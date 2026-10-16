@@ -50,9 +50,7 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       const timeoutMs = readPositiveIntegerParam(params, "timeoutMs") ?? 20_000;
       const maxStdoutBytes = readPositiveIntegerParam(params, "maxStdoutBytes") ?? 512_000;
 
-      if (api.runtime?.version && api.logger?.debug) {
-        api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
-      }
+      api.logger.debug?.(`lobster plugin runtime=${api.runtime.version}`);
 
       const runnerParams: LobsterRunnerParams = {
         action,

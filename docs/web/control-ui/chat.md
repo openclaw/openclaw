@@ -84,8 +84,11 @@ activity without a completed parent turn does not invent a parent wait.
 The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Once
 everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
-successful `sessions_yield` leaves no marker in the transcript, and its private
-continuation context stays hidden.
+successful `sessions_yield` waiting for an incoming message shows its public
+acknowledgment, or **Waiting for a message** when none was recorded. Child handoffs
+keep their existing activity rows. Private continuation context stays hidden.
+Turns with only tool calls use the usual activity rows; entries with nothing
+displayable do not leave an empty assistant reply.
 
 When the last subagent finishes, its activity row disappears and the block stays as it
 is, without a working indicator, until the turn resumes. Its answer then
@@ -148,6 +151,27 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Context breakdown
+
+Open **Details → Context** to see the current usage and an estimated breakdown
+of messages and other context, workspace memory, tool schemas, skills, and the
+remaining system prompt. Expand memory, tools, or skills to inspect individual
+contributors. The report loads only while this section is open; **Refresh**
+reloads the saved report without starting an agent turn.
+
+Contributor sizes use character-based token estimates from the last matching
+run report, not the provider's tokenizer. Workspace memory and skills are
+subtracted from the system prompt so they are not counted twice. **Messages &
+other** is the estimated remainder, including context the report does not track
+separately. Unverified injection sizes stay unknown rather than showing zero.
+MCP and deferred tools are not separate categories in this report.
+
+When a matching last-run prompt budget is available, the section shows the
+remaining budget and the reserve outside it. These are estimates, not a promise
+of the exact auto-compaction point. **Compact session** uses the existing
+compaction command and appears only with the required permissions; it is
+disabled while a run is active. It preserves the composer draft.
 
 ## Image viewing
 

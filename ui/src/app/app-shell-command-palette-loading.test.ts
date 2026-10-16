@@ -7,7 +7,11 @@ import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../components/modal-dialog.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
-import { createCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
+import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import {
+  COMMAND_PALETTE_ELEMENT,
+  LazyCustomElementRequestController,
+} from "./lazy-custom-element.ts";
 
 let restoreDialog: () => void;
 let container: HTMLDivElement;
@@ -34,7 +38,15 @@ function mountLoader() {
   foreground.focus();
   foreground.setSelectionRange(5, 9, "backward");
   const { state, dispose: disposeOwner } = createRoot((dispose) => {
-    const loading = createCommandPaletteLoading({});
+    const loading = new ShellCommandPaletteOwner(
+      {
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: new LazyCustomElementRequestController({ requestUpdate: () => {} }),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      },
+      { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
+    ).loading;
     loading.begin();
     return { state: loading, dispose };
   });

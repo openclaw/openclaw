@@ -94,7 +94,7 @@ export function renderComposer(
     toolOverrides: overrides.toolOverrides,
     modelControl: new NewSessionModelControl(() => undefined),
     requiresModifier: overrides.requiresModifier ?? false,
-    requestUpdate: renderCurrent,
+    onChange: renderCurrent,
     submitDisabledReason: overrides.submitDisabledReason,
     blockedSubmitNotice: overrides.blockedSubmitNotice,
     dictationActive: overrides.dictationActive,

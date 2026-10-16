@@ -46,7 +46,10 @@ export function createDesktopPictureInPicture(
       pending.cancelled = true;
     }
     release();
-    setFeedback({ pending: Boolean(pending) });
+    // Disposed owners release the mirror without publishing presentation state.
+    if (host.isConnected) {
+      setFeedback({ pending: Boolean(pending) });
+    }
   };
   const toggle = async () => {
     if (activePopup) {

@@ -72,7 +72,7 @@ function assertOpenCodeLocalAccess(hostId: string, allowProcessHomeFallback?: bo
 }
 
 function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
 async function loadContinuableOpenCodeSession(

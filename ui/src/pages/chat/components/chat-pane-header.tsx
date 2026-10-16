@@ -35,7 +35,6 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import { usePanePresentation } from "../chat-pane-embedded-view.tsx";
 import {
   PaneDetails,
   PaneHeaderPresence,
@@ -43,6 +42,7 @@ import {
   PaneSubagentStop,
   type PaneDetailsProps,
 } from "../chat-pane-header-view.tsx";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";

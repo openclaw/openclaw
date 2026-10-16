@@ -17,7 +17,7 @@ import {
   type DesktopPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
-import { DesktopAppLauncher } from "./desktop-app-launcher.ts";
+import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
@@ -62,6 +62,7 @@ export class DesktopPanelController extends SolidPanelController {
     | null = null;
   fullscreenMode!: DesktopFullscreen;
   pictureInPicture!: DesktopPictureInPicture;
+  launcher!: DesktopAppLauncher;
 
   /** Browser tests replace the transport without opening a real RFB socket. */
   desktopClientFactory: () => Pick<desktopTransport.DesktopClient, "connect"> = () =>
@@ -86,14 +87,6 @@ export class DesktopPanelController extends SolidPanelController {
     () => this.state === "connected",
     () => void this.connectEnvironment(this.environmentId, this.controlling),
   );
-  private readonly launcher = new DesktopAppLauncher(this, () => ({
-    client: this.client,
-    source: this.source,
-    presented: !this.embedded || this.presented,
-    state: this.state,
-    apps: this.desktopApps,
-  }));
-
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -145,17 +138,22 @@ export class DesktopPanelController extends SolidPanelController {
     controlling: () => this.controlling,
     input: () => this.renderRoot.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
   });
-  private readonly dockLayout = new DockLayoutController(this, {
+  readonly dockLayout = new DockLayoutController(this, {
     layout: desktopPanelLayout,
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode?.ownsFullscreen() ?? false,
   });
 
-  readonly pictureInPictureSource = (): HTMLCanvasElement | null =>
-    this.available && this.state === "connected" && (!this.embedded || this.presented)
-      ? this.renderRoot.querySelector<HTMLCanvasElement>(".desktop-surface canvas")
-      : null;
+  get launchTarget() {
+    return {
+      client: this.client,
+      source: this.source,
+      presented: !this.embedded || this.presented,
+      state: this.state,
+      apps: this.desktopApps,
+    };
+  }
 
   override connectedCallback(): void {
     if (!this.embedded) {
@@ -318,10 +316,7 @@ export class DesktopPanelController extends SolidPanelController {
 
   private disconnectConnection(retainViewer = false): void {
     this.audio.close();
-    // Disposed owners release the mirror without publishing presentation state.
-    if (this.isConnected) {
-      this.pictureInPicture.close();
-    }
+    this.pictureInPicture.close();
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);
@@ -329,7 +324,10 @@ export class DesktopPanelController extends SolidPanelController {
     if (!retainViewer) {
       this.sessionSource.invalidate();
       this.loading = false;
-      this.launcher.clear();
+      // Disposal invalidates launch work through the Solid owner without publishing feedback.
+      if (this.isConnected) {
+        this.launcher.clear();
+      }
     }
   }
 
@@ -659,7 +657,7 @@ export class DesktopPanelController extends SolidPanelController {
         loading: this.loading,
         automaticSource: this.usesAutomaticSource,
         hasTarget: this.sessionKey !== null || this.requestedSource !== null,
-        errorText: this.launcher.error ?? this.errorText,
+        errorText: this.launcher.feedback().error ?? this.errorText,
         noticeText: this.noticeText,
         availability: this.sessionSource.desktopAvailability,
         picker: {
@@ -700,7 +698,7 @@ export class DesktopPanelController extends SolidPanelController {
       },
       controlling: this.controlling,
       desktopApps: this.desktopApps,
-      launchingApp: this.launcher.app,
+      launchingApp: this.launcher.feedback().app ?? null,
       startup: this.sessionSource.startupEnvironment,
       sizing: {
         mode: this.sizingMode,

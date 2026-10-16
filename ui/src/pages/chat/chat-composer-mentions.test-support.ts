@@ -128,7 +128,7 @@ export function composerFixture(
         getMentions: () => mentions,
         canSubmit: true,
         requiresModifier: false,
-        requestUpdate: renderCurrent,
+        onChange: renderCurrent,
         submitting: false,
         textareaController: controller,
         onInput: (next, selected) => {
