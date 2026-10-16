@@ -1,4 +1,3 @@
-// Native terminal settlement bounds projection and checkpoint work without harming sibling runs.
 import path from "node:path";
 import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -16,6 +15,7 @@ import {
 } from "./attempt-timeouts.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import { isJsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -38,6 +38,16 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
 
+function holdTranscriptWriter(target: Parameters<typeof withSessionTranscriptWriteLock>[0]) {
+  const release = createDeferred<void>();
+  const acquired = createDeferred<void>();
+  const writing = withSessionTranscriptWriteLock(target, async () => {
+    acquired.resolve();
+    await release.promise;
+  });
+  return { release: release.resolve, acquired: acquired.promise, writing };
+}
+
 async function createTranscriptParams(name: string) {
   const params = createTestParams();
   await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), `session-${name}`);
@@ -55,25 +65,18 @@ beforeEach(resetSharedCodexAppServerClientForTests);
 afterEach(resetSharedCodexAppServerClientForTests);
 
 it("settles a native receipt while prompt persistence is blocked with execution budget maximum", async () => {
-  const timeoutMs = MAX_TIMER_TIMEOUT_MS;
-
   const { params, transcriptTarget } = await createTranscriptParams("held-prompt");
-  const held = createDeferred<void>();
-  const writerAcquired = createDeferred<void>();
-  let writer: Promise<void> | undefined;
+  let writer: ReturnType<typeof holdTranscriptWriter> | undefined;
   const harness = createStartedThreadHarness(async (method) => {
     if (method === "turn/start") {
-      writer = withSessionTranscriptWriteLock(transcriptTarget, async () => {
-        writerAcquired.resolve();
-        await held.promise;
-      });
-      await writerAcquired.promise;
+      writer = holdTranscriptWriter(transcriptTarget);
+      await writer.acquired;
     }
     return undefined;
   });
   const onAttemptTimeout = vi.fn();
   const onAttemptDeadlineChanged = vi.fn();
-  params.timeoutMs = timeoutMs;
+  params.timeoutMs = MAX_TIMER_TIMEOUT_MS;
   params.onAttemptTimeout = onAttemptTimeout;
   params.onAttemptDeadlineChanged = onAttemptDeadlineChanged;
   vi.useFakeTimers();
@@ -89,12 +92,7 @@ it("settles a native receipt while prompt persistence is blocked with execution 
         id: "turn-1",
         status: "completed",
         items: [
-          {
-            id: "answer",
-            type: "agentMessage",
-            phase: "final_answer",
-            text: "Completed answer.",
-          },
+          { id: "answer", type: "agentMessage", phase: "final_answer", text: "Completed answer." },
         ],
       }),
     );
@@ -107,17 +105,17 @@ it("settles a native receipt while prompt persistence is blocked with execution 
     expect(onAttemptTimeout).not.toHaveBeenCalled();
     // Storage released after the deadline simulation must keep its native coordinator timers.
     vi.useRealTimers();
-    held.resolve();
-    await writer;
+    writer?.release();
+    await writer?.writing;
     const result = await run;
     expect(result.terminal).toEqual({ kind: "ok" });
     expect(result.assistantTexts).toEqual(["Completed answer."]);
     expect(onAttemptTimeout).not.toHaveBeenCalled();
     expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
   } finally {
-    held.resolve();
+    writer?.release();
     vi.useRealTimers();
-    await writer;
+    await writer?.writing;
     await run;
   }
 });
@@ -307,17 +305,12 @@ it.each([
   async ({ boundary, termination, release }) => {
     const queuedNetworkResult = boundary === "checkpoint" && termination === "timeout";
     const { params, transcriptTarget } = await createTranscriptParams("checkpoint");
-    const checkpoint = createDeferred<void>();
+    let checkpoint: ReturnType<typeof holdTranscriptWriter> | undefined;
     const checkpointWrites: Promise<unknown>[] = [];
     const holdWriter = async () => {
-      const writerAcquired = createDeferred<void>();
-      checkpointWrites.push(
-        withSessionTranscriptWriteLock(transcriptTarget, async () => {
-          writerAcquired.resolve();
-          await checkpoint.promise;
-        }),
-      );
-      await writerAcquired.promise;
+      checkpoint = holdTranscriptWriter(transcriptTarget);
+      checkpointWrites.push(checkpoint.writing);
+      await checkpoint.acquired;
     };
     // Database worker requests arm 60-second timeouts on the fake clock. A write parked behind
     // the held writer starts after the deadline jump, which would otherwise expire its I/O.
@@ -396,19 +389,13 @@ it.each([
           },
         },
       });
-      const completedCommand = {
+      const completedCommand = createNativeCommandItem({
         id: "checkpoint-command",
-        type: "commandExecution",
         command: "echo saved",
         cwd: params.workspaceDir,
-        commandActions: [],
-        processId: null,
-        source: "agent",
-        status: "completed",
         aggregatedOutput: "saved",
-        exitCode: 0,
         durationMs: 1,
-      };
+      });
       if (queuedNetworkResult) {
         void harness.notify(itemNotification("item/completed", completedCommand));
         await vi.waitFor(() => expect(checkpointMirror).toHaveBeenCalledOnce(), fastWait);
@@ -429,11 +416,7 @@ it.each([
           status: "completed",
           items: [
             ...(queuedNetworkResult ? [] : [completedCommand]),
-            {
-              id: "checkpoint-answer",
-              type: "agentMessage",
-              text: "Completed before checkpoint.",
-            },
+            { id: "checkpoint-answer", type: "agentMessage", text: "Completed before checkpoint." },
           ],
         }),
       );
@@ -459,7 +442,7 @@ it.each([
       }
       if (release !== "after cutoff") {
         // The replacement final still queues behind the authoritative writer.
-        checkpoint.resolve();
+        checkpoint?.release();
         await Promise.allSettled(checkpointWrites);
       }
       if (release !== "during grace") {
@@ -503,7 +486,7 @@ it.each([
         ),
       ).toHaveLength(1);
       expect(resolveActiveEmbeddedRunSessionId(transcriptTarget.sessionKey)).toBeUndefined();
-      checkpoint.resolve();
+      checkpoint?.release();
       await Promise.allSettled(checkpointWrites);
       const events = await readSessionTranscriptEvents(transcriptTarget);
       const assistantRows = events.filter(
@@ -515,6 +498,10 @@ it.each([
           event.message["__openclaw"].mirrorIdentity === "turn-1:assistant",
       );
       if (assistantCommitted) {
+        const warning = {
+          settlementWarning: { timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS },
+          ...(queuedNetworkResult ? { turnTainted: true } : {}),
+        };
         expect(assistantRows).toMatchObject([
           {
             id: result.contextEngineTerminalAnchor?.entryId,
@@ -522,14 +509,7 @@ it.each([
               stopReason:
                 termination === "timeout" || boundary === "publication" ? "stop" : "aborted",
               idempotencyKey: result.assistantTranscriptIdempotencyKey,
-              ...(termination === "timeout"
-                ? {
-                    __openclaw: {
-                      settlementWarning: { timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS },
-                      ...(queuedNetworkResult ? { turnTainted: true } : {}),
-                    },
-                  }
-                : {}),
+              ...(termination === "timeout" ? { __openclaw: warning } : {}),
             },
           },
         ]);
@@ -600,7 +580,7 @@ it.each([
     } finally {
       unsubscribe();
       deadlineJumped.resolve();
-      checkpoint.resolve();
+      checkpoint?.release();
       abort.abort("test cleanup");
       successorAbort.abort("test cleanup");
       vi.useRealTimers();

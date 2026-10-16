@@ -17,7 +17,7 @@ import {
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
 } from "./attempt-timeouts.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -35,6 +35,16 @@ setupRunAttemptTestHooks();
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
+const notification = (method: string, params: JsonObject): CodexServerNotification => ({
+  method,
+  params: { threadId: "thread-1", turnId: "turn-1", ...params },
+});
+
+const nativeCompleted = (items: JsonObject[]): CodexServerNotification => ({
+  method: "turn/completed",
+  params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items } },
+});
+
 function completedAssistant(id: string, text: string): CodexServerNotification {
   return itemNotification("item/completed", {
     id,
@@ -48,25 +58,20 @@ function finalizationHookNotification(
   method: "hook/started" | "hook/completed",
   status: "running" | "completed",
 ): CodexServerNotification {
-  return {
-    method,
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      run: {
-        id: "stop-hook-1",
-        eventName: "stop",
-        handlerType: "command",
-        executionMode: "sync",
-        scope: "turn",
-        source: "project",
-        sourcePath: "/workspace/.codex/hooks.json",
-        status,
-        statusMessage: null,
-        entries: [],
-      },
+  return notification(method, {
+    run: {
+      id: "stop-hook-1",
+      eventName: "stop",
+      handlerType: "command",
+      executionMode: "sync",
+      scope: "turn",
+      source: "project",
+      sourcePath: "/workspace/.codex/hooks.json",
+      status,
+      statusMessage: null,
+      entries: [],
     },
-  };
+  });
 }
 
 function commandNotification(id: string, command: string, completed = true) {
@@ -91,17 +96,8 @@ function startAttempt(params: TestParams) {
   return { run, settled };
 }
 
-function makeAgentMessageDelta(delta: string, itemId = "msg-partial-1"): CodexServerNotification {
-  return {
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId,
-      delta,
-    },
-  };
-}
+const makeAgentMessageDelta = (delta: string, itemId = "msg-partial-1") =>
+  notification("item/agentMessage/delta", { itemId, delta });
 
 async function expectTurnInterrupted(
   harness: ReturnType<typeof createStartedThreadHarness>,
@@ -128,33 +124,28 @@ function makeMediaProjectionGate() {
   return { projectionStarted: started.promise, releaseProjection: gate.resolve };
 }
 
-function reasoningDelta(): CodexServerNotification {
-  return {
-    method: "item/reasoning/textDelta",
-    params: { threadId: "thread-1", turnId: "turn-1", itemId: "reasoning-1", delta: "thinking" },
-  };
-}
+const reasoningDelta = () =>
+  notification("item/reasoning/textDelta", { itemId: "reasoning-1", delta: "thinking" });
 
-async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
-  vi.useFakeTimers();
-  const harness = createStartedThreadHarness();
-  const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: 60_000 }));
-  await run.waitForTurnAccepted();
-  for (const notification of notifications) {
-    await harness.notify(notification);
+async function runNotificationScenario(
+  notifications: CodexServerNotification[],
+  termination: "timeout" | "client-close",
+) {
+  const timed = termination === "timeout";
+  if (timed) {
+    vi.useFakeTimers();
   }
-  await vi.advanceTimersByTimeAsync(60_000);
-  return await run;
-}
-
-async function runClientCloseScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
-  const run = runCodexAppServerAttempt(createTestParams());
+  const run = runCodexAppServerAttempt(makeTestParams(timed ? { timeoutMs: 60_000 } : {}));
   await run.waitForTurnAccepted();
-  for (const notification of notifications) {
-    await harness.notify(notification);
+  for (const event of notifications) {
+    await harness.notify(event);
   }
-  harness.close();
+  if (timed) {
+    await vi.advanceTimersByTimeAsync(60_000);
+  } else {
+    harness.close();
+  }
   return await run;
 }
 
@@ -262,35 +253,19 @@ it("joins queued image projection when timeout aborts the turn", async () => {
 });
 
 it("retains assistant text and usage without upgrading execution timeout to success", async () => {
-  const result = await runExecutionTimeoutScenario([
-    commandNotification("cmd-1", "touch done.txt"),
-    completedAssistant("msg-1", "Finished."),
-    {
-      method: "thread/tokenUsage/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        tokenUsage: {
-          last: { totalTokens: 12, inputTokens: 5, cachedInputTokens: 2, outputTokens: 7 },
-        },
-      },
-    },
-    {
-      method: "rawResponse/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
+  const usage = { totalTokens: 12, inputTokens: 5, cachedInputTokens: 2, outputTokens: 7 };
+  const result = await runNotificationScenario(
+    [
+      commandNotification("cmd-1", "touch done.txt"),
+      completedAssistant("msg-1", "Finished."),
+      notification("thread/tokenUsage/updated", { tokenUsage: { last: usage } }),
+      notification("rawResponse/completed", {
         responseId: "response-1",
-        usage: {
-          totalTokens: 12,
-          inputTokens: 5,
-          cachedInputTokens: 2,
-          outputTokens: 7,
-          reasoningOutputTokens: 0,
-        },
-      },
-    },
-  ]);
+        usage: { ...usage, reasoningOutputTokens: 0 },
+      }),
+    ],
+    "timeout",
+  );
 
   expect(projectAttemptResult(result)).toMatchObject({
     aborted: true,
@@ -579,14 +554,17 @@ it("settles a client-close route after the host trajectory capability closes (fi
 });
 
 it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {
-  const result = await runClientCloseScenario([
-    itemNotification("item/completed", {
-      type: "agentMessage",
-      id: "msg-completed-1",
-      text: "Earlier complete reply.",
-    }),
-    makeAgentMessageDelta("Later partial reply", "msg-partial-2"),
-  ]);
+  const result = await runNotificationScenario(
+    [
+      itemNotification("item/completed", {
+        type: "agentMessage",
+        id: "msg-completed-1",
+        text: "Earlier complete reply.",
+      }),
+      makeAgentMessageDelta("Later partial reply", "msg-partial-2"),
+    ],
+    "client-close",
+  );
 
   expect(readAttemptTerminal(result).promptError).toBe(
     "codex app-server client closed before turn completed",
@@ -631,17 +609,9 @@ it("does not treat a user prompt containing the interrupted marker as terminal",
   });
   expect(resolved).toBe(false);
 
-  await harness.notify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turn: {
-        id: "turn-1",
-        status: "completed",
-        items: [{ type: "agentMessage", id: "msg-1", text: "It marks an interrupted turn." }],
-      },
-    },
-  });
+  await harness.notify(
+    nativeCompleted([{ type: "agentMessage", id: "msg-1", text: "It marks an interrupted turn." }]),
+  );
 
   const result = await run;
   expect(resolved).toBe(true);
@@ -675,17 +645,7 @@ it("releases completion when a projector callback throws during turn/completed",
   const run = runCodexAppServerAttempt(params);
   await Promise.race([run, turnStartRequested.promise]);
   expect(request.mock.calls.map(([method]) => method)).toContain("turn/start");
-  await notify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turn: {
-        id: "turn-1",
-        status: "completed",
-        items: [{ id: "plan-1", type: "plan", text: "step one\nstep two" }],
-      },
-    },
-  });
+  await notify(nativeCompleted([{ id: "plan-1", type: "plan", text: "step one\nstep two" }]));
   const result = await run;
   expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
 });

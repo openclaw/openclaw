@@ -1,5 +1,5 @@
-// Codex composed native hook relay retention regression.
 import path from "node:path";
+import { setImmediate as nextMacrotask } from "node:timers/promises";
 import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
@@ -46,8 +46,15 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
-function invokeRelay(relayId: string, rawPayload: JsonObject) {
-  return invokeNativeHookRelay({ provider: "codex", relayId, event: "pre_tool_use", rawPayload });
+function invokeRelay(
+  relayId: string,
+  rawPayload: JsonObject,
+  { signal, ...registration }: { signal?: AbortSignal; generation?: number } = {},
+) {
+  return invokeNativeHookRelay(
+    { provider: "codex", relayId, event: "pre_tool_use", rawPayload, ...registration },
+    signal,
+  );
 }
 
 function childTool(agentId: string, command?: string): JsonObject {
@@ -151,6 +158,12 @@ function childClaimed(item: JsonObject, turnId: string): CodexServerNotification
 
 const successfulHook = { stdout: "", stderr: "", exitCode: 0 };
 
+function expectRegistration(relayId: string, registered: boolean) {
+  expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId) !== undefined).toBe(
+    registered,
+  );
+}
+
 function parentItem(item: JsonObject, turnId = "parent-a"): CodexServerNotification {
   return { method: "item/completed", params: { threadId: "parent-thread", turnId, item } };
 }
@@ -238,25 +251,24 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
     .spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime")
     .mockImplementation((params) => {
       const admission = params.executionAdmission;
-      return register(
-        admission
-          ? {
-              ...params,
-              executionAdmission: {
-                ...admission,
-                admit: async (invocation, assertSource, preparation) => {
-                  try {
-                    await admission.admit(invocation, assertSource, preparation);
-                  } finally {
-                    if (invocation.toolUseId === "abandoned-input") {
-                      lateAdmissionSettled.resolve();
-                    }
-                  }
-                },
-              },
+      if (!admission) {
+        return register(params);
+      }
+      return register({
+        ...params,
+        executionAdmission: {
+          ...admission,
+          admit: async (invocation, assertSource, preparation) => {
+            try {
+              await admission.admit(invocation, assertSource, preparation);
+            } finally {
+              if (invocation.toolUseId === "abandoned-input") {
+                lateAdmissionSettled.resolve();
+              }
             }
-          : params,
-      );
+          },
+        },
+      });
     });
   const relay = createRelay("active-input", host.hostCapabilities, new AbortController().signal, {
     nativeModelAdmission: {
@@ -273,20 +285,16 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
     toolName = "multi_agent_v1send_input",
     signal?: AbortSignal,
   ) =>
-    invokeNativeHookRelay(
+    invokeRelay(
+      relay.relayId,
       {
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          session_id: "parent-thread",
-          turn_id: turnId,
-          tool_use_id: callId,
-          tool_name: toolName,
-          tool_input: { target, message: "Continue" },
-        },
+        session_id: "parent-thread",
+        turn_id: turnId,
+        tool_use_id: callId,
+        tool_name: toolName,
+        tool_input: { target, message: "Continue" },
       },
-      signal,
+      { signal },
     );
   const request = {
     client: client.client,
@@ -298,6 +306,13 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
   };
   const followup = (turnId: string, callId: string, signal?: AbortSignal) =>
     invoke(turnId, callId, "child-thread", "collaborationfollowup_task", signal);
+  const acceptInput = (callId: string, submissionId: string, turnId = "parent-a") =>
+    client.notify(successfulSendInputOutput({ turnId, callId, submissionId }));
+  const nativeWrite = vi.fn();
+  const expectBlocked = async (invocation: Promise<unknown>, reason: string) => {
+    await expect(invocation.then(nativeWrite)).rejects.toThrow(reason);
+    expect(nativeWrite).not.toHaveBeenCalled();
+  };
   const capture = await monitor.captureModelSource(request);
   if (!capture) {
     throw new Error("Expected child execution custody");
@@ -306,11 +321,7 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
     expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
       resolveCodexNativeModelInputTools({}).toSorted(),
     );
-    const nativeWrite = vi.fn();
-    await expect(invoke("parent-b", "denied-steer").then(nativeWrite)).rejects.toThrow(
-      "same admitted model source",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
+    await expectBlocked(invoke("parent-b", "denied-steer"), "same admitted model source");
     await expect(invoke("parent-b", "ambiguous-root", "parent-thread")).rejects.toThrow(
       "unambiguous receiver turn",
     );
@@ -318,42 +329,30 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
       "outside the sender's admitted tree",
     );
     expect(() => capture.assertCurrent()).not.toThrow();
-    await expect(followup("parent-b", "foreign-active-followup").then(nativeWrite)).rejects.toThrow(
+    await expectBlocked(
+      followup("parent-b", "foreign-active-followup"),
       "same admitted model source",
     );
-    expect(nativeWrite).not.toHaveBeenCalled();
     await expect(followup("parent-a", "same-active-followup")).resolves.toEqual(successfulHook);
     await client.notify(inputRejected("same-active-followup", "Input declined"));
 
     await invoke("parent-a", "initial-same-source-steer");
-    await client.notify(
-      successfulSendInputOutput({
-        turnId: "parent-a",
-        callId: "initial-same-source-steer",
-        submissionId: "initial-opaque-steer",
-      }),
-    );
+    await acceptInput("initial-same-source-steer", "initial-opaque-steer");
 
     // The accepted opaque receipt plus unresolved writes share the capacity
     // reserved before native input. Failed calls release their reservations.
     for (let index = 0; index < 31; index++) {
       await invoke("parent-a", `pending-${index}`);
     }
-    await expect(invoke("parent-a", "over-capacity").then(nativeWrite)).rejects.toThrow(
+    await expectBlocked(
+      invoke("parent-a", "over-capacity"),
       "native input admission capacity reached",
     );
-    expect(nativeWrite).not.toHaveBeenCalled();
     for (let index = 0; index < 31; index++) {
       await client.notify(inputRejected(`pending-${index}`, "Input rejected"));
     }
     await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual(successfulHook);
-    await client.notify(
-      successfulSendInputOutput({
-        turnId: "parent-a",
-        callId: "same-source-steer",
-        submissionId: "opaque-same-turn-receipt",
-      }),
-    );
+    await acceptInput("same-source-steer", "opaque-same-turn-receipt");
     expect(() => capture.assertCurrent()).not.toThrow();
 
     // A stock V1 successful steer reports an opaque submission ID while the
@@ -372,13 +371,7 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
       ),
     );
     await expect(monitor.captureModelSource(request)).rejects.toThrow("same admitted model source");
-    await client.notify(
-      successfulSendInputOutput({
-        turnId: "parent-b",
-        callId: "accepted-steer",
-        submissionId: "opaque-foreign-receipt",
-      }),
-    );
+    await acceptInput("accepted-steer", "opaque-foreign-receipt", "parent-b");
     expect(() => capture.assertCurrent()).toThrow("execution was cancelled");
     await expect(monitor.captureModelSource(request)).rejects.toThrow("execution was cancelled");
     await client.notify(
@@ -387,10 +380,7 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
     const coldTarget = threadRead({ threadStatus: "notLoaded" });
     coldTarget.thread.modelProvider = "unqualified-provider";
     client.setThreadRead("child-thread", coldTarget);
-    await expect(followup("parent-b", "denied-cold-followup").then(nativeWrite)).rejects.toThrow(
-      "does not admit this model",
-    );
-    expect(nativeWrite).not.toHaveBeenCalled();
+    await expectBlocked(followup("parent-b", "denied-cold-followup"), "does not admit this model");
     const warmTarget = threadRead({ threadStatus: "idle" });
     warmTarget.thread.modelProvider = "test-provider";
     client.setThreadRead("child-thread", warmTarget);
@@ -460,9 +450,7 @@ it("refuses foreign V1 steering before write and fences an accepted same-turn so
 });
 
 it("releases abandoned admission capacity while preserving duplicate waiters and retained children", async () => {
-  const host = await createAdmittedHostCapabilityTestFixture({
-    runId: "admission-cancellation",
-  });
+  const host = await createAdmittedHostCapabilityTestFixture({ runId: "admission-cancellation" });
   const source = new AbortController();
   const admissionWaits = new Map<string, Promise<unknown>[]>();
   const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
@@ -490,20 +478,10 @@ it("releases abandoned admission capacity while preserving duplicate waiters and
   const relay = createRelay("admission-cancellation", host.hostCapabilities, source.signal);
   const pending: Promise<unknown>[] = [];
   const invoke = (child: string, signal?: AbortSignal) => {
-    const invocation = invokeNativeHookRelay(
-      {
-        provider: "codex",
-        relayId: relay.relayId,
-        generation: relay.generation,
-        event: "pre_tool_use",
-        rawPayload: {
-          agent_id: child,
-          tool_name: "Bash",
-          tool_input: { command: "echo fixture" },
-        },
-      },
+    const invocation = invokeRelay(relay.relayId, childTool(child, "echo fixture"), {
+      generation: relay.generation,
       signal,
-    );
+    });
     void invocation.catch(() => undefined);
     pending.push(invocation);
     return invocation;
@@ -538,9 +516,7 @@ it("releases abandoned admission capacity while preserving duplicate waiters and
     releaseChild();
     releaseChild = undefined;
     await expect(invoke("replacement-child")).rejects.toThrow(/not found|inactive/);
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relay.relayId),
-    ).toBeUndefined();
+    expectRegistration(relay.relayId, false);
   } finally {
     releaseChild?.();
     relay.unregister();
@@ -554,30 +530,12 @@ it("releases abandoned admission capacity while preserving duplicate waiters and
 });
 
 it.each([
-  {
-    name: "V1 before turn binding",
-    version: "v1",
-    bindBeforeClaim: false,
-    hasDeliveryScope: true,
-    parentFails: false,
-  },
-  {
-    name: "V2 without delivery scope",
-    version: "v2",
-    bindBeforeClaim: true,
-    hasDeliveryScope: false,
-    parentFails: false,
-  },
-  {
-    name: "V1 parent failure after yield",
-    version: "v1",
-    bindBeforeClaim: true,
-    hasDeliveryScope: false,
-    parentFails: true,
-  },
+  ["V1 before turn binding", "v1", false, true, false],
+  ["V2 without delivery scope", "v2", true, false, false],
+  ["V1 parent failure after yield", "v1", true, false, true],
 ] as const)(
-  "retains and fences a live child through sessions_yield ($name)",
-  async ({ version, bindBeforeClaim, hasDeliveryScope, parentFails }) => {
+  "retains and fences a live child through sessions_yield (%s)",
+  async (_name, version, bindBeforeClaim, hasDeliveryScope, parentFails) => {
     const childThreadId = `child-${version}`;
     const childClaim = directSpawnItem(version, "thread-1", childThreadId);
     const deferredTurnStart = createDeferred<undefined>();
@@ -590,7 +548,8 @@ it.each([
       return undefined;
     });
     const { params, fixture } = await yieldParams(childThreadId);
-    params.onAgentEvent = vi.fn();
+    const onAgentEvent = vi.fn<NonNullable<typeof params.onAgentEvent>>();
+    params.onAgentEvent = onAgentEvent;
     if (hasDeliveryScope) {
       params.agentHarnessCompletionScope = fixture.agentHarnessCompletionScope;
     }
@@ -607,27 +566,23 @@ it.each([
     const remote = version === "v1" && !parentFails;
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-      ...(remote
+      pluginConfig: remote
         ? {
-            pluginConfig: {
-              appServer: {
-                nativeHookRelay: {
-                  url: "https://gateway.example/node/__openclaw__/native-hook",
-                  credentialDirectory: "/home/node/.native-hooks",
-                },
+            appServer: {
+              nativeHookRelay: {
+                url: "https://gateway.example/node/__openclaw__/native-hook",
+                credentialDirectory: "/home/node/.native-hooks",
               },
             },
           }
-        : {}),
+        : undefined,
     });
     let relayId: string | undefined;
     try {
       await awaitGateBeforeSettlement(turnStarted.promise, run, "Attempt ended before turn/start");
       if (bindBeforeClaim) {
         deferredTurnStart.resolve(undefined);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextMacrotask();
       }
       const startRequest = harness.requests.find((request) => request.method === "thread/start");
       relayId = extractRelayIdFromThreadRequest(startRequest?.params);
@@ -711,9 +666,7 @@ it.each([
             (message) => message.role === "custom",
           ),
         ).toEqual([]);
-        expect(
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-        ).toBeUndefined();
+        expectRegistration(relayId, false);
         await expect(invokeRelay(relayId, preDiscoveryPayload)).rejects.toThrow(
           /not found|inactive/,
         );
@@ -722,9 +675,7 @@ it.each([
 
       // The app-server response intentionally exposes only protocol content; the internal
       // terminate marker schedules the turn release on the next macrotask.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextMacrotask();
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       const result = await run;
       expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
@@ -739,8 +690,8 @@ it.each([
           details: { source: "sessions_yield", message: "Waiting for child" },
         }),
       ]);
-      const terminalLifecycleEvents = (params.onAgentEvent as ReturnType<typeof vi.fn>).mock.calls
-        .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
+      const terminalLifecycleEvents = onAgentEvent.mock.calls
+        .map(([event]) => event)
         .filter(
           (event) =>
             event.stream === "lifecycle" &&
@@ -756,7 +707,7 @@ it.each([
           },
         },
       ]);
-      expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+      expectRegistration(relayId, true);
       if (remote) {
         expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
       }
@@ -773,7 +724,7 @@ it.each([
         },
       });
       expect(beforeToolCall).toHaveBeenCalledTimes(5);
-      expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+      expectRegistration(relayId, true);
       for (const agentId of ["unknown-child", `${childThreadId}/nested`]) {
         await expect(invokeRelay(relayId, childTool(agentId))).rejects.toThrow(
           /not found|inactive|retained invocation/,
@@ -790,9 +741,7 @@ it.each([
       if (remote) {
         expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
       }
-      expect(
-        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-      ).toBeUndefined();
+      expectRegistration(relayId, false);
       await expect(invokeRelay(relayId, childTool(childThreadId, "allow-child"))).rejects.toThrow(
         /not found|inactive/,
       );

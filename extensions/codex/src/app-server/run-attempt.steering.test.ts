@@ -226,17 +226,9 @@ it("marks the active run aborted before asynchronous cleanup releases its handle
 });
 
 it.each([
-  {
-    name: "unfinished answer (completed-answer, second steer: false)",
-    completionId: "completed-answer",
-    secondSteer: false,
-  },
-  {
-    name: "unfinished answer (unfinished-answer, second steer: true)",
-    completionId: "unfinished-answer",
-    secondSteer: true,
-  },
-])("persists already visible output before $name", async ({ completionId, secondSteer }) => {
+  ["completed-answer", false],
+  ["unfinished-answer", true],
+] as const)("persists pre-steer output (%s, second: %s)", async (completionId, secondSteer) => {
   const { requests, completeTurn, notify, waitForMethod } = createStartedThreadHarness();
   const params = createSteeringParams();
   const media = [{ path: "media://inbound/steered.csv", contentType: "text/csv" }];

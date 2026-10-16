@@ -36,8 +36,6 @@ type Recorder = NonNullable<QueueOptions["userTurnTranscriptRecorder"]>;
 type UserMessage = NonNullable<Recorder["message"]>;
 type Scenario = "offloaded" | "mixed" | "resolved";
 type SteerRequest = {
-  threadId: string;
-  expectedTurnId: string;
   clientUserMessageId: string;
   input: CodexUserInput[];
 };
@@ -69,34 +67,29 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
     mediaDir = await fs.mkdtemp(path.join(inbound, "steering-"));
     managedFixtures.push(mediaDir);
   }
-  const png = (r: number, g: number, b: number) => createSolidPngBuffer(1, 1, { r, g, b });
-  const blueBytes = png(0, 0, 255),
-    greenBytes = png(0, 255, 0),
-    redBytes = png(255, 0, 0);
-  const image = async (name: string, bytes: Buffer) => {
+  const image = async (name: string, r: number, g: number, b: number) => {
+    const bytes = createSolidPngBuffer(1, 1, { r, g, b });
     const file = { path: path.join(mediaDir, `${name}.png`), contentType: "image/png" };
     await fs.writeFile(file.path, bytes);
-    return file;
+    const data = bytes.toString("base64");
+    return { file, data, input: { type: "image", url: `data:image/png;base64,${data}` } };
   };
-  const [blue, green, documentImage, described] = await Promise.all([
-    image("blue", blueBytes),
-    image("green", greenBytes),
-    image("document", redBytes),
-    image("described", redBytes),
+  const [blue, green, red, document] = await Promise.all([
+    image("blue", 0, 0, 255),
+    image("green", 0, 255, 0),
+    image("red", 255, 0, 0),
+    image("document", 255, 0, 0),
   ]);
-  const document = { path: documentImage.path, kind: "document" as const };
-  const inline = {
-    type: "image" as const,
-    data: redBytes.toString("base64"),
-    mimeType: "image/png",
-  };
+  const inline = { type: "image" as const, data: red.data, mimeType: "image/png" };
   const mixed = scenario !== "offloaded";
   const canonical = scenario === "resolved";
+  const mixedMedia = [blue.file, { kind: "image" as const }, green.file];
   const media: NonNullable<QueueOptions["media"]> = canonical
-    ? [document, described, blue, { kind: "image" }, green]
+    ? [{ path: document.file.path, kind: "document" }, red.file, ...mixedMedia]
     : mixed
-      ? [blue, { kind: "image" }, green]
-      : [blue, green];
+      ? mixedMedia
+      : [blue.file, green.file];
+  const staleMedia: NonNullable<QueueOptions["media"]> = [green.file, { kind: "image" }, blue.file];
   const message: UserMessage & { content: string } = {
     role: "user",
     content: "compare these attachments",
@@ -130,10 +123,7 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
   });
   let persisted = false;
   const recorder = {
-    message:
-      scenario === "resolved"
-        ? { ...message, __openclaw: { media: [green, { kind: "image" }, blue] } }
-        : message,
+    message: canonical ? { ...message, __openclaw: { media: staleMedia } } : message,
     resolveMessage: vi.fn(async (): Promise<UserMessage> => message),
     getAdmissionReceipt: () => undefined,
     markRuntimePersistencePending: vi.fn(),
@@ -164,7 +154,7 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
     waitForTranscriptCommit: true,
     images: mixed ? [inline] : [],
     // Deliberately disagree with the recorder's canonical facts and layout.
-    media: canonical ? [green, { kind: "image" }, blue] : media,
+    media: canonical ? staleMedia : media,
     imageOrder: canonical
       ? ["inline", "offloaded", "offloaded"]
       : mixed
@@ -172,11 +162,7 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
         : ["offloaded", "offloaded"],
     ...(canonical ? { userTurnTranscriptRecorder: recorder } : {}),
   };
-  const expectedImages = [
-    { type: "image", url: `data:image/png;base64,${blueBytes.toString("base64")}` },
-    ...(mixed ? [{ type: "image", url: `data:image/png;base64,${inline.data}` }] : []),
-    { type: "image", url: `data:image/png;base64,${greenBytes.toString("base64")}` },
-  ];
+  const expectedImages = [blue.input, ...(mixed ? [red.input] : []), green.input];
   const readSteeredMessages = async () =>
     (await readVisibleSessionTranscriptMessageEntries(target))
       .map((entry) => entry.message)
@@ -197,9 +183,10 @@ type StartedHarness = ReturnType<typeof createStartedThreadHarness>;
 
 async function withActiveMediaTurn(
   fixture: MediaFixture,
-  harness: StartedHarness,
-  exercise: (controller: AbortController) => Promise<void>,
+  exercise: (harness: StartedHarness, controller: AbortController) => Promise<void>,
+  onRequest?: Parameters<typeof createStartedThreadHarness>[0],
 ) {
+  const harness = createStartedThreadHarness(onRequest);
   // Drive media/closure ordering without charging filesystem setup to the run budget.
   vi.useFakeTimers();
   const controller = new AbortController();
@@ -221,7 +208,7 @@ async function withActiveMediaTurn(
     expect(resolveActiveEmbeddedRunSessionId(fixture.params.sessionKey!)).toBe(
       fixture.params.sessionId,
     );
-    await exercise(controller);
+    await exercise(harness, controller);
   } finally {
     // Assertions may fail while a steer awaits consumption; always retire its owner.
     controller.abort();
@@ -289,8 +276,6 @@ async function expectUnpersisted(fixture: MediaFixture, harness: StartedHarness)
 }
 
 it("prepares remote attachments with sandbox access ro without changing images or transcript", async () => {
-  const workspaceAccess = "ro";
-
   const fixture = await createMediaFixture("resolved", true);
   const sandboxRoot = path.join(tempDir, "sandbox");
   await fs.mkdir(sandboxRoot);
@@ -299,13 +284,10 @@ it("prepares remote attachments with sandbox access ro without changing images o
       sessionKey: fixture.params.sessionKey!,
       workspaceDir: sandboxRoot,
       agentWorkspaceDir: fixture.params.workspaceDir,
-      workspaceAccess,
-      runtimeId: "fixture",
-      runtimeLabel: "fixture",
-      containerName: "fixture",
+      workspaceAccess: "ro",
       tools: { allow: [], deny: [] },
     },
-    dockerOverrides: { image: "fixture", containerPrefix: "fixture", readOnlyRoot: true },
+    dockerOverrides: { readOnlyRoot: true },
   });
   sandbox.fsBridge = createRemoteShellSandboxFsBridge({
     sandbox,
@@ -329,9 +311,8 @@ it("prepares remote attachments with sandbox access ro without changing images o
     },
   );
   const release = registerSteeringWorkspace(fixture, prepare);
-  const harness = createStartedThreadHarness();
   try {
-    await withActiveMediaTurn(fixture, harness, async () => {
+    await withActiveMediaTurn(fixture, async (harness) => {
       const accepted = queueMedia(fixture);
       await waitForAcceptance(accepted, true);
       const [steer] = steers(harness);
@@ -374,9 +355,8 @@ it.each(["replaced", "host-closed", "hydration-host-closed"] as const)(
     }
     const release = hydrating ? () => {} : registerSteeringWorkspace(fixture, prepare);
     let releaseReplacement: (() => void) | undefined;
-    const harness = createStartedThreadHarness();
     try {
-      await withActiveMediaTurn(fixture, harness, async () => {
+      await withActiveMediaTurn(fixture, async (harness) => {
         const accepted = queueMedia(fixture, hydrating ? "delayed image" : fixture.message.content);
         await vi.waitFor(
           () =>
@@ -412,8 +392,7 @@ it("keeps consumed question answers accepted when their host closes during the r
   const onAttemptTimeout = vi.fn();
   fixture.params.onAttemptTimeout = onAttemptTimeout;
   const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
-  const harness = createStartedThreadHarness();
-  await withActiveMediaTurn(fixture, harness, async (controller) => {
+  await withActiveMediaTurn(fixture, async (harness, controller) => {
     const result = { status: "answered" as const, answers: { answers: { choice: ["yes"] } } };
     const answer = createDeferred<typeof result>();
     const onBlockReply = vi.fn();
@@ -470,8 +449,7 @@ it("rejects a outside-workspace structured image before dispatch or persistence"
   fixture.options.imageOrder = ["offloaded"];
   fixture.message["__openclaw"] = { media: fixture.options.media };
   fixture.options.userTurnTranscriptRecorder = fixture.recorder;
-  const harness = createStartedThreadHarness();
-  await withActiveMediaTurn(fixture, harness, async () => {
+  await withActiveMediaTurn(fixture, async (harness) => {
     const accepted = queueMedia(fixture, "inspect this");
     await waitForAcceptance(accepted, false);
     await expectUnpersisted(fixture, harness);
@@ -482,8 +460,7 @@ it("keeps later text behind the reserved image preparation slot", async () => {
   const fixture = await createMediaFixture("resolved");
   const prepared = createDeferred<UserMessage>();
   fixture.recorder.resolveMessage.mockImplementation(() => prepared.promise);
-  const harness = createStartedThreadHarness();
-  await withActiveMediaTurn(fixture, harness, async () => {
+  await withActiveMediaTurn(fixture, async (harness) => {
     try {
       const firstAccepted = queueMedia(fixture, "first image");
       await vi.waitFor(
@@ -493,10 +470,7 @@ it("keeps later text behind the reserved image preparation slot", async () => {
       const secondAccepted = queueMedia(fixture, "later text", { debounceMs: 0 });
       expect(steers(harness)).toEqual([]);
       prepared.resolve(fixture.message);
-      await vi.waitFor(
-        () => expect(secondAccepted).toHaveBeenCalledExactlyOnceWith(true),
-        fastWait,
-      );
+      await waitForAcceptance(secondAccepted, true);
       expect(firstAccepted).toHaveBeenCalledExactlyOnceWith(true);
       const requests = steers(harness);
       expect(requests.map((entry) => entry.input)).toEqual([
@@ -516,78 +490,72 @@ it("keeps later text behind the reserved image preparation slot", async () => {
 
 it("leaves rejected steering intact for a caller-owned fallback consumer", async () => {
   const fixture = await createMediaFixture("mixed");
-  const harness = createStartedThreadHarness(async (method) => {
-    if (method === "turn/steer") {
-      throw new Error("no active turn to steer");
-    }
-  });
-  await withActiveMediaTurn(fixture, harness, async () => {
-    const originalText = "  preserve this caption\n";
-    const originalOptions = { ...fixture.options, userTurnTranscriptRecorder: fixture.recorder };
-    const expectedPayload = {
-      text: originalText,
-      images: structuredClone(originalOptions.images),
-      imageOrder: structuredClone(originalOptions.imageOrder),
-      media: structuredClone(originalOptions.media),
-    };
-    // The SDK exposes eligibility plus acceptance, not the Gateway fallback dispatcher.
-    // Consume the actual retained inputs after rejection; do not compare an object to itself.
-    const fallback = vi.fn(async (text: string, options: QueueOptions) => ({
-      payload: structuredClone({
-        text,
-        images: options.images,
-        imageOrder: options.imageOrder,
-        media: options.media,
-      }),
-      recorder: options.userTurnTranscriptRecorder,
-      hydrated: await detectAndLoadAgentHarnessPromptImages({
-        prompt: text,
-        existingImages: options.images,
-        imageOrder: options.imageOrder,
-        media: options.media,
-        workspaceDir: fixture.params.workspaceDir,
-        model: fixture.params.model,
-        workspaceOnly: true,
-      }),
-    }));
-    let fallbackResult: ReturnType<typeof fallback> | undefined;
-    const accepted = vi.fn((value: boolean) => {
-      if (!value) {
-        fallbackResult = fallback(originalText, originalOptions);
+  await withActiveMediaTurn(
+    fixture,
+    async (harness) => {
+      const originalText = "  preserve this caption\n";
+      const originalOptions = { ...fixture.options, userTurnTranscriptRecorder: fixture.recorder };
+      const copyPayload = (text: string, { images, imageOrder, media }: QueueOptions) =>
+        structuredClone({ text, images, imageOrder, media });
+      const expectedPayload = copyPayload(originalText, originalOptions);
+      // The SDK exposes eligibility plus acceptance, not the Gateway fallback dispatcher.
+      // Consume the actual retained inputs after rejection; do not compare an object to itself.
+      const fallback = vi.fn(async (text: string, options: QueueOptions) => ({
+        payload: copyPayload(text, options),
+        recorder: options.userTurnTranscriptRecorder,
+        hydrated: await detectAndLoadAgentHarnessPromptImages({
+          prompt: text,
+          existingImages: options.images,
+          imageOrder: options.imageOrder,
+          media: options.media,
+          workspaceDir: fixture.params.workspaceDir,
+          model: fixture.params.model,
+          workspaceOnly: true,
+        }),
+      }));
+      let fallbackResult: ReturnType<typeof fallback> | undefined;
+      const accepted = vi.fn((value: boolean) => {
+        if (!value) {
+          fallbackResult = fallback(originalText, originalOptions);
+        }
+      });
+      expect(
+        queueAgentHarnessMessage(fixture.params.sessionId, originalText, {
+          ...originalOptions,
+          onQueueAccepted: accepted,
+        }),
+      ).toBe(true);
+      await waitForAcceptance(accepted, false);
+      const result = await fallbackResult;
+      expect(result?.payload).toEqual(expectedPayload);
+      expect(result?.recorder).toBe(fixture.recorder);
+      expect(
+        result?.hydrated.images.map((image) => ({
+          type: image.type,
+          url: `data:${image.mimeType};base64,${image.data}`,
+        })),
+      ).toEqual(fixture.expectedImages);
+      expect(result?.hydrated.loadedCount).toBe(2);
+      expect(fallback).toHaveBeenCalledOnce();
+      const [steer] = steers(harness);
+      await notifyConsumed(harness, steer.clientUserMessageId);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+      await result?.recorder?.persistApproved();
+      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+    },
+    async (method) => {
+      if (method === "turn/steer") {
+        throw new Error("no active turn to steer");
       }
-    });
-    expect(
-      queueAgentHarnessMessage(fixture.params.sessionId, originalText, {
-        ...originalOptions,
-        onQueueAccepted: accepted,
-      }),
-    ).toBe(true);
-    await waitForAcceptance(accepted, false);
-    const result = await fallbackResult;
-    expect(result?.payload).toEqual(expectedPayload);
-    expect(result?.recorder).toBe(fixture.recorder);
-    expect(
-      result?.hydrated.images.map((image) => ({
-        type: image.type,
-        url: `data:${image.mimeType};base64,${image.data}`,
-      })),
-    ).toEqual(fixture.expectedImages);
-    expect(result?.hydrated.loadedCount).toBe(2);
-    expect(fallback).toHaveBeenCalledOnce();
-    const [steer] = steers(harness);
-    await notifyConsumed(harness, steer.clientUserMessageId);
-    expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-    expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-    await result?.recorder?.persistApproved();
-    expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-  });
+    },
+  );
 });
 
 it("does not consume an offloaded image caption as a pending text-only answer", async () => {
   const fixture = await createMediaFixture("offloaded");
   fixture.params.onBlockReply = vi.fn();
-  const harness = createStartedThreadHarness();
-  await withActiveMediaTurn(fixture, harness, async () => {
+  await withActiveMediaTurn(fixture, async (harness) => {
     const response = harness.handleServerRequest({
       id: "request-image-answer",
       method: "item/tool/requestUserInput",
