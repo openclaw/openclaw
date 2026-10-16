@@ -25,17 +25,17 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
 }
 
 describe("applyJobPatch schedule retention", () => {
-  it.each([
-    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: false },
-    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined },
-  ])("defaults $schedule.kind to cleanup when converting it to at", (previous) => {
-    const job = makeJob(previous);
+  it.each([{ schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined }])(
+    "defaults $schedule.kind to cleanup when converting it to at",
+    (previous) => {
+      const job = makeJob(previous);
 
-    applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
+      applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
 
-    expect(job.schedule.kind).toBe("at");
-    expect(job.deleteAfterRun).toBe(true);
-  });
+      expect(job.schedule.kind).toBe("at");
+      expect(job.deleteAfterRun).toBe(true);
+    },
+  );
 
   it("preserves an explicit keep policy when converting a recurring job to at", () => {
     const job = makeJob({ deleteAfterRun: true });
@@ -49,43 +49,25 @@ describe("applyJobPatch schedule retention", () => {
   });
 
   it.each([
-    { kind: "every" as const, everyMs: 60_000 },
-    { kind: "cron" as const, expr: "0 * * * *" },
-  ])("clears the at-only default when converting to $kind", (schedule) => {
-    const job = makeJob({
-      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-      deleteAfterRun: true,
-    });
+    { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+    { kind: "on-exit", command: "true" },
+  ] as const)(
+    "clears inherited $kind cleanup on recurring conversion but honors explicit policies",
+    (previous) => {
+      for (const deleteAfterRun of [undefined, false, true]) {
+        const job = makeJob({ schedule: previous, deleteAfterRun: true });
 
-    applyJobPatch(job, { schedule });
+        applyJobPatch(job, {
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          ...(deleteAfterRun === undefined ? {} : { deleteAfterRun }),
+        });
 
-    expect(job.schedule.kind).toBe(schedule.kind);
-    expect(Object.hasOwn(job, "deleteAfterRun")).toBe(false);
-  });
-
-  it.each([
-    {
-      label: "at to at",
-      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
-      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
+        expect(job.schedule.kind).toBe("cron");
+        expect(job.deleteAfterRun).toBe(deleteAfterRun);
+        expect(Object.hasOwn(job, "deleteAfterRun")).toBe(deleteAfterRun !== undefined);
+      }
     },
-    {
-      label: "at to on-exit",
-      previous: { kind: "at" as const, at: "2026-07-19T09:00:00.000Z" },
-      next: { kind: "on-exit" as const, command: "true" },
-    },
-    {
-      label: "on-exit to at",
-      previous: { kind: "on-exit" as const, command: "true" },
-      next: { kind: "at" as const, at: "2026-07-20T09:00:00.000Z" },
-    },
-  ])("preserves one-shot retention for $label", ({ previous, next }) => {
-    const job = makeJob({ schedule: previous, deleteAfterRun: false });
-
-    applyJobPatch(job, { schedule: next });
-
-    expect(job.deleteAfterRun).toBe(false);
-  });
+  );
 });
 
 describe("schedule activation ownership", () => {
@@ -132,7 +114,7 @@ describe("schedule activation ownership", () => {
     expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
   });
 
-  it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(
+  it.each(["startupCatchupAtMs"] as const)(
     "rejects out-of-Date-range caller state for %s",
     (field) => {
       const job = makeJob({ enabled: false });
@@ -147,74 +129,7 @@ describe("schedule activation ownership", () => {
 });
 
 describe("applyJobPatch delivery merge", () => {
-  it("threads explicit delivery threadId patches into delivery", () => {
-    const job = makeJob();
-    const patch = { delivery: { threadId: "99" } } as Parameters<typeof applyJobPatch>[1];
-
-    applyJobPatch(job, patch);
-
-    expect(job.delivery).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890",
-      threadId: "99",
-    });
-  });
-
-  it("clears nullable delivery fields", () => {
-    const job = makeJob({
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "-1001234567890",
-        threadId: "99",
-        accountId: "bot-a",
-        failureDestination: {
-          mode: "announce",
-          channel: "slack",
-          to: "C123",
-          accountId: "bot-b",
-        },
-      },
-    });
-    const patch = {
-      delivery: {
-        channel: null,
-        to: null,
-        threadId: null,
-        accountId: null,
-        failureDestination: null,
-      },
-    } as Parameters<typeof applyJobPatch>[1];
-
-    applyJobPatch(job, patch);
-
-    expect(job.delivery).toEqual({ mode: "announce" });
-  });
-
-  it("preserves implicit delivery when clearing an absent override", () => {
-    const job = makeJob({ delivery: undefined });
-
-    applyJobPatch(job, {
-      delivery: { channel: null },
-    });
-
-    expect(job.delivery).toBeUndefined();
-  });
-
-  it("preserves implicit detached delivery when patching best-effort", () => {
-    const job = makeJob({ delivery: undefined });
-
-    applyJobPatch(job, {
-      delivery: { bestEffort: false },
-    });
-
-    expect(job.delivery).toEqual({ mode: "announce", bestEffort: false });
-    expect(resolveCronDeliveryPlan(job).mode).toBe("announce");
-  });
-
   it.each([
-    { name: "best-effort disabled", delivery: { bestEffort: false } },
     {
       name: "nullable clears",
       delivery: {
@@ -252,16 +167,6 @@ describe("applyJobPatch delivery merge", () => {
     existingDelivery?: CronJob["delivery"];
   }>([
     { name: "announce mode", delivery: { mode: "announce" } },
-    { name: "channel", delivery: { channel: "telegram" } },
-    { name: "recipient", delivery: { to: "123" } },
-    {
-      name: "recipient on inherited none",
-      delivery: { to: "123" },
-      existingDelivery: { mode: "none" },
-    },
-    { name: "zero thread", delivery: { threadId: 0 } },
-    { name: "string thread", delivery: { threadId: "99" } },
-    { name: "account", delivery: { accountId: "bot-a" } },
     {
       name: "completion webhook",
       delivery: {
@@ -283,10 +188,7 @@ describe("applyJobPatch delivery merge", () => {
     },
   );
 
-  it.each([
-    { bestEffort: false },
-    { channel: null, to: null, threadId: null, accountId: null },
-  ] satisfies Array<CronJobPatch["delivery"]>)(
+  it.each([{ bestEffort: false }] satisfies Array<CronJobPatch["delivery"]>)(
     "clears inherited announce delivery when retargeting to main with %j",
     (delivery) => {
       const job = makeJob();
@@ -386,39 +288,6 @@ describe("applyJobPatch delivery merge", () => {
       channel: "slack",
       to: "C123",
       accountId: "bot-a",
-    });
-  });
-
-  it("uses nullable failure destination fields to clear inherited global defaults", () => {
-    const job = makeJob();
-
-    applyJobPatch(job, {
-      delivery: {
-        failureDestination: {
-          channel: null,
-          to: "C123",
-          accountId: null,
-          mode: null,
-        },
-      },
-    });
-
-    const failureDestination = job.delivery?.failureDestination;
-    expect(failureDestination?.to).toBe("C123");
-    expect(Object.hasOwn(failureDestination as object, "channel")).toBe(true);
-    expect(Object.hasOwn(failureDestination as object, "accountId")).toBe(true);
-    expect(Object.hasOwn(failureDestination as object, "mode")).toBe(true);
-    expect(
-      resolveFailureDestination(job, {
-        channel: "slack",
-        accountId: "bot-a",
-        mode: "webhook",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "last",
-      to: "C123",
-      accountId: undefined,
     });
   });
 

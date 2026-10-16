@@ -19,6 +19,8 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { GatewayClientOptions } from "../../../../src/gateway/client.js";
+import { readGatewayLockProcessCmdline } from "../../../../src/infra/gateway-lock-process.js";
+import { isPidDefinitelyDead } from "../../../../src/shared/pid-alive.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -54,6 +56,8 @@ const DISCONNECT_MARKER = "CODEX_NODE_EXEC_DISCONNECT_PROOF";
 const RECOVERY_MARKER = "CODEX_NODE_EXEC_FRESH_ATTEMPT_PROOF";
 const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
+const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
+const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
 let receipts: FixtureReceiptChannel;
 
 beforeAll(async () => {
@@ -420,15 +424,37 @@ async function readRemoteEvidence<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 }
 
-async function nodeChildCommands(nodePid: number): Promise<string[]> {
-  const { stdout } = await execFileAsync("ps", ["-ax", "-o", "ppid=", "-o", "command="], {
+async function nodeChildCommands(nodePid: number): Promise<string[][]> {
+  // Unrelated inline scripts can overflow a whole-host command-line census.
+  const { stdout } = await execFileAsync("ps", ["-ax", "-o", "ppid=", "-o", "pid="], {
     encoding: "utf8",
   });
   return stdout
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(`${nodePid} `))
-    .map((line) => line.slice(String(nodePid).length).trim());
+    .flatMap((line) => {
+      const pid = Number(line.slice(String(nodePid).length).trim());
+      const argv = readGatewayLockProcessCmdline(pid, process.platform, 1_000);
+      if (argv?.length) {
+        return [argv];
+      }
+      if (isPidDefinitelyDead(pid)) {
+        return [];
+      }
+      throw new Error(`Could not inspect live node child process ${pid}`);
+    });
+}
+
+function launchCommandHasArg(argv: string[], names: ReadonlySet<string>): boolean {
+  const inlineScript = argv.findIndex(
+    (arg) => arg === "-e" || arg === "--eval" || arg.startsWith("--eval="),
+  );
+  const launchArgs = inlineScript < 0 ? argv : argv.slice(0, inlineScript);
+  return launchArgs.some((arg) => {
+    const normalized = arg.toLowerCase();
+    return names.has(normalized) || names.has(path.basename(normalized));
+  });
 }
 
 async function startTurn(
@@ -695,7 +721,7 @@ describe("Codex paired-device exec-server carrier", () => {
         ).toEqual([]);
         expect(
           (await nodeChildCommands(unapprovedNodePid!)).filter((command) =>
-            /(?:^|\s)(?:worker|codex(?:\s+exec-server)?)(?:\s|$)/iu.test(command),
+            launchCommandHasArg(command, WORKER_OR_CODEX_COMMAND_ARGS),
           ),
         ).toEqual([]);
         expect(provider.nativeExecCalls).toBe(0);
@@ -784,7 +810,9 @@ describe("Codex paired-device exec-server carrier", () => {
         const nodePid = node.child.pid;
         expect(nodePid).toBeTruthy();
         const children = await nodeChildCommands(nodePid!);
-        expect(children.filter((command) => /(?:^|\s)worker(?:\s|$)/u.test(command))).toEqual([]);
+        expect(
+          children.filter((command) => launchCommandHasArg(command, WORKER_COMMAND_ARGS)),
+        ).toEqual([]);
 
         const repeated = await startTurn(requester, REPEAT_MARKER);
         await expectSuccessfulTurn({ reviewer, gateway, node, provider, runId: repeated.runId });

@@ -13,7 +13,6 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { createCanonicalAgentConfigFixture } from "../../../../src/test-utils/config-roster.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
@@ -131,7 +130,7 @@ describe("node workspace document access", () => {
       });
       const nodeId = nodeIdentity.deviceId;
       const attachmentFixture = await writeAttachmentFixture(state.root);
-      const config: OpenClawConfig = createCanonicalAgentConfigFixture({
+      const config: OpenClawConfig = {
         gateway: {
           mode: "local",
           bind: "loopback",
@@ -139,12 +138,14 @@ describe("node workspace document access", () => {
           nodes: { commands: { allow: COMMANDS } },
         },
         agents: {
-          list: [
-            { id: "qa", default: true, workspace: state.workspaceDir },
-            { id: "local", workspace: state.path("local-workspace") },
-          ],
+          ownership: "explicit",
+          entries: {
+            qa: { workspace: state.workspaceDir },
+            local: { workspace: state.path("local-workspace") },
+          },
           defaults: {
             workspace: state.workspaceDir,
+            systemAgent: { agentId: "qa" },
             skipBootstrap: true,
             heartbeat: { every: "0m" },
           },
@@ -177,7 +178,7 @@ describe("node workspace document access", () => {
             },
           },
         },
-      }).config;
+      };
       const gatewayOwner = createQaGatewayChild();
       let owner: GatewayClient | undefined;
       let reader: GatewayClient | undefined;

@@ -26,7 +26,7 @@ import {
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
-import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { runExec } from "../process/exec.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -53,6 +53,7 @@ import {
   startGatewayCaseControlClient,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
+import { readRequestBody, writeTuiModelHttpJson } from "./tui-pty-model-http-test-support.js";
 import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
 import { startRuntimePty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -203,24 +204,6 @@ async function requestWithUnavailableRetry<T>(request: () => Promise<T>): Promis
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
-
 async function writeResponsesSse(
   res: ServerResponse,
   text: string,
@@ -353,11 +336,11 @@ async function startRoutedMockModelServer(
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-        writeJson(res, 200, { ok: true });
+        writeTuiModelHttpJson(res, 200, { ok: true });
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
-        writeJson(res, 200, {
+        writeTuiModelHttpJson(res, 200, {
           data: Object.keys(behaviors).map((id) => ({
             id,
             object: "model",
@@ -378,7 +361,9 @@ async function startRoutedMockModelServer(
           const behavior = behaviors[modelId];
           if (!behavior) {
             rejectedRequests.push(request);
-            writeJson(res, 400, { error: `unknown mock model: ${modelId || "missing"}` });
+            writeTuiModelHttpJson(res, 400, {
+              error: `unknown mock model: ${modelId || "missing"}`,
+            });
             return;
           }
           const modelRequests = requestsByModel.get(modelId) ?? [];
@@ -401,10 +386,10 @@ async function startRoutedMockModelServer(
           );
           return;
         }
-        writeJson(res, 404, { error: "not found" });
+        writeTuiModelHttpJson(res, 404, { error: "not found" });
         return;
       }
-      writeJson(res, 404, { error: "not found" });
+      writeTuiModelHttpJson(res, 404, { error: "not found" });
     })();
   });
 
@@ -1826,8 +1811,11 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
+        await reloadSharedAuthStoreOwnership({
+          ...process.env,
+          OPENCLAW_STATE_DIR: fixture.stateDir,
+        });
         const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
-          reloadSharedAuthStoreOwnership();
           return loadAuthProfileStoreForRuntime(agentDir, {
             readOnly: true,
             syncExternalCli: false,
@@ -2612,8 +2600,7 @@ export default {
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
-      const failureText =
-        "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+      const failureText = "No answer was returned. Ask again if you still need one.";
       const chatEvents: unknown[] = [];
       fixture.controlClient.onEvent = ({ event, payload }) => {
         if (event === "chat") {
@@ -2631,8 +2618,7 @@ export default {
 
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () =>
-            fixture.visibleOutput().includes("did not produce a visible reply") ? true : null,
+          read: () => (fixture.visibleOutput().includes(failureText) ? true : null),
           onTimeout: () =>
             new Error(
               `empty-reply fallback was not rendered\nchatEvents=${JSON.stringify(chatEvents)}\nrequests=${JSON.stringify(

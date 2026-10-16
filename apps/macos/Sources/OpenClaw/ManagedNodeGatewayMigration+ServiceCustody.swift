@@ -1,11 +1,9 @@
-import CryptoKit
 import Foundation
-import OpenClawNativeState
 
 extension ManagedNodeGatewayMigration {
     struct ServiceCustody: Equatable, Sendable {
         let definition: GatewayLaunchAgentManager.ServiceDefinitionDigest
-        let runtimePin: OpenClawNativeStateConfigValue?
+        let runtimePin: GatewayLaunchAgentManager.RuntimeIntent?
 
         func serviceAuthority() throws -> GatewayLaunchAgentManager.ServiceAuthority {
             let authority = try GatewayLaunchAgentManager.gatewayServiceAuthority()
@@ -34,6 +32,9 @@ extension ManagedNodeGatewayMigration {
             error installError: String?,
             capture: () async throws -> ServiceCustody) async throws
         {
+            if let installError, installError.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                throw Failure(message: installError)
+            }
             do { self.installed = try await capture() } catch {
                 if let installError { throw Failure(message: installError) }
                 throw error
@@ -49,17 +50,6 @@ extension ManagedNodeGatewayMigration {
             throw Failure(message: "Gateway service or runtime pin changed during migration. " +
                 "The newer service was preserved; inspect it before retrying.")
         }
-    }
-
-    private struct RuntimePin: Decodable {
-        struct Pin: Decodable {
-            let runtime: String
-            let path: String
-        }
-
-        let version: Int
-        let pin: Pin
-        let definition: String
     }
 
     static func captureServiceCustody(
@@ -111,28 +101,23 @@ extension ManagedNodeGatewayMigration {
                   environmentWrapper: artifacts.wrapper),
               let cli = GatewayLaunchAgentManager.installedServiceCLI(
                   snapshot: snapshot, environmentFile: artifacts.environment, environmentWrapper: artifacts.wrapper),
-              cli.prefix.first == runtime.bun.path,
+              cli.matchesBundledRuntime(runtime),
               let entrypoint = cli.prefix.last,
-              Self.bundledEntrypoints(runtime: runtime).contains(entrypoint),
               snapshot.environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path,
               snapshot.port == port,
               snapshot.programArguments.contains("--allow-unconfigured") == allowUnconfigured
         else { throw Failure(message: "The Gateway service does not match this Bun installation; it was preserved.") }
-        // Core binds runtime intent to the unwrapped command and working directory.
         let workingDirectory = (plist["WorkingDirectory"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         guard plist["WorkingDirectory"] == nil || plist["WorkingDirectory"] is String else {
             throw Failure(message: "The installed Gateway working directory could not be inspected.")
         }
-        let binding: [Any] = [command, workingDirectory as Any? ?? NSNull()]
-        let bindingData = try JSONSerialization.data(withJSONObject: binding, options: [.withoutEscapingSlashes])
-        let definition = SHA256.hash(data: bindingData).map { String(format: "%02x", $0) }.joined()
         let expectedCommand = [runtime.bun.path, entrypoint, "gateway", "--port", String(port)] +
             (allowUnconfigured ? ["--allow-unconfigured"] : [])
         // A failed writer may publish the service before committing its pin. Without that
         // binding, only the exact packaged installer command and profile working directory qualify.
         let allowsAbsentPin = allowMissingRuntimePin && command == expectedCommand && workingDirectory == state.path
         guard self.runtimePinMatchesInstallation(
-            claim.runtimePin, runtime: runtime, definition: definition, allowMissing: allowsAbsentPin),
+            claim.runtimePin, runtime: runtime, allowMissing: allowsAbsentPin),
             try await self.captureServiceCustody(profile: profile) == claim
         else {
             throw Failure(message: "Gateway service or runtime pin changed after Bun installation; it was preserved.")
@@ -141,20 +126,12 @@ extension ManagedNodeGatewayMigration {
     }
 
     static func runtimePinMatchesInstallation(
-        _ record: OpenClawNativeStateConfigValue?,
+        _ record: GatewayLaunchAgentManager.RuntimeIntent?,
         runtime: BundledRuntime,
-        definition: String,
         allowMissing: Bool) -> Bool
     {
         guard let record else { return allowMissing }
-        guard let pin = try? JSONDecoder().decode(RuntimePin.self, from: Data(record.value.utf8)) else { return false }
-        return pin.version == 1 && pin.pin.runtime == "bun" && pin.pin.path == runtime.bun.path &&
-            pin.definition == definition
-    }
-
-    private static func bundledEntrypoints(runtime: BundledRuntime) -> Set<String> {
-        Set(["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs"].map {
-            runtime.packageRoot.appendingPathComponent($0).path
-        })
+        // The daemon reports known intent only after checking its binding to the current definition.
+        return record.pin?.runtime == "bun" && record.pin?.path == runtime.bun.path
     }
 }

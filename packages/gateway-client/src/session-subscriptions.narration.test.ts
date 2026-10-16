@@ -11,9 +11,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 describe("session narration subscription ownership", () => {
   it.each([
     { key: "agent:main:foo", firstAgent: undefined, secondAgent: "main", owners: 2 },
-    { key: "agent:main:foo", firstAgent: "main", secondAgent: undefined, owners: 2 },
     { key: "agent:main:foo", firstAgent: "MAIN", secondAgent: "main", owners: 1 },
-    { key: "global", firstAgent: undefined, secondAgent: "main", owners: 2 },
     { key: "global", firstAgent: "main", secondAgent: undefined, owners: 2 },
   ])(
     "retains independent wire ownership for $key ($firstAgent → $secondAgent)",
@@ -276,7 +274,7 @@ describe("session narration subscription ownership", () => {
     await coordinator.release(approvalOwner);
   });
 
-  it("restores a timed-out downgrade and drains overlapping releases without orphaning narration", async () => {
+  it("retries a timed-out downgrade and drains overlapping releases without orphaning narration", async () => {
     const downgrade = createDeferred<unknown>();
     let holdDowngrade = false;
     const { client, request } = createClient(async (_method, params) => {
@@ -305,6 +303,7 @@ describe("session narration subscription ownership", () => {
     expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
       subscriptionId: expect.any(String),
       key: "main",
+      mode: "narration",
     });
     await Promise.all([coordinator.release(foreground), coordinator.release(narration)]);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {

@@ -210,6 +210,55 @@ describe("writeImportedSourcePage", () => {
     },
   );
 
+  it.each(["bridge", "unsafe-local"] as const)(
+    "preserves a %s page and tracked state when source bytes are malformed UTF-8",
+    async (group) => {
+      const sourcePath = path.join(suiteRoot, "encoding-source.md");
+      const pagePath = "sources/encoding.md";
+      const syncKey = `${group}:encoding`;
+      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
+        entries: {},
+        version: 1,
+      };
+      const original = "Café 🤖 � original";
+      await fs.writeFile(sourcePath, original);
+      const params = {
+        vaultRoot: suiteRoot,
+        syncKey,
+        sourcePath,
+        sourceUpdatedAtMs: 123,
+        sourceSize: Buffer.byteLength(original),
+        renderFingerprint: "encoding",
+        pagePath,
+        group,
+        state,
+        buildRendered: buildSourcePage,
+      };
+      await writeImportedSourcePage(params);
+      const pageBefore = await fs.readFile(path.join(suiteRoot, pagePath));
+      expect(pageBefore.toString("utf8")).toContain(original);
+      const stateBefore = structuredClone(state);
+      const malformed = Buffer.from([0xff, 0x0a]);
+      await fs.writeFile(sourcePath, malformed);
+      const buildRendered = vi.fn(buildSourcePage);
+
+      await expect(
+        writeImportedSourcePage({
+          ...params,
+          sourceUpdatedAtMs: 124,
+          sourceSize: malformed.length,
+          buildRendered,
+        }),
+      ).rejects.toThrow(
+        `Imported source file must be valid UTF-8: ${sourcePath}. Restore the source as valid UTF-8 and retry the sync.`,
+      );
+      expect(buildRendered).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(suiteRoot, pagePath))).resolves.toEqual(pageBefore);
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(malformed);
+      expect(state).toEqual(stateBefore);
+    },
+  );
+
   it("preserves CRLF human notes without copying marker comments from existing imported content", async () => {
     const sourcePath = path.join(suiteRoot, "imported-crlf.txt");
     const pagePath = "sources/imported-crlf.md";

@@ -1,5 +1,3 @@
-// Pure pose model shared by the mascot animator and canvas renderer.
-
 export type MascotMood =
   | "idle"
   | "curious"

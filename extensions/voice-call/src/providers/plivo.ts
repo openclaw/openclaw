@@ -23,7 +23,7 @@ import type {
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
-import { guardedJsonApiRequest, readProviderCallStatus } from "./shared/guarded-json-api.js";
+import { createCarrierApi } from "./shared/carrier-api.js";
 
 interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -54,11 +54,9 @@ function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
 
-  private readonly authId: string;
   private readonly authToken: string;
-  private readonly baseUrl: string;
   private readonly options: PlivoProviderOptions;
-  private readonly apiHost: string;
+  private readonly api: ReturnType<typeof createCarrierApi>;
 
   // Best-effort mapping between create-call request UUID and call UUID.
   private requestUuidToCallUuid = new Map<string, string>();
@@ -114,33 +112,13 @@ export class PlivoProvider implements VoiceCallProvider {
       throw new Error("Plivo Auth Token is required");
     }
 
-    this.authId = config.authId;
     this.authToken = config.authToken;
-    this.baseUrl = `https://api.plivo.com/v1/Account/${this.authId}`;
-    this.apiHost = new URL(this.baseUrl).hostname;
     this.options = options;
-  }
-
-  private async apiRequest<T = unknown>(params: {
-    method: "GET" | "POST" | "DELETE";
-    endpoint: string;
-    body?: Record<string, unknown>;
-    allowNotFound?: boolean;
-  }): Promise<T> {
-    const { method, endpoint, body, allowNotFound } = params;
-    return await guardedJsonApiRequest<T>({
-      url: `${this.baseUrl}${endpoint}`,
-      method,
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
-        "Content-Type": "application/json",
-      },
-      body,
-      allowNotFound,
-      allowedHostnames: [this.apiHost],
-      auditContext: "voice-call.plivo.api",
-      errorPrefix: "Plivo API error",
-    });
+    this.api = createCarrierApi(
+      "Plivo",
+      `https://api.plivo.com/v1/Account/${config.authId}`,
+      `Basic ${Buffer.from(`${config.authId}:${config.authToken}`).toString("base64")}`,
+    );
   }
 
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
@@ -188,45 +166,33 @@ export class PlivoProvider implements VoiceCallProvider {
     let providerResponseBody: string;
 
     // Special flows that exist only to return Plivo XML (no events).
-    if (flow === "xml-speak") {
-      const pending = callId ? this.pendingSpeakByCallId.get(callId) : undefined;
+    if (flow === "xml-speak" || flow === "xml-listen") {
+      const speaks = flow === "xml-speak";
+      const pendingSpeak = speaks && callId ? this.pendingSpeakByCallId.get(callId) : undefined;
+      const pendingListen = !speaks && callId ? this.pendingListenByCallId.get(callId) : undefined;
+      const language = speaks ? pendingSpeak?.locale : pendingListen?.language;
       if (callId) {
-        this.pendingSpeakByCallId.delete(callId);
+        (speaks ? this.pendingSpeakByCallId : this.pendingListenByCallId).delete(callId);
       }
-
       const actionUrl =
-        pending?.listenAfterPlayback && callId ? this.buildActionUrl(ctx, callId) : null;
-      providerResponseBody = pending
-        ? actionUrl
-          ? PlivoProvider.xmlGetInputSpeech({
-              text: pending.text,
-              language: pending.locale,
-              actionUrl,
-            })
-          : PlivoProvider.xmlSpeak(pending.text, pending.locale)
-        : PlivoProvider.xmlKeepAlive();
-    } else if (flow === "xml-listen") {
-      const pending = callId ? this.pendingListenByCallId.get(callId) : undefined;
-      if (callId) {
-        this.pendingListenByCallId.delete(callId);
-      }
-
-      const actionUrl = this.buildActionUrl(ctx, callId);
-
+        !speaks || (pendingSpeak?.listenAfterPlayback && callId)
+          ? this.buildActionUrl(ctx, callId)
+          : null;
       providerResponseBody =
         actionUrl && callId
-          ? PlivoProvider.xmlGetInputSpeech({
-              actionUrl,
-              language: pending?.language,
-            })
-          : PlivoProvider.xmlKeepAlive();
+          ? PlivoProvider.xmlGetInputSpeech({ text: pendingSpeak?.text, language, actionUrl })
+          : pendingSpeak
+            ? PlivoProvider.xmlKeepAlive(
+                `  <Speak language="${escapeXml(language || "en-US")}">${escapeXml(pendingSpeak.text)}</Speak>\n`,
+              )
+            : PlivoProvider.xmlKeepAlive();
     } else {
       const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
       event = this.normalizeEvent(parsed, callId, dedupeKey);
       providerResponseBody =
         flow === "answer" || flow === "getinput"
           ? PlivoProvider.xmlKeepAlive()
-          : PlivoProvider.xmlEmpty();
+          : '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
     }
 
     return {
@@ -332,19 +298,15 @@ export class PlivoProvider implements VoiceCallProvider {
 
     this.callIdToWebhookUrl.set(input.callId, input.webhookUrl);
 
-    const result = await this.apiRequest<PlivoCreateCallResponse>({
-      method: "POST",
-      endpoint: "/Call/",
-      body: {
-        from: PlivoProvider.normalizeNumber(input.from),
-        to: PlivoProvider.normalizeNumber(input.to),
-        answer_url: answerUrl.toString(),
-        answer_method: "POST",
-        hangup_url: hangupUrl.toString(),
-        hangup_method: "POST",
-        // Plivo's API uses `hangup_on_ring` for outbound ring timeout.
-        hangup_on_ring: this.options.ringTimeoutSec ?? 30,
-      },
+    const result = await this.api.request<PlivoCreateCallResponse>("/Call/", {
+      from: PlivoProvider.normalizeNumber(input.from),
+      to: PlivoProvider.normalizeNumber(input.to),
+      answer_url: answerUrl.toString(),
+      answer_method: "POST",
+      hangup_url: hangupUrl.toString(),
+      hangup_method: "POST",
+      // Plivo's API uses `hangup_on_ring` for outbound ring timeout.
+      hangup_on_ring: this.options.ringTimeoutSec ?? 30,
     });
 
     const requestUuid = Array.isArray(result.request_uuid)
@@ -359,16 +321,14 @@ export class PlivoProvider implements VoiceCallProvider {
 
   async hangupCall(input: HangupCallInput): Promise<void> {
     const callUuid = this.requestUuidToCallUuid.get(input.providerCallId);
-    await this.apiRequest({
+    await this.api.request(`/Call/${callUuid || input.providerCallId}/`, undefined, {
       method: "DELETE",
-      endpoint: `/Call/${callUuid || input.providerCallId}/`,
       allowNotFound: true,
     });
     // Without a resolved call UUID, also try canceling the outbound request.
     if (!callUuid) {
-      await this.apiRequest({
+      await this.api.request(`/Request/${input.providerCallId}/`, undefined, {
         method: "DELETE",
-        endpoint: `/Request/${input.providerCallId}/`,
         allowNotFound: true,
       });
     }
@@ -410,14 +370,10 @@ export class PlivoProvider implements VoiceCallProvider {
     transferUrl.searchParams.set("flow", params.flow);
     transferUrl.searchParams.set("callId", params.callId);
 
-    await this.apiRequest({
-      method: "POST",
-      endpoint: `/Call/${params.callUuid}/`,
-      body: {
-        legs: "aleg",
-        aleg_url: transferUrl.toString(),
-        aleg_method: "POST",
-      },
+    await this.api.request(`/Call/${params.callUuid}/`, {
+      legs: "aleg",
+      aleg_url: transferUrl.toString(),
+      aleg_method: "POST",
     });
   }
 
@@ -458,19 +414,8 @@ export class PlivoProvider implements VoiceCallProvider {
       "machine",
       "hangup",
     ]);
-    return readProviderCallStatus(
-      () =>
-        guardedJsonApiRequest<{ call_status?: string }>({
-          url: `${this.baseUrl}/Call/${input.providerCallId}/`,
-          method: "GET",
-          headers: {
-            Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
-          },
-          allowNotFound: true,
-          allowedHostnames: [this.apiHost],
-          auditContext: "plivo-get-call-status",
-          errorPrefix: "Plivo get call status error",
-        }),
+    return this.api.getCallStatus<{ call_status?: string }>(
+      `/Call/${input.providerCallId}/`,
       (data) => {
         const status = data.call_status ?? "unknown";
         return { status, isTerminal: terminalStatuses.has(status) };
@@ -486,23 +431,10 @@ export class PlivoProvider implements VoiceCallProvider {
     return trimmed.replace(/[^\d+]/g, "");
   }
 
-  private static xmlEmpty(): string {
-    return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-  }
-
-  private static xmlKeepAlive(): string {
+  private static xmlKeepAlive(content = ""): string {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Wait length="300" />
-</Response>`;
-  }
-
-  private static xmlSpeak(text: string, locale?: string): string {
-    const language = locale || "en-US";
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Speak language="${escapeXml(language)}">${escapeXml(text)}</Speak>
-  <Wait length="300" />
+${content}  <Wait length="300" />
 </Response>`;
   }
 
@@ -516,12 +448,11 @@ export class PlivoProvider implements VoiceCallProvider {
       params.text === undefined
         ? ""
         : `    <Speak language="${escapeXml(language)}">${escapeXml(params.text)}</Speak>\n`;
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
+    return PlivoProvider.xmlKeepAlive(
+      `  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
 ${prompt}  </GetInput>
-  <Wait length="300" />
-</Response>`;
+`,
+    );
   }
 
   private buildActionUrl(ctx: WebhookContext, callId?: string): string | null {

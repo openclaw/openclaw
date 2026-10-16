@@ -1,6 +1,7 @@
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
 type CanvasSurface = "assistant_message" | "node_panel";
@@ -31,26 +32,18 @@ type CanvasPreview = {
   mcpApp?: McpAppPreviewDescriptor;
 };
 
-function getRecordStringField(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function coerceMcpAppDescriptor(
   record: Record<string, unknown> | undefined,
 ): McpAppPreviewDescriptor | undefined {
-  const viewId = getRecordStringField(record, "viewId");
+  const viewId = readNonBlankString(record?.viewId);
   if (!viewId || viewId.length > 128) {
     return undefined;
   }
-  const serverName = getRecordStringField(record, "serverName");
-  const toolName = getRecordStringField(record, "toolName");
-  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
-  const toolCallId = getRecordStringField(record, "toolCallId");
-  const originSessionKey = getRecordStringField(record, "originSessionKey");
+  const serverName = readNonBlankString(record?.serverName);
+  const toolName = readNonBlankString(record?.toolName);
+  const uiResourceUri = readNonBlankString(record?.uiResourceUri);
+  const toolCallId = readNonBlankString(record?.toolCallId);
+  const originSessionKey = readNonBlankString(record?.originSessionKey);
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -75,14 +68,6 @@ function coerceMcpAppDescriptor(
     : { viewId };
 }
 
-function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" || value === "node_panel" ? value : undefined;
-}
-
-function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {
-  return value === "strict" || value === "scripts" ? value : undefined;
-}
-
 function normalizePreferredHeight(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 160
     ? Math.min(Math.trunc(value), 1200)
@@ -99,7 +84,7 @@ function coerceCanvasPreview(
   if (!record) {
     return undefined;
   }
-  const kind = getRecordStringField(record, "kind")?.trim().toLowerCase();
+  const kind = readNonBlankString(record?.kind)?.trim().toLowerCase();
   if (kind !== "canvas") {
     return undefined;
   }
@@ -109,12 +94,12 @@ function coerceCanvasPreview(
   const mcpApp = coerceMcpAppDescriptor(asOptionalRecord(record.mcpApp));
   const mcpAppViewId = mcpApp?.viewId;
   const requestedSurface =
-    getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
-  const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
-  if (!surface) {
+    readNonBlankString(presentation?.target) ?? readNonBlankString(record?.target);
+  const surface = requestedSurface ?? "assistant_message";
+  if (surface !== "assistant_message" && surface !== "node_panel") {
     return undefined;
   }
-  const title = getRecordStringField(presentation, "title") ?? getRecordStringField(view, "title");
+  const title = readNonBlankString(presentation?.title) ?? readNonBlankString(view?.title);
   const preferredHeight = normalizePreferredHeight(
     asFiniteNumber(presentation?.preferred_height) ??
       asFiniteNumber(presentation?.preferredHeight) ??
@@ -122,13 +107,12 @@ function coerceCanvasPreview(
       asFiniteNumber(view?.preferredHeight),
   );
   const className =
-    getRecordStringField(presentation, "class_name") ??
-    getRecordStringField(presentation, "className");
-  const style = getRecordStringField(presentation, "style");
-  const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
-  const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
-  const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
-  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+    readNonBlankString(presentation?.class_name) ?? readNonBlankString(presentation?.className);
+  const style = readNonBlankString(presentation?.style);
+  const sandbox = readNonBlankString(presentation?.sandbox);
+  const viewUrl = readNonBlankString(view?.url) ?? readNonBlankString(view?.entryUrl);
+  const viewId = readNonBlankString(view?.id) ?? readNonBlankString(view?.docId);
+  const requestedBoardWidgetName = readNonBlankString(view?.boardWidgetName);
   const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
     ? requestedBoardWidgetName
     : undefined;
@@ -138,7 +122,7 @@ function coerceCanvasPreview(
     render: "url",
     ...(title ? { title } : {}),
     ...(preferredHeight ? { preferredHeight } : {}),
-    ...(sandbox ? { sandbox } : {}),
+    ...(sandbox === "strict" || sandbox === "scripts" ? { sandbox } : {}),
     ...(mcpApp ? { mcpApp } : {}),
   };
   if (mcpAppViewId && viewId === mcpAppViewId) {
@@ -146,8 +130,8 @@ function coerceCanvasPreview(
   }
   const url =
     viewUrl ??
-    (getRecordStringField(source, "type")?.trim().toLowerCase() === "url"
-      ? getRecordStringField(source, "url")
+    (readNonBlankString(source?.type)?.trim().toLowerCase() === "url"
+      ? readNonBlankString(source?.url)
       : undefined);
   if (!url) {
     return undefined;
@@ -173,7 +157,7 @@ function parseCanvasAttributes(raw: string): Record<string, string> {
   const re = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(raw))) {
-    const key = match[1]?.trim().toLowerCase();
+    const key = match[1]?.toLowerCase();
     const value = (match[2] ?? match[3] ?? "").trim();
     if (key && value) {
       attrs[key] = value;
@@ -182,31 +166,21 @@ function parseCanvasAttributes(raw: string): Record<string, string> {
   return attrs;
 }
 
-function defaultCanvasEntryUrl(ref: string): string {
-  const encoded = encodeURIComponent(ref.trim());
-  return `/__openclaw__/canvas/documents/${encoded}/index.html`;
-}
-
 function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | undefined {
-  if (attrs.target && normalizeSurface(attrs.target) !== "assistant_message") {
+  if (attrs.target && attrs.target !== "assistant_message") {
     return undefined;
   }
-  const surface = "assistant_message";
-  const title = attrs.title?.trim() || undefined;
-  const preferredHeight =
-    attrs.height && Number.isFinite(Number(attrs.height))
-      ? normalizePreferredHeight(Number(attrs.height))
-      : undefined;
-  const className = attrs.class?.trim() || attrs.class_name?.trim() || undefined;
-  const style = attrs.style?.trim() || undefined;
-  const ref = attrs.ref?.trim();
-  const url = attrs.url?.trim();
+  const { title, style, ref, url } = attrs;
+  const preferredHeight = normalizePreferredHeight(Number(attrs.height));
+  const className = attrs.class ?? attrs.class_name;
   if (url || ref) {
     return {
       kind: "canvas",
-      surface,
+      surface: "assistant_message",
       render: "url",
-      url: url ?? defaultCanvasEntryUrl(expectDefined(ref, "canvas reference")),
+      url:
+        url ??
+        `/__openclaw__/canvas/documents/${encodeURIComponent(expectDefined(ref, "canvas reference"))}/index.html`,
       ...(ref ? { viewId: ref } : {}),
       ...(title ? { title } : {}),
       ...(preferredHeight ? { preferredHeight } : {}),

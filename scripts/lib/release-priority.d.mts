@@ -14,7 +14,6 @@ export interface ReleasePriorityRecord {
   recordedAt: string;
   repository?: string;
 }
-export function isReleaseBranch(name: unknown): boolean;
 export function isDeferrableRun(
   run: Record<string, unknown> | undefined,
   parentRunId: string | number,

@@ -9,10 +9,8 @@ import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/t
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
-import {
-  loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -32,34 +30,38 @@ type GatewaySessionCompactionParams = {
   storePath: string;
 };
 
-function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {
+/** Empty transcripts are a no-op; only the legacy runtime has a host preflight. */
+export async function preflightGatewaySessionCompaction(
+  params: GatewaySessionCompactionParams,
+): Promise<
+  | { reason: "no transcript" | "Already compacted" | "Nothing to compact (session too small)" }
+  | undefined
+> {
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const persistedRuntime = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
     entry: params.entry,
     cfg: params.cfg,
   }).agentHarnessId;
+  const transcriptTarget = {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionStoreKey,
+    storePath: params.storePath,
+  };
   const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
-  return (
-    (!persistedRuntime || persistedRuntime === "openclaw") &&
-    (!contextEngine || contextEngine === "legacy")
-  );
-}
-
-/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
-export async function preflightGatewaySessionCompaction(
-  params: GatewaySessionCompactionParams,
-): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
-  if (!usesLegacyOpenClawCompaction(params)) {
-    return undefined;
+  if (
+    (persistedRuntime && persistedRuntime !== "openclaw") ||
+    (contextEngine && contextEngine !== "legacy")
+  ) {
+    const stats = await readTranscriptStatsAsync(transcriptTarget);
+    return stats.eventCount === 0 ? { reason: "no transcript" } : undefined;
+  }
+  const transcriptEvents = await loadTranscriptEvents(transcriptTarget);
+  if (transcriptEvents.length === 0) {
+    return { reason: "no transcript" };
   }
   try {
-    const transcriptEvents = await loadTranscriptEvents({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionStoreKey,
-      storePath: params.storePath,
-    });
     const tree = scanSessionTranscriptTree(transcriptEvents);
     const branch = selectSessionTranscriptTreePathNodes(tree, tree.leafId)
       .map((node) => node.entry)
@@ -71,7 +73,7 @@ export async function preflightGatewaySessionCompaction(
     });
     return preflight.compactable ? undefined : { reason: preflight.reason };
   } catch {
-    // Preserve the existing compaction error path for malformed or unavailable transcripts.
+    // Preserve the existing compaction error path for malformed transcripts.
     return undefined;
   }
 }
@@ -80,12 +82,13 @@ export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
   host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
+  // The lifecycle owner already selected and revalidated this exact current window.
+  const transcriptTarget = {
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
-  });
+  };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
@@ -108,12 +111,7 @@ export async function runGatewaySessionCompaction(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      sessionTarget: transcriptTarget,
       allowGatewaySubagentBinding: true,
       sessionFile: transcriptTarget.sessionKey,
       workspaceDir,

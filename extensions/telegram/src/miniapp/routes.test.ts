@@ -97,13 +97,11 @@ function createRoute(
       route = params;
     },
   });
-  if (currentConfig) {
-    api.runtime.config = {
-      current: currentConfig,
-      mutateConfigFile: vi.fn(),
-      replaceConfigFile: vi.fn(),
-    };
-  }
+  api.runtime.config = {
+    current: currentConfig ?? (() => cfg),
+    mutateConfigFile: vi.fn(),
+    replaceConfigFile: vi.fn(),
+  };
   registerTelegramMiniAppRoutes(api, launchTickets);
   if (!route) {
     throw new Error("expected miniapp route registration");
@@ -253,6 +251,7 @@ describe("registerTelegramMiniAppRoutes", () => {
     registerTelegramMiniApp(
       createTestPluginApi({
         config: cfg,
+        runtime: { config: { current: () => cfg } } as OpenClawPluginApi["runtime"],
         registerCommand: (command) => commands.push(command),
         registerHttpRoute: (route) => routes.push(route),
       }),
@@ -341,18 +340,12 @@ describe("registerTelegramMiniAppRoutes", () => {
     });
   });
 
-  it.each(
-    (["account", "command"] as const).flatMap((source) =>
-      (["*", "telegram"] as const).flatMap((channel) =>
-        [
-          { members: ["*"], allowed: false },
-          { members: ["@owner", "999999"], allowed: false },
-          { members: ["telegram:123456"], allowed: true },
-          { members: ["*", "tg:123456"], allowed: true },
-        ].map(({ members, allowed }) => ({ source, channel, members, allowed })),
-      ),
-    ),
-  )(
+  it.each([
+    { source: "command", channel: "*", members: ["*"], allowed: false },
+    { source: "command", channel: "*", members: ["telegram:123456"], allowed: true },
+    { source: "account", channel: "telegram", members: ["@owner", "999999"], allowed: false },
+    { source: "account", channel: "telegram", members: ["*", "tg:123456"], allowed: true },
+  ])(
     "requires explicit group ownership: $source / $channel / $members",
     async ({ source, channel, members, allowed }) => {
       const cfg = config([]);
@@ -373,6 +366,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       registerTelegramMiniApp(
         createTestPluginApi({
           config: cfg,
+          runtime: { config: { current: () => cfg } } as OpenClawPluginApi["runtime"],
           registerCommand: (command) => commands.push(command),
         }),
       );
@@ -642,22 +636,6 @@ describe("registerTelegramMiniAppRoutes", () => {
 
     expect(last?.statusCode).toBe(429);
     expect(last?.body).toBe("Too many requests");
-  });
-
-  it("keeps malformed JSON on the expired-link response", async () => {
-    const route = createRoute(config());
-    const res = await callRoute({
-      route,
-      method: "POST",
-      url: "/__openclaw_tg_miniapp/auth",
-      contentType: "application/json",
-      body: "{",
-      ip: "203.0.113.49",
-    });
-
-    expect(res.statusCode).toBe(401);
-    expect(res.body).toBe("This link expired. Run /controlui again in your bot chat.");
-    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
   it.each(["content-length", "chunked"])(

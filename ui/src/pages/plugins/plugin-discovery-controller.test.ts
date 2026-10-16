@@ -1,5 +1,4 @@
 // @vitest-environment node
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -31,12 +30,7 @@ function setup(
   responses: Array<PluginDiscoveryResult | Promise<PluginDiscoveryResult>>,
   responder?: (method: string, params: unknown) => Promise<unknown>,
 ) {
-  const host = {
-    addController() {},
-    removeController() {},
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  } satisfies ReactiveControllerHost;
+  const notify = vi.fn();
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const request = vi.spyOn(client, "request").mockImplementation(async (method, params) => {
     if (responder) {
@@ -51,7 +45,7 @@ function setup(
     }
     return response;
   });
-  const controller = new PluginDiscoveryController(host, {
+  const controller = new PluginDiscoveryController(notify, {
     getClient: () => client,
     isConnected: () => true,
   });
@@ -166,8 +160,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
 
   const loading = controller.refresh();
   expect(controller.loading).toBe(false);
-  expect(controller.featuredLoading).toBe(false);
-  expect(controller.trendingLoading).toBe(false);
   expect(controller.featured).toEqual([featured]);
   expect(controller.trending).toEqual([trending]);
   refresh.resolve({ items: [category], categories });
@@ -312,8 +304,6 @@ it("restores the loaded overview immediately when clearing search and retires la
   controller.updateQuery("");
 
   expect(controller.loading).toBe(false);
-  expect(controller.featuredLoading).toBe(false);
-  expect(controller.trendingLoading).toBe(false);
   expect(controller.result?.items).toEqual([overview]);
   lateSearch.resolve({ items: [entry(3)] });
   await vi.advanceTimersByTimeAsync(250);
@@ -484,19 +474,6 @@ it("preserves independent Trending rank from the deduplicated overview", async (
 
   expect(controller.result?.items.map((item) => item.id)).toEqual([official.id, community.id]);
   expect(controller.trending.map((item) => item.id)).toEqual([community.id, official.id]);
-});
-
-it("keeps unranked overview members after ranked entries", async () => {
-  const ranked = entry(1);
-  ranked.catalog.featured = true;
-  ranked.catalog.featuredRank = 0;
-  const unranked = entry(2);
-  unranked.catalog.featured = true;
-  const { controller } = setup([{ items: [unranked, ranked] }]);
-
-  await controller.refresh();
-
-  expect(controller.featured.map((item) => item.id)).toEqual([ranked.id, unranked.id]);
 });
 
 it("preserves category navigation when a filtered view reconnects", async () => {

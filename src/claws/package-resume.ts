@@ -1,15 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
-import {
-  openExistingOpenClawStateDatabaseReadOnly,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import {
-  readClawInstallRecordFromDatabase,
-  readClawPackageRefs,
-  type PersistedClawInstall,
-  type PersistedClawPackageRef,
-} from "./provenance.js";
+import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawPackage, ClawPackagePreflightResult } from "./types.js";
 
 export function ownerInstallIsNewerThanRefs(
@@ -84,38 +75,4 @@ export function findResumableIntroducedPluginRequirement(params: {
       persistedExtensionMatchesPreflight(candidate, params.preflight),
   );
   return ref && !ownerInstallIsNewerThanRefs(params.preflight.installedAt, [ref]) ? ref : undefined;
-}
-
-export async function readClawResumeStateReadOnly(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<
-  | {
-      record: PersistedClawInstall;
-      packageRefs: PersistedClawPackageRef[];
-    }
-  | undefined
-> {
-  const database = await openExistingOpenClawStateDatabaseReadOnly(options);
-  if (!database) {
-    return undefined;
-  }
-  try {
-    const hasInstallTable = database.db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get();
-    if (!hasInstallTable) {
-      return undefined;
-    }
-    const record = readClawInstallRecordFromDatabase(database.db, agentId);
-    if (!record) {
-      return undefined;
-    }
-    return {
-      record,
-      packageRefs: readClawPackageRefs({ ...options, database, readOnly: true, agentId }),
-    };
-  } finally {
-    database.walMaintenance.close();
-  }
 }

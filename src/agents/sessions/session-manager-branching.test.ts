@@ -9,15 +9,16 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   onSessionIdentityMutation,
-  replaceTranscriptEventsSync,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -234,17 +235,12 @@ describe("SessionManager branch replacement", () => {
     const beforeEntries = manager.getEntries();
     const beforeTarget = manager.getSessionTarget();
     expect(beforeTarget).toMatchObject(scope);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            throw new Error("branch transcript write failed");
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        throw new Error("branch transcript write failed");
+      }
+      admit(request, grant);
+    });
     const replacements: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.previous.sessionKeys.includes(scope.sessionKey)) {

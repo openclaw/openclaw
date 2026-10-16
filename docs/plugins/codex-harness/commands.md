@@ -55,10 +55,10 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list` shows configured native plugins; `/codex plugins
-available` discovers Codex marketplace plugins in the bound workspace.
+  available` discovers Codex marketplace plugins in the bound workspace.
 - `/codex plugins install <plugin>@<marketplace>` installs and authorizes one
   discovered plugin. `/codex plugins enable <name>` and `/codex plugins
-disable <name>` update its persisted policy. Mutations require an owner or
+  disable <name>` update its persisted policy. Mutations require an owner or
   `operator.admin` gateway client.
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
@@ -89,13 +89,21 @@ a fresh native thread while keeping the selected model and provider. This
 recovery preserves pending manual attachments and native-model-owned threads.
 It does not replay a turn whose native outcome is uncertain.
 
+For a `/codex bind` conversation, an app-server restart can unload the bound
+thread without deleting its history. If Codex rejects the next turn before
+accepting its input, OpenClaw resumes that same thread and submits the message
+once more. It does not create a replacement thread. Deleted history,
+authentication failures, and uncertain turn outcomes stay visible instead of
+triggering automatic replay. If recovery reports unavailable history, rebind
+the conversation and resend the message.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`
 persists `off` in the OpenClaw session and sends `null` on affected Codex
 harness turns to clear the OpenClaw-owned service-tier override. `/fast default`
 clears only that session layer, so lower-precedence shared defaults may still
-resolve to `on`, `off`, or `auto`.
+resolve to `on`, `off`, `auto`, or `ultrafast`.
 
 `/codex fast` instead changes the bound native Codex conversation preference.
 `/codex fast off` stores `flex` for later conversation-bound native turns; it
@@ -106,10 +114,14 @@ any binding preference that applies to that turn: Fast on starts from `priority`
 Fast off sends `null`, and auto decides for each model call. The configured or
 bound native tier is used only when no shared run control is supplied.
 
-Fast, active Auto, and unspecified shared run controls automatically upgrade to
-Ultrafast when the authenticated app-server catalog advertises it for the selected
-native model. Set `appServer.enableUltrafast: false` to keep the baseline tier;
-an explicit shared `"ultrafast"` preference still requests supported Ultrafast.
+Ultrafast requires an effective shared `"ultrafast"` selection, from a session or
+run control or an authored `fastModeDefault: "ultrafast"`, and an authenticated
+app-server catalog that advertises it for the selected native model. An unset
+`appServer.enableUltrafast` or `true` permits that selection; `false` sends ordinary
+Fast (`priority`) instead and skips the Ultrafast catalog check. Fast, active Auto,
+and unspecified controls never automatically upgrade. A native `serviceTier:
+"ultrafast"` also starts from `priority` until the shared selection requests it.
+Standard and inactive Auto remain off.
 See [app-server transport](/plugins/codex-harness-reference/app-server-transport)
 for catalog checks and fallback behavior.
 

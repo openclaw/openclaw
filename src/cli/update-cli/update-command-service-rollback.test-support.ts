@@ -11,10 +11,8 @@ import * as systemdFiles from "../../daemon/systemd-service-files.js";
 import * as systemdSystem from "../../daemon/systemd-system.js";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import * as candidateState from "../../infra/update-candidate-state.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
@@ -365,11 +363,12 @@ export function registerPackageRootRollbackTests(
     if (scenario === "backup restore failed") {
       expect(outcome.rolledBack).toBe(false);
       expect(outcome.result).toMatchObject({
-        reason: "service-definition-rollback-unverified",
+        reason: "doctor-failed",
         root: previousRoot,
         recovery: { packageRollbackVerified: true, serviceRestartSafe: false },
         rollbackOutcome: { status: "failed" },
       });
+      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
       expect(await fs.readFile(path.join(previousRoot, "package.json"), "utf8")).toContain(
         previousPackageVersion,
       );
@@ -380,7 +379,8 @@ export function registerPackageRootRollbackTests(
       expect(outcome.rolledBack).toBe(false);
       expect(await fs.readFile(command.sourcePath!)).toEqual(definitionBeforeRollback);
       expect(mocks.child).not.toHaveBeenCalled();
-      expect(outcome.result.reason).toBe("service-definition-rollback-unverified");
+      expect(outcome.result.reason).toBe("doctor-failed");
+      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
       expect(outcome.result.rollbackOutcome).toEqual({
         status: "not-attempted",
         reason: "service-definition-rollback-unverified",

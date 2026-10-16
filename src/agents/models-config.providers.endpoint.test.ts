@@ -140,7 +140,6 @@ describe("provider endpoint source eligibility", () => {
     expect(preparedStaticProviderCatalog.entries).toEqual([
       {
         provider: aliasedProvider,
-        result: { providers: { alternate: nativeCatalog } },
         providerConfigs: { alternate: nativeCatalog },
       },
     ]);
@@ -149,13 +148,16 @@ describe("provider endpoint source eligibility", () => {
       agentDir: state.agentDir(),
       providerDiscoveryEntriesOnly: true,
       preparedStaticProviderCatalog,
+      explicitProviders: {
+        alternate: {
+          ...nativeCatalog,
+          models: nativeCatalog.models.map((model) => ({ ...model, name: "Authored model" })),
+        },
+      },
     });
     expect(discovered?.alternate?.models.map((model) => model.id)).toEqual(["native-model"]);
+    expect(discovered?.alternate?.models[0]?.name).toBe("Authored model");
     expect(discovered?.fixture).toBeUndefined();
-    const first = discovered?.alternate;
-    assert(first?.models[0], "Expected the selected native model");
-    first.baseUrl = "https://changed.example/v1";
-    first.models[0].name = "Changed by the first consumer";
     const next = await resolveImplicitProviders({
       ...params,
       agentDir: state.agentDir(),
@@ -182,9 +184,7 @@ describe("provider endpoint source eligibility", () => {
       },
     });
     expect(prepared.providers).toEqual([excludedProvider]);
-    expect(prepared.entries).toEqual([
-      { provider: excludedProvider, result: { providers: {} }, providerConfigs: {} },
-    ]);
+    expect(prepared.entries).toEqual([{ provider: excludedProvider, providerConfigs: {} }]);
     expect(run).not.toHaveBeenCalled();
   });
 

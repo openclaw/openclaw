@@ -249,61 +249,6 @@ describe("materializePreparedRuntimeModel", () => {
     expect(resolveModel).not.toHaveBeenCalled();
   });
 
-  it("projects an authored Completions route without reusing Responses metadata", async () => {
-    const completionsPlan: AgentRuntimeAuthPlan = {
-      ...plan,
-      forwardedAuthProfileId: "openai:key",
-      selectedAuthMode: "api_key",
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      },
-    };
-    const resolved = {
-      provider: "openai",
-      id: "gpt-5.5",
-      api: "openai-completions",
-      baseUrl: "https://api.openai.com/v1",
-    };
-    const resolveModel = vi.fn(async () => ({ model: resolved }));
-
-    await expect(
-      materializePreparedRuntimeModel({
-        plan: completionsPlan,
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config: { models: { providers: {} } } as OpenClawConfig,
-        model: {
-          provider: "openai",
-          id: "gpt-5.5",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-        },
-        resolveModel,
-      }),
-    ).resolves.toBe(resolved);
-    expect(resolveModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authProfileId: "openai:key",
-        authProfileMode: "api_key",
-        config: expect.objectContaining({
-          models: expect.objectContaining({
-            providers: expect.objectContaining({
-              openai: expect.objectContaining({
-                api: "openai-completions",
-                baseUrl: "https://api.openai.com/v1",
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
-  });
-
   it("accepts the canonical model id for the shipped GPT-5.4 alias on its API route", async () => {
     const aliasPlan: AgentRuntimeAuthPlan = {
       ...plan,

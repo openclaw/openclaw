@@ -279,7 +279,13 @@ const historyProfiles: {
   {
     job: "preflight",
     step: "Resolve exact diff base",
-    env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
+    env: {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      RELEASE_GATE: "true",
+      DISPATCH_ID: "",
+      TARGET_CONTEXT_REF: "",
+      WORKFLOW_REVISION: harness,
+    },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
   },
   {
@@ -392,6 +398,8 @@ posixIt(
       "scripts/generate-npm-package-lock.mts",
       "scripts/changed-lanes.mts",
       "scripts/lib/merge-head-diff-base.mjs",
+      "scripts/stage-openclaw-bun.sh",
+      "scripts/lib/openclaw-bun.json",
     ]) {
       expect(sparseCheckout.args).toContain(`/${file}`);
     }

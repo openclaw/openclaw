@@ -1,9 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowCondition } from "./ci-workflow.test-support.js";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -238,7 +240,19 @@ describe("security-fast workflow", () => {
         "Install security scanners",
         "Audit changed GitHub workflows with zizmor",
       ]) {
-        expect(securityStep(name).if).toBe("steps.workflow_scope.outputs.changed == 'true'");
+        expect(
+          evaluateWorkflowCondition(expectDefined(securityStep(name).if, "scanner condition"), {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            failed: true,
+            steps: {
+              workflow_scope: { outputs: { changed: String(changed) } },
+              security_scanners: { outputs: {}, outcome: "success" },
+              scanner_config: { outputs: {}, outcome: "success" },
+            },
+          }),
+        ).toBe(changed);
         expect(securityStepIndex("Detect changed GitHub workflows")).toBeLessThan(
           securityStepIndex(name),
         );
@@ -246,46 +260,75 @@ describe("security-fast workflow", () => {
     },
   );
 
-  it.each([0, 1, 130])(
-    "propagates audit exit %s in ordinary and scheduled CI but not release CI",
+  it.each(["pull_request", "push", "schedule", "workflow_dispatch"] as const)(
+    "runs the production audit only for release dispatches: %s",
+    (eventName) => {
+      const audit = securityStep("Audit production dependencies");
+      expect(audit.if).toBeDefined();
+      for (const [dispatchId, release] of [
+        ["", false],
+        ["manual-ci", false],
+        ["full-release-validation", false],
+        ["release-native-android", false],
+        ["full-release-validation-1-1-ci", true],
+        ["release-native-android-1-1-a", true],
+      ] as const) {
+        expect(
+          evaluateWorkflowCondition(expectDefined(audit.if, "audit condition"), {
+            eventName,
+            dispatchId,
+            steps: { node_setup: { outputs: {}, outcome: "success" } },
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${eventName}: ${dispatchId}`,
+        ).toBe(eventName === "workflow_dispatch" && release);
+      }
+    },
+  );
+
+  it.each([0, 1, 2, 130])(
+    "warns without blocking CI or pre-commit for audit exit %s, retaining the strict daily audit",
     (auditExit) => {
       const repo = tempDirs.make("openclaw-audit-ci-");
       mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
       mkdirSync(join(repo, ".ci-harness", "scripts"), { recursive: true });
       writeFileSync(
         join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-        `process.exit(${auditExit});\n`,
+        `console.log("audit report"); process.exit(${auditExit});\n`,
       );
       writeFileSync(
         join(repo, ".ci-harness", "scripts", "ci-production-audit.mjs"),
+        readFileSync("scripts/ci-production-audit.mjs"),
+      );
+      writeFileSync(
+        join(repo, "scripts", "ci-production-audit.mjs"),
         readFileSync("scripts/ci-production-audit.mjs"),
       );
       expect(securityStep("Checkout trusted CI harness").with?.["sparse-checkout"]).toContain(
         "scripts/ci-production-audit.mjs",
       );
       const audit = securityStep("Audit production dependencies");
-      const runAudit = (eventName: string, dispatchId: string) => {
-        const eventPath = join(repo, "event.json");
-        writeFileSync(eventPath, JSON.stringify({ inputs: { dispatch_id: dispatchId } }));
-        return runStep(audit, repo, { GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath });
+      const hooks = parse(readFileSync(".pre-commit-config.yaml", "utf8")) as {
+        repos: Array<{ hooks: Array<{ id: string; entry: string; verbose?: boolean }> }>;
       };
-      for (const [eventName, dispatchId] of [
-        ["pull_request", "full-release-validation-1-1-ci"],
-        ["workflow_dispatch", ""],
-        ["workflow_dispatch", "manual-ci"],
-      ]) {
-        const result = runAudit(eventName!, dispatchId!);
-        expect(result.status).toBe(auditExit);
-        expect(result.stdout).toBe("");
-      }
-      for (const dispatchId of ["full-release-validation-1-1-ci", "release-native-android-1-1-a"]) {
-        const release = runAudit("workflow_dispatch", dispatchId);
-        expect(release.status).toBe(0);
-        expect(release.stdout).toBe(
-          auditExit === 0
-            ? ""
-            : `::warning title=Dependency advisories do not block releases::Production dependency audit exited ${auditExit}. Release CI records this without failing; queue the dependency bump on main after publication.\n`,
-        );
+      const hook = hooks.repos
+        .flatMap((entry) => entry.hooks)
+        .find((candidate) => candidate.id === "pnpm-audit-prod");
+      expect(hook).toBeDefined();
+      expect(hook?.verbose).toBe(true);
+      for (const step of [audit, { run: hook!.entry }]) {
+        const result = runStep(step, repo, { GITHUB_EVENT_NAME: "", GITHUB_EVENT_PATH: "" });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("audit report\n");
+        if (auditExit === 0) {
+          expect(result.stdout).not.toContain("::warning");
+        } else {
+          expect(result.stdout).toContain("::warning title=Dependency audit is non-blocking::");
+          expect(result.stdout).toContain(`Production dependency audit exited ${auditExit}.`);
+          expect(result.stdout).toContain("daily Dependency Audit workflow");
+          expect(result.stdout).toContain("dependency bump on main");
+        }
       }
       const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
         jobs: { audit: { steps: WorkflowStep[] } };

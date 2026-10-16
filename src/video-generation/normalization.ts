@@ -3,6 +3,7 @@ import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   normalizeVideoGenerationDuration,
   resolveVideoGenerationSupportedDurations,
+  selectSupportedVideoDuration,
 } from "./duration-support.js";
 import type {
   VideoGenerationIgnoredOverride,
@@ -10,15 +11,6 @@ import type {
   VideoGenerationProvider,
   VideoGenerationResolution,
 } from "./types.js";
-
-const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
-  "360P",
-  "480P",
-  "540P",
-  "720P",
-  "768P",
-  "1080P",
-];
 
 type ResolvedVideoGenerationOverrides = {
   size?: string;
@@ -55,7 +47,6 @@ export function resolveVideoGenerationOverrides(params: {
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
     capabilities: caps,
-    resolutionOrder: VIDEO_RESOLUTION_ORDER,
     reportUnrecognizedOverrides: true,
     useAspectRatioForRequestedSize: true,
   });
@@ -72,16 +63,8 @@ export function resolveVideoGenerationOverrides(params: {
     watermark = undefined;
   }
 
-  const requestedDurationSeconds =
-    typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
-      ? Math.max(1, Math.round(params.durationSeconds))
-      : undefined;
-  const durationSeconds = normalizeVideoGenerationDuration({
-    provider: params.provider,
-    model: params.model,
-    durationSeconds: requestedDurationSeconds,
-    inputImageCount: params.inputImageCount ?? 0,
-    inputVideoCount: params.inputVideoCount ?? 0,
+  const requestedDurationSeconds = normalizeVideoGenerationDuration({
+    durationSeconds: params.durationSeconds,
   });
   const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
     provider: params.provider,
@@ -89,6 +72,10 @@ export function resolveVideoGenerationOverrides(params: {
     inputImageCount: params.inputImageCount ?? 0,
     inputVideoCount: params.inputVideoCount ?? 0,
   });
+  const durationSeconds =
+    requestedDurationSeconds !== undefined && supportedDurationSeconds
+      ? selectSupportedVideoDuration(requestedDurationSeconds, supportedDurationSeconds)
+      : requestedDurationSeconds;
 
   if (
     typeof requestedDurationSeconds === "number" &&

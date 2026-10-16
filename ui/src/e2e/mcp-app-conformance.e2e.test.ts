@@ -16,14 +16,12 @@ import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundl
 import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
 import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
 import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.ts";
+import * as testStateFixture from "../../../src/test-utils/openclaw-test-state.ts";
 import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
@@ -57,7 +55,7 @@ const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let proofDir: string;
 
-let state: OpenClawTestState | undefined;
+let state: testStateFixture.OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
 let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
 let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
@@ -108,7 +106,7 @@ const suite = createControlUiE2eSuite({
       // Both tests share retained reports even when screenshots and video are disabled.
       proofDir = createControlUiE2eArtifactDir("mcp-app-request-lifetime");
       signal.throwIfAborted();
-      state = await createOpenClawTestState({
+      state = await testStateFixture.createOpenClawTestState({
         prefix: "openclaw-mcp-app-conformance-",
         applyEnv: false,
         env: {
@@ -203,6 +201,7 @@ const suite = createControlUiE2eSuite({
       await state.writeConfig(cfg);
       signal.throwIfAborted();
       state.applyEnv();
+      setRuntimeConfigSnapshot(cfg);
       mcpScheduler = createTestGatewayScheduler();
       await setSessionMcpRuntimeScheduler(mcpScheduler);
       signal.throwIfAborted();
@@ -412,21 +411,21 @@ suite.define(() => {
             path: path.join(proofDir, "control-ui-resource-allowed.png"),
           });
         }
-        const confirmedPrompts: string[] = [];
-        controlPage.on("dialog", async (dialog) => {
-          confirmedPrompts.push(dialog.message());
-          await dialog.accept();
-        });
         await app.locator("#update-context").click();
         await waitForText(app.locator("#context-update"), "accepted");
         await app.locator("#send-message").click();
+        const confirmation = controlPage.getByRole("alertdialog");
+        await waitForTextContaining(confirmation, "summarize selection");
+        expect(
+          await controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt")),
+        ).toBeUndefined();
+        await confirmation.getByRole("button", { name: "Send", exact: true }).click();
         await waitForText(app.locator("#message"), "accepted");
         await expect
           .poll(() =>
             controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
           )
           .toBe("summarize selection");
-        expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
         const currentView = getMcpAppViewLease(viewId, runtime);
         if (!currentView) {
           throw new Error("Conformance view expired before context inspection");

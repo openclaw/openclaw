@@ -77,11 +77,20 @@ on both a time check and a context-size check:
 5. Record each changed result as a session projection and reset the pruning TTL clock. Follow-up requests reuse the same projected bytes, including tool-loop continuations and later turns.
 
 The TTL gates new pruning rounds, not replay of previous projections. Projections
-survive Gateway restarts and eviction from the in-memory session cache through
-the transcript marker. Ordinary tool-result trims and the already-sent boundary
+survive Gateway restarts and idle-session unloading through the transcript
+marker. The last active attempt releases its prompt projections after cleanup;
+the next attempt restores them from the active transcript. Ordinary tool-result trims and the already-sent boundary
 are also saved before model requests when the projection changes, even with TTL
-pruning off. Unchanged projections add no new marker; restart restores the latest
-marker on the active branch. Old results retain their projected bytes through
+pruning off. Changed projections record only added, updated, and removed entries,
+with a full checkpoint after at most 31 deltas or before accumulated delta payload
+reaches 64 KiB. Unchanged projections add no new projection marker. Restart restores
+the latest checkpoint and subsequent deltas on the active branch, stopping at a
+reset. Older full-snapshot markers remain readable as checkpoints; existing
+transcript rows need no migration and are not deleted. Runtimes predating delta
+support cannot replay changes after the last full checkpoint, so preserve a backup
+when rolling back across this format change. Bounded history reads acquire any
+omitted checkpoint as projection metadata without expanding the model's retained
+history. Old results retain their projected bytes through
 tool loops and restarts. Original
 text and non-text content stay in the transcript. Compaction drops projections
 for results no longer in the active history; `/new` and session reset
@@ -92,16 +101,16 @@ Two safety rules apply regardless of thresholds: the last three assistant turns 
 
 Only `toolResult` messages are eligible; normal conversation text is left alone. Use `agents.defaults.contextPruning.tools.{allow,deny}` to scope which tool names are prunable on either path.
 
-## Legacy image cleanup
+<a id="legacy-image-cleanup" />
 
-OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
+## Image history
 
-- It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
-- The window advances only when a new user turn begins, never within a tool loop.
-- In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
-- Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
-- The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.
-- This is separate from normal cache-TTL pruning above. It exists to stop repeated image payloads or stale media refs from busting prompt caches on later turns.
+Image blocks and attachment references stay in retained conversation history as
+new turns arrive. Replacing an already-sent image with a cleanup marker changes
+the prompt prefix and discards the provider's cached context. Compaction and
+explicit history-window limits own removal of old image-bearing turns; there is
+no separate age-based image cleanup. The raw transcript keeps the original
+attachments for history viewers.
 
 ## Smart defaults
 

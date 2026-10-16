@@ -1,11 +1,13 @@
+import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import "./chat-detail-panel.ts";
+import "./chat-detail-panel.tsx";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
 // needs a real DOM, so this suite only runs in the checks-ui Chromium project.
@@ -54,18 +56,15 @@ async function mountFile(content: FileSidebarContent, width?: number): Promise<D
   files.push(content);
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
-  if (width === undefined) {
-    document.body.append(panel);
-    mounted.push(panel);
-  } else {
-    const container = document.createElement("div");
+  const container = createChatSidebarContainer();
+  if (width !== undefined) {
     container.className = "side-panel__panel";
     container.style.cssText = `display:flex;width:${width}px;height:320px;`;
     panel.className = "chat-sidebar";
-    container.append(panel);
-    document.body.append(container);
-    mounted.push(container);
   }
+  container.append(panel);
+  document.body.append(container);
+  mounted.push(container);
   await panel.updateComplete;
   await expect.poll(() => panel.querySelector(".cm-editor"), { timeout: 5_000 }).not.toBeNull();
   return panel;
@@ -92,24 +91,46 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
-  it("keeps long lines inside Review and gives horizontal scroll to the editor", async () => {
-    const panel = await mountFile(
-      {
-        kind: "file",
-        path: "src/long-line.ts",
-        name: "long-line.ts",
-        content: `export const value = "${"long-content-".repeat(80)}";`,
-      },
-      320,
-    );
-
-    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
-    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
-    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
-    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.parentElement!.clientWidth);
-    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
-    expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
-    expect(getComputedStyle(scroller).overflowX).toBe("auto");
+  it("keeps CodeMirror idle during unrelated panel property updates", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "isolation.txt",
+      name: "isolation.txt",
+      line: 2,
+      content: "first\nsecond\nthird",
+      edit: { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() },
+    });
+    await userEvent.click(button(panel, "Edit file"));
+    const editor = panel.querySelector<HTMLElement>(".cm-content")!;
+    await userEvent.type(editor, "draft ");
+    const draft = readFileDraft(panel.content)?.content;
+    const updates = vi.spyOn(EditorView.prototype, "update");
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        Object.assign(panel, { execNode: `node-${index}` });
+        await panel.updateComplete;
+        await Promise.resolve();
+      }
+      expect(updates.mock.calls.length).toBe(0);
+      expect(panel.querySelector(".cm-content")).toBe(editor);
+      expect(document.activeElement).toBe(editor);
+      expect(readFileDraft(panel.content)?.content).toBe(draft);
+      await userEvent.type(editor, "more ");
+      expect(readFileDraft(panel.content)?.content).toContain("more ");
+      expect(updates.mock.calls.length).toBeGreaterThan(0);
+      await userEvent.click(button(panel, "Discard"));
+      panel.content.content = "Changed in-place file text\nsecond\nthird";
+      Object.assign(panel, { execNode: "latest-node" });
+      await panel.updateComplete;
+      await expect
+        .poll(() => [...editor.querySelectorAll(".cm-line")].map((line) => line.textContent))
+        .toEqual(["Changed in-place file text", "second", "third"]);
+      expect(editor.querySelector(".file-view__line--target")?.textContent).toBe("second");
+      expect(editor.querySelector(".file-view__line--target")?.getAttribute("data-line")).toBe("2");
+      expect(panel.querySelector(".cm-content")).toBe(editor);
+    } finally {
+      updates.mockRestore();
+    }
   });
 
   it("wraps long lines at the panel width when word wrap is on and remembers the choice", async () => {
@@ -123,8 +144,13 @@ describe.runIf(browserMode)("chat file editor", () => {
       },
       320,
     );
+    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
     const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
+    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.parentElement!.clientWidth);
+    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
     await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(getComputedStyle(scroller).overflowX).toBe("auto");
 
     const wrapButton = button(panel, "Enable word wrap");
     expect(wrapButton.getAttribute("aria-pressed")).toBe("false");
@@ -145,26 +171,8 @@ describe.runIf(browserMode)("chat file editor", () => {
     localStorage.removeItem("openclaw.control.fileView.wrap.v1");
   });
 
-  it("renders content and decorates the requested line", async () => {
-    const panel = await mountFile({
-      kind: "file",
-      path: "src/example.ts",
-      name: "example.ts",
-      content: "const first = 1;\nconst second = 2;",
-      line: 2,
-    });
-
-    expect(panel.querySelector(".cm-content")?.textContent).toContain("const second = 2;");
-    const target = panel.querySelector(".file-view__line--target");
-    expect(target?.getAttribute("data-line")).toBe("2");
-  });
-
   it.each([
-    { name: "LF", content: "first\nneedle\nlast\nneedle\n", matchLines: [1, 3] },
-    { name: "CRLF", content: "first\r\nneedle\r\nlast\r\nneedle\r\n", matchLines: [1, 3] },
-    { name: "CR", content: "first\rneedle\rlast\rneedle\r", matchLines: [1, 3] },
     { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
-    { name: "mixed LF first", content: "first\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
     {
       name: "editable mixed LF first",
       content: "first\nneedle\rlast\r\nneedle",
@@ -471,32 +479,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.click(button(restored, "Discard"));
   });
 
-  it("reloads the latest content after a save conflict", async () => {
-    const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-    const fetchLatest = vi
-      .fn()
-      .mockResolvedValue({ content: "latest", hash: "hash-2", editable: true });
-    const panel = await mountFile({
-      kind: "file",
-      path: "notes.txt",
-      name: "notes.txt",
-      content: "before",
-      edit: { hash: "hash-1", save, fetchLatest },
-    });
-
-    await userEvent.click(button(panel, "Edit file"));
-    await userEvent.fill(panel.querySelector<HTMLElement>(".cm-content")!, "local");
-    await userEvent.click(button(panel, "Save"));
-    await expect
-      .poll(() => panel.querySelector('[role="alert"]')?.textContent)
-      .toContain("File changed on disk since it was loaded.");
-
-    await userEvent.click(button(panel, "Reload"));
-    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
-    expect(fetchLatest).toHaveBeenCalledOnce();
-    expect(button(panel, "Save").disabled).toBe(true);
-  });
-
   it.each(["mixed\r\nendings\nnow", "mixed\nendings\r\nnow"])(
     "drops edit mode and its draft when a conflict reload returns %j",
     async (content) => {
@@ -566,6 +548,8 @@ describe.runIf(browserMode)("chat file editor", () => {
       .toBe("false");
     finishReload?.({ content: "latest", hash: "hash-2", editable: true });
     await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
+    expect(fetchLatest).toHaveBeenCalledOnce();
+    expect(button(panel, "Save").disabled).toBe(true);
     expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
   });
 });

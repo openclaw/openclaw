@@ -1,6 +1,6 @@
 import { clearTimeout as cancelTimeout, setTimeout as scheduleTimeout } from "node:timers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expect, vi, type MockInstance } from "vitest";
 
@@ -88,13 +88,13 @@ export function resolveFlushTimerForDelay(
 /** Runs held buffer timers and returns their already-admitted album work. */
 export function runHeldTelegramBufferTimers(
   timers: ReadonlyArray<() => unknown>,
-  enqueueSpy: MockInstance<KeyedAsyncQueue["enqueue"]>,
+  enqueueSpy: MockInstance<typeof enqueueKeyedTask>,
 ) {
   for (const timer of timers) {
     timer();
   }
   const work = enqueueSpy.mock.results.flatMap((queued, index) =>
-    enqueueSpy.mock.calls[index]?.[0].startsWith("media:") && queued.type === "return"
+    enqueueSpy.mock.calls[index]?.[0].key.startsWith("media:") && queued.type === "return"
       ? [Promise.resolve(queued.value)]
       : [],
   );
@@ -104,7 +104,7 @@ export function runHeldTelegramBufferTimers(
 
 export async function flushChannelPostMediaGroup(
   setTimeoutSpy: ReturnType<typeof holdTelegramMediaTimeouts>,
-  enqueueSpy: MockInstance<KeyedAsyncQueue["enqueue"]>,
+  enqueueSpy: MockInstance<typeof enqueueKeyedTask>,
   completionTimeoutMs = 75,
   delayMs = 20,
 ) {

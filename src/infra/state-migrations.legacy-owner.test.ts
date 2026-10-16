@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { recordCompletedLegacyAgentDirMigration } from "./state-migrations.agent-dir-receipt.js";
@@ -35,7 +36,7 @@ describe("legacy owner advisories", () => {
         OPENCLAW_AGENT_DIR: undefined,
         PI_CODING_AGENT_DIR: undefined,
       };
-      const source: OpenClawConfig = {
+      const source: OpenClawConfigWithLegacyRoster = {
         plugins: { enabled: false },
         agents: {
           defaults: {
@@ -95,7 +96,7 @@ describe("legacy owner advisories", () => {
       const refused =
         requiredFailure || (standalone && (selection === "none" || selection === "main"));
       const root = fs.realpathSync(tempDirs.make("openclaw-legacy-owner-"));
-      const stateDir = path.join(root, "state");
+      const stateDir = path.join(root, standalone ? ".openclaw" : "state");
       fs.mkdirSync(stateDir);
       const configPath = path.join(root, "openclaw.json");
       const cfg: OpenClawConfig = {
@@ -113,6 +114,7 @@ describe("legacy owner advisories", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_HOME: root,
+        OPENCLAW_PROFILE: undefined,
         OPENCLAW_AGENT_DIR: selection === "override" ? targetDir : undefined,
         PI_CODING_AGENT_DIR: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -184,13 +186,7 @@ describe("legacy owner advisories", () => {
           snapshot,
           env,
         });
-        expect(plan.warnings).toEqual(
-          expect.arrayContaining(
-            standalone
-              ? [expect.stringContaining("outside the copied state snapshot")]
-              : receipt.warnings,
-          ),
-        );
+        expect(plan.warnings).toEqual(expect.arrayContaining(receipt.warnings));
         expect(
           plan.steps.find((step) => step.id === "migration-detection")?.refusal,
         ).toBeUndefined();

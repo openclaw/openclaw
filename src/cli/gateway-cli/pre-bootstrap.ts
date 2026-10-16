@@ -42,7 +42,9 @@ let selectedGatewayRunEnvironment: GatewayRunEnvironmentSelection | undefined;
 let appliedGatewayRunConfigEnvironment: GatewayRunEnvironmentSelection | undefined;
 let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrap:
-  | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & { snapshot: ConfigFileSnapshot })
+  | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & {
+      snapshot: ConfigFileSnapshot;
+    })
   | undefined;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
 let gatewayRunTargetSelectedByConfig = false;
@@ -191,14 +193,13 @@ function restoreAppliedGatewayRunConfigEnvironment(preserveSelection = true): vo
 async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
   const { createConfigIO } = await import("../../config/io.factory.js");
   return await withArtifactPreservingStateReads(async () => {
-    const current = await readConfigFileSnapshot({
-      isolateEnv: true,
+    const current = await createConfigIO({
+      env: cloneEnvWithPlatformSemantics(process.env),
       observe: false,
       pluginValidation: "core-only",
-    });
+    }).readConfigFileSnapshot();
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {
@@ -631,7 +632,9 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
 }
 
 export async function recheckGatewayRunBootstrap(
-  params: GatewayRunGuardParams & { snapshot?: ConfigFileSnapshot },
+  params: GatewayRunGuardParams & {
+    snapshot?: ConfigFileSnapshot;
+  },
 ): Promise<boolean> {
   // This callback can run while startup preflight owns the shared preparation lease.
   // Throw a typed exit so its finally releases the lease before the CLI exits.
@@ -641,8 +644,8 @@ export async function recheckGatewayRunBootstrap(
       throw new ExitError(code);
     },
   };
-  const expected = preparedGatewayRunBootstrap?.snapshot;
-  if (!expected) {
+  const prepared = preparedGatewayRunBootstrap;
+  if (!prepared) {
     params.runtime.error(
       "Refusing to run gateway state preparation without a prepared config snapshot. Retry startup.",
     );
@@ -662,7 +665,7 @@ export async function recheckGatewayRunBootstrap(
   }
   // Selection already admitted any current-config backup. Later authored drift
   // must be validated by a new startup attempt.
-  const change = describeGatewayRunConfigChange(expected, current, {
+  const change = describeGatewayRunConfigChange(prepared.snapshot, current, {
     allowPathChange: params.snapshot !== undefined,
   });
   if (!change) {

@@ -25,22 +25,15 @@ import {
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
-  /** Parsed JSON arguments object. */
   arguments: Record<string, unknown>;
   /** Exclusive end offset of the parsed block. */
   end: number;
   /** Tool name parsed from bracket, Harmony, or XML-ish syntax. */
   name: string;
-  /** Original text slice that produced this block. */
   raw: string;
   /** Inclusive start offset of the parsed block. */
   start: number;
 };
-
-type NormalizedPlainTextToolCallParseOptions = Omit<
-  PlainTextToolCallParseOptions,
-  "allowedToolNames"
-> & { allowedToolNames?: ReadonlySet<string> };
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
@@ -80,6 +73,7 @@ export type PlainTextToolCallScan = PlainTextToolCallScanBranches &
         next: number;
         overCap: boolean;
         payloadStart: number;
+        settled: boolean;
       }
     | {
         completeEnd?: number;
@@ -346,56 +340,49 @@ export function scanPlainTextToolCall(
     );
   const xmlOverCap = overCap(xml.payload);
   const jsonOverCap = overCap(jsonValue.payload);
-
-  if (xml.accepted && xmlish.kind === "complete") {
-    return {
-      ...branches,
-      end: xmlish.end,
-      kind: "complete",
-      next: xmlish.end,
-      overCap: xmlOverCap,
-      payloadStart: xmlish.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "complete") {
-    if (jsonOverCap || parseJsonArguments(text, json.payload)) {
+  const complete =
+    xml.accepted && xmlish.kind === "complete"
+      ? xmlish
+      : jsonValue.accepted && json.kind === "complete"
+        ? json
+        : undefined;
+  if (complete) {
+    const payloadOverCap = complete === xmlish ? xmlOverCap : jsonOverCap;
+    if (complete === xmlish || payloadOverCap || parseJsonArguments(text, complete.payload)) {
       return {
         ...branches,
-        end: json.end,
+        end: complete.end,
         kind: "complete",
-        next: json.end,
-        overCap: jsonOverCap,
-        payloadStart: json.payload.start,
+        next: complete.end,
+        overCap: payloadOverCap,
+        payloadStart: complete.payload.start,
+        settled:
+          complete.end > complete.payload.end || skipWhitespace(text, complete.end) < text.length,
       };
     }
     return {
       ...branches,
-      at: json.end,
+      at: complete.end,
       kind: "invalid",
-      next: json.end,
+      next: complete.end,
       overCap: false,
-      payloadStart: json.payload.start,
+      payloadStart: complete.payload.start,
     };
   }
-
-  if (xml.accepted && xmlish.kind === "invalid" && xmlOverCap && xml.payload) {
+  const invalid =
+    xmlOverCap && xmlish.kind === "invalid"
+      ? xmlish
+      : jsonOverCap && json.kind === "invalid"
+        ? json
+        : undefined;
+  if (invalid?.candidate?.payload) {
     return {
       ...branches,
-      at: xmlish.at,
+      at: invalid.at,
       kind: "invalid",
-      next: xmlish.at,
+      next: invalid.at,
       overCap: true,
-      payloadStart: xml.payload.start,
-    };
-  }
-  if (jsonValue.accepted && json.kind === "invalid" && jsonOverCap && jsonValue.payload) {
-    return {
-      ...branches,
-      at: json.at,
-      kind: "invalid",
-      next: json.at,
-      overCap: true,
-      payloadStart: jsonValue.payload.start,
+      payloadStart: invalid.candidate.payload.start,
     };
   }
 
@@ -410,7 +397,7 @@ export function scanPlainTextToolCall(
         : {}),
       kind: "prefix",
       next: text.length,
-      overCap: overCap(payload),
+      overCap: xmlPrefix ? xmlOverCap : jsonOverCap,
       ...(payload ? { payloadStart: payload.start } : {}),
     };
   }
@@ -460,69 +447,59 @@ function extractXmlishParameterValue(
   return value.slice(payloadStart).replace(/(?:\r\n|[\r\n])$/u, "");
 }
 
-function parsePlainTextToolCallBlockAtAnySyntax(
-  text: string,
-  start: number,
-  options?: NormalizedPlainTextToolCallParseOptions,
-  structuralLineBreaks?: StructuralLineBreakOptions,
-): PlainTextToolCallBlock | null {
-  for (const scanCall of [scanPlainTextJsonToolCall, scanXmlishToolCall]) {
-    const scan = scanCall(text, start, structuralLineBreaks);
-    if (scan.kind !== "complete") {
-      continue;
-    }
-    const name = text.slice(scan.name.start, scan.name.end);
-    if (options?.allowedToolNames && !options.allowedToolNames.has(name)) {
-      continue;
-    }
-    const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
-    if (
-      utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) ===
-      null
-    ) {
-      continue;
-    }
-    const args =
-      "parameters" in scan
-        ? Object.fromEntries(
-            scan.parameters.map((parameter) => [
-              text.slice(parameter.name.start, parameter.name.end),
-              extractXmlishParameterValue(
-                text,
-                parameter.value.start,
-                parameter.value.end,
-                structuralLineBreaks,
-              ),
-            ]),
-          )
-        : parseJsonArguments(text, scan.payload);
-    if (args) {
-      return { arguments: args, end: scan.end, name, raw: text.slice(start, scan.end), start };
-    }
-  }
-  return null;
-}
-
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
   structuralLineBreaks?: StructuralLineBreakOptions,
 ): PlainTextToolCallBlock[] | null {
   const blocks: PlainTextToolCallBlock[] = [];
-  const normalizedOptions = options
-    ? {
-        ...options,
-        allowedToolNames: options.allowedToolNames ? new Set(options.allowedToolNames) : undefined,
-      }
+  const allowedToolNames = options?.allowedToolNames
+    ? new Set(options.allowedToolNames)
     : undefined;
+  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
-    const block = parsePlainTextToolCallBlockAtAnySyntax(
-      text,
-      cursor,
-      normalizedOptions,
-      structuralLineBreaks,
-    );
+    let block: PlainTextToolCallBlock | undefined;
+    for (const scanCall of [scanPlainTextJsonToolCall, scanXmlishToolCall]) {
+      const scan = scanCall(text, cursor, structuralLineBreaks);
+      if (scan.kind !== "complete") {
+        continue;
+      }
+      const name = text.slice(scan.name.start, scan.name.end);
+      if (allowedToolNames && !allowedToolNames.has(name)) {
+        continue;
+      }
+      if (
+        utf8ByteLengthWithinLimit(text, scan.payload.start, scan.payload.end, maxPayloadBytes) ===
+        null
+      ) {
+        continue;
+      }
+      const args =
+        "parameters" in scan
+          ? Object.fromEntries(
+              scan.parameters.map((parameter) => [
+                text.slice(parameter.name.start, parameter.name.end),
+                extractXmlishParameterValue(
+                  text,
+                  parameter.value.start,
+                  parameter.value.end,
+                  structuralLineBreaks,
+                ),
+              ]),
+            )
+          : parseJsonArguments(text, scan.payload);
+      if (args) {
+        block = {
+          arguments: args,
+          end: scan.end,
+          name,
+          raw: text.slice(cursor, scan.end),
+          start: cursor,
+        };
+        break;
+      }
+    }
     if (!block) {
       return null;
     }
@@ -538,51 +515,75 @@ export function stripPlainTextToolCallBlocks(
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
   if (
-    !text ||
-    (!/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
-        text,
-      ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
+    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
   ) {
     return text;
   }
-  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  return projectPlainTextToolCallBlocks(text, options).text;
+}
+
+/** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
+export function projectPlainTextToolCallBlocks(
+  text: string,
+  options: {
+    resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
+    settleBefore?: number;
+  } = {},
+): { text: string; retainStart: number; retainedOutputStart: number } {
+  let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
+  const isProtected = (offset: number) =>
+    isOffsetInProtectedRanges(
+      offset,
+      (protectedRanges ??= options.resolveProtectedRanges?.(text) ?? []),
+    );
   let result = "";
   let cursor = 0;
   let index = 0;
+  let retainStart = 0;
+  let retainedOutputStart = 0;
+  let pending = false;
   while (index < text.length) {
     const lineStart = index === 0 || text[index - 1] === "\n" || text[index - 1] === "\r";
     if (!lineStart) {
       index += 1;
       continue;
     }
+    if (!pending && index <= (options.settleBefore ?? text.length)) {
+      retainStart = index;
+      retainedOutputStart = result.length + index - cursor;
+    }
     const blockStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(blockStart, protectedRanges)) {
+    if (
+      (text[blockStart] === "[" ||
+        text[blockStart] === "<" ||
+        HARMONY_CHANNELS.some((channel) => channel[0] === text[blockStart])) &&
+      isProtected(blockStart)
+    ) {
       index += 1;
       continue;
     }
     const scan = scanPlainTextToolCall(text, blockStart);
-    if (scan.kind === "prefix" && scan.completeEnd === undefined) {
-      return result + text.slice(cursor);
-    }
     if (scan.kind === "invalid") {
       // The scanner owns everything before `at` as one malformed candidate. Honor that
       // progress so nested line starts inside its payload are not rescanned quadratically.
       index = Math.max(index + 1, scan.next);
       continue;
     }
+    pending ||= scan.kind === "prefix" || !scan.settled;
     let blockEnd = scan.kind === "complete" ? scan.end : scan.completeEnd;
     if (blockEnd === undefined) {
-      return result + text.slice(cursor);
+      return { text: result + text.slice(cursor), retainStart, retainedOutputStart };
     }
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);
-      if (isOffsetInProtectedRanges(adjacentStart, protectedRanges)) {
+      if (isProtected(adjacentStart)) {
         break;
       }
       const adjacent = scanPlainTextToolCall(text, adjacentStart);
+      pending ||= adjacent.kind === "prefix" || (adjacent.kind === "complete" && !adjacent.settled);
       const adjacentEnd =
         adjacent.kind === "complete"
           ? adjacent.end
@@ -602,5 +603,10 @@ export function stripPlainTextToolCallBlocks(
     index = cursor;
   }
   result += text.slice(cursor);
-  return result;
+  // Keep a terminal CR until a possible LF settles newline consumption.
+  if (!pending && text.endsWith("\n") && text.length <= (options.settleBefore ?? text.length)) {
+    retainStart = text.length;
+    retainedOutputStart = result.length;
+  }
+  return { text: result, retainStart, retainedOutputStart };
 }

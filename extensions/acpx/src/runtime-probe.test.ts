@@ -7,7 +7,7 @@ import {
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
-import type { AcpxProcessCleanupDeps } from "./process-reaper.js";
+import type { AcpxProcessSystemFixture } from "./process-reaper.test-support.js";
 import {
   CODEX_ACP_WRAPPER_COMMAND,
   makeEmptySessionStore,
@@ -21,7 +21,7 @@ import { ACPX_PROCESS_LEASE_MAX_ENTRIES } from "./state.js";
 
 function makeProbeRuntime(
   leases: ReturnType<typeof makeLeaseStore>,
-  cleanup?: AcpxProcessCleanupDeps,
+  cleanup?: AcpxProcessSystemFixture,
   command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
   wrapperRoot = "/tmp/openclaw/acpx",
 ) {

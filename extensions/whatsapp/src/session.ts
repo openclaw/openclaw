@@ -164,10 +164,6 @@ function resolveEnvWaWebSocketUrl(): string | undefined {
   return url.toString();
 }
 
-/**
- * Create a Baileys socket backed by the multi-file auth store we keep on disk.
- * Consumers can opt into QR printing for interactive login flows.
- */
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
@@ -239,6 +235,13 @@ async function createWaSocketInternal(
     }
     opts.onCredentialPersistenceError?.(error);
   };
+  const observeCredentialPersistence = <T>(task: Promise<T>, reportError = false): Promise<T> => {
+    opts.onCredentialPersistenceTask?.(task);
+    if (reportError) {
+      void task.then(undefined, reportCredentialPersistenceError);
+    }
+    return task;
+  };
   const persistedSignalKeys: SignalKeyStore = opts.beforeCredentialPersistence
     ? {
         ...state.keys,
@@ -253,21 +256,10 @@ async function createWaSocketInternal(
     ? {
         ...cachedSignalKeys,
         get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
-          const task = Promise.resolve(cachedSignalKeys.get(type, ids));
-          opts.onCredentialPersistenceTask?.(task);
-          return task;
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)));
         },
         set(data) {
-          const task = (async () => {
-            try {
-              await cachedSignalKeys.set(data);
-            } catch (error) {
-              reportCredentialPersistenceError(error);
-              throw error;
-            }
-          })();
-          opts.onCredentialPersistenceTask?.(task);
-          return task;
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.set(data)), true);
         },
       }
     : cachedSignalKeys;
@@ -277,19 +269,11 @@ async function createWaSocketInternal(
         const storeLidPnMappings = repository.lidMapping.storeLIDPNMappings.bind(
           repository.lidMapping,
         );
-        repository.lidMapping.storeLIDPNMappings = (...storeArgs) => {
-          const task = storeLidPnMappings(...storeArgs);
-          opts.onCredentialPersistenceTask?.(task);
-          void task.then(undefined, reportCredentialPersistenceError);
-          return task;
-        };
+        repository.lidMapping.storeLIDPNMappings = (...storeArgs) =>
+          observeCredentialPersistence(storeLidPnMappings(...storeArgs), true);
         const migrateSession = repository.migrateSession.bind(repository);
-        repository.migrateSession = (...migrateArgs) => {
-          const task = migrateSession(...migrateArgs);
-          opts.onCredentialPersistenceTask?.(task);
-          void task.then(undefined, reportCredentialPersistenceError);
-          return task;
-        };
+        repository.migrateSession = (...migrateArgs) =>
+          observeCredentialPersistence(migrateSession(...migrateArgs), true);
         return repository;
       }
     : undefined;

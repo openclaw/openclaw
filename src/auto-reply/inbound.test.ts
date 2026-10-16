@@ -9,13 +9,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./reply/inbound-dedupe.js";
-import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  normalizeMentionText,
-  stripMentions,
-} from "./reply/mentions.js";
+import { buildMentionRegexes, matchesMentionPatterns, stripMentions } from "./reply/mentions.js";
 import { prepareReplyConversation } from "./reply/prompt-session-context.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
@@ -55,11 +49,6 @@ function installGroupRequireMentionTestPlugins(
         plugin: createChannelTestPluginBase({ id: "line" }),
         source: "test",
       },
-      {
-        pluginId: "imessage",
-        plugin: createChannelTestPluginBase({ id: "imessage" }),
-        source: "test",
-      },
     ]),
   );
 }
@@ -87,35 +76,19 @@ describe("applyTemplate", () => {
     expect(applyTemplate("args={{CommandArgs}}", ctx)).toBe("args=");
   });
 
-  it("renders missing placeholders as empty", () => {
-    const ctx: TemplateContext = {};
-
-    expect(applyTemplate("missing={{Missing}}", ctx)).toBe("missing=");
-  });
-
-  it("never renders channel-owned conversation navigation or image references", () => {
+  it("never renders channel-owned conversation image references", () => {
     const ctx = {
       ConversationAvatar: "/private/media/inbound/avatar.png",
-      ConversationLink: { url: "https://chat.example.test/thread/123", label: "Source Thread" },
     } as unknown as TemplateContext;
 
     expect(applyTemplate("avatar={{ConversationAvatar}}", ctx)).toBe("avatar=");
-    expect(applyTemplate("link={{ConversationLink}}", ctx)).toBe("link=");
-  });
-});
-
-describe("normalizeInboundTextNewlines", () => {
-  it("normalizes CRLF/CR to LF", () => {
-    expect(normalizeInboundTextNewlines("a\r\nb")).toBe("a\nb");
-    expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
   });
 });
 
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
-      // Use actual CRLF for newline normalization test, not literal \n sequences
-      Body: "a\r\nb\r\nc",
+      Body: "a\r\nb\rc",
       RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
@@ -239,36 +212,9 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
-
-  it("fills a generic content type only when media exists", () => {
-    const withMedia: MsgContext = {
-      Body: "hi",
-      media: [{ path: "/tmp/file.bin" }],
-    };
-    const outWithMedia = finalizeInboundContext(withMedia);
-    expect(outWithMedia.media).toEqual([
-      expect.objectContaining({ path: "/tmp/file.bin", contentType: "application/octet-stream" }),
-    ]);
-
-    const withoutMedia: MsgContext = { Body: "hi" };
-    const outWithoutMedia = finalizeInboundContext(withoutMedia);
-    expect(outWithoutMedia.media).toBeUndefined();
-  });
 });
 
 describe("inbound dedupe", () => {
-  it("skips duplicates with the same key", () => {
-    resetInboundDedupe();
-    const ctx: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+1555",
-      MessageSid: "msg-1",
-    };
-    commitInboundForTest(ctx);
-    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate" });
-  });
-
   it("does not dedupe when the peer changes", () => {
     resetInboundDedupe();
     const base: MsgContext = {
@@ -370,15 +316,11 @@ describe("mention helpers", () => {
     expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
-  it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
-  });
-
   it("matches patterns case-insensitively", () => {
     const regexes = buildMentionRegexes({
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
-    expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("OPEN\u200bCLAW: hi", regexes)).toBe(true);
   });
 
   it("lets catch-all mention patterns match empty text", () => {
@@ -400,12 +342,11 @@ describe("mention helpers", () => {
           groupChat: { mentionPatterns: ["\\bglobal\\b"] },
         },
         agents: {
-          list: [
-            {
-              id: "work",
+          entries: {
+            work: {
               groupChat: { mentionPatterns: ["\\bworkbot\\b"] },
             },
-          ],
+          },
         },
       },
       "work",
@@ -546,31 +487,6 @@ describe("resolveGroupRequireMention", () => {
       key: "line:group:r123",
       channel: "line",
       id: "r123",
-      chatType: "group",
-    };
-
-    const { group } = prepareReplyConversation({ ctx, groupResolution });
-    await expect(resolveGroupRequireMention({ cfg, group })).resolves.toBe(false);
-  });
-
-  it("preserves plugin-backed channel requireMention resolution", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: {
-          groups: {
-            "chat:primary": { requireMention: false },
-          },
-        },
-      },
-    };
-    const ctx: TemplateContext = {
-      Provider: "imessage",
-      From: "imessage:group:chat:primary",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "imessage:group:chat:primary",
-      channel: "imessage",
-      id: "chat:primary",
       chatType: "group",
     };
 

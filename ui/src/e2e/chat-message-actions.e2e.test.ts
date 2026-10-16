@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -75,8 +76,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -87,13 +86,24 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   await expect
     .poll(() =>
       button.evaluate((element) => {
-        const tooltip = element
-          .closest("openclaw-tooltip")
-          ?.shadowRoot?.querySelector<
-            HTMLElement & { anchor?: Element | null; popup?: { active?: boolean } }
-          >("wa-tooltip");
-        const body = tooltip?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
-        const bounds = body?.getBoundingClientRect();
+        const host = [
+          ...document.querySelectorAll<HTMLElement & { anchor?: Element | null }>(
+            "openclaw-tooltip",
+          ),
+        ].find(
+          (candidate) =>
+            candidate.anchor === element ||
+            candidate.shadowRoot
+              ?.querySelector<HTMLSlotElement>("slot:not([name])")
+              ?.assignedElements({ flatten: true })[0] === element,
+        );
+        const tooltip = host?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface[popover]");
+        const anchor =
+          host?.anchor ??
+          host?.shadowRoot
+            ?.querySelector<HTMLSlotElement>("slot:not([name])")
+            ?.assignedElements({ flatten: true })[0];
+        const bounds = tooltip?.getBoundingClientRect();
         // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
         // markup whitespace is in textContent but never rendered or announced.
         const readableText = (node: Node): string =>
@@ -101,13 +111,15 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
             ? ""
             : node instanceof Text
               ? node.data
-              : Array.from(node.childNodes, readableText).join("");
+              : node instanceof HTMLSlotElement
+                ? Array.from(node.assignedNodes({ flatten: true }), readableText).join("")
+                : Array.from(node.childNodes, readableText).join("");
         return {
-          anchorMatches: tooltip?.anchor === element,
+          anchorMatches: anchor === element,
           height: bounds?.height ?? 0,
-          hidden: body?.hidden ?? true,
-          open: tooltip?.hasAttribute("open") ?? false,
-          popupActive: tooltip?.popup?.active ?? false,
+          hidden: tooltip ? getComputedStyle(tooltip).display === "none" : true,
+          open: host?.hasAttribute("open") ?? false,
+          popupActive: tooltip?.matches(":popover-open") ?? false,
           text: tooltip ? readableText(tooltip).trim() : "",
           width: bounds?.width ?? 0,
         };
@@ -121,12 +133,20 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
       text,
     });
   const bounds = await button.evaluate((element) => {
-    const body = element
-      .closest("openclaw-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>("wa-tooltip")
-      ?.shadowRoot?.querySelector<HTMLElement>('[part="body"]');
-    const slot = body?.querySelector<HTMLSlotElement>("slot");
-    const textNode = slot?.assignedNodes().find((node) => node.textContent?.trim());
+    const host = [
+      ...document.querySelectorAll<HTMLElement & { anchor?: Element | null }>("openclaw-tooltip"),
+    ].find(
+      (candidate) =>
+        candidate.anchor === element ||
+        candidate.shadowRoot
+          ?.querySelector<HTMLSlotElement>("slot:not([name])")
+          ?.assignedElements({ flatten: true })[0] === element,
+    );
+    const body = host?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface[popover]");
+    const slot = body?.querySelector<HTMLSlotElement>('slot[name="content"]');
+    const textNode =
+      slot?.assignedNodes({ flatten: true }).find((node) => node.textContent?.trim()) ??
+      body?.querySelector(".tooltip-content");
     const range = textNode ? document.createRange() : null;
     if (range && textNode) {
       range.selectNodeContents(textNode);
@@ -588,9 +608,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         },
       ],
     });
-    const openTooltip = page.locator("wa-tooltip[open]");
+    const openTooltip = page.locator(".tooltip-surface[popover]:popover-open");
     const popupStyle = () =>
-      openTooltip.locator('[part="body"]').evaluate((element) => {
+      openTooltip.evaluate((element) => {
         const style = getComputedStyle(element);
         return {
           background: style.backgroundColor,
@@ -630,7 +650,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
       await file.hover();
       await expect.poll(() => openTooltip.count()).toBe(1);
-      expect(await openTooltip.textContent()).toContain("/workspace/tooltip-proof.txt");
+      const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+      await filePath.waitFor({ state: "visible" });
+      expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
       expect(await popupStyle()).toEqual(metadataStyle);
       expect(await file.getAttribute("title")).toBe("");
       await screenshot(page, "tooltip-file-hint.png");
@@ -639,7 +661,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await timestamp.tap();
       await expect.poll(() => openTooltip.count()).toBe(1);
       await group.locator(".msg-meta__details").waitFor({ state: "visible" });
-      const bounds = await openTooltip.locator('[part="body"]').boundingBox();
+      const bounds = await openTooltip.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
@@ -747,7 +769,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        page.locator(".sidebar-rail .sidebar-new-session"),
         `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
@@ -755,12 +777,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
-        page.getByRole("button", { name: "Collapse sidebar" }),
-        `Collapse sidebar (${sidebarShortcut})`,
-      );
-      await expectHoverTooltip(
-        page.getByRole("button", { name: "Open split view" }),
-        "Open split view",
+        page.locator('[data-navigation-view][aria-pressed="true"]'),
+        `Sessions · Collapse sidebar (${sidebarShortcut})`,
       );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");
@@ -917,7 +935,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "agent:main:main",
         messageId: "assistant-full-message",
-        maxChars: 500_000,
+        maxChars: CHAT_MESSAGE_MAX_CHARS,
       });
       await expect
         .poll(() => fullTextBubble.locator(".chat-text").textContent())

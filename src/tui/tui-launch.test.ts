@@ -59,6 +59,7 @@ describe("launchTuiCli", () => {
     process.execArgv.length = 0;
     process.execArgv.push(...originalExecArgv);
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("filters inherited inspector flags when relaunching TUI", async () => {
@@ -125,11 +126,32 @@ describe("launchTuiCli", () => {
   });
 
   it("launches compiled CLI shapes without repeating the current command", async () => {
-    process.argv[1] = "setup";
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    process.argv[1] = "/standalone/runtime/openclaw.mjs";
+    process.execArgv.push("--trace-warnings");
     await launchTuiCli({ deliver: false });
 
     const options = expectSpawned(["tui"]);
     expect(options.stdio).toBe("inherit");
+  });
+
+  it("launches a standalone TUI without a loose CLI entry", async () => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    process.argv = [process.execPath];
+    process.execArgv.push("--trace-warnings");
+
+    await launchTuiCli({ deliver: false });
+
+    expectSpawned(["tui"]);
+  });
+
+  it("still rejects an unavailable loose CLI entry", async () => {
+    process.argv = [process.execPath];
+
+    await expect(launchTuiCli({ deliver: false })).rejects.toThrow(
+      "unable to relaunch TUI: current CLI entry path is unavailable",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("passes gateway connection options as TUI arguments without mutating env", async () => {

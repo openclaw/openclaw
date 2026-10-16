@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
+import { prepareDevicePairingBinding } from "../../infra/device-pairing-binding.js";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import { resolveNodePairingState } from "../../infra/device-pairing.js";
 import {
@@ -10,25 +10,29 @@ import {
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
-import { pairedNodeDevice } from "./environments.test-support.js";
+import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 import { nodeEventHandlers } from "./nodes.event.js";
 import { nodeReadHandlers } from "./nodes.read.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const { listDevicePairingMock, listNodePairingMock, recordHostStatsMock, resolveLocalNodeIdMock } =
-  vi.hoisted(() => ({
-    listDevicePairingMock: vi.fn(),
-    listNodePairingMock: vi.fn(),
-    recordHostStatsMock: vi.fn(),
-    resolveLocalNodeIdMock: vi.fn(),
-  }));
+const {
+  readPairingSnapshotMock,
+  listNodePairingMock,
+  recordHostStatsMock,
+  resolveLocalNodeIdMock,
+} = vi.hoisted(() => ({
+  readPairingSnapshotMock: vi.fn(),
+  listNodePairingMock: vi.fn(),
+  recordHostStatsMock: vi.fn(),
+  resolveLocalNodeIdMock: vi.fn(),
+}));
 
-vi.mock("../../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing.js")>(
-    "../../infra/device-pairing.js",
-  );
-  return { ...actual, listDevicePairing: listDevicePairingMock };
+vi.mock("../../infra/device-pairing-store-readonly.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/device-pairing-store-readonly.js")
+  >("../../infra/device-pairing-store-readonly.js");
+  return { ...actual, readDevicePairingNodeSnapshot: readPairingSnapshotMock };
 });
 
 vi.mock("../../node-host/local-id.js", () => ({
@@ -93,13 +97,93 @@ async function invoke(
 }
 
 describe("node read projections", () => {
+  it("uses current node bindings when pairing publications replace historical roles", async () => {
+    const current = createPairedNode("current-node");
+    const revoked = createPairedNode("revoked-node");
+    const operator = createPairedNode("operator-device");
+    // Devices without approved surfaces are still listed if they hold a current node token.
+    delete current.nodeSurface;
+    delete revoked.nodeSurface;
+    delete operator.nodeSurface;
+    revoked.tokens!.node!.revokedAtMs = 2;
+    operator.roles = ["operator"];
+    operator.tokens = {
+      operator: { token: "test-operator-token", role: "operator", scopes: [], createdAtMs: 1 },
+    };
+    const registry = new NodeRegistry();
+    const paired = [current, revoked, operator];
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot(paired));
+    resolveLocalNodeIdMock.mockResolvedValue(undefined);
+    const readIds = async () => {
+      const respond = await invoke(registry, "node.list", {});
+      expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      return respond.mock.calls[0]![1].nodes.map((node: NodeListNode) => node.nodeId);
+    };
+    expect(await readIds()).toEqual(["current-node"]);
+    current.tokens!.node!.revokedAtMs = 3;
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot(paired));
+    expect(await readIds()).toEqual([]);
+  });
+
+  it("shares immutable catalog rows until pairing or live node facts change", async () => {
+    const paired = createPairedNode("cached-node");
+    const registry = new NodeRegistry();
+    const client = registerNode(registry, paired);
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot([paired]));
+    resolveLocalNodeIdMock.mockResolvedValue(undefined);
+    const admin = {
+      connect: { scopes: ["operator.admin"] },
+    } as GatewayRequestHandlerOptions["client"];
+    const read = async () => {
+      const respond = await invoke(registry, "node.list", {}, admin);
+      expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      return respond.mock.calls[0]![1].nodes[0] as NodeListNode;
+    };
+    try {
+      const initial = await read();
+      expect(initial).toMatchObject({ nodeId: "cached-node", connected: true, commands: [] });
+      expect(await read()).toBe(initial);
+      expect(Object.isFrozen(initial)).toBe(true);
+      expect(Object.isFrozen(initial.commands)).toBe(true);
+
+      registry.updateHostStats({
+        nodeId: paired.deviceId,
+        connId: client.connId,
+        stats: { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 },
+        observedAtMs: 100,
+      });
+      const stats = await read();
+      expect(stats).not.toBe(initial);
+      expect(stats.hostStats).toMatchObject({ memoryFreeBytes: 4096, updatedAtMs: 100 });
+      expect(initial.hostStats).toBeUndefined();
+      expect(await read()).toBe(stats);
+
+      paired.nodeSurface!.displayName = "Renamed node";
+      readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot([paired]));
+      const renamed = await read();
+      expect(renamed.displayName).toBe("Renamed node");
+      expect(await read()).toBe(renamed);
+
+      registry.unregister(client.connId);
+      const offline = await read();
+      expect(offline).toMatchObject({ connected: false, displayName: "Renamed node" });
+      expect(offline.hostStats).toBeUndefined();
+      expect(await read()).toBe(offline);
+
+      readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot([]));
+      expect(await read()).toBeUndefined();
+    } finally {
+      registry.unregister(client.connId);
+    }
+  });
+
   it("retains received stats after replacement and rejects the retired connection", async () => {
     const pairedNode = createPairedNode("stats-node");
     const { nodeRegistry } = createNodeRegistryRuntime(
       () =>
         new NodeRegistry({
           resolveCurrentPairingState: async () =>
-            projectPairedDeviceNodeBindings([pairedNode]).get(pairedNode.deviceId),
+            prepareDevicePairingBinding(pairedNode.deviceId, pairedNode).binding ?? undefined,
         }),
     );
     const registered = registerNode(nodeRegistry, pairedNode);
@@ -110,7 +194,9 @@ describe("node read projections", () => {
       pairedNode.nodeSurface!.lastHostStats = structuredClone(hostStats);
       return true;
     });
-    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [pairedNode] });
+    readPairingSnapshotMock.mockImplementation(async () =>
+      createDevicePairingNodeSnapshot([pairedNode]),
+    );
     resolveLocalNodeIdMock.mockResolvedValue(undefined);
     const sendStats = () =>
       invoke(
@@ -199,7 +285,7 @@ describe("node read projections", () => {
         declaration: { protocolFeatures: ["node-worker-supervisor-v1"] },
       }),
     ).toEqual({ changed: true });
-    listDevicePairingMock.mockResolvedValue({ pending: [], paired: pairedNodes });
+    readPairingSnapshotMock.mockResolvedValue(createDevicePairingNodeSnapshot(pairedNodes));
     resolveLocalNodeIdMock.mockResolvedValue(localNodeId);
 
     async function request(method: "node.list" | "node.describe", params: Record<string, unknown>) {

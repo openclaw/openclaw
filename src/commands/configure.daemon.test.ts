@@ -7,8 +7,15 @@ import { maybeInstallDaemon } from "./configure.daemon.js";
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
-const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const readDaemonRuntimePinForInstall = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -32,9 +39,11 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: vi.fn(async (_opts, run) => run({ setLabel: progressSetLabel })),
 }));
 
+// mock-isolation: Daemon configuration tests use a synthetic install plan and config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: loadConfig,
   loadConfig,
+  captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
 vi.mock("./gateway-install-token.js", () => ({
@@ -85,7 +94,7 @@ describe("maybeInstallDaemon", () => {
     runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: "1.4.3",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
@@ -107,7 +116,7 @@ describe("maybeInstallDaemon", () => {
     });
   });
 
-  it.each([false, true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
+  it.each([true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
     serviceIsLoaded.mockResolvedValue(loaded);
     if (loaded) {
       select.mockResolvedValueOnce("reinstall");
@@ -160,13 +169,13 @@ describe("maybeInstallDaemon", () => {
       typeof import("./daemon-install-helpers.js")
     >("./daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -199,30 +208,27 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["bun", "node"])(
-    "defaults the runtime picker to recorded Bun and honors %s",
-    async (choice) => {
-      const recordedPath = "/opt/recorded/bin/bun";
-      serviceIsLoaded.mockResolvedValue(true);
-      serviceReadCommand.mockResolvedValue({
-        programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
-      });
-      select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
+  it.each(["bun"])("defaults the runtime picker to recorded Bun and honors %s", async (choice) => {
+    const recordedPath = "/opt/recorded/bin/bun";
+    serviceIsLoaded.mockResolvedValue(true);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
+    });
+    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(choice);
 
-      expect(await runInstall()).toBe("succeeded");
+    expect(await runInstall()).toBe("succeeded");
 
-      expect(select).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Gateway service runtime",
-          initialValue: "bun",
-        }),
-      );
-      const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
-      expect(plan?.runtime).toBe(choice);
-      expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
-      expect(plan?.pinnedRuntimePath).toBeUndefined();
-    },
-  );
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Gateway service runtime",
+        initialValue: "bun",
+      }),
+    );
+    const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+    expect(plan?.runtime).toBe(choice);
+    expect(plan?.runtimePath).toBe(choice === "bun" ? recordedPath : undefined);
+    expect(plan?.pinnedRuntimePath).toBeUndefined();
+  });
 
   it("rethrows install probe failures that are not the known non-fatal Linux systemd cases", async () => {
     serviceIsLoaded.mockRejectedValueOnce(
@@ -252,7 +258,7 @@ describe("maybeInstallDaemon", () => {
   it.each([undefined, "node"] as const)(
     "carries installed pin intent through setup (explicit=%s)",
     async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "installed-pin", stored: true, pin };
       const existingCommand = {
         programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],

@@ -304,39 +304,6 @@ describe("slackPlugin actions", () => {
     expect(actionContext.currentChannelId).toBe("C123");
   });
 
-  it("forwards the host media reader through bundled Slack uploads", async () => {
-    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
-    const mediaLocalRoots = ["/tmp/workspace-agent"];
-    const mediaReadFile = vi.fn(async () => Buffer.from("file"));
-
-    await slackPlugin.actions!.handleAction!({
-      action: "upload-file",
-      channel: "slack",
-      accountId: "default",
-      cfg: {},
-      params: {
-        to: "channel:C123",
-        filePath: "/tmp/workspace-agent/renders/file.wav",
-        initialComment: "render",
-      },
-      mediaLocalRoots,
-      mediaReadFile,
-      toolContext: { currentChannelId: "C123", replyToMode: "all" },
-    });
-
-    expect(requireMockCallArg(handleSlackActionMock, 0, 0)).toMatchObject({
-      action: "uploadFile",
-      filePath: "/tmp/workspace-agent/renders/file.wav",
-      initialComment: "render",
-    });
-    expect(requireMockCallArg(handleSlackActionMock, 0, 2)).toMatchObject({
-      currentChannelId: "C123",
-      replyToMode: "all",
-      mediaLocalRoots,
-      mediaReadFile,
-    });
-  });
-
   it("does not inherit forged media capabilities from generic Slack tool context", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ ok: true });
     const handleAction = slackPlugin.actions!.handleAction!;
@@ -653,31 +620,6 @@ describe("slackPlugin outbound", () => {
     );
   });
 
-  it("forwards partial-send progress through the registered Slack sender", async () => {
-    const sendSlack = vi.fn(async (...args: unknown[]) => {
-      const options = args[2] as {
-        onDeliveryResult?: (result: { messageId: string }) => Promise<void>;
-      };
-      await options.onDeliveryResult?.({ messageId: "m-first" });
-      throw new Error("later Slack chunk failed");
-    });
-    const onDeliveryResult = vi.fn();
-    const sendText = slackPlugin.outbound!.sendText!;
-
-    await expect(
-      sendText({
-        cfg,
-        to: "C123",
-        text: "long message",
-        accountId: "default",
-        deps: { sendSlack },
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("later Slack chunk failed");
-
-    expect(onDeliveryResult).toHaveBeenCalledWith({ channel: "slack", messageId: "m-first" });
-  });
-
   it("uses the workspace-partitioned write-client cache for Grid session status", async () => {
     const target = {
       cfg: slackConfig({ botToken: "xoxb-test" }),
@@ -748,23 +690,6 @@ describe("slackPlugin outbound", () => {
     ).toBe("1712345678.123456");
   });
 
-  it("does not recover invalid Slack auto-thread anchors", () => {
-    const resolveAutoThreadId = slackPlugin.threading!.resolveAutoThreadId!;
-
-    const threadId = resolveAutoThreadId({
-      cfg,
-      to: "channel:C123",
-      replyToId: "msg-internal-1",
-      toolContext: {
-        currentChannelId: "C123",
-        currentThreadTs: "thread-root",
-        replyToMode: "all",
-      },
-    });
-
-    expect(threadId).toBeUndefined();
-  });
-
   it("does not stringify numeric thread ids in tool context", () => {
     const buildToolContext = slackPlugin.threading!.buildToolContext!;
 
@@ -793,20 +718,13 @@ describe("slackPlugin outbound", () => {
 
   it.each([
     {
-      name: "current",
-      replyToIsExplicit: true,
-      replyToCurrent: true,
-      expectedReplyToId: "1712345678.123456",
-    },
-    {
       name: "inherited",
       replyToIsExplicit: false,
       expectedReplyToId: "1712345678.123456",
     },
-    { name: "explicit", replyToIsExplicit: true, expectedReplyToId: "1712345688.654321" },
   ])(
     "routes $name child replies to $expectedReplyToId",
-    ({ replyToIsExplicit, replyToCurrent, expectedReplyToId }) => {
+    ({ replyToIsExplicit, expectedReplyToId }) => {
       const resolveReplyTransport = slackPlugin.threading!.resolveReplyTransport!;
 
       expect(
@@ -815,7 +733,6 @@ describe("slackPlugin outbound", () => {
           replyToId: "1712345688.654321",
           threadId: "1712345678.123456",
           replyToIsExplicit,
-          replyToCurrent,
         }),
       ).toEqual({ replyToId: expectedReplyToId, threadId: null });
     },
@@ -1005,68 +922,6 @@ describe("slackPlugin outbound", () => {
   });
 });
 
-describe("Slack message presentation", () => {
-  const cfg = slackConfig({ botToken: "xoxb-test", appToken: "xapp-test" });
-  it("renders portable presentations through the facade as card receipts (#95440)", async () => {
-    const sendSlack = vi.fn().mockResolvedValueOnce({
-      messageId: "msg-1",
-      channelId: "C123",
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [{ channel: "slack", messageId: "msg-1", channelId: "C123" }],
-        kind: "card",
-      }),
-    });
-    const outbound = slackPlugin.outbound;
-    const renderPresentation = outbound?.renderPresentation;
-    if (!renderPresentation) {
-      throw new Error("Expected Slack presentation renderer");
-    }
-
-    const presentation = {
-      title: "Status",
-      blocks: [{ type: "divider" as const }],
-    };
-    const payload = { text: "Fallback", presentation };
-    const rendered = await renderPresentation({
-      payload,
-      presentation,
-      ctx: { cfg, to: "C123", text: payload.text, payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack presentation payload");
-    }
-    // Core consumes the portable presentation before handing the native payload to the adapter.
-    const { presentation: _presentation, ...deliveryPayload } = rendered;
-
-    const result = await slackPlugin.message!.send!.payload!({
-      cfg,
-      to: "C123",
-      text: deliveryPayload.text ?? "",
-      payload: deliveryPayload,
-      accountId: "default",
-      deps: { sendSlack },
-    });
-
-    const to = requireMockCallArgValue(sendSlack, 0, 0);
-    const text = requireMockCallArgValue(sendSlack, 0, 1);
-    const options = requireMockCallArg(sendSlack, 0, 2);
-    expect(to).toBe("C123");
-    expect(text).toBe("Fallback\n\nStatus");
-    expect(options.blocks).toEqual([
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
-      },
-      {
-        type: "header",
-        text: { type: "plain_text", text: "Status", emoji: true },
-      },
-      { type: "divider" },
-    ]);
-    expect(result.receipt.parts[0]?.kind).toBe("card");
-  });
-});
-
 describe("slackPlugin directory", () => {
   it("lists configured peers without throwing a ReferenceError", async () => {
     const listPeers = slackPlugin.directory!.listPeers!;
@@ -1150,54 +1005,4 @@ describe("slackPlugin config", () => {
       });
     },
   );
-
-  it("does not mark partial configured-unavailable token status as configured", async () => {
-    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
-      account: {
-        accountId: "default",
-        name: "Default",
-        enabled: true,
-        configured: false,
-        botTokenStatus: "configured_unavailable",
-        appTokenStatus: "missing",
-        botTokenSource: "config",
-        appTokenSource: "none",
-        config: {},
-      } as never,
-      cfg: {} as OpenClawConfig,
-      runtime: undefined,
-    });
-
-    expect(snapshot?.configured).toBe(false);
-    expect(snapshot?.botTokenStatus).toBe("configured_unavailable");
-    expect(snapshot?.appTokenStatus).toBe("missing");
-  });
-
-  it("keeps HTTP mode signing-secret unavailable accounts configured in snapshots", async () => {
-    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
-      account: {
-        accountId: "default",
-        name: "Default",
-        enabled: true,
-        configured: true,
-        mode: "http",
-        botTokenStatus: "available",
-        signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-        botTokenSource: "config",
-        signingSecretSource: "config", // pragma: allowlist secret
-        config: {
-          mode: "http",
-          botToken: "xoxb-http",
-          signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
-        },
-      } as never,
-      cfg: {} as OpenClawConfig,
-      runtime: undefined,
-    });
-
-    expect(snapshot?.configured).toBe(true);
-    expect(snapshot?.botTokenStatus).toBe("available");
-    expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

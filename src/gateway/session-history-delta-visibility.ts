@@ -11,11 +11,9 @@ import {
   unwrapSessionTranscriptWorkerReply,
 } from "../config/sessions/session-history-worker-errors.js";
 import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
-import {
-  createSubagentCoordinationHistoryProjection,
-  type SubagentCoordinationDisplayResolver,
-} from "./chat-display-projection.history.js";
+import { createSubagentCoordinationHistoryProjection } from "./chat-display-projection.history.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 export function isAppendOnlySessionHistoryDelta(
   delta: SessionTranscriptDisplayDeltaResult,

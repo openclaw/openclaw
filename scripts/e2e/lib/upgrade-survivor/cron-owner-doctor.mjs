@@ -6,8 +6,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  findInstalledPackageRoot,
+  inspectCronBackups,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
 
 const fixtureName = "cron-owner-fixture.json";
 const prefix = "owner-proof-";
@@ -68,15 +75,6 @@ function paths() {
   };
 }
 
-function readDatabase(databasePath, run) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
-}
-
 function inspectRows(databasePath, storePath) {
   return readDatabase(databasePath, (db) =>
     db
@@ -88,25 +86,18 @@ function inspectRows(databasePath, storePath) {
   );
 }
 
-function inspectBackups(databasePath) {
-  return fs
-    .readdirSync(path.dirname(databasePath))
-    .filter(
-      (name) =>
-        name.startsWith(`${path.basename(databasePath)}.doctor-cron-`) && name.endsWith(".bak"),
-    )
-    .toSorted()
-    .map((name) => ({
-      name,
-      sha256: hash(fs.readFileSync(path.join(path.dirname(databasePath), name))),
-    }));
-}
-
 function snapshot(fixture) {
   const config = readJson(fixture.configPath);
   return {
     rows: inspectRows(fixture.databasePath, fixture.storePath),
-    backups: inspectBackups(fixture.databasePath),
+    backups: inspectCronBackups(fixture.databasePath),
+    quarantinedJobs: readDatabase(fixture.databasePath, (db) =>
+      Number(
+        db
+          .prepare("SELECT count(*) AS count FROM diagnostic_events WHERE scope = ?")
+          .get(`cron.quarantine:${fixture.storePath}`).count,
+      ),
+    ),
     historicalMarker: config.agents?.entries?.ops?.default === true,
     legacySourceSha256: fs.existsSync(fixture.storePath)
       ? hash(fs.readFileSync(fixture.storePath))
@@ -116,22 +107,21 @@ function snapshot(fixture) {
 
 function installedProcessIdentity(entrypoint) {
   const file = fs.realpathSync(entrypoint);
-  for (let root = path.dirname(file), depth = 0; depth < 4; root = path.dirname(root), depth++) {
+  const root = findInstalledPackageRoot(path.dirname(file), 4);
+  if (root) {
     const manifestPath = path.join(root, "package.json");
-    if (fs.existsSync(manifestPath) && readJson(manifestPath).name === "openclaw") {
-      const manifest = fs.readFileSync(manifestPath);
-      const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
-      const info = JSON.parse(build);
-      assert.equal(info.version, JSON.parse(manifest).version);
-      return {
-        version: info.version,
-        commit: info.commit,
-        manifestSha256: hash(manifest),
-        buildInfoSha256: hash(build),
-        entrypoint: path.relative(root, file),
-        entrypointSha256: hash(fs.readFileSync(file)),
-      };
-    }
+    const manifest = fs.readFileSync(manifestPath);
+    const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
+    const info = JSON.parse(build);
+    assert.equal(info.version, JSON.parse(manifest).version);
+    return {
+      version: info.version,
+      commit: info.commit,
+      manifestSha256: hash(manifest),
+      buildInfoSha256: hash(build),
+      entrypoint: path.relative(root, file),
+      entrypointSha256: hash(fs.readFileSync(file)),
+    };
   }
   throw new Error("Observed CLI is outside an OpenClaw package");
 }
@@ -167,15 +157,7 @@ function observeProcess() {
     receipt.observationError = String(error);
   }
   const file = path.join(artifacts, `cron-owner-${role}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function gateway(artifacts, name, method, params) {
@@ -268,6 +250,7 @@ function seed(p) {
   if (baseline.version === "2026.9.4") {
     assert.equal(baseline.buildInfo.commit, "3a9d69db306cd7f081e06254cb89c4bcc14a7107");
   }
+  // This JSON-looking path selects a SQLite partition; no retired source file is written.
   const storePath = path.join(p.stateDir, "custom-cron/jobs.json");
   const config = readJson(p.configPath);
   delete config.agents.ownership;
@@ -287,7 +270,6 @@ function seed(p) {
         delivery,
       },
     })),
-    { name: "json-import", overrides: {} },
   ].map(({ name, overrides }, index) =>
     Object.assign(
       {
@@ -352,7 +334,7 @@ function seed(p) {
       `INSERT INTO cron_jobs (${required.join(", ")}) VALUES (${required.map(() => "?").join(", ")})`,
     );
     db.exec("BEGIN IMMEDIATE");
-    for (const [index, job] of definitions.slice(0, -1).entries()) {
+    for (const [index, job] of definitions.entries()) {
       const { state, updatedAtMs, ...definition } = job;
       insert.run(
         storePath,
@@ -376,8 +358,6 @@ function seed(p) {
     db.close();
   }
   writeJson(p.configPath, config);
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  writeJson(storePath, { version: 1, jobs: [definitions.at(-1)] });
   const fixture = {
     databasePath: p.databasePath,
     configPath: p.configPath,
@@ -387,14 +367,17 @@ function seed(p) {
     baseline,
     candidate,
     originalConfigSha256: hash(fs.readFileSync(p.configPath)),
-    legacySha256: hash(fs.readFileSync(storePath)),
   };
-  writeJson(path.join(p.artifacts, fixtureName), { ...fixture, before: snapshot(fixture) });
+  const before = snapshot(fixture);
+  assert.equal(before.legacySourceSha256, null, "Fixture wrote a retired cron source");
+  assert.equal(before.quarantinedJobs, 0, "Fixture requires a clean canonical partition");
+  writeJson(path.join(p.artifacts, fixtureName), { ...fixture, before });
 }
 
 function assertRepaired(fixture, observed) {
   assert.equal(observed.historicalMarker, false, "Doctor did not retire the repaired marker");
-  assert.equal(observed.legacySourceSha256, null, "Legacy cron source was not archived");
+  assert.equal(observed.legacySourceSha256, null, "Canonical cron repair created a retired source");
+  assert.equal(observed.quarantinedJobs, 0, "Canonical jobs were unexpectedly quarantined");
   assert.deepEqual(
     observed.rows.map((row) => row.job_id).toSorted(),
     fixture.definitions.map((job) => job.id).toSorted(),
@@ -489,20 +472,16 @@ function assertUpdated(p, observations, packageRoot) {
   assert(updater, "Published updater was not observed");
   assert(doctor, "Installed updater's candidate Doctor did not perform the owner repair");
   assert.deepEqual(updater.before, fixture.before, "Specimen changed before the installed update");
-  assert.equal(doctor.before.legacySourceSha256, fixture.legacySha256);
+  assert.equal(doctor.before.legacySourceSha256, null, "Doctor received a retired cron source");
+  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
+    job_id,
+    agent_id,
+    job_json,
+    state_json,
+  });
   assert.deepEqual(
-    doctor.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
-    fixture.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
+    doctor.before.rows.map(persistedFields),
+    fixture.before.rows.map(persistedFields),
     "Jobs were repaired before candidate Doctor received them",
   );
   for (const receipt of [updater, doctor]) {
@@ -525,29 +504,15 @@ function assertUpdated(p, observations, packageRoot) {
   assertRepaired(fixture, doctor.after);
   const current = snapshot(fixture);
   assert.deepEqual(current, doctor.after, "Cron changed after update Doctor exited");
-  assert.equal(hash(fs.readFileSync(`${fixture.storePath}.migrated`)), fixture.legacySha256);
-  const migration = readDatabase(p.databasePath, (db) =>
-    db
-      .prepare(
-        "SELECT status, removed_source, source_sha256, source_record_count FROM migration_sources WHERE source_path = ? AND migration_kind = 'legacy-cron-json'",
-      )
-      .all(fixture.storePath),
-  );
-  assert.deepEqual(
-    migration.map((row) => Object.assign({}, row)),
-    [
-      {
-        status: "completed",
-        removed_source: 1,
-        source_sha256: fixture.legacySha256,
-        source_record_count: 1,
-      },
-    ],
-  );
+  assert.equal(fs.existsSync(`${fixture.storePath}.migrated`), false);
   const added = current.backups.filter(
     (entry) => !fixture.before.backups.some((before) => before.name === entry.name),
   );
-  assert.equal(added.length, 2, "Import and ownership repair must each retain a verified backup");
+  assert.equal(
+    added.length,
+    2,
+    "Ownership and delivery normalization must each retain a verified backup",
+  );
   const backedUp = added.map((backup) => {
     const backupPath = path.join(path.dirname(p.databasePath), backup.name);
     readDatabase(backupPath, (db) => {
@@ -556,34 +521,37 @@ function assertUpdated(p, observations, packageRoot) {
     });
     return { backup, rows: inspectRows(backupPath, fixture.storePath) };
   });
-  const beforeImport = backedUp.filter(
-    ({ rows }) => !rows.some((row) => row.job_id === `${prefix}json-import`),
-  );
   const beforeOwnership = backedUp.filter(({ rows }) =>
-    rows.some((row) => row.job_id === `${prefix}json-import`),
+    isDeepStrictEqual(rows.map(persistedFields), fixture.before.rows.map(persistedFields)),
   );
-  assert.equal(beforeImport.length, 1, "Missing unique pre-import snapshot");
-  assert.equal(beforeOwnership.length, 1, "Missing unique pre-ownership snapshot");
-  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
-    job_id,
-    agent_id,
-    job_json,
-    state_json,
+  const beforeNormalization = backedUp.filter(({ rows }) => {
+    const historical = rows.find((row) => row.job_id === `${prefix}historical`);
+    return (
+      historical?.agent_id === "ops" &&
+      JSON.parse(historical.job_json).agentId === "ops" &&
+      deliveryCases.every(({ name, delivery }) => {
+        const row = rows.find((entry) => entry.job_id === `${prefix}${name}`);
+        return row !== undefined && isDeepStrictEqual(JSON.parse(row.job_json).delivery, delivery);
+      })
+    );
   });
+  assert.equal(beforeOwnership.length, 1, "Missing unique original-state ownership backup");
+  assert.equal(beforeNormalization.length, 1, "Missing unique pre-normalization backup");
   assert.deepEqual(
-    beforeImport[0].rows.map(persistedFields),
-    fixture.before.rows.map(persistedFields),
-    "Initial backup did not preserve the original persisted definitions, owners, and state",
-  );
-  assert.deepEqual(
-    beforeOwnership[0].rows.map((row) => row.job_id).toSorted(),
+    beforeNormalization[0].rows.map((row) => row.job_id).toSorted(),
     fixture.definitions.map((job) => job.id).toSorted(),
+    "Pre-normalization backup omitted fixture jobs",
   );
-  for (const name of ["historical", "json-import"]) {
-    const row = beforeOwnership[0].rows.find((entry) => entry.job_id === `${prefix}${name}`);
-    assert(row, `Ownership backup omitted ${name}`);
-    assert.equal(row.agent_id, null);
-    assert.equal(Object.hasOwn(JSON.parse(row.job_json), "agentId"), false);
+  for (const row of beforeNormalization[0].rows) {
+    const original = fixture.before.rows.find((entry) => entry.job_id === row.job_id);
+    const repaired = current.rows.find((entry) => entry.job_id === row.job_id);
+    assert(original && repaired, "Normalization backup changed the fixture inventory");
+    const { agentId: _originalOwner, ...originalDefinition } = JSON.parse(original.job_json);
+    const { agentId, ...definition } = JSON.parse(row.job_json);
+    assert.deepEqual(definition, originalDefinition, "Ownership repair changed authored fields");
+    assert.equal(agentId, JSON.parse(repaired.job_json).agentId);
+    assert.equal(row.agent_id, repaired.agent_id);
+    assert.equal(row.state_json, original.state_json, "Ownership backup lost runtime state");
   }
   const archive = parseCliJson(
     fs.readFileSync(path.join(p.artifacts, "cron-owner-backup.json"), "utf8"),
@@ -606,14 +574,15 @@ function assertUpdated(p, observations, packageRoot) {
     updaterPid: updater.pid,
     doctorPid: doctor.pid,
     backups: {
-      beforeImport: beforeImport[0].backup,
       beforeOwnership: beforeOwnership[0].backup,
+      beforeNormalization: beforeNormalization[0].backup,
     },
     verifiedArchive: {
       path: archive.archivePath,
       sha256: hash(fs.readFileSync(archive.archivePath)),
     },
-    migration,
+    canonicalSQLiteOnly: true,
+    quarantinedJobs: current.quarantinedJobs,
     fixtureOwners: current.rows.map((row) => ({ id: row.job_id, agentId: row.agent_id })),
     automaticSupervisorRestartVerified: false,
   });
@@ -699,19 +668,14 @@ function assertRuntime(p) {
   assert.deepEqual(
     receipts.map((row) => Object.assign({}, row)),
     [
-      {
-        job_id: `${prefix}explicit`,
-        agent_id: "research",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}explicit`).runId,
-      },
-      {
-        job_id: `${prefix}historical`,
-        agent_id: "ops",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}historical`).runId,
-      },
-    ],
+      ["explicit", "research"],
+      ["historical", "ops"],
+    ].map(([name, agentId]) => ({
+      job_id: `${prefix}${name}`,
+      agent_id: agentId,
+      status: "ok",
+      request_run_id: runs.find((run) => run.jobId === `${prefix}${name}`).runId,
+    })),
   );
   const proofPath = path.join(p.artifacts, "cron-owner-proof.json");
   const proof = {

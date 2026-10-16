@@ -14,7 +14,6 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
@@ -25,6 +24,7 @@ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generati
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -55,8 +55,6 @@ export async function startGatewayCoreRuntime(input: {
   logDiscovery: GatewayLogger;
   logHealth: GatewayLogger;
   logChannels: GatewayLogger;
-  loadGatewayStartupEarlyModule: () => Promise<typeof import("./server-startup-early.js")>;
-  loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
   loadGatewayModelCatalog: typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
   loadGatewayModelCatalogSnapshot: typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
   readPreparedGatewayModelCatalog: typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
@@ -69,8 +67,6 @@ export async function startGatewayCoreRuntime(input: {
     logDiscovery,
     logHealth,
     logChannels,
-    loadGatewayStartupEarlyModule,
-    loadGatewayPluginBootstrapModule,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
@@ -154,7 +150,7 @@ export async function startGatewayCoreRuntime(input: {
   const startEarlyRuntime = (): Promise<GatewayEarlyRuntime> =>
     (earlyRuntimePromise ??= startupTrace
       .measure("runtime.early", () =>
-        loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+        import("./server-startup-early.js").then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             scheduler: runtime.scheduler,
             minimalTestGateway,
@@ -172,44 +168,46 @@ export async function startGatewayCoreRuntime(input: {
             pluginRegistry: pluginRuntime.registry,
             pluginRuntimeClaim: kernel.pluginRuntimeGeneration.currentClaim(),
             broadcast,
-            nodeSendToAllSubscribed,
-            getPresenceVersion,
-            getHealthVersion,
-            refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
-            restartRunningChannels: async (
-              mode,
-              shouldContinue = () => !isGatewayWorkAdmissionClosed(),
-            ) => {
-              // A new timing gap must resnapshot every running account even while
-              // older failures remain pending. A retry before the first attempted
-              // pass has no target list yet, so it also needs that fresh snapshot.
-              const selection =
-                mode === "new-thaw" || pendingThawRestartTargets === undefined
-                  ? { kind: "new-thaw" as const, pendingTargets: pendingThawRestartTargets }
-                  : { kind: "deferred-retry" as const, targets: pendingThawRestartTargets };
-              const failedTargets = await restartRunningChannelAccounts(
-                channelManager,
-                {
-                  shouldContinue,
-                  onError: (message) => logHealth.error(message),
-                },
-                selection,
-              );
-              pendingThawRestartTargets = failedTargets.length > 0 ? failedTargets : undefined;
-              return failedTargets.length === 0;
+            maintenance: {
+              nodeSendToAllSubscribed,
+              getPresenceVersion,
+              getHealthVersion,
+              refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+              restartRunningChannels: async (
+                mode,
+                shouldContinue = () => !isGatewayWorkAdmissionClosed(),
+              ) => {
+                // A new timing gap must resnapshot every running account even while
+                // older failures remain pending. A retry before the first attempted
+                // pass has no target list yet, so it also needs that fresh snapshot.
+                const selection =
+                  mode === "new-thaw" || pendingThawRestartTargets === undefined
+                    ? { kind: "new-thaw" as const, pendingTargets: pendingThawRestartTargets }
+                    : { kind: "deferred-retry" as const, targets: pendingThawRestartTargets };
+                const failedTargets = await restartRunningChannelAccounts(
+                  channelManager,
+                  {
+                    shouldContinue,
+                    onError: (message) => logHealth.error(message),
+                  },
+                  selection,
+                );
+                pendingThawRestartTargets = failedTargets.length > 0 ? failedTargets : undefined;
+                return failedTargets.length === 0;
+              },
+              refreshPresence: runtime.publishPresence,
+              resetEventLoopHealth: readinessEventLoopHealth.reset,
+              logHealth,
+              clients,
+              dedupe,
+              chatAbortControllers,
+              chatQueuedTurns,
+              restartRecoveryCandidates,
+              chatRunState,
+              removeChatRun,
+              agentRunSeq,
+              nodeSendToSession: sendNodeSessionEvent,
             },
-            refreshPresence: runtime.publishPresence,
-            resetEventLoopHealth: readinessEventLoopHealth.reset,
-            logHealth,
-            clients,
-            dedupe,
-            chatAbortControllers,
-            chatQueuedTurns,
-            restartRecoveryCandidates,
-            chatRunState,
-            removeChatRun,
-            agentRunSeq,
-            nodeSendToSession: sendNodeSessionEvent,
             getRuntimeConfig,
             startupTrace,
           }),
@@ -302,44 +300,45 @@ export async function startGatewayCoreRuntime(input: {
   } = await startupTrace.measure("gateway.handlers", async () => {
     const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
       await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+    const auxHandlers = createGatewayAuxHandlers({
+      scheduler: runtime.scheduler,
+      log,
+      chatAbortControllers,
+      hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
+      getNativeApprovalRouteCoordinator: () =>
+        runtime.gatewayInstanceRuntimeRef.current?.nativeApprovals.routeCoordinator,
+      // Grant terms freeze at mint. This reads the live config so a policy
+      // change applies to grants minted after it, never retroactively.
+      resolveGrantDefaultExpiresAtMs: (nowMs) => {
+        const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
+        return days !== null ? nowMs + days * 86_400_000 : null;
+      },
+      activateRuntimeSecrets,
+      sharedGatewaySessionGenerationState,
+      resolveSharedGatewaySessionGenerationForConfig,
+      clients,
+      channelManager,
+      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+      logChannels,
+      registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
+        ? (handler) =>
+            workerEnvironmentStartup.placementStore.registerTurnClaimClosedHandler(handler)
+        : undefined,
+      validateAgentRuntimeDelegatedAuthority: (authority) =>
+        validateAgentRuntimeApprovalAuthority({
+          kind: "agentRuntime",
+          agentId: "approval-manager",
+          sessionKey: "approval-manager",
+          operationalRunInstance: authority.operationalRunInstance,
+          delegatedAuthority: authority,
+        }),
+      onApprovalLifecycle: approvalSessionEvents.publish,
+      onAgentRunAuthorityClosed: (authority) => {
+        gatewayComputerService.revokeRunAuthority(authority);
+      },
+    });
     return {
-      ...createGatewayAuxHandlers({
-        scheduler: runtime.scheduler,
-        log,
-        chatAbortControllers,
-        hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
-        getNativeApprovalRouteCoordinator: () =>
-          runtime.gatewayInstanceRuntimeRef.current?.nativeApprovals.routeCoordinator,
-        // Grant terms freeze at mint. This reads the live config so a policy
-        // change applies to grants minted after it, never retroactively.
-        resolveGrantDefaultExpiresAtMs: (nowMs) => {
-          const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
-          return days !== null ? nowMs + days * 86_400_000 : null;
-        },
-        activateRuntimeSecrets,
-        sharedGatewaySessionGenerationState,
-        resolveSharedGatewaySessionGenerationForConfig,
-        clients,
-        channelManager,
-        getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-        logChannels,
-        registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
-          ? (handler) =>
-              workerEnvironmentStartup.placementStore.registerTurnClaimClosedHandler(handler)
-          : undefined,
-        validateAgentRuntimeDelegatedAuthority: (authority) =>
-          validateAgentRuntimeApprovalAuthority({
-            kind: "agentRuntime",
-            agentId: "approval-manager",
-            sessionKey: "approval-manager",
-            operationalRunInstance: authority.operationalRunInstance,
-            delegatedAuthority: authority,
-          }),
-        onApprovalLifecycle: approvalSessionEvents.publish,
-        onAgentRunAuthorityClosed: (authority) => {
-          gatewayComputerService.revokeRunAuthority(authority);
-        },
-      }),
+      ...auxHandlers,
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
   });
@@ -356,6 +355,7 @@ export async function startGatewayCoreRuntime(input: {
       await stopOperatorInteractions();
     },
   });
+  await approvalRuntime.ready;
   approvalManagersForReplay.set("exec", execApprovalManager);
   approvalManagersForReplay.set("plugin", pluginApprovalManager);
   approvalManagersForReplay.set("system-agent", systemAgentApprovalManager);
@@ -417,7 +417,7 @@ export async function startGatewayCoreRuntime(input: {
     return createGatewayMethodRegistry(
       [
         ...coreDescriptors,
-        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...nextPluginRegistry.gatewayMethodDescriptors,
         ...createGatewayMethodDescriptorsFromHandlers({
           handlers: auxHandlers,
           owner: { kind: "aux", area: "gateway-extra" },
@@ -471,6 +471,7 @@ export async function startGatewayCoreRuntime(input: {
         Object.assign(attachedGatewayExtraHandlers, loaded.pluginRegistry.gatewayHandlers);
         attachedPluginGatewayHandlerKeys = nextHandlerKeys;
         attachedGatewayMethodRegistry = nextMethodRegistry;
+        invalidateSharedReadResponses(broadcast);
         kernel.publishMethodSurface(nextMethods);
       },
       afterCommit: () => {
@@ -506,7 +507,7 @@ export async function startGatewayCoreRuntime(input: {
         runtime,
         port,
         log,
-        loadGatewayPluginBootstrapModule,
+        loadGatewayPluginBootstrapModule: () => import("./server-plugin-bootstrap.js"),
         prepareAttachedPluginRuntime,
       },
       params,

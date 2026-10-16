@@ -47,10 +47,7 @@ function extractMSTeamsResultConversationId(value: unknown): string | undefined 
 }
 
 /** Recover the actual Teams conversation resolved by a successful tool send. */
-export function extractMSTeamsToolSendResult(
-  result: unknown,
-  _send: ChannelToolSend,
-): ChannelToolSend | null {
+export function extractMSTeamsToolSendResult(result: unknown): ChannelToolSend | null {
   const details = isRecord(result) && isRecord(result.details) ? result.details : undefined;
   const deliveryResult = details && isRecord(details.result) ? details.result : undefined;
   const conversationId = extractMSTeamsResultConversationId(deliveryResult);

@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   }),
   runtime: { error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: mocks.stateAdmission,
 }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -47,6 +47,14 @@ describe("unsupported CLI Node update admission", () => {
     });
     await expect(updateCommand({ json: true })).rejects.toEqual(new ExitError(1));
     expect(mocks.stateAdmission).not.toHaveBeenCalled();
+    const refusal = mocks.runtime.writeJson.mock.calls[0]?.[0];
+    expect(refusal.error).toContain(`detected: Node 26.0.0 at ${process.execPath}`);
+    expect(refusal.error).toContain("Failing check node-runtime");
+    expect(refusal.error).toContain("Update install root:");
+    expect(refusal.error).toContain("Update binary:");
+    expect(refusal.error).toContain(">=24.16.0 <25");
+    expect(refusal.error).toContain(">=26.1.0");
+    expect(refusal.error).toContain("Node 26 recommended");
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "error",

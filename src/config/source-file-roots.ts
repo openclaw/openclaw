@@ -4,6 +4,7 @@ import {
   isUnsafeDeviceReadPath,
 } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import type { Root } from "@openclaw/fs-safe/root";
 import { admitObservationRoot, observationPrefixKind } from "../infra/fs-observation-root.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -148,12 +149,7 @@ export function configObservationEntries(
       continue;
     }
     const relative = path.relative(admitted.authority.rootDir, candidate) || ".";
-    if (
-      relative &&
-      !path.isAbsolute(relative) &&
-      relative !== ".." &&
-      !relative.startsWith(`..${path.sep}`)
-    ) {
+    if (!isPathRelativeEscape(relative)) {
       entries.set(relative, candidate);
     }
   }

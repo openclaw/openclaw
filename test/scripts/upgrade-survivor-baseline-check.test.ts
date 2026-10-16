@@ -24,13 +24,13 @@ const args = process.argv.slice(2);
 const prefix = args[args.indexOf("--prefix") + 1];
 const spec = args.find(arg => arg.startsWith("openclaw@"));
 fs.appendFileSync(${JSON.stringify(installs)}, JSON.stringify({ args, prefix }) + "\\n");
-if (${JSON.stringify(failure)} === "install" && spec.endsWith("8.1")) {
+if (${JSON.stringify(failure)} === "install" && spec.endsWith("8.33")) {
   console.error("registry unavailable"); process.exit(1);
 }
-if (${JSON.stringify(failure)} === "launch" && spec.endsWith("8.1")) process.exit(0);
+if (${JSON.stringify(failure)} === "launch" && spec.endsWith("8.33")) process.exit(0);
 fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' +
-  'if (' + JSON.stringify(spec.endsWith("8.1")) + ' && process.argv.includes(' +
+  'if (' + JSON.stringify(spec.endsWith("8.33")) + ' && process.argv.includes(' +
   JSON.stringify(${JSON.stringify(failure)} === "version" ? "--version" : "set") +
   ')) { console.error("Cannot find package fixture-runtime"); process.exit(1); }\\n' +
   'console.log(process.argv.includes("--version") ? ' + JSON.stringify(spec) + ' : "local");\\n',
@@ -48,8 +48,8 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
         PATH: `${bin}${path.delimiter}${process.env.PATH}`,
         LANES: "published-upgrade-survivor onboard",
         GROUP_SIZE: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.8.1 2026.8.2",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.8.1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.8.33 2026.8.34",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.8.33",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state base",
         ...overrides,
@@ -65,26 +65,67 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
 }
 
 describe("published baseline startup admission", () => {
+  it("checks each pinned recovery driver once before scheduling exact rows", () => {
+    const fixture = runFixture("runtime", {
+      LANES: "published-upgrade-survivor",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+        "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    });
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(JSON.parse(fixture.result.stdout)).toHaveLength(5);
+    expect(
+      fixture.report.baselines.map((entry: { baseline: string; status: string }) => [
+        entry.baseline,
+        entry.status,
+      ]),
+    ).toEqual([
+      ["openclaw@2026.9.8", "usable"],
+      ["openclaw@2026.9.9", "usable"],
+      ["openclaw@2026.9.7", "usable"],
+    ]);
+    expect(readFileSync(fixture.installs, "utf8").trim().split("\n")).toHaveLength(3);
+  });
+
   it.each(["version", "runtime"] as const)(
     "skips unusable %s baselines with evidence before scheduling scenarios",
     (failure) => {
       const fixture = runFixture(failure);
       expect(fixture.result.status, fixture.result.stderr).toBe(0);
       const groups = JSON.parse(fixture.result.stdout);
-      expect(groups.map((group: { label: string }) => group.label)).toEqual([
-        "published-upgrade-survivor-2026.8.2",
-        "onboard",
+      expect(groups).toEqual([
+        {
+          docker_lanes: "published-upgrade-survivor",
+          label: "published-upgrade-survivor-2026.8.34-scenarios-1",
+          published_upgrade_survivor_baselines: "openclaw@2026.8.34",
+          published_upgrade_survivor_scenarios: "legacy-operator-state",
+          timeout_minutes: 90,
+        },
+        {
+          docker_lanes: "published-upgrade-survivor",
+          label: "published-upgrade-survivor-2026.8.34-scenarios-2",
+          published_upgrade_survivor_baselines: "openclaw@2026.8.34",
+          published_upgrade_survivor_scenarios: "base",
+          timeout_minutes: 90,
+        },
+        { docker_lanes: "onboard", label: "onboard" },
       ]);
-      expect(fixture.report.baselines).toEqual([
-        expect.objectContaining({
-          baseline: "openclaw@2026.8.1",
-          status: "skipped",
-          reason: expect.stringContaining("unusable published baseline"),
-          error: expect.stringContaining("Cannot find package fixture-runtime"),
-          scenarios: ["legacy-operator-state", "base"],
-        }),
-        expect.objectContaining({ baseline: "openclaw@2026.8.2", status: "usable" }),
-      ]);
+      expect(fixture.report.baselines).toHaveLength(2);
+      expect(fixture.report.baselines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.33",
+            status: "skipped",
+            reason: expect.stringContaining("unusable published baseline"),
+            error: expect.stringContaining("Cannot find package fixture-runtime"),
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+          expect.objectContaining({
+            baseline: "openclaw@2026.8.34",
+            status: "usable",
+            scenarios: ["legacy-operator-state", "base"],
+          }),
+        ]),
+      );
       const installs = readFileSync(fixture.installs, "utf8")
         .trim()
         .split("\n")
@@ -125,7 +166,7 @@ describe("published baseline startup admission", () => {
       ),
     ).toEqual(expected);
     expect(fixture.report.baselines).toEqual([
-      expect.objectContaining({ baseline: "openclaw@2026.8.1", status: "skipped" }),
+      expect.objectContaining({ baseline: "openclaw@2026.8.33", status: "skipped" }),
     ]);
   });
 
@@ -137,7 +178,12 @@ describe("published baseline startup admission", () => {
     ({ failure, error }) => {
       const fixture = runFixture(failure);
       expect(fixture.result.status).not.toBe(0);
-      expect(fixture.report.baselines[0]).toMatchObject({
+      expect(
+        fixture.report.baselines.find(
+          (entry: { baseline: string }) => entry.baseline === "openclaw@2026.8.33",
+        ),
+      ).toMatchObject({
+        baseline: "openclaw@2026.8.33",
         status: "failed",
         error: expect.stringContaining(error),
       });

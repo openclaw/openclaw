@@ -9,6 +9,7 @@ import {
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export type MemoryToolOptions = {
   config?: OpenClawConfig;
@@ -20,6 +21,7 @@ export type MemoryToolOptions = {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
+  runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
 const MemorySearchSchema = {
@@ -93,26 +95,26 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   parameters: MemorySearchSchema,
   prepareArguments: (args: unknown) => {
     const params = asToolParamsRecord(args);
-    if (!Object.hasOwn(params, "min_score") && !Object.hasOwn(params, "max_results")) {
+    const aliases = [
+      ["min_score", "minScore"],
+      ["max_results", "maxResults"],
+      ["limit", "maxResults"],
+    ] as const;
+    if (!aliases.some(([alias]) => Object.hasOwn(params, alias))) {
       return args;
     }
     const normalized = { ...params };
-    // Explicit camelCase values win, including invalid values that validation must reject.
-    for (const [alias, key] of [
-      ["min_score", "minScore"],
-      ["max_results", "maxResults"],
-    ] as const) {
-      if (Object.hasOwn(normalized, alias)) {
-        if (!Object.hasOwn(normalized, key)) {
-          normalized[key] = normalized[alias];
-        }
-        delete normalized[alias];
+    // Precedence: maxResults > max_results > limit, even for invalid values validation must reject.
+    for (const [alias, key] of aliases) {
+      if (Object.hasOwn(normalized, alias) && !Object.hasOwn(normalized, key)) {
+        normalized[key] = normalized[alias];
       }
+      delete normalized[alias];
     }
     return normalized;
   },
   describe: ({ search }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+    `Semantically search ${search} when an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn. Do not repeat memory retrieval when supplied context fully answers the question. Omit \`corpus\` to search those configured sources. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements; use \`corpus=all\` only when compiled wiki supplements are needed. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
@@ -140,10 +142,10 @@ export function buildMemoryPromptSection({
 
   // Code mode may defer tool descriptions; recall and disclosure policy must stay here.
   const guidance = hasMemorySearch
-    ? `Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search without corpus to search the configured sources${
+    ? `When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn, run memory_search without corpus to search the configured sources${
         hasMemoryGet ? "; for memory-file hits, use memory_get to pull only the needed lines" : ""
-      }. Use corpus=all only when compiled wiki supplements are needed. If low confidence after search, say you checked.`
-    : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific memory file: run memory_get to pull only the needed lines. If low confidence after reading, say you checked.";
+      }. Do not repeat memory retrieval when supplied context fully answers the question. Use corpus=all only when compiled wiki supplements are needed. If low confidence after search, say you checked.`
+    : "When an answer depends on prior work, decisions, dates, people, preferences, or todos not already present in the current turn and points to a specific memory file, run memory_get to pull only the needed lines. Do not repeat memory retrieval when supplied context fully answers the question. If low confidence after reading, say you checked.";
   const sessionGuidance = !hasMemorySearch
     ? []
     : [

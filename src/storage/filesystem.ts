@@ -22,6 +22,12 @@ function validateSettings(settings: Readonly<Record<string, unknown>>): string |
   return undefined;
 }
 
+function ignoreMissingPath(error: unknown): undefined {
+  if (!isMissingPathError(error)) {
+    throw error;
+  }
+}
+
 export const filesystemStorageProvider: StorageProvider = {
   id: "filesystem",
   label: "Filesystem",
@@ -131,12 +137,7 @@ export const filesystemStorageProvider: StorageProvider = {
         },
         async getObject(key, opts) {
           await assertCurrent(opts?.signal);
-          const opened = await files.open(key).catch((error: unknown) => {
-            if (isMissingPathError(error)) {
-              return undefined;
-            }
-            throw error;
-          });
+          const opened = await files.open(key).catch(ignoreMissingPath);
           if (!opened) {
             return undefined;
           }
@@ -162,24 +163,14 @@ export const filesystemStorageProvider: StorageProvider = {
         },
         async statObject(key, opts) {
           await assertCurrent(opts?.signal);
-          const stat = await files.stat(key).catch((error: unknown) => {
-            if (isMissingPathError(error)) {
-              return undefined;
-            }
-            throw error;
-          });
+          const stat = await files.stat(key).catch(ignoreMissingPath);
           await assertCurrent(opts?.signal);
           return stat?.isFile ? { key, sizeBytes: stat.size, modifiedAt: stat.mtimeMs } : undefined;
         },
         async *listObjects(prefix, opts) {
           await assertCurrent(opts?.signal);
           const parentKey = prefix.slice(0, prefix.lastIndexOf("/") + 1).replace(/\/$/u, "");
-          const parentStat = await files.stat(parentKey || ".").catch((error: unknown) => {
-            if (isMissingPathError(error)) {
-              return undefined;
-            }
-            throw error;
-          });
+          const parentStat = await files.stat(parentKey || ".").catch(ignoreMissingPath);
           if (!parentStat?.isDirectory) {
             return;
           }

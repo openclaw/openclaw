@@ -14,7 +14,7 @@ import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
-import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModelsAsync } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -53,7 +53,7 @@ import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-supp
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
-  appendPrioritizedDynamicLiveModels,
+  appendLiveModelCandidates,
   applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
@@ -131,8 +131,13 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { enterIsolatedGatewayLiveDiscoveryState } from "./gateway-models.profiles.live.discovery.test-helpers.js";
+import { toLiveModelConfig } from "./gateway-models.profiles.live.model-config.test-helpers.js";
 import {
+  createExplicitLiveFallbackModel,
+  createGatewayLiveTestModel,
   isolateLiveGatewayConfig,
+  parseExplicitLiveModelRef,
+  resolveExplicitLiveModelCandidates,
   resolveGatewayLiveModelThinkingLevel,
   resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
@@ -146,8 +151,8 @@ import {
 } from "./live-tool-probe.test-helpers.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -166,7 +171,6 @@ const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antth
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
-const EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW = 128_000;
 const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
@@ -199,8 +203,6 @@ const GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR = path.join(
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/kimi-k2p5",
-  "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
@@ -971,14 +973,6 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
     expect(
       shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p5"),
     ).toBe(true);
-    expect(
-      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p6"),
-    ).toBe(true);
-    expect(
-      shouldSkipExecReadNonceMissForLiveModel(
-        "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
-      ),
-    ).toBe(true);
   });
 });
 
@@ -1464,31 +1458,7 @@ describe("resolveGatewayLiveCandidatePoolLimit", () => {
   });
 });
 
-function createGatewayLiveTestModel(provider: string, id: string): Model {
-  return {
-    provider,
-    id,
-    name: id,
-    api: resolveExplicitLiveFallbackApi(provider),
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000,
-    maxTokens: 100,
-    reasoning: false,
-  } as Model;
-}
-
-const EXPLICIT_LIVE_FALLBACK_API_BY_PROVIDER: Partial<Record<string, Api>> = {
-  "amazon-bedrock": "bedrock-converse-stream",
-};
-
 const DEFAULT_BEDROCK_LIVE_REGION = "us-east-1";
-
-function resolveExplicitLiveFallbackApi(provider: string): Api {
-  return (
-    EXPLICIT_LIVE_FALLBACK_API_BY_PROVIDER[normalizeProviderId(provider)] ?? "openai-responses"
-  );
-}
 
 function resolveDefaultBedrockLiveBaseUrl(
   params: {
@@ -1636,182 +1606,6 @@ function normalizeOptionalEnvValue(value: string | undefined): string | undefine
   return trimmed;
 }
 
-function createExplicitLiveFallbackModel(provider: string, id: string): Model {
-  const thinkingProfile = resolveEffectiveThinkingProfile({
-    provider,
-    context: {
-      provider,
-      modelId: id,
-      agentRuntime: "openclaw",
-      reasoning: true,
-    },
-  });
-  const supportsXhigh = thinkingProfile?.levels.some((level) => level.id === "xhigh") ?? false;
-  const supportsMax = thinkingProfile?.levels.some((level) => level.id === "max") ?? false;
-  return {
-    ...createGatewayLiveTestModel(provider, id),
-    contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
-    maxTokens: 4_096,
-    reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
-    ...(supportsXhigh || supportsMax
-      ? {
-          thinkingLevelMap: {
-            ...(supportsXhigh ? { xhigh: "xhigh" } : {}),
-            ...(supportsMax ? { max: "max" } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function createGatewayLiveTestRegistry(overrides: Partial<ModelRegistry>): ModelRegistry {
-  return {
-    find() {
-      return undefined;
-    },
-    getAll() {
-      return [];
-    },
-    getAvailable() {
-      return [];
-    },
-    hasConfiguredAuth() {
-      return true;
-    },
-    ...overrides,
-  };
-}
-
-describe("resolveExplicitLiveModelCandidates", () => {
-  it("uses targeted registry lookup for explicit provider/model filters", () => {
-    const model = createGatewayLiveTestModel("xai", "grok-4.3");
-    const matcher = createLiveTargetMatcher({
-      providerFilter: new Set(["xai"]),
-      modelFilter: new Set(["xai/grok-4.3"]),
-      env: {},
-    });
-    const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: createGatewayLiveTestRegistry({
-        find(provider, modelId) {
-          expect(provider).toBe("xai");
-          expect(modelId).toBe("grok-4.3");
-          return model;
-        },
-        getAll() {
-          throw new Error("explicit model lookup should not enumerate registry");
-        },
-      }),
-      modelFilter: new Set(["xai/grok-4.3"]),
-      providerFilter: new Set(["xai"]),
-      targetMatcher: matcher,
-    });
-
-    expect(candidates).toEqual([model]);
-  });
-
-  it("normalizes retired Google Gemini refs before targeted lookup", () => {
-    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
-    const matcher = createLiveTargetMatcher({
-      providerFilter: new Set(["google"]),
-      modelFilter: new Set(["google/gemini-3-pro-preview"]),
-      env: {},
-    });
-    const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: createGatewayLiveTestRegistry({
-        find(provider, modelId) {
-          expect(provider).toBe("google");
-          expect(modelId).toBe("gemini-3.1-pro-preview");
-          return model;
-        },
-        getAll() {
-          throw new Error("explicit model lookup should not enumerate registry");
-        },
-      }),
-      modelFilter: new Set(["google/gemini-3-pro-preview"]),
-      providerFilter: new Set(["google"]),
-      targetMatcher: matcher,
-    });
-
-    expect(candidates).toEqual([model]);
-  });
-
-  it("fails closed when canonical metadata is unavailable for an explicit ref", () => {
-    const matcher = createLiveTargetMatcher({
-      providerFilter: new Set(["openai"]),
-      modelFilter: new Set(["openai/gpt-5.5"]),
-      env: {},
-    });
-    const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: createGatewayLiveTestRegistry({
-        find(provider, modelId) {
-          expect(provider).toBe("openai");
-          expect(modelId).toBe("gpt-5.5");
-          return undefined;
-        },
-        getAll() {
-          throw new Error("explicit model lookup should not enumerate registry");
-        },
-      }),
-      modelFilter: new Set(["openai/gpt-5.5"]),
-      providerFilter: new Set(["openai"]),
-      targetMatcher: matcher,
-    });
-
-    expect(candidates).toBeNull();
-  });
-
-  it("uses the Bedrock Converse API for explicit Bedrock fallback candidates", () => {
-    const modelRef = "amazon-bedrock/global.anthropic.claude-sonnet-4-6";
-    const matcher = createLiveTargetMatcher({
-      providerFilter: new Set(["amazon-bedrock"]),
-      modelFilter: new Set([modelRef]),
-      env: {},
-    });
-    const candidates = resolveExplicitLiveModelCandidates({
-      modelRegistry: createGatewayLiveTestRegistry({
-        find(provider, modelId) {
-          expect(provider).toBe("amazon-bedrock");
-          expect(modelId).toBe("global.anthropic.claude-sonnet-4-6");
-          return undefined;
-        },
-      }),
-      modelFilter: new Set([modelRef]),
-      providerFilter: new Set(["amazon-bedrock"]),
-      targetMatcher: matcher,
-    });
-
-    expect(candidates?.[0]).toMatchObject({
-      provider: "amazon-bedrock",
-      id: "global.anthropic.claude-sonnet-4-6",
-      api: "bedrock-converse-stream",
-    });
-  });
-
-  it("falls back to enumeration for ambiguous model-only filters", () => {
-    const matcher = createLiveTargetMatcher({
-      providerFilter: null,
-      modelFilter: new Set(["grok-4.3"]),
-      env: {},
-    });
-
-    expect(
-      resolveExplicitLiveModelCandidates({
-        modelRegistry: createGatewayLiveTestRegistry({
-          find() {
-            throw new Error("ambiguous model-only lookup should not use direct find");
-          },
-          getAll() {
-            return [];
-          },
-        }),
-        modelFilter: new Set(["grok-4.3"]),
-        providerFilter: null,
-        targetMatcher: matcher,
-      }),
-    ).toBeNull();
-  });
-});
-
 describe("providerScopedModelRegistryProviders", () => {
   it("uses curated high-signal providers for default modern sweeps", () => {
     expect(
@@ -1879,9 +1673,8 @@ describe("providerScopedModelRegistryProviders", () => {
         useSmall: false,
       }),
     ).toEqual([
-      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "openai/gpt-5.6-luna" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
-      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
     ]);
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
@@ -1896,12 +1689,12 @@ describe("providerScopedModelRegistryProviders", () => {
   it("loads explicit gateway model refs through dynamic discovery", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
-        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.2-chat" }],
+        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.6-luna" }],
         providerFilter: new Set(["openrouter"]),
         useExplicit: true,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.2-chat" }]);
+    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.6-luna" }]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -2133,7 +1926,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
             thinkingLevelMap: {
-              off: null,
+              off: undefined,
               minimal: null,
               low: null,
               medium: null,
@@ -3827,7 +3620,7 @@ describe("retryLiveTranscriptProjectionRead", () => {
 });
 
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { storePath, entry } = await loadSessionEntryAsync(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
@@ -5381,7 +5174,8 @@ async function loadAuthBackedLiveModelRegistry(params: {
   providerList: string[] | undefined;
 }): Promise<{
   authProfileStore: AuthProfileStore;
-  modelRegistry: LiveModelRegistry;
+  authStorage: Awaited<ReturnType<typeof discoverAuthStorageFacts>>["authStorage"];
+  modelRegistry: Awaited<ReturnType<typeof discoverModelsAsync>>;
   all: Array<Model>;
 }> {
   const authProfileStore = await withGatewayLiveSetupTimeout(
@@ -5396,9 +5190,9 @@ async function loadAuthBackedLiveModelRegistry(params: {
     ),
     "[all-models] load auth profiles",
   );
-  const authStorage = await withGatewayLiveSetupTimeout(
+  const { authStorage } = await withGatewayLiveSetupTimeout(
     Promise.resolve().then(() =>
-      discoverAuthStorage(params.agentDir, {
+      discoverAuthStorageFacts(params.agentDir, {
         config: params.cfg,
         env: process.env,
         ...(params.providerList
@@ -5412,41 +5206,12 @@ async function loadAuthBackedLiveModelRegistry(params: {
     "[all-models] load auth storage",
   );
   logProgress("[all-models] loading model registry");
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, params.agentDir);
   const all = await withGatewayLiveSetupTimeout(
     Promise.resolve().then(() => modelRegistry.getAll()),
     "[all-models] load model registry",
   );
-  return { authProfileStore, modelRegistry, all };
-}
-
-function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
-  return {
-    id: model.id,
-    name: model.name,
-    api: model.api as ModelProviderConfig["api"],
-    baseUrl: model.baseUrl,
-    input: model.input ?? ["text"],
-    reasoning: model.reasoning,
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-    cost: {
-      ...model.cost,
-      ...(model.cost.tieredPricing
-        ? {
-            tieredPricing: model.cost.tieredPricing.map((tier) => ({
-              ...tier,
-              range:
-                tier.range.length === 2 && tier.range[1] === Number.POSITIVE_INFINITY
-                  ? [tier.range[0]]
-                  : [...tier.range],
-            })),
-          }
-        : {}),
-    },
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.compat ? { compat: model.compat } : {}),
-  };
+  return { authProfileStore, authStorage, modelRegistry, all };
 }
 
 function mergeLiveProviderConfig(params: {
@@ -5526,70 +5291,6 @@ function buildLiveProviderConfig(params: {
   return config;
 }
 
-function parseExplicitLiveModelRef(
-  raw: string,
-  providerFilter: Set<string> | null,
-): { provider: string; modelId: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash !== -1) {
-    const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const rawModelId = trimmed.slice(slash + 1).trim();
-    const modelId =
-      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGooglePreviewModelId(rawModelId)
-        : rawModelId;
-    return provider && modelId ? { provider, modelId } : null;
-  }
-  if (!providerFilter || providerFilter.size !== 1) {
-    return null;
-  }
-  const [provider] = [...providerFilter];
-  return provider ? { provider: normalizeProviderId(provider), modelId: trimmed } : null;
-}
-
-function resolveExplicitLiveModelCandidates(params: {
-  modelRegistry: LiveModelRegistry;
-  modelFilter: Set<string> | null;
-  providerFilter: Set<string> | null;
-  targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
-}): Array<Model> | null {
-  if (!params.modelFilter || params.modelFilter.size === 0) {
-    return null;
-  }
-  const candidates: Array<Model> = [];
-  const seen = new Set<string>();
-  for (const raw of params.modelFilter) {
-    const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
-    if (!ref) {
-      return null;
-    }
-    const model =
-      params.modelRegistry.find(ref.provider, ref.modelId) ??
-      (ref.provider === "amazon-bedrock"
-        ? createExplicitLiveFallbackModel(ref.provider, ref.modelId)
-        : undefined);
-    if (!model) {
-      return null;
-    }
-    if (
-      !params.targetMatcher.matchesProvider(model.provider) ||
-      !params.targetMatcher.matchesModel(model.provider, model.id)
-    ) {
-      return null;
-    }
-    const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      candidates.push(model);
-    }
-  }
-  return candidates;
-}
-
 async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> {
   const configured = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
   if (!GATEWAY_LIVE_OPENAI_API_DEFAULT) {
@@ -5616,8 +5317,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      detectClaudeLoginState: async () => ({ credentials: false }),
-      readCodexCliCredentials: () => null,
+      hasCodexCliAuthFile: () => false,
       readGeminiCliCredentials: () => null,
     },
   });
@@ -5838,9 +5538,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
     await prepareLiveGatewayWorkspace(workspaceDir);
     // Prefix the random values so provider safety heuristics do not mistake the
-    // harmless readback proof for secret material.
-    const nonceA = `tool-read-alpha-${randomUUID()}`;
-    const nonceB = `tool-read-beta-${randomUUID()}`;
+    // harmless readback proof for secret material. Keep the random part short: the
+    // probe proves the file was read, not 36-character UUID copy fidelity, which
+    // GPT-5.6 variants occasionally garble.
+    const nonceA = `tool-read-alpha-${randomBytes(4).toString("hex")}`;
+    const nonceB = `tool-read-beta-${randomBytes(4).toString("hex")}`;
     // Keep probe values out of the path: weak tool callers may echo the filename
     // instead of reading the file, turning nonceA into a false duplicate answer.
     const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
@@ -6219,7 +5921,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               if (params.extraToolProbes) {
                 phase = "tool-exec";
                 logProgress(`${progressLabel}: tool-exec`);
-                const nonceC = randomUUID();
+                const nonceC = `exec-read-${randomBytes(4).toString("hex")}`;
                 // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
                 // isolated without putting a nonce-shaped UUID in the model-visible path.
                 const toolWritePath = path.join(
@@ -6814,6 +6516,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           providerFilter: PROVIDERS,
         });
         let authProfileStore: AuthProfileStore;
+        let explicitDiscoveryStores:
+          | Awaited<ReturnType<typeof loadAuthBackedLiveModelRegistry>>
+          | undefined;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model>;
         if (providerScopedModelProviders) {
@@ -6836,6 +6541,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               cfg,
               providerList: providerScopedModelProviders,
             });
+            explicitDiscoveryStores = authBacked;
             authProfileStore = authBacked.authProfileStore;
             modelRegistry = authBacked.modelRegistry;
             all = authBacked.all;
@@ -6847,6 +6553,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             cfg,
             providerList,
           });
+          explicitDiscoveryStores = authBacked;
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
@@ -6859,20 +6566,33 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         if (prioritizedRefs.length > 0) {
           const augmented = await withGatewayLiveSetupTimeout(
-            appendPrioritizedDynamicLiveModels({
+            appendLiveModelCandidates({
               models: all,
               config: cfg,
               agentDir,
               workspaceDir,
               env: process.env,
               modelRegistry,
+              ...(useExplicit
+                ? {
+                    resolution: {
+                      kind: "explicit" as const,
+                      getDiscoveryStores: async () =>
+                        (explicitDiscoveryStores ??= await loadAuthBackedLiveModelRegistry({
+                          agentDir,
+                          cfg,
+                          providerList: providerScopedModelProviders ?? providerList,
+                        })),
+                    },
+                  }
+                : {}),
               refs: prioritizedRefs,
             }),
-            `[all-models] load dynamic ${useSmall ? "small" : "high-signal"} model refs`,
+            `[all-models] load ${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"} model refs`,
           );
           if (augmented.added.length > 0) {
             logProgress(
-              `[all-models] loaded ${augmented.added.length} prioritized dynamic ${useSmall ? "small" : "high-signal"} model refs`,
+              `[all-models] loaded ${augmented.added.length} ${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"} model refs`,
             );
             all = augmented.models;
             modelRegistry = createStaticLiveModelRegistry(all);
@@ -6883,19 +6603,20 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           providerFilter: PROVIDERS,
           modelFilter: filter,
           config: cfg,
+          workspaceDir,
           env: process.env,
         });
-        let wanted = useExplicit
-          ? resolveExplicitLiveModelCandidates({
-              modelRegistry,
-              modelFilter: filter,
-              providerFilter: PROVIDERS,
-              targetMatcher,
-            })
-          : null;
-        if (!wanted) {
-          wanted = filter
-            ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
+        const wanted =
+          useExplicit && filter
+            ? resolveExplicitLiveModelCandidates({
+                modelRegistry,
+                models: all,
+                modelFilter: filter,
+                providerFilter: PROVIDERS,
+                config: cfg,
+                workspaceDir,
+                env: process.env,
+              })
             : useSmall
               ? all.filter((m) => isWantedSmallGatewayLiveModel({ model: m, targetMatcher }))
               : all.filter(
@@ -6914,7 +6635,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                       workspaceDir,
                     }),
                 );
-        }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
         assertGatewayLiveSelectedSomeModels({
           allowProviderDriftSkip: useModern || useSmall,
@@ -6931,8 +6651,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
           if (
-            resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
-              ?.suppress
+            (!useExplicit || !filter) &&
+            resolveBuiltInModelSuppressionFromManifest({
+              provider: model.provider,
+              id: model.id,
+              baseUrl: model.baseUrl,
+              config: cfg,
+              workspaceDir,
+            })?.suppress
           ) {
             continue;
           }
@@ -7095,8 +6821,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const hostStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
+      const { authStorage } = await discoverAuthStorageFacts(agentDir);
+      const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
 

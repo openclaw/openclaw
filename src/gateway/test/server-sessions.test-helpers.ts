@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { registerAcpSessionResetControls } from "../../acp/control-plane/manager.reset-controls.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -17,6 +18,7 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
@@ -365,7 +367,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot(); // A suite server may prewarm before case setup.
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return { dir, storePath: testState.sessionStorePath };
   }
 
@@ -374,7 +376,13 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+    testState.agentConfig = {
+      ...testState.agentConfig,
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
+    };
+    setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return {
       dir,
       storeTemplate,
@@ -445,7 +453,11 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       configPath,
       `${JSON.stringify(
         {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, work: {} },
+            defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          },
           session: { scope: "global", store: storeTemplate },
         },
         null,
@@ -569,6 +581,7 @@ export async function directSessionReq<TPayload = unknown>(
     client?: SessionsHandlerOptions["client"];
     isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
+    hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{
@@ -589,11 +602,13 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
+  const contextKey = opts?.context ?? defaultDirectContext;
+  const existingContext = directContexts.get(contextKey);
   const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    dedupe: new Map(),
+    chatAbortControllers: existingContext?.chatAbortControllers ?? new Map(),
+    chatQueuedTurns: existingContext?.chatQueuedTurns ?? new Map(),
+    dedupe: existingContext?.dedupe ?? new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     readPreparedGatewayModelCatalog: async () => {
       const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
@@ -602,8 +617,7 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const contextKey = opts?.context ?? defaultDirectContext;
-  const context = directContexts.get(contextKey) ?? createDirectChatContext();
+  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (
@@ -611,6 +625,8 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.startup",
       "chat.history",
       "sessions.list",
+      "sessions.processes.list",
+      "sessions.processes.stop",
       "sessions.describe",
       "sessions.get",
       "sessions.preview",
@@ -642,6 +658,7 @@ export async function directSessionReq<TPayload = unknown>(
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
     sessionMutationAuthorization: opts?.sessionMutationAuthorization,
+    hasCurrentClientAuthority: opts?.hasCurrentClientAuthority,
   });
   await flushPendingSessionsChangedEvents(context);
   if (!result) {

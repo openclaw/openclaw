@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -46,7 +51,9 @@ describe("forced worker environment abandonment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("drains nested operations before recording result loss and releasing the claim", async () => {
+  it("drains nested operations before recording result loss and releasing the claim", async ({
+    signal,
+  }) => {
     const { store, environmentId } = await createActiveAbandonmentFixture(database);
     const claim = await store.claimTurn({
       ...REQUEST,
@@ -66,29 +73,49 @@ describe("forced worker environment abandonment", () => {
       }),
     ).toMatchObject({ kind: "execute" });
 
+    const toolAdmissionClosed = createDeferred();
+    const closeToolState = store.closeWorkerTurnToolState.bind(store);
+    vi.spyOn(store, "closeWorkerTurnToolState").mockImplementation((closingClaim) => {
+      const closing = closeToolState(closingClaim);
+      toolAdmissionClosed.resolve();
+      return closing;
+    });
+
     const abandonment = forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
       resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     });
 
-    await vi.waitFor(() => {
+    let completed = false;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          toolAdmissionClosed.promise,
+          abandonment,
+          "Abandonment completed before closing tool admission",
+        ),
+        signal,
+      );
       expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
-    });
-    expect(store.get(REQUEST.sessionId)).toMatchObject({
-      state: "active",
-      turnClaim: { claimId: claim.claimId },
-    });
-    expect(
-      await store.completeWorkerSessionToolOperation({
-        sourceSessionId: claim.sessionId,
-        sourceClaimId: claim.claimId,
-        toolCallId: "forced-send",
-        requestDigest: "forced-send-digest",
-        resultJson: '{"status":"ok"}',
-      }),
-    ).toBe(true);
-    await abandonment;
+      expect(store.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        turnClaim: { claimId: claim.claimId },
+      });
+    } finally {
+      try {
+        completed = await store.completeWorkerSessionToolOperation({
+          sourceSessionId: claim.sessionId,
+          sourceClaimId: claim.claimId,
+          toolCallId: "forced-send",
+          requestDigest: "forced-send-digest",
+          resultJson: '{"status":"ok"}',
+        });
+      } finally {
+        await abandonment;
+      }
+    }
+    expect(completed).toBe(true);
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
@@ -100,7 +127,7 @@ describe("forced worker environment abandonment", () => {
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
-    store.startDrain({
+    await store.startDrain({
       sessionId: active.sessionId,
       environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -150,7 +177,7 @@ describe("forced worker environment abandonment", () => {
       basePackSha256: createHash("sha256").update("").digest("hex"),
       basePack: Buffer.alloc(0),
     });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -159,7 +186,7 @@ describe("forced worker environment abandonment", () => {
     if (draining.state !== "draining") {
       throw new Error("draining placement fixture was not draining");
     }
-    store.startReconcile({
+    await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,

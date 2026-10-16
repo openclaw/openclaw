@@ -125,14 +125,12 @@ function createProgressNarrator(params: {
   }
 
   const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
-    const preparation = (preparedPromise ??= prepareNarrationModel({
+    const prepared = await (preparedPromise ??= prepareNarrationModel({
       cfg: params.cfg,
       agentId: params.agentId,
     }));
-    const prepared = await preparation;
-    // Failed or borrowed routes recheck credentials on the next narration. A late
-    // waiter must not clear a newer preparation owned by a queued turn.
-    if ((!prepared || prepared.agentHarnessRuntimeOverride) && preparedPromise === preparation) {
+    // Failed or borrowed routes recheck credentials on the next narration.
+    if (!prepared || prepared.agentHarnessRuntimeOverride) {
       preparedPromise = undefined;
     }
     if (abortSignal.aborted) {
@@ -195,10 +193,6 @@ function createProgressNarrator(params: {
     if (retryTimer !== undefined) {
       clearTimeout(retryTimer);
       retryTimer = undefined;
-    }
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
-      retryImmediate = false;
-      return;
     }
     retryTimer = setTimeout(
       () => {
@@ -327,9 +321,7 @@ function createProgressNarrator(params: {
       }
       // Command-output titles usually carry the raw command text; honor the
       // channel's commandText: "status" policy for the failure note too.
-      const title = params.hideCommandText
-        ? payload.name || "command"
-        : payload.title || payload.name || "command";
+      const title = (!params.hideCommandText && payload.title) || payload.name || "command";
       recordEvent(
         "command_output",
         {
@@ -371,12 +363,7 @@ function createProgressNarrator(params: {
   };
 }
 
-/**
- * Wraps reply options with a progress narrator when the channel opted in via
- * onNarrationUpdate and a utility model resolves (explicit config or the
- * primary provider's declared default; utilityModel: "" disables).
- * Returns the options unchanged otherwise.
- */
+/** Requires onNarrationUpdate and a utility model; utilityModel: "" disables narration. */
 export function attachProgressNarratorToReplyOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -410,25 +397,21 @@ export function attachProgressNarratorToReplyOptions(params: {
   });
   return {
     ...opts,
-    ...(opts.onToolStart
-      ? {
-          onToolStart: async (payload) => {
-            narrator.noteToolStart(payload);
-            return await opts.onToolStart?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onToolStart && {
+      onToolStart: async (payload) => {
+        narrator.noteToolStart(payload);
+        return await opts.onToolStart?.(payload);
+      },
+    }),
     onCommandOutput: async (payload) => {
       narrator.noteCommandOutput(payload);
       return await opts.onCommandOutput?.(payload);
     },
-    ...(opts.onItemEvent
-      ? {
-          onItemEvent: async (payload) => {
-            narrator.noteItemEvent(payload);
-            return await opts.onItemEvent?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onItemEvent && {
+      onItemEvent: async (payload) => {
+        narrator.noteItemEvent(payload);
+        return await opts.onItemEvent?.(payload);
+      },
+    }),
   };
 }

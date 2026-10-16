@@ -35,6 +35,7 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
@@ -80,6 +81,7 @@ async function createHistoricalSharedStore() {
   const turn = await persistSessionTranscriptTurn(
     { ...store.scope, sessionId: "doctor-session" },
     {
+      config: store.cfg,
       expectedSessionId: "doctor-session",
       messages: [{ message: { role: "user", content: goalOperation.objective } }],
       sessionTurnMutation: { kind: "goal", operation: goalOperation, runId: "goal-start" },
@@ -229,7 +231,9 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
     createdVia: "operator",
     createdActor: { type: "human", source: "profile", id: "person", label: "Original creator" },
   });
-  expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
+  expect(
+    readStoredGoalState(requireNativeSqliteDatabase(reopened.db), store.scope.sessionKey),
+  ).toEqual(store.goalState);
   expect(
     readSessionGoalOperationInDatabase(reopened, {
       ...store.scope,

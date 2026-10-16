@@ -252,12 +252,7 @@ function usage() {
   ].join("\n");
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const cliArgs = process.argv.slice(2);
   if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
     process.stdout.write(`${usage()}\n`);

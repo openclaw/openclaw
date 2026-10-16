@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
@@ -14,18 +15,13 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
-  getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  isOpenRouterMistralModelId,
-  normalizeOpenRouterApiModelId,
-  normalizeOpenRouterModelFamilyId,
-} from "./models.js";
+import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -52,7 +48,10 @@ import {
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
-const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
+// Upstream families with OpenRouter prompt caching, so pruning waits out the cache TTL.
+// OpenRouter documents implicit Gemini caching only for the 2.5 series and newer.
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY =
+  /^(?:(?:anthropic|deepseek|moonshot(?:ai)?|x-ai|z-?ai)\/|google\/gemini-(?:2\.5|3))/;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 // Configured rows keep their sizing and opt-outs, but the OpenRouter model
@@ -239,7 +238,7 @@ export default defineSingleProviderPluginEntry({
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
       const apiModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-      const capabilities = getOpenRouterModelCapabilities(apiModelId);
+      const capabilities = getLoadedOpenRouterModelCapabilities(apiModelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
@@ -302,9 +301,15 @@ export default defineSingleProviderPluginEntry({
             }),
           });
         },
-        staticRun: async () => ({
-          provider: buildOpenrouterProvider(),
-        }),
+        staticRun: async (ctx) => {
+          // Configured OpenRouter models complete from this catalog through synchronous
+          // capability reads, and thinking levels are chosen from that row. Load capabilities
+          // first (persisted catalog, or one fetch) only when a caller selected OpenRouter.
+          if (ctx.providerIds?.includes(PROVIDER_ID)) {
+            await loadOpenRouterModelCapabilities(OPENROUTER_DEFAULT_MODEL_REF);
+          }
+          return { provider: buildOpenrouterProvider() };
+        },
       },
       resolveDynamicModel: buildDynamicOpenRouterModel,
       // Resolve the catalog model even when a configured row already exists.
@@ -377,9 +382,11 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.OPENROUTER_API_KEY],
-        });
+        const apiKey = (
+          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+            envDirect: [ctx.env.OPENROUTER_API_KEY],
+          })
+        )?.[0];
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>

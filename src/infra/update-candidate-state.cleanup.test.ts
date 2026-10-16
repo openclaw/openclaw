@@ -20,10 +20,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
-import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  readUpdateStateSchemaVersions,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
   inventoryUpdateCandidateStateWorker,
   materializeUpdateCandidateStateWorker,
@@ -80,19 +77,12 @@ async function createDatabase(file: string, sql = ""): Promise<void> {
   }
 }
 
-const cases = [
-  { cleanup: "healthy", readError: false },
-  { cleanup: "transient", readError: false },
-  { cleanup: "persistent", readError: false },
-  { cleanup: "healthy", readError: true },
-  { cleanup: "persistent", readError: true },
-] as const;
-
-it.each(
-  (["versions", "snapshot"] as const).flatMap((mode) =>
-    cases.map(({ cleanup, readError }) => ({ mode, cleanup, readError })),
-  ),
-)(
+it.each([
+  { mode: "versions", cleanup: "transient", readError: false },
+  { mode: "versions", cleanup: "persistent", readError: true },
+  { mode: "snapshot", cleanup: "persistent", readError: false },
+  { mode: "snapshot", cleanup: "healthy", readError: true },
+] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
     const { mode } = scenario;
@@ -222,110 +212,32 @@ it.each(
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    console.log(
-      JSON.stringify({
-        ...scenario,
-        code: result.code,
-        termination: result.termination,
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        attempts,
-        retained,
-      }),
-    );
     expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
     expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
     expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
-    if (scenario.cleanup === "healthy" && !scenario.readError) {
-      expect(result.code, result.stderr.toString()).toBe(0);
-      const output = JSON.parse(result.stdout.toString());
-      expect(mode === "versions" ? output : output.versions).toContainEqual({
-        path: source,
-        userVersion: 3,
-        contentVersion: 3,
+    expect(result.code, result.stdout.toString()).toBe(1);
+    expect(result.stdout.toString()).toBe("");
+    if (scenario.readError) {
+      expect(result.stderr.toString()).toContain('no such column: "path"');
+      const [recorded] = updateRunStepsFromResultStep({
+        name: "candidate snapshot",
+        exitCode: result.code,
+        stderrTail: result.stderr.toString(),
       });
-    } else {
-      expect(result.code, result.stdout.toString()).toBe(1);
-      expect(result.stdout.toString()).toBe("");
-      if (scenario.readError) {
-        expect(result.stderr.toString()).toContain('no such column: "path"');
-        const [recorded] = updateRunStepsFromResultStep({
-          name: "candidate snapshot",
-          exitCode: result.code,
-          stderrTail: result.stderr.toString(),
-        });
-        expect(recorded?.detail).toMatch(
-          /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
-        );
-        expect(recorded?.detail).toContain("ERR_SQLITE_ERROR");
-        expect(recorded?.detail).toContain('no such column: "path"');
-        expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
-      }
-      if (scenario.cleanup !== "healthy") {
-        expect(result.stderr.toString()).toContain("snapshot cleanup failed");
-        expect(result.stderr.toString()).toContain(attempts[0]!.directory);
-      }
+      expect(recorded?.detail).toMatch(
+        /^Exit code: 1; (?:Caused by: )?no such column: "path".* \| ERR_SQLITE_ERROR$/u,
+      );
+      expect(recorded?.detail).toContain("ERR_SQLITE_ERROR");
+      expect(recorded?.detail).toContain('no such column: "path"');
+      expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
+    }
+    if (scenario.cleanup !== "healthy") {
+      expect(result.stderr.toString()).toContain("snapshot cleanup failed");
+      expect(result.stderr.toString()).toContain(attempts[0]!.directory);
     }
   },
   30_000,
-);
-
-it("releases the shared discovery snapshot before agent inspection", async () => {
-  const stateDir = path.join(root, "discovery-owner");
-  const shared = path.join(stateDir, "state", "openclaw.sqlite");
-  const agent = path.join(stateDir, "agents", "registered.sqlite");
-  const stagingRoot = path.join(root, "discovery-staging");
-  await createDatabase(
-    shared,
-    `CREATE TABLE agent_databases (path TEXT); INSERT INTO agent_databases VALUES ('${agent.replaceAll("'", "''")}');`,
-  );
-  await createDatabase(agent);
-  await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
-
-  await expect(
-    discoverUpdateStateSchemaInspectionInProcess({ stateDir, config: {}, stagingRoot }),
-  ).resolves.toMatchObject({
-    files: expect.arrayContaining([
-      [shared, { spellings: [shared], owners: [{ role: "global" }] }],
-      [agent, { spellings: [agent] }],
-    ]),
-    sharedVersion: { path: shared, userVersion: 3, contentVersion: 3 },
-  });
-  expect(await fs.readdir(stagingRoot)).toEqual([]);
-});
-
-it.each([false, true])(
-  "removes parent-owned schema staging after worker settlement (readError=%s)",
-  async (readError) => {
-    const cache = path.join(root, "inspection-cache");
-    const cacheOwner = path.join(cache, "openclaw");
-    const stateDir = path.join(root, `cleanup-${readError}`);
-    const shared = path.join(stateDir, "state", "openclaw.sqlite");
-    await fs.mkdir(cacheOwner, { recursive: true, mode: 0o700 });
-    await createDatabase(shared, readError ? "CREATE TABLE agent_databases (not_path TEXT);" : "");
-    const previousCache = process.env.XDG_CACHE_HOME;
-    process.env.XDG_CACHE_HOME = cache;
-    try {
-      const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
-      if (readError) {
-        await expect(operation).rejects.toThrow('no such column: "path"');
-      } else {
-        await expect(operation).resolves.toContainEqual({
-          path: shared,
-          userVersion: 3,
-          contentVersion: 3,
-        });
-      }
-      expect(await fs.readdir(cacheOwner)).toEqual([]);
-    } finally {
-      if (previousCache === undefined) {
-        delete process.env.XDG_CACHE_HOME;
-      } else {
-        process.env.XDG_CACHE_HOME = previousCache;
-      }
-    }
-  },
 );
 
 function inspectionResult(

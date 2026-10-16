@@ -61,9 +61,9 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   allowAdvancedLocalState?: boolean;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  additionalPaths?: ReadonlySet<string>;
 }): Promise<WorkerWorkspaceApplyResult | undefined> {
   const root = await fs.realpath(params.root);
-  const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
   const preserveDirectories = new Set(
     reconciliationDirectories(
       params.current.directories,
@@ -73,6 +73,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
+  params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
@@ -90,21 +91,16 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
     : preflight.conflictPaths;
-  const verifyLocalStable = async () =>
-    await assertActualWorkspaceManifest({
+  return {
+    ...actual,
+    conflictPaths,
+    verifyLocalStable: createWorkspaceManifestVerifier({
       root,
       expectedRef: actual.manifestRef,
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
       includePaths,
-    });
-  return {
-    ...actual,
-    conflictPaths,
-    verifyLocalStable: async () =>
-      hashMemo
-        ? await withWorkspaceHashMemo(hashMemo, verifyLocalStable, metrics)
-        : await verifyLocalStable(),
+    }),
   };
 }
 
@@ -119,6 +115,14 @@ export async function assertActualWorkspaceManifest(params: {
   if (actual.manifestRef !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
+}
+
+export function createWorkspaceManifestVerifier(
+  params: Parameters<typeof assertActualWorkspaceManifest>[0],
+): () => Promise<void> {
+  const { memo, metrics } = activeWorkspaceHashContext() ?? {};
+  const verify = () => assertActualWorkspaceManifest(params);
+  return () => (memo ? withWorkspaceHashMemo(memo, verify, metrics) : verify());
 }
 
 export async function applyWorkspaceDirectoryChanges(params: {
@@ -166,22 +170,6 @@ export async function applyWorkspaceDirectoryChanges(params: {
     }
     await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
-}
-
-export function hasReplacedBaseEntryAncestor(
-  entryPath: string,
-  baseByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-  currentByPath: ReadonlyMap<string, WorkerWorkspaceManifestEntry>,
-): boolean {
-  const segments = entryPath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    const ancestor = segments.slice(0, index).join("/");
-    const baseEntry = baseByPath.get(ancestor);
-    if (baseEntry && !sameEntry(baseEntry, currentByPath.get(ancestor))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function retainedConflictPaths(

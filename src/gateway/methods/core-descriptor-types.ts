@@ -1,9 +1,10 @@
 import type {
   GatewayMethodDescriptor,
+  GatewayReadSharing,
   GatewayMethodScope,
   GatewayMethodSessionAccess,
 } from "./descriptor.js";
-export type CoreGatewayMethodSpec = {
+export type CoreGatewayMethodSpec = Partial<GatewayReadSharing> & {
   name: string;
   family?: string;
   scope: GatewayMethodScope;
@@ -19,6 +20,9 @@ export type CoreGatewayMethodSpec = {
 
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
+  | "shareKey"
+  | "shareInvalidationEvents"
+  | "shareMaxAgeMs"
   | "advertise"
   | "startup"
   | "lifetime"

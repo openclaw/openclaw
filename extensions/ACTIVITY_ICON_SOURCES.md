@@ -51,6 +51,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `minimax`               | `ProviderIcon-minimax.svg`     |
 | `mistral`               | `ProviderIcon-mistral.svg`     |
 | `moonshot`              | `ProviderIcon-kimi.svg`        |
+| `muse`                  | `ProviderIcon-meta.svg`        |
 | `novita`                | `ProviderIcon-novita.svg`      |
 | `nvidia`                | `ProviderIcon-nvidia.svg`      |
 | `ollama`                | `ProviderIcon-ollama.svg`      |
@@ -108,6 +109,7 @@ For LiteLLM, the small source stroke widths are unified at 1.35 source units bef
 | `twitch`                 | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `twitch.svg`         |
 | `vault`                  | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `vault.svg`          |
 | `whatsapp`               | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `whatsapp.svg`       |
+| `x`                      | [`simple-icons@16.31.0`](https://www.npmjs.com/package/simple-icons/v/16.31.0) | `x.svg`              |
 | `zalo`                   | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 | `zalouser`               | [`simple-icons@13.21.0`](https://www.npmjs.com/package/simple-icons/v/13.21.0) | `zalo.svg`           |
 
@@ -129,8 +131,8 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
+| Agent or task flow      | `a2a`, `acpx`, `advisor`, `llm-task`, `mcp-events`, `raft`, `reef`                                               |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `mcp-relay`, `session-share`                                 |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |

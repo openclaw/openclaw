@@ -21,8 +21,22 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
-export function describeToolGroup(items: readonly AgentActivityItem[]) {
-  const summary = summarizeAgentActivity(items);
+export function hasVisiblePreparedActivity(message: unknown): boolean {
+  return readPreparedActivity(message).some(
+    (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+  );
+}
+
+type ToolGroupOptions = {
+  /** Calls of launches that opened a session in its own right, not a subagent. */
+  ownSessionLaunches?: ReadonlySet<string>;
+};
+
+export function describeToolGroup(
+  items: readonly AgentActivityItem[],
+  options: ToolGroupOptions = {},
+) {
+  const summary = summarizeAgentActivity(items, options);
   const label = Object.entries(summary.counts)
     .filter(([, count]) => count > 0)
     .map(([kind, count]) =>
@@ -45,9 +59,9 @@ export function describeToolGroup(items: readonly AgentActivityItem[]) {
 
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
-  options: { includeInlineOutcomes?: boolean } = {},
+  options: ToolGroupOptions & { includeInlineOutcomes?: boolean } = {},
 ): string {
-  const summary = describeToolGroup(items);
+  const summary = describeToolGroup(items, options);
   return (
     [
       summary.label,

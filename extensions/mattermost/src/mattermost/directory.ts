@@ -1,4 +1,4 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
@@ -9,15 +9,9 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
-import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+import type { ChannelDirectoryEntry } from "./runtime-api.js";
 
-type MattermostDirectoryParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  query?: string | null;
-  limit?: number | null;
-  runtime: RuntimeEnv;
-};
+type MattermostDirectoryParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeers"]>>[0];
 
 /** Build the requested account client, or aggregate accounts for an explicitly unscoped lookup. */
 function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
@@ -35,7 +29,7 @@ function buildClients(params: MattermostDirectoryParams): MattermostClient[] {
     const client = createMattermostClient({
       baseUrl: account.baseUrl,
       botToken: account.botToken,
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
     if (!seen.has(client.token)) {
       seen.add(client.token);

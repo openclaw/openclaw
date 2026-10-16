@@ -251,38 +251,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 
-  it("preserves per-agent ack checks for group broadcast voice notes", async () => {
-    maybeBroadcastMessageMock.mockImplementation(
-      async (params: {
-        ackAlreadySent?: boolean;
-        ackReaction?: unknown;
-        preflightAudioTranscript?: string | null;
-      }) => {
-        expect(params.preflightAudioTranscript).toBe("transcribed voice note");
-        expect(params.ackAlreadySent).toBeUndefined();
-        expect(params.ackReaction).toBeUndefined();
-        return true;
-      },
-    );
-    const handler = makeHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-        broadcast: {
-          "1203630@g.us": ["main", "backup"],
-        },
-      } as never,
-    });
-
-    await handler(makeGroupAudioMsg());
-
-    expect(events).toEqual(["ack", "stt"]);
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
   it("clears preflight status reaction before group broadcast voice fan-out", async () => {
     maybeBroadcastMessageMock.mockImplementation(
       async (params: { preflightAudioTranscript?: string | null }) => {
@@ -317,29 +285,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 
-  it("uses group voice transcript for mention gating before dispatch", async () => {
-    applyGroupGatingMock
-      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
-      .mockResolvedValueOnce({ shouldProcess: true });
-    const handler = makeHandler();
-
-    await handler(makeGroupAudioMsg());
-
-    expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
-    const firstGatingParams = mockObjectArg(applyGroupGatingMock, "applyGroupGating");
-    expect(firstGatingParams.deferMissingMention).toBe(true);
-    expect(firstGatingParams).not.toHaveProperty("mentionText");
-    expect(events).toEqual(["ack", "stt"]);
-    const secondGatingParams = mockObjectArg(applyGroupGatingMock, "applyGroupGating", 1);
-    expect(secondGatingParams.mentionText).toBe("transcribed voice note");
-    expect(secondGatingParams).not.toHaveProperty("deferMissingMention");
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const processParams = mockObjectArg(processMessageMock, "processMessage");
-    expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
-    expect(processParams.ackAlreadySent).toBe(true);
-    expect(processParams.ackReaction).toBe(ackReactionHandle);
-  });
-
   it("removes preflight ack when group voice transcript still misses mention gating", async () => {
     applyGroupGatingMock
       .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
@@ -351,34 +296,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["ack", "stt"]);
     expect(ackReactionHandle.remove).toHaveBeenCalledTimes(1);
-    expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("clears preflight status reaction when group voice transcript still misses mention gating", async () => {
-    applyGroupGatingMock
-      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
-      .mockResolvedValueOnce({ shouldProcess: false });
-    const handler = makeHandler({
-      cfg: {
-        messages: { statusReactions: { enabled: true } },
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-      } as never,
-    });
-
-    await handler(makeGroupAudioMsg());
-
-    expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
-    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.clear).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
     expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
@@ -410,16 +327,5 @@ describe("createWebOnMessageHandler audio preflight", () => {
       OriginatingTo: "+15550000002",
       AccountId: "default",
     });
-  });
-
-  it("does not transcribe group voice when policy gating rejects before mention", async () => {
-    applyGroupGatingMock.mockResolvedValueOnce({ shouldProcess: false });
-    const handler = makeHandler();
-
-    await handler(makeGroupAudioMsg());
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
   });
 });

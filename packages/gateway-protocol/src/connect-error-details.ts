@@ -45,6 +45,8 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  PAIRING_REJECTED: "PAIRING_REJECTED",
+  PAIRING_EXPIRED: "PAIRING_EXPIRED",
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
@@ -52,15 +54,7 @@ type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
 /** Pairing-specific reasons clients can display and use for reconnect policy. */
-const ConnectPairingRequiredReasons = {
-  NOT_PAIRED: "not-paired",
-  ROLE_UPGRADE: "role-upgrade",
-  SCOPE_UPGRADE: "scope-upgrade",
-  METADATA_UPGRADE: "metadata-upgrade",
-} as const;
-
-export type ConnectPairingRequiredReason =
-  (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
+export type ConnectPairingRequiredReason = keyof typeof PAIRING_CONNECT_REASON_METADATA;
 
 /** Suggested client-side recovery action for structured connect errors. */
 const CONNECT_RECOVERY_NEXT_STEP_VALUES = [
@@ -87,6 +81,7 @@ type PairingConnectErrorDetails = {
   recommendedNextStep?: ConnectRecoveryNextStep;
   retryable?: boolean;
   pauseReconnect?: boolean;
+  waitForResolution?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -100,51 +95,34 @@ export type ConnectPairingRequiredDetails = Pick<
   "reason" | "requestId"
 >;
 
-const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set(
-  Object.values(ConnectPairingRequiredReasons),
-);
 const PAIRING_CONNECT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-const PAIRING_CONNECT_REASON_METADATA: Readonly<
-  Record<
-    ConnectPairingRequiredReason,
-    {
-      requirement: string;
-      remediationHint: string;
-      recoveryTitle: string;
-    }
-  >
-> = {
+const PAIRING_CONNECT_REASON_METADATA = {
   "not-paired": {
+    message: "device pairing required",
     requirement: "device is not approved yet",
     remediationHint: "Approve this device from the pending pairing requests.",
     recoveryTitle: "Gateway pairing approval required.",
   },
   "role-upgrade": {
+    message: "role upgrade pending approval",
     requirement: "device is asking for a higher role than currently approved",
     remediationHint: "Review the requested role upgrade, then approve the pending request.",
     recoveryTitle: "Gateway role upgrade approval required.",
   },
   "scope-upgrade": {
+    message: "scope upgrade pending approval",
     requirement: "device is asking for more scopes than currently approved",
     remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     recoveryTitle: "Gateway scope upgrade approval required.",
   },
   "metadata-upgrade": {
+    message: "device metadata change pending approval",
     requirement: "device identity changed and must be re-approved",
     remediationHint: "Review the refreshed device details, then approve the pending request.",
     recoveryTitle: "Gateway device refresh approval required.",
   },
-};
-
-const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
-  Record<ConnectPairingRequiredReason, string>
-> = {
-  "not-paired": "device pairing required",
-  "role-upgrade": "role upgrade pending approval",
-  "scope-upgrade": "scope upgrade pending approval",
-  "metadata-upgrade": "device metadata change pending approval",
-};
+} as const;
 
 const AUTH_CONNECT_ERROR_CODES = new Map<string | undefined, ConnectErrorDetailCode>([
   ["token_missing", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING],
@@ -237,7 +215,7 @@ function normalizeConnectRecoveryNextStep(value: unknown): ConnectRecoveryNextSt
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
   const normalized = normalizeOptionalProtocolString(value) ?? "";
-  return CONNECT_PAIRING_REQUIRED_REASON_VALUES.has(normalized as ConnectPairingRequiredReason)
+  return Object.hasOwn(PAIRING_CONNECT_REASON_METADATA, normalized)
     ? (normalized as ConnectPairingRequiredReason)
     : undefined;
 }
@@ -259,6 +237,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -285,14 +266,6 @@ export function buildPairingConnectErrorMessage(
     : "pairing required";
 }
 
-function buildPairingConnectRemediationHint(
-  reason: ConnectPairingRequiredReason | undefined,
-): string {
-  return reason
-    ? PAIRING_CONNECT_REASON_METADATA[reason].remediationHint
-    : "Approve the pending device request before retrying.";
-}
-
 /** Short user-facing recovery title for pairing-required connect failures. */
 export function buildPairingConnectRecoveryTitle(
   reason: ConnectPairingRequiredReason | undefined,
@@ -314,6 +287,7 @@ export function buildPairingConnectErrorDetails(
     recommendedNextStep: params.recommendedNextStep,
     retryable: params.retryable,
     pauseReconnect: params.pauseReconnect,
+    waitForResolution: params.waitForResolution,
   });
 }
 
@@ -325,7 +299,9 @@ function normalizePairingConnectMetadata(
     requestId: normalizePairingConnectRequestId(details.requestId),
     remediationHint:
       normalizeOptionalProtocolString(details.remediationHint) ??
-      buildPairingConnectRemediationHint(reason),
+      (reason
+        ? PAIRING_CONNECT_REASON_METADATA[reason].remediationHint
+        : "Approve the pending device request before retrying."),
     deviceId: normalizeOptionalProtocolString(details.deviceId),
     requestedRole: normalizeOptionalProtocolString(details.requestedRole),
     requestedScopes: normalizeOptionalTrimmedStringList(details.requestedScopes),
@@ -362,6 +338,8 @@ export function readPairingConnectErrorDetails(
     retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
     pauseReconnect:
       typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
+    waitForResolution:
+      typeof details.waitForResolution === "boolean" ? details.waitForResolution : undefined,
   });
 }
 
@@ -373,18 +351,18 @@ export function readConnectPairingRequiredMessage(
   if (!normalizedMessage) {
     return null;
   }
-  const normalized = normalizedMessage.trim().toLowerCase();
+  const normalized = normalizedMessage.toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
-  for (const [candidate, prefix] of Object.entries(
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON,
-  ) as Array<[ConnectPairingRequiredReason, string]>) {
-    if (normalized.includes(prefix)) {
+  for (const [candidate, metadata] of Object.entries(PAIRING_CONNECT_REASON_METADATA) as Array<
+    [ConnectPairingRequiredReason, { message: string }]
+  >) {
+    if (normalized.includes(metadata.message)) {
       reason = candidate;
       break;
     }
   }
   if (!reason && normalized.includes("pairing required")) {
-    reason = ConnectPairingRequiredReasons.NOT_PAIRED;
+    reason = "not-paired";
   }
   if (!reason) {
     return null;
@@ -431,15 +409,10 @@ function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boole
     return null;
   }
   const location = normalizeOptionalProtocolString(details.location);
-  if (!location) {
-    return { cloudflareAccess: false };
-  }
-  try {
-    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
-    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
-  } catch {
-    return { cloudflareAccess: false };
-  }
+  const hostname = URL.parse(location ?? "")
+    ?.hostname.toLowerCase()
+    .replace(/\.+$/u, "");
+  return { cloudflareAccess: hostname?.endsWith(".cloudflareaccess.com") ?? false };
 }
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
@@ -531,19 +504,17 @@ export function classifyGatewayConnectFailure(input: {
 /** Formats pairing-required details into the canonical user-facing message. */
 export function formatConnectPairingRequiredMessage(details: unknown): string {
   const pairing = readPairingConnectErrorDetails(details);
-  const base =
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON[
-      pairing?.reason ?? ConnectPairingRequiredReasons.NOT_PAIRED
-    ];
+  const base = PAIRING_CONNECT_REASON_METADATA[pairing?.reason ?? "not-paired"].message;
   return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
 }
 
 /** Formats connect errors using structured details before falling back to raw messages. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+  const code = readConnectErrorDetailCode(params.details);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
   return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
@@ -572,7 +543,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     parts.push(`Gateway v${expected}`);
   }
   if (probeMin !== undefined) {
-    parts.push(`probe min v${probeMin}`);
+    parts.push(`connection check min v${probeMin}`);
   }
   const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;

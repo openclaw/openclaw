@@ -95,6 +95,7 @@ export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 export type WorkboardCardReadScope =
   | { kind: "board"; boardId: string }
   | { kind: "session"; sessionKey: string }
+  | { kind: "session-links"; sessionKey: string; boardId?: string }
   | {
       kind: "worker-context";
       cardId: string;
@@ -125,4 +126,12 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
   listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]>;
   hasCards(boardId: string): Promise<boolean>;
+};
+
+export type WorkboardPersistence = {
+  cards: WorkboardCardStore;
+  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+  sessionsBoard: WorkboardSessionsBoardStore;
+  subscriptions: WorkboardSubscriptionStore;
+  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 };

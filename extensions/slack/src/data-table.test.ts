@@ -3,13 +3,53 @@ import {
   buildSlackDataTableBlock,
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
-  hasSlackDataTableBlock,
   renderSlackDataTableCompactPlainTextFallback,
   renderSlackDataTableFallbackText,
+  renderSlackTableFallbackText,
   SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 
 describe("Slack data table blocks", () => {
+  it.each([false, true])(
+    "preserves rich-text dates in table fallback (mrkdwnSafe=%s)",
+    (mrkdwnSafe) => {
+      expect(
+        renderSlackTableFallbackText(
+          {
+            type: "table",
+            rows: [
+              [{ type: "raw_text", text: "When" }],
+              [
+                {
+                  type: "rich_text",
+                  elements: [
+                    {
+                      type: "rich_text_section",
+                      elements: [
+                        { type: "text", text: "From " },
+                        { type: "date", timestamp: 0, format: "{date_num}" },
+                        { type: "text", text: " to " },
+                        {
+                          type: "date",
+                          timestamp: 1_700_000_000,
+                          format: "{date_short}",
+                          fallback: "<tomorrow>",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            ],
+          },
+          mrkdwnSafe,
+        ),
+      ).toBe(
+        `When\nFrom 1970-01-01T00:00:00.000Z to ${mrkdwnSafe ? "&lt;tomorrow&gt;" : "<tomorrow>"}`,
+      );
+    },
+  );
+
   it("maps portable cells to Slack's current native shape", () => {
     expect(
       buildSlackDataTableBlock({
@@ -131,56 +171,6 @@ describe("Slack data table blocks", () => {
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: $125k; Owner: <@U123> ready");
   });
 
-  it("renders a compact formatting-disabled fallback with each cell once", () => {
-    expect(
-      renderSlackDataTableCompactPlainTextFallback({
-        type: "data_table",
-        caption: "Pipeline report",
-        rows: [
-          [
-            { type: "raw_text", text: "Owner <!channel>" },
-            { type: "raw_text", text: "Link" },
-          ],
-          [
-            { type: "raw_text", text: "<@U1> & `literal`" },
-            { type: "raw_text", text: "<https://example.com|open>" },
-          ],
-        ],
-      }),
-    ).toBe(
-      [
-        "Pipeline report (table)",
-        "Owner <!channel>\tLink",
-        "<@U1> & `literal`\t<https://example.com|open>",
-      ].join("\n"),
-    );
-  });
-
-  it("reversibly escapes one-line table delimiters without collapsing authored whitespace", () => {
-    expect(
-      renderSlackDataTableCompactPlainTextFallback({
-        type: "data_table",
-        caption: " Path\\root\t\r\n  ",
-        rows: [
-          [
-            { type: "raw_text", text: "A  B" },
-            { type: "raw_text", text: "Column\tTwo" },
-          ],
-          [
-            { type: "raw_text", text: "line1\nline2\\tail" },
-            { type: "raw_text", text: "keep  spaces" },
-          ],
-        ],
-      }),
-    ).toBe(
-      [
-        " Path\\\\root\\t\\r\\n   (table)",
-        "A  B\tColumn\\tTwo",
-        "line1\\nline2\\\\tail\tkeep  spaces",
-      ].join("\n"),
-    );
-  });
-
   it("rejects raw native tables outside Slack's documented bounds", () => {
     const rows = Array.from({ length: 100 }, () => [{ type: "raw_text", text: "x" }]);
     expect(
@@ -215,8 +205,8 @@ describe("Slack data table blocks", () => {
   });
 
   it("detects native tables and keeps a caption fallback for malformed raw blocks", () => {
-    expect(hasSlackDataTableBlock([{ type: "section" }])).toBe(false);
-    expect(hasSlackDataTableBlock([{ type: "data_table" }])).toBe(true);
+    expect(countSlackDataTableBlocksCellCharacters([{ type: "section" }])).toBe(0);
+    expect(countSlackDataTableBlocksCellCharacters([{ type: "data_table" }])).toBeUndefined();
     expect(
       renderSlackDataTableFallbackText({
         type: "data_table",

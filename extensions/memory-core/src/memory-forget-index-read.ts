@@ -1,17 +1,18 @@
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   tableExists,
-  withFreshOpenClawAgentDatabaseReadOnly,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { referencesSession, scrubMemoryContent } from "./memory-forget-content.js";
 import type {
   ForgetDatabase,
   ForgetIndexPlan,
   ForgetIndexReadInput,
 } from "./memory-forget-index-task.js";
+import { requireMemorySearchDatabase } from "./memory-search-database.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 
 export async function readMemoryForgetIndexInWorker(
@@ -31,7 +32,8 @@ export async function readMemoryForgetIndexInWorker(
     entryKeys: new Set(request.entryKeys),
     corpusSnippets: new Set(request.corpusSnippets),
   };
-  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db }) => {
+  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db: connection }) => {
+    const db = requireMemorySearchDatabase(connection);
     const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
     const indexedChunks = executeSqliteQuerySync(
       db,
@@ -84,14 +86,17 @@ export async function readMemoryForgetIndexInWorker(
     const removedSessionPaths = new Set(
       chunks.filter((chunk) => chunk.source === "sessions").map((chunk) => chunk.path),
     );
-    const sources = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("memory_index_sources").select(["path", "source"]),
-    ).rows.filter(
-      (source) =>
-        params.removedPaths.has(source.path) ||
-        (source.source === "sessions" && removedSessionPaths.has(source.path)),
-    );
+    const sources =
+      params.removedPaths.size > 0 || removedSessionPaths.size > 0
+        ? executeSqliteQuerySync(
+            db,
+            kysely.selectFrom("memory_index_sources").select(["path", "source"]),
+          ).rows.filter(
+            (source) =>
+              params.removedPaths.has(source.path) ||
+              (source.source === "sessions" && removedSessionPaths.has(source.path)),
+          )
+        : [];
     const chunkIds = chunks.map((chunk) => chunk.id);
     const ftsRows =
       chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
@@ -158,7 +163,8 @@ export async function readMemoryForgetIndexInWorker(
     // Preview must not create or migrate state; its owner-validated handle
     // stays read-only while exposing vec0.
     const vectorResult = withFreshOpenClawAgentDatabaseReadOnly(
-      ({ db }) => {
+      ({ db: connection }) => {
+        const db = requireMemorySearchDatabase(connection);
         db.enableLoadExtension(true);
         db.loadExtension(preparedExtensionPath);
         const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);

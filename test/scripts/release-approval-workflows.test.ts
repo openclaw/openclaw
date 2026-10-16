@@ -289,14 +289,18 @@ describe("release approval workflow contracts", () => {
       }
 
       const script = publish.run;
-      const mutation =
-        workflow === "openclaw-npm-release"
-          ? /verify_release_tooling_identity\n\s*bash scripts\/openclaw-npm-publish\.sh --publish/gu
-          : null;
-      if (mutation) {
-        const publishes = script.match(/bash scripts\/openclaw-npm-publish\.sh --publish/gu) ?? [];
-        expect(publishes.length).toBeGreaterThan(0);
-        expect(script.match(mutation)).toHaveLength(publishes.length);
+      if (workflow === "openclaw-npm-release") {
+        const publishes =
+          script.match(/bash trusted-workflow\/scripts\/openclaw-npm-publish\.sh --publish/gu) ??
+          [];
+        expect(publishes).toHaveLength(2);
+        const wrapper = readFileSync("scripts/openclaw-npm-publish.sh", "utf8");
+        expect(wrapper).toContain("--verify-publication-authority");
+        const authority = readFileSync("scripts/npm-preflight-tooling-identity.mjs", "utf8");
+        expect(authority).toContain(
+          "releasePublishParentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY",
+        );
+        expect(authority).toContain("verifyReleaseToolingIdentity(publicationAuthority)");
       } else {
         const verified = script.indexOf(
           `--release-publish-parent-state-policy "$${policyVariable}"`,

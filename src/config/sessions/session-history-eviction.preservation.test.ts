@@ -3,12 +3,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import {
+  registerAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -57,21 +61,24 @@ describe("SQLite historical session preservation", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
-  it.each(["recent", "pinned", "manual"] as const)(
+  it.each(["registry", "recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
         if (protection !== "recent") {
           return await operation();
         }
-        const reads = trackSqliteStatementExecutions(database().db, ["history"], (sql) =>
-          sql.startsWith("select") &&
-          sql.includes('"session_windows"') &&
-          sql.includes('"session_nodes"') &&
-          sql.includes('"entry_json"') &&
-          !sql.includes('where "session_windows"."session_id" =')
-            ? "history"
-            : null,
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database().db),
+          ["history"],
+          (sql) =>
+            sql.startsWith("select") &&
+            sql.includes('"session_windows"') &&
+            sql.includes('"session_nodes"') &&
+            sql.includes('"entry_json"') &&
+            !sql.includes('where "session_windows"."session_id" =')
+              ? "history"
+              : null,
         );
         try {
           const result = await operation();
@@ -110,6 +117,9 @@ describe("SQLite historical session preservation", () => {
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
           ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
+          ...(protection === "registry"
+            ? { archivedAt: now, archiveReason: "active-session-cap" as const }
+            : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
         },
       );
@@ -121,6 +131,13 @@ describe("SQLite historical session preservation", () => {
         updatedAt: now - 8 * dayMs,
       });
       settlePhysicalUsage();
+      if (protection === "registry") {
+        registerAgentRunContext("history-live-run", {
+          agentId: "main",
+          sessionKey: recentKey,
+          projectSessionActive: true,
+        });
+      }
       const before = await measureSessionPhysicalDiskUsage(storePath);
 
       const result = await inspectHistoryReads(() =>

@@ -1,8 +1,9 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
-import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 export type ToolExecutionEndEvent = Omit<
   Extract<AgentEvent, { type: "tool_execution_end" }>,
@@ -10,7 +11,11 @@ export type ToolExecutionEndEvent = Omit<
 > & { isError?: boolean };
 
 export function endTool(ctx: ToolHandlerContext, event: ToolExecutionEndEvent) {
-  return handleToolExecutionEnd(ctx, { type: "tool_execution_end", isError: false, ...event });
+  return handleToolExecutionEnd(
+    ctx,
+    { type: "tool_execution_end", isError: false, ...event },
+    prepareToolResult(event.result),
+  );
 }
 
 export function resultWithDetails(details: Record<string, unknown>) {

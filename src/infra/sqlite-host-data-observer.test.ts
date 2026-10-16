@@ -30,7 +30,12 @@ describe("host data SQL observation", () => {
         if (kind === "unknown") {
           vi.spyOn(db, "location").mockReturnValue(null);
         }
-        const observer = observeHostDataSql();
+        const observedDatabases = new Set<typeof db>();
+        const observer = observeHostDataSql((_sql, database) => {
+          if (database) {
+            observedDatabases.add(database);
+          }
+        });
         try {
           retained.get();
           expect(observer.calls[2]).toHaveBeenCalledExactlyOnceWith();
@@ -44,6 +49,7 @@ describe("host data SQL observation", () => {
           expect(read.all()).toEqual([{ value: 1 }]);
           expect([...read.iterate()]).toEqual([{ value: 1 }]);
           expect(observer.calls.every((call) => call.mock.calls.length > 0)).toBe(true);
+          expect(observedDatabases).toEqual(new Set([db]));
         } finally {
           observer.restore();
           db.close();

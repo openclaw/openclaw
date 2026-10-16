@@ -79,28 +79,52 @@ describe("managed handoff lease repair", () => {
     expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(receiptAtRelease);
   });
 
-  it("names a live descendant and preserves the retained generation", async () => {
-    const previous = fixture.seed();
-    fixture.processCensus.matchingPids.push(81234);
-    await expect(prepareRepair()).rejects.toThrow(/PID 81234.*openclaw update repair/);
-    expect(fixture.current()).toEqual(previous);
-    expect(fixture.store.acquire(fixture.root, "next-update", { kind: "update" }).kind).toBe(
-      "busy",
+  it.each([
+    "live descendant",
+    "unverified descendant",
+    "live owner",
+    "unverified owner",
+    "45-minute floor",
+    "larger recorded timeout",
+  ] as const)("preserves the retained generation for %s", async (reason) => {
+    const largerTimeout = reason === "larger recorded timeout";
+    const grace = largerTimeout || reason === "45-minute floor";
+    const previous = fixture.seed(
+      grace
+        ? {
+            ageMs: (largerTimeout ? 46 : 44) * 60_000,
+            timeoutMs: largerTimeout ? 90 * 60_000 : undefined,
+          }
+        : {},
     );
-    expect(listUpdateRuns({}, { env })).toEqual([]);
-  });
-
-  it("preserves inspection guidance without suggesting that unverified system processes be stopped", async () => {
-    const previous = fixture.seed();
-    fixture.processCensus.unverifiedPids.push(81234);
-    fixture.processCensus.error =
-      "Retry update repair as Administrator using the same Windows account.";
-    await expect(prepareRepair()).rejects.toThrow(
-      new Error(
+    let expected: string | RegExp | Error;
+    if (grace) {
+      expected = new Date(previous.updatedAt + (largerTimeout ? 90 : 45) * 60_000).toISOString();
+    } else if (reason === "live owner" || reason === "unverified owner") {
+      fixture.births.set(
+        fixture.helper.pid,
+        reason === "live owner" ? Number(fixture.helper.startIdentity) : null,
+      );
+      expected = new RegExp("live or unverified: PID " + fixture.helper.pid);
+    } else if (reason === "unverified descendant") {
+      fixture.processCensus.unverifiedPids.push(81234);
+      fixture.processCensus.error =
+        "Retry update repair as Administrator using the same Windows account.";
+      expected = new Error(
         `Handoff descendants remain alive or unverified: PID 81234. ${fixture.processCensus.error}`,
-      ),
-    );
+      );
+    } else {
+      fixture.processCensus.matchingPids.push(81234);
+      expected = /PID 81234.*openclaw update repair/;
+    }
+    await expect(prepareRepair()).rejects.toThrow(expected);
     expect(fixture.current()).toEqual(previous);
+    if (reason === "live descendant") {
+      expect(fixture.store.acquire(fixture.root, "next-update", { kind: "update" }).kind).toBe(
+        "busy",
+      );
+      expect(listUpdateRuns({}, { env })).toEqual([]);
+    }
   });
 
   it("preserves an incomplete rollback across repair state overrides", async () => {
@@ -143,60 +167,6 @@ describe("managed handoff lease repair", () => {
     expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
   });
 
-  it("retains bound recovery facts if the finalizer ledger refuses its settlement receipt", async () => {
-    const previous = fixture.seed();
-    const run = createUpdateRun({ trigger: "cli" }, { env });
-    {
-      using repair = await prepareRepair();
-      repair.bindRun(run.runId);
-      finishUpdateRun(run.runId, { status: "failed" }, { env });
-      expect(() => repair.complete(run.runId)).toThrow("settlement was not recorded");
-      expect(
-        getUpdateRun(run.runId, { env })?.steps.some(
-          (step) => step.step === "finalize:handoff-settlement",
-        ),
-      ).toBe(false);
-    }
-    const retained = fixture.current();
-    expect(retained.action).toMatchObject({ kind: "triage", phase: "uncertain" });
-    expect(fixture.readMetadata(retained)).toMatchObject({
-      source: {
-        owner: previous.owner,
-        payload_json: previous.payload,
-        updated_at: previous.updatedAt,
-      },
-      facts: { ...fixture.facts, runIds: ["retained-update", run.runId] },
-    });
-  });
-
-  it.each(["live", "unknown"])("retains a %s recorded owner", async (state) => {
-    const previous = fixture.seed();
-    fixture.births.set(
-      fixture.helper.pid,
-      state === "live" ? Number(fixture.helper.startIdentity) : null,
-    );
-    await expect(prepareRepair()).rejects.toThrow(
-      new RegExp("live or unverified: PID " + fixture.helper.pid),
-    );
-    expect(fixture.current()).toEqual(previous);
-  });
-
-  it.each([
-    { name: "45-minute floor", ageMs: 44 * 60_000, timeoutMs: undefined, graceMs: 45 * 60_000 },
-    {
-      name: "larger recorded timeout",
-      ageMs: 46 * 60_000,
-      timeoutMs: 90 * 60_000,
-      graceMs: 90 * 60_000,
-    },
-  ])("waits for the $name", async ({ ageMs, timeoutMs, graceMs }) => {
-    const previous = fixture.seed({ ageMs, timeoutMs });
-    await expect(prepareRepair()).rejects.toThrow(
-      new Date(previous.updatedAt + graceMs).toISOString(),
-    );
-    expect(fixture.current()).toEqual(previous);
-  });
-
   it("refuses a changed generation after awaited artifact inspection", async () => {
     const previous = fixture.seed();
     const inspecting = createDeferred();
@@ -213,36 +183,55 @@ describe("managed handoff lease repair", () => {
     expect(fixture.current()).toEqual(changed);
   });
 
-  it("retains the new uncertain binding and original artifacts when repair fails", async () => {
-    const previous = fixture.seed();
-    const diagnostics = fs.readFileSync(fixture.diagnosticPath);
-    await expect(
-      (async () => {
-        using repair = await prepareRepair();
-        repair.assertCurrent();
-        throw new Error("Current installation repair failed");
-      })(),
-    ).rejects.toThrow("Current installation repair failed");
-    const retained = fixture.current();
-    expect(retained.owner).not.toBe(previous.owner);
-    expect(retained.helper.pid).toBe(process.pid);
-    expect(retained.action).toMatchObject({ kind: "triage", phase: "uncertain" });
-    expect(fixture.readMetadata(retained)).toMatchObject({
-      source: {
-        owner: previous.owner,
-        payload_json: previous.payload,
-        updated_at: previous.updatedAt,
-      },
-      facts: fixture.facts,
-    });
-    expect(fs.readFileSync(fixture.diagnosticPath)).toEqual(diagnostics);
-    const olderWriterGeneration = fixture.replaceHeartbeat(retained);
-    expect(fixture.readMetadata(olderWriterGeneration)).toBeNull();
-    expect(fixture.store.acquire(fixture.root, "next-update", { kind: "update" }).kind).toBe(
-      "busy",
-    );
-    expect(listUpdateRuns({}, { env })).toEqual([]);
-  });
+  it.each(["installation repair", "settlement receipt"] as const)(
+    "retains uncertain recovery facts and artifacts after failed %s",
+    async (failure) => {
+      const previous = fixture.seed();
+      const diagnostics = fs.readFileSync(fixture.diagnosticPath);
+      const run =
+        failure === "settlement receipt" ? createUpdateRun({ trigger: "cli" }, { env }) : undefined;
+      await expect(
+        (async () => {
+          using repair = await prepareRepair();
+          repair.assertCurrent();
+          if (run) {
+            repair.bindRun(run.runId);
+            finishUpdateRun(run.runId, { status: "failed" }, { env });
+            repair.complete(run.runId);
+          } else {
+            throw new Error("Current installation repair failed");
+          }
+        })(),
+      ).rejects.toThrow(run ? "settlement was not recorded" : "Current installation repair failed");
+      const retained = fixture.current();
+      expect(retained.owner).not.toBe(previous.owner);
+      expect(retained.helper.pid).toBe(process.pid);
+      expect(retained.action).toMatchObject({ kind: "triage", phase: "uncertain" });
+      expect(fixture.readMetadata(retained)).toMatchObject({
+        source: {
+          owner: previous.owner,
+          payload_json: previous.payload,
+          updated_at: previous.updatedAt,
+        },
+        facts: { ...fixture.facts, runIds: ["retained-update", ...(run ? [run.runId] : [])] },
+      });
+      expect(fs.readFileSync(fixture.diagnosticPath)).toEqual(diagnostics);
+      if (run) {
+        expect(
+          getUpdateRun(run.runId, { env })?.steps.some(
+            (step) => step.step === "finalize:handoff-settlement",
+          ),
+        ).toBe(false);
+      } else {
+        const olderWriterGeneration = fixture.replaceHeartbeat(retained);
+        expect(fixture.readMetadata(olderWriterGeneration)).toBeNull();
+        expect(fixture.store.acquire(fixture.root, "next-update", { kind: "update" }).kind).toBe(
+          "busy",
+        );
+        expect(listUpdateRuns({}, { env })).toEqual([]);
+      }
+    },
+  );
 
   it("preserves interrupted repair evidence across reboot until explicit repair settles it", async () => {
     let now = Date.now();

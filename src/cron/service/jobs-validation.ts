@@ -1,13 +1,17 @@
 /** Validation helpers for cron schedules, targets, payloads, and delivery. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
+import { isCronEventSchedule } from "../source-schedule.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
@@ -41,17 +45,15 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
-  job: Pick<CronJob, "schedule" | "sessionTarget" | "payload">,
+  job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
 ) {
   if (typeof job.sessionTarget !== "string") {
     throw new Error(
       'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
     );
   }
-  const isIsolatedLike =
-    job.sessionTarget === "isolated" ||
-    job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
+  const isConversationTarget =
+    job.sessionTarget === "current" || job.sessionTarget.startsWith("session:");
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }
@@ -61,23 +63,32 @@ export function assertSupportedJobSpec(
     job.payload.kind !== "script" &&
     !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
-    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
+    throw new Error(
+      'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
+    );
   }
   if (
     job.payload.kind === "script" &&
     job.sessionTarget !== "main" &&
     job.sessionTarget !== "isolated"
   ) {
-    throw new Error('script cron jobs require sessionTarget="main" or "isolated"');
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
+    );
+  }
+  if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
+    );
   }
   if (
-    isIsolatedLike &&
+    job.sessionTarget === "isolated" &&
     job.payload.kind !== "agentTurn" &&
     job.payload.kind !== "command" &&
-    !(job.sessionTarget === "isolated" && job.payload.kind === "script")
+    job.payload.kind !== "script"
   ) {
     throw new Error(
-      'isolated cron jobs require payload.kind="agentTurn", "command", or "script"; script payloads do not support current/session targets',
+      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
     );
   }
 }
@@ -144,17 +155,25 @@ export function assertPacingSupport(job: Pick<CronJob, "schedule" | "pacing">) {
   }
 }
 
-export function assertStreamScheduleSupport(
+export function assertExternalSourceScheduleSupport(
   job: Pick<CronJob, "schedule" | "payload">,
   opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
 ) {
-  if (job.schedule.kind !== "stream") {
+  if (job.schedule.kind !== "stream" && job.schedule.kind !== "event") {
     return;
   }
   if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
-      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+      `cron ${job.schedule.kind} schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true`,
     );
+  }
+  if (job.schedule.kind === "event") {
+    if (!isCronEventSchedule(job.schedule) || job.payload.kind !== "agentTurn") {
+      throw new Error(
+        "event schedules require a plugin source, options object, and agentTurn payload",
+      );
+    }
+    return;
   }
   const { command, mode = "line", match } = job.schedule;
   if (
@@ -205,7 +224,7 @@ export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
 }
 
 export function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
+  job: CronJob,
   defaultAgentId: string | undefined,
   patch?: CronJobPatch,
 ) {
@@ -224,9 +243,11 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; system-owned monitors invoke Gateway
-  // dependencies directly, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  if (
+    job.payload.kind === "script" ||
+    isSystemOwnedCronPayloadKind(job.payload.kind) ||
+    isHeartbeatTaskCronJob(job)
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);
@@ -293,16 +314,18 @@ export function assertAnnounceDeliveryChannelSupport(
   if (patch && !cronPatchTouchesDeliveryResolution(patch)) {
     return;
   }
-  const plan = resolveCronDeliveryPlan(job);
+  const mode = resolveCronDeliveryMode(job);
+  const channel = normalizeMessageChannel(job.delivery?.channel);
+  const to = normalizeOptionalString(job.delivery?.to);
   const channels = [...new Set(configuredChannels ?? [])].toSorted();
   // Provider-prefix recognition is plugin-backed and may not be loaded at this
   // seam. A prefixed target can still select its channel at runtime, so accept.
-  const targetMaySelectChannel = /^[a-z][a-z0-9_-]*:/i.test(plan.to ?? "");
+  const targetMaySelectChannel = /^[a-z][a-z0-9_-]*:/i.test(to ?? "");
   if (
     job.sessionTarget !== "isolated" ||
     job.sessionKey?.trim() ||
-    plan.mode !== "announce" ||
-    (plan.channel !== undefined && plan.channel !== "last") ||
+    mode !== "announce" ||
+    (channel !== undefined && channel !== "last") ||
     targetMaySelectChannel ||
     job.delivery?.bestEffort === true ||
     channels.length < 2

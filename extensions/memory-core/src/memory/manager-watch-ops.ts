@@ -1,15 +1,10 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { MemoryFileWatcher } from "./file-watcher.js";
 import { MemoryManagerSyncBase } from "./manager-sync-base.js";
 
 const log = createSubsystemLogger("memory");
-
-function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err: unknown) => {
-    log.warn(`memory sync failed (${reason}): ${String(err)}`);
-  });
-}
 
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private fileWatcher: MemoryFileWatcher | undefined;
@@ -41,7 +36,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         this.markMemoryWatchDirty();
         this.memoryWatchUnavailable ||= event === "unavailable";
         // Remote notifications have already passed native file settling on the host.
-        runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+        this.syncInBackground({ reason: "watch" });
       };
       this.remoteWatchRetirement = this.memoryFiles
         .watch(
@@ -75,6 +70,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       return;
     }
     this.fileWatcher = new MemoryFileWatcher({
+      runInBackgroundContext: this.runInBackgroundContext,
       workspaceDir: this.workspaceDir,
       agentId: this.agentId,
       settings: this.settings,
@@ -139,6 +135,19 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     }
   }
 
+  protected syncInBackground(params: MemorySyncParams, failureReason = params.reason): void {
+    const failed = (err: unknown) => {
+      log.warn(`memory sync failed (${failureReason}): ${String(err)}`);
+    };
+    try {
+      this.runInBackgroundContext(() => {
+        void this.runInBackgroundContext(() => this.sync(params)).catch(failed);
+      });
+    } catch (err) {
+      failed(err);
+    }
+  }
+
   protected ensureIntervalSync() {
     const minutes = this.settings.sync.intervalMinutes;
     if (!minutes || minutes <= 0 || this.intervalTimer) {
@@ -149,7 +158,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       return;
     }
     this.intervalTimer = setInterval(() => {
-      runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
+      this.syncInBackground({ reason: "interval" });
     }, ms);
   }
 }

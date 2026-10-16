@@ -1,11 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
 import { vi } from "vitest";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
@@ -151,38 +148,3 @@ export function resetTranscriptTestDom(): void {
 }
 
 export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
-
-export async function mountTestTranscript(
-  paneId: string,
-  initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(paneId),
-) {
-  const container = document.body.appendChild(document.createElement("div"));
-  let currentSession: ChatTranscriptSession;
-  container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
-  container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
-  const renderRows = (rows: readonly TestContentRow[]) => {
-    const view = transcript.renderSession(`agent:main:${paneId}`, (session) => {
-      currentSession = session;
-      return session.render(
-        rows,
-        (row) => (row.kind === "content" ? row.content : nothing),
-        null,
-        false,
-      );
-    });
-    render(view, container);
-    transcript.hostUpdated();
-  };
-  transcript.hostConnected();
-  renderRows(initialRows);
-  await flushDeferredRowPrune();
-  return {
-    container,
-    renderRows,
-    transcript,
-    get session() {
-      return currentSession;
-    },
-  };
-}

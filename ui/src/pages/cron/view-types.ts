@@ -18,6 +18,7 @@ import type {
   CronFormState,
   CronJobsLastStatusFilter,
 } from "../../lib/cron/types.ts";
+import type { CronEventSourceView } from "./event-source.ts";
 
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
@@ -43,6 +44,7 @@ export type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
+  eventSource?: CronEventSourceView;
   heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
@@ -81,16 +83,20 @@ export type CronProps = {
   onClone: (job: CronJob) => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
   onRun: (job: CronJob, mode?: "force" | "due") => void;
-  onRemove: (job: CronJob) => void;
+  onRemove: (job: CronJob) => void | Promise<void>;
   onLoadMoreJobs: () => void;
   onJobsFiltersChange: (patch: Parameters<typeof updateCronJobsFilter>[1]) => void | Promise<void>;
   onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
+    cronRunsRunId?: string | null;
     cronRunsStatuses?: CronRunsStatusValue[];
     cronRunsDeliveryStatuses?: CronDeliveryStatus[];
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  onHighlightedRun?: (element: HTMLElement, link: string) => () => void;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };
+
+export type CronPanelMode = "overview" | "create" | "job";

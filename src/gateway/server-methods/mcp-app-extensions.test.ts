@@ -186,6 +186,19 @@ describe("registered MCP App extensions", () => {
     );
     expect(mocks.dispose).toHaveBeenCalledOnce();
   });
+  it.each(["global", "file"] as const)(
+    "honors tool display preference for %s launches",
+    async (entrypointType) => {
+      catalog.tools[0]!.appExtensions!.preferredModelDisplayMode = "inline";
+      await invoke("mcp.app.launch", {
+        serverName: "demo",
+        toolName: "show",
+        entrypointType,
+        ...(entrypointType === "file" ? { filePath: "part.stl" } : {}),
+      });
+      expect(mocks.fetch).toHaveBeenCalledWith(expect.objectContaining({ displayMode: "inline" }));
+    },
+  );
   it.each(["upload", "view", "missing view"])(
     "releases launch authority when %s preparation fails",
     async (failure) => {
@@ -220,6 +233,13 @@ describe("registered MCP App extensions", () => {
       expect.objectContaining({ viewId: "mcp-app-demo" }),
     );
     expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+    const authorize = mocks.fetch.mock.calls[0]![0].authorizeAppInteraction;
+    expect(authorize()).toBe(true);
+    mocks.assert.mockImplementationOnce(() => {
+      throw new Error("session revoked");
+    });
+    expect(authorize).toThrow("session revoked");
     expect(mocks.viewCleanup.size).toBe(1);
     for (const cleanup of mocks.viewCleanup) {
       cleanup();
@@ -298,6 +318,25 @@ describe("registered MCP App extensions", () => {
       { assertCurrent: expect.any(Function) },
     );
   });
+  it.each([undefined, { items: [{ type: "resource_link", uri: "cad://part" }] }])(
+    "reports unsupported mention output without exposing validation issues (%j)",
+    async (structuredContent) => {
+      mocks.call.mockResolvedValue({
+        content: [{ type: "resource_link", uri: "cad://part", name: "Part" }],
+        structuredContent,
+      });
+      const response = await invoke("mcp.app.mention", { serverName: "demo", query: "part" });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: "This app returned an unsupported resource list",
+          details: { code: "MCP_APP_UNSUPPORTED_MENTION_RESULT" },
+        }),
+      );
+    },
+  );
   it("does not return protected data after revocation during the call", async () => {
     mocks.call.mockImplementation(async () => {
       mocks.assert.mockImplementation(() => {

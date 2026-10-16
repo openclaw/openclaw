@@ -19,6 +19,7 @@ import {
 } from "../sessions/transcript-events.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -85,6 +86,7 @@ describe("HTTP historical model disclosure", () => {
   let committed: OpenClawConfig;
   let port: number;
   let readerId: string;
+  let releaseProfileCatalog: (() => void) | undefined;
   let sequence = 0;
   let scope: { agentId: string; sessionKey: string; sessionId: string };
   const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
@@ -98,11 +100,16 @@ describe("HTTP historical model disclosure", () => {
   };
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({ scenario: "minimal", label: "http-model-policy" });
+    state = await createOpenClawTestState({
+      scenario: "minimal",
+      label: "http-model-policy",
+      prepareProfileCatalog: true,
+    });
     publishConfig(config());
     readerId = (await ensureCanonicalUserProfileForEmail(readerEmail)).id;
     const staff = await ensureCanonicalUserProfileForEmail(staffEmail);
     await setCanonicalUserProfileRole(staff.id, "staff");
+    releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
     const context = createDirectChatContext({
       getRuntimeConfig: () => current,
       getCommittedRuntimeConfig: () => committed,
@@ -116,6 +123,7 @@ describe("HTTP historical model disclosure", () => {
       getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
       getRuntimeConfig: () => current,
       getGatewayRequestContext: () => context,
+      httpRequestLifetime: context,
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -163,13 +171,17 @@ describe("HTTP historical model disclosure", () => {
   });
 
   afterAll(async () => {
-    server?.closeAllConnections();
-    if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    try {
+      server?.closeAllConnections();
+      if (server) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      releaseProfileCatalog?.();
+      await state?.cleanup();
     }
-    await state?.cleanup();
   });
 
   async function requestHistory(
@@ -237,7 +249,14 @@ describe("HTTP historical model disclosure", () => {
     expect(initial.event).toBe("history");
     expect(initial.data).toEqual(json);
 
-    const id = await append("inline private model reply");
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+    let id: string;
+    try {
+      id = await append("inline private model reply");
+    } finally {
+      unsubscribe();
+    }
     const inline = await stream.next();
     expect(inline.event).toBe("message");
     expect(inline.data).toMatchObject({
@@ -249,6 +268,21 @@ describe("HTTP historical model disclosure", () => {
     expect(record(inline.data).message).toMatchObject({
       content: [{ type: "text", text: "inline private model reply" }],
     });
+    const stored = await loadTranscriptEvents(scope);
+    emitSessionTranscriptUpdate(
+      expectDefined(
+        updates.find((candidate) => candidate.messageId === id),
+        "committed inline update",
+      ),
+    );
+    const repeated = await stream.next();
+    expect(repeated.event).toBe("history");
+    const repeatedRows = expectRestrictedSnapshot(repeated.data, 5);
+    expectHidden(repeatedRows[4]);
+    expect(repeatedRows[4]).toMatchObject({
+      content: [{ type: "text", text: "inline private model reply" }],
+    });
+    expect(await loadTranscriptEvents(scope)).toEqual(stored);
     await append("refresh private model reply", "file-only");
     const refreshed = await stream.next();
     expect(refreshed.event).toBe("history");
@@ -330,34 +364,6 @@ describe("HTTP historical model disclosure", () => {
       }
     },
   );
-
-  it("filters a refresh forced by a repeated committed inline sequence", async () => {
-    const stream = await openStream();
-    expectRestrictedSnapshot((await stream.next()).data, 4);
-    const updates: InternalSessionTranscriptUpdate[] = [];
-    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    let id: string;
-    try {
-      id = await append("repeated inline sequence");
-    } finally {
-      unsubscribe();
-    }
-    expect((await stream.next()).event).toBe("message");
-    const update = expectDefined(
-      updates.find((candidate) => candidate.messageId === id),
-      "committed inline update",
-    );
-    const stored = await loadTranscriptEvents(scope);
-    emitSessionTranscriptUpdate(update);
-    const refreshed = await stream.next();
-    expect(refreshed.event).toBe("history");
-    const rows = expectRestrictedSnapshot(refreshed.data, 5);
-    expectHidden(rows[4]);
-    expect(rows[4]).toMatchObject({
-      content: [{ type: "text", text: "repeated inline sequence" }],
-    });
-    expect(await loadTranscriptEvents(scope)).toEqual(stored);
-  });
 
   it("uses a policy committed during final current-profile acquisition", async () => {
     publishConfig(config(["example/*"]));

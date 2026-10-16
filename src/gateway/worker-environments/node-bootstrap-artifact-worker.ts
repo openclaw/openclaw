@@ -13,15 +13,10 @@ export async function prepareNodeBootstrapArtifactInWorker(
 ): Promise<NodeBootstrapArtifact> {
   const pool = new WorkerTaskPool<NodeBootstrapArtifactWorkerInput, NodeBootstrapArtifact>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.nodeBootstrapArtifact),
-    maxWorkers: 1,
+    workerClass: "writer",
   });
   try {
-    const artifact = await pool.run({ options, temporaryRoot }, {});
-    // Structured cloning drops frozen descriptors at the worker boundary.
-    return Object.freeze({
-      ...artifact,
-      enabledPluginIds: Object.freeze(artifact.enabledPluginIds),
-    });
+    return await pool.run({ options, temporaryRoot }, {});
   } finally {
     // The provider may remove staging only after the builder has stopped writing.
     await pool.close();

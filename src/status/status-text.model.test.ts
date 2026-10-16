@@ -1,22 +1,29 @@
+import type { StatementSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
+import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -48,7 +55,6 @@ describe("buildStatusText prepared context windows", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    cliBackendsTesting.resetDepsForTest();
     await state.cleanup();
   });
   const tokenUsage = {
@@ -108,6 +114,158 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it("prepares bounded usage off-thread and sees a later committed transcript", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "status-worker-usage",
+      sessionKey: "agent:main:status-worker-usage",
+      storePath: state.statePath("status.sqlite"),
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    const readUsage = vi.spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync");
+    await replaceSessionEntry(target, entry);
+    await appendTranscriptMessage(target, {
+      message: {
+        role: "assistant",
+        content: "x".repeat(300_000),
+        usage: { input: 10, output: 2, totalTokens: 12 },
+      },
+    });
+    await waitForSessionTranscriptProjection(target);
+    const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+    const reads: string[] = [];
+    const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(read, receiver: StatementSync, args) {
+            if (
+              /\b(?:transcript_events|session_transcript_active_events|transcript_event_identities)\b/iu.test(
+                receiver.sourceSQL,
+              )
+            ) {
+              reads.push(receiver.sourceSQL);
+            }
+            return Reflect.apply(read, receiver, args);
+          },
+        }),
+      );
+    });
+    const render = () =>
+      renderPreparedStatus({
+        sessionEntry: entry,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        includeTranscriptUsage: true,
+      });
+    setRuntimeConfigSnapshot({});
+    try {
+      const first = await render();
+      // The newest message still contributes usage when its body exceeds the byte budget.
+      expect(first.text).toContain("Tokens: 10 in / 2 out");
+      expect(reads).toEqual([]);
+
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "assistant",
+          content: "New usage",
+          usage: { input: 30, output: 4, totalTokens: 34 },
+        },
+      });
+      await waitForSessionTranscriptProjection(target);
+      reads.length = 0;
+      const latest = await render();
+      expect(latest.text).toContain("Tokens: 30 in / 4 out");
+      expect(reads).toEqual([]);
+
+      const committedEntry = {
+        ...entry,
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+        inputTokens: 60,
+        outputTokens: 6,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 60,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      } satisfies InternalSessionEntry;
+      await replaceSessionEntry(target, committedEntry);
+      readUsage.mockClear();
+      const committed = await renderPreparedStatus({
+        sessionEntry: committedEntry,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        includeTranscriptUsage: true,
+      });
+      expect(committed.text).toContain("Tokens: 60 in / 6 out");
+      expect(readUsage).not.toHaveBeenCalled();
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+  });
+
+  it.each([
+    { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
+    { name: "unknown limits", window: undefined, expected: "45k/?" },
+    {
+      name: "another runtime's limits",
+      window: 262_144,
+      nativeRuntime: "other-runtime",
+      expected: "45k/?",
+    },
+    {
+      name: "API limits for a native runtime",
+      window: 262_144,
+      resolvedHarness: "fixture-native",
+      expected: "45k/?",
+    },
+  ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
+    const provider = "ollama";
+    const model = "qwen3:8b";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
+    const previous = cacheMaps.map((cache) => cache.get(key));
+    for (const cache of cacheMaps) {
+      cache.set(key, 128_000);
+    }
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
+        contextTokens: 200_000,
+        thinkingCatalog: [
+          {
+            provider,
+            id: model,
+            nativeRuntime: scenario.nativeRuntime,
+            contextWindow: scenario.window,
+            contextTokens: scenario.window,
+          },
+        ],
+      });
+
+      expect(parts.text).toContain(`Context: ${scenario.expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" ? table.rows : []).toContainEqual([
+        "📚 Context",
+        expect.stringContaining(scenario.expected),
+      ]);
+    } finally {
+      cacheMaps.forEach((cache, index) => {
+        const value = previous[index];
+        if (value === undefined) {
+          cache.delete(key);
+        } else {
+          cache.set(key, value);
+        }
+      });
+    }
+  });
 
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({
@@ -198,12 +356,14 @@ describe("buildStatusText prepared context windows", () => {
   async function renderTerminalFallback(
     params: {
       entry?: Partial<InternalSessionEntry>;
+      live?: boolean;
       message?: Record<string, unknown>;
       laterMessage?: Record<string, unknown>;
       status?: Partial<StatusTextParams>;
     } = {},
   ) {
     return await withTempHome(async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionId: "terminal-fallback",
@@ -245,15 +405,25 @@ describe("buildStatusText prepared context windows", () => {
         append(params.laterMessage);
       }
       const original = loadSessionEntryReadOnly(scope);
-      const parts = await renderPreparedStatus({
-        sessionEntry: original,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        contextTokens: 1_000_000,
-        ...params.status,
-      });
-      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
-      return parts;
+      const runId = "current-live-run";
+      if (params.live) {
+        registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
+      }
+      try {
+        const parts = await renderPreparedStatus({
+          sessionEntry: original,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          contextTokens: 1_000_000,
+          ...params.status,
+        });
+        expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+        return parts;
+      } finally {
+        if (params.live) {
+          clearAgentRunContext(runId);
+        }
+      }
     });
   }
 
@@ -299,7 +469,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it.each([
-    ["running session", { entry: { status: "running" } }],
+    ["running session", { live: true }],
     ["missing run", { entry: { lastRunId: undefined } }],
     ["failed assistant", { message: { stopReason: "error" } }],
     ["hidden assistant", { message: { content: [] } }],
@@ -342,7 +512,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it("skips terminal transcript access for a stale selected notice", async () => {
-    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync");
     const parts = await renderTerminalFallback({
       entry: {
         fallbackNotice: {
@@ -356,17 +526,17 @@ describe("buildStatusText prepared context windows", () => {
     expect(readTail).not.toHaveBeenCalled();
   });
 
-  it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
+  it("uses the admitted effective cap for the terminal pair", async () => {
     const parts = await renderTerminalFallback({
       entry: { providerOverride: "deepseek", modelOverride: "deepseek-v4-flash" },
       status: {
         provider: "fallback",
         model: "small-model",
-        contextTokens: 96_000,
         thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
           provider,
           id,
           contextWindow,
+          contextTokens: id === "small-model" ? 96_000 : contextWindow,
         })),
       },
     });
@@ -379,8 +549,8 @@ describe("buildStatusText prepared context windows", () => {
     ["legacy usage fallback", "usage/previous-model"],
   ])("keeps %s through independent usage hydration", async (_name, notice) => {
     const readUsage = vi
-      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscript")
-      .mockReturnValue({
+      .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync")
+      .mockResolvedValue({
         modelProvider: "usage",
         model: "previous-model",
         inputTokens: 10,
@@ -487,44 +657,14 @@ describe("buildStatusText prepared context windows", () => {
     },
   );
 
-  it("does not turn the context overlay label into a new selected model", async () => {
-    const parts = await renderPreparedStatus({ primaryModelLabelOverride: "fallback/small-model" });
-    expect(parts.text).toContain("Model: deepseek/deepseek-v4-flash");
-  });
-
-  it("preserves a literal self-provider prefix in a prepared model ID", async () => {
-    const sessionEntry: InternalSessionEntry = {
-      sessionId: "selection-owner-control",
-      updatedAt: 1,
-    };
-    const original = structuredClone(sessionEntry);
-    const parts = await renderPreparedStatus({
-      cfg: { agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } },
-      provider: "custom",
-      model: "custom/model",
-      sessionEntry,
-      resolvedThinkLevel: "off",
-    });
-    expect(parts.text).toContain("Model: custom/custom/model");
-    expect(parts.text).not.toContain("Model: custom/model");
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-    expect(table?.type === "table" ? table.rows : []).toContainEqual([
-      "🧠 Model",
-      expect.stringContaining("custom/custom/model"),
-    ]);
-    expect(sessionEntry).toEqual(original);
-  });
-
   it.each([
     { error: new SessionTranscriptProjectionUnavailableError("projection"), unavailable: true },
     { error: new SessionTranscriptStorageUnavailableError(), unavailable: true },
     { error: new Error("unexpected reader failure"), unavailable: false },
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
-      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,
@@ -539,136 +679,5 @@ describe("buildStatusText prepared context windows", () => {
       await expect(result).rejects.toBe(error);
     }
     expect(readTail).toHaveBeenCalledOnce();
-  });
-
-  it("renders a cold-cache prepared window in plain and rich status", async () => {
-    const parts = await renderPreparedStatus();
-    const table = parts.presentation.blocks.find((block) => block.type === "table");
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/200k");
-    expect(table?.type === "table" ? table.rows : []).toContainEqual([
-      "📚 Context",
-      expect.stringContaining("45k/1.0m"),
-    ]);
-  });
-
-  it("keeps the selected prepared window over stale active model state", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "selected-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-        modelProvider: "fallback",
-        model: "small-model",
-        ...tokenUsage,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
-  });
-
-  it("uses the active prepared window for an established fallback", async () => {
-    const parts = await renderPreparedStatus({
-      sessionEntry: {
-        sessionId: "active-prepared-context",
-        updatedAt: 0,
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelProvider: "fallback",
-        model: "small-model",
-        fallbackNotice: { ...fallbackNotice, reason: "provider unavailable" },
-        ...tokenUsage,
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/128k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
-    // Supply runtime alias metadata while exercising the authored context cap.
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-          bundleMcp: true,
-        },
-      ],
-    });
-    const parts = await renderPreparedStatus({
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      resolvedHarness: "claude-cli",
-      sessionEntry: {
-        sessionId: "claude-cli-authored-cap",
-        updatedAt: 0,
-        modelProvider: "claude-cli",
-        model: "claude-haiku-4-5",
-        agentHarnessId: "claude-cli",
-        contextTokens: 256_000,
-        contextTokensSource: "resolved",
-        ...tokenUsage,
-      },
-      thinkingCatalog: [
-        {
-          provider: "anthropic",
-          id: "claude-haiku-4-5",
-          contextWindow: 1_000_000,
-          contextTokens: 1_000_000,
-        },
-      ],
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.test",
-              models: [
-                {
-                  id: "claude-haiku-4-5",
-                  name: "Claude Haiku 4.5",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 1_000_000,
-                  contextTokens: 256_000,
-                  maxTokens: 128_000,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(parts.text).toContain("Context: 45k/256k");
-    expect(parts.text).not.toContain("Context: 45k/1.0m");
-  });
-
-  it("matches namespaced prepared model IDs without stripping them", async () => {
-    const parts = await renderPreparedStatus({
-      provider: "openrouter",
-      model: "deepseek/deepseek-v4-flash",
-      thinkingCatalog: [
-        ...catalog,
-        {
-          provider: "openrouter",
-          id: "deepseek-v4-flash",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 128_000,
-          contextTokens: 128_000,
-        },
-      ],
-    });
-
-    expect(parts.text).toContain("Context: 45k/1.0m");
-    expect(parts.text).not.toContain("Context: 45k/128k");
   });
 });

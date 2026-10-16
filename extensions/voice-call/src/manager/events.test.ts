@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import {
   createEventManagerHarness,
@@ -83,6 +83,53 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
+  it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
+    const ctx = createContext();
+    const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });
+    ctx.activeCalls.set(call.callId, call);
+    ctx.beforeCallEnd = async () => {
+      await processEvent(ctx, {
+        id: "last-transcript",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.assistant-speech",
+        transcript: "The plumber will call back.",
+      });
+    };
+    await processEvent(ctx, {
+      id: "carrier-ended",
+      callId: call.callId,
+      timestamp: Date.now(),
+      type: "call.ended",
+      reason: "completed",
+    });
+    expect(call.transcript).toMatchObject([
+      { speaker: "bot", text: "The plumber will call back." },
+    ]);
+    expect(call.endReason).toBe("completed");
+  });
+
+  it("finalizes confirmed carrier termination even when final transcript drain fails", async () => {
+    const ctx = createContext({
+      beforeCallEnd: async () => {
+        throw new Error("bridge close failed");
+      },
+    });
+    const call = createCall({ callId: "drain-failed", providerCallId: "CA-drain-failed" });
+    ctx.activeCalls.set(call.callId, call);
+    await expect(
+      processEvent(ctx, {
+        id: "carrier-drain-failed",
+        callId: call.callId,
+        timestamp: Date.now(),
+        type: "call.ended",
+        reason: "completed",
+      }),
+    ).resolves.toEqual({ kind: "processed" });
+    expect(call.endReason).toBe("completed");
+    expect(ctx.activeCalls.size).toBe(0);
+  });
+
   it.each(["speech", "answered", "terminal", "fatal-error"] as const)(
     "publishes %s side effects only after SQLite persistence succeeds",
     async (kind) => {
@@ -232,9 +279,9 @@ describe("processEvent (functional)", () => {
       if (!state) {
         throw new Error("expected the fixture state runtime");
       }
-      const openStore = state.openKeyedStore.bind(state);
+      const openStore = state.openKeyedStoreV2.bind(state);
       const fault = vi
-        .spyOn(state, "openKeyedStore")
+        .spyOn(state, "openKeyedStoreV2")
         .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
@@ -358,7 +405,7 @@ describe("processEvent (functional)", () => {
       vi.setSystemTime(now);
       const hangupCalls: HangupCallInput[] = [];
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -427,7 +474,7 @@ describe("processEvent (functional)", () => {
     }) as VoiceCallProvider & { isConversationStreamConnectEnabled?: () => boolean };
     provider.isConversationStreamConnectEnabled = () => true;
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "twilio",
         fromNumber: "+15550000000",
@@ -718,7 +765,7 @@ describe("processEvent privacy assertions", () => {
     "redacts caller phone numbers in allowlist $label logs",
     async ({ phone, allowFrom, allowed }) => {
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -743,7 +790,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers in call record creation logs", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -766,7 +813,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers when rejection cannot reach a provider", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",

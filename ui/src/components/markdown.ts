@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
@@ -24,6 +25,7 @@ import {
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
 import {
+  hasStreamingMarkdownHtml,
   repairStreamingMarkdownTail,
   splitStableStreamingMarkdown,
   streamingMarkdownState,
@@ -631,12 +633,7 @@ export function toSanitizedMarkdownHtml(
     markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
   markdownCache.delete(cacheKey);
   markdownCache.set(cacheKey, sanitized);
-  if (markdownCache.size > MARKDOWN_CACHE_LIMIT) {
-    const oldest = markdownCache.keys().next().value;
-    if (oldest) {
-      markdownCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
   return sanitized;
 }
 
@@ -682,16 +679,21 @@ export function toStreamingMarkdownParts(
   const state = streamingMarkdownState(streamKey);
   const previous = state?.rendered;
   const renderKey = markdownRenderKey(renderOptions);
+  const append = previous && stableMarkdown.startsWith(previous.markdown);
+  // Literal code cannot acquire HTML ownership after its block is complete.
+  const hasHtml = append
+    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
+    : hasStreamingMarkdownHtml(stableMarkdown);
   // Containers and block-art classification can outlive a completed boundary.
   // The message parse guard also keeps applying to the complete prefix.
   const incremental =
     previous?.options === renderKey &&
-    stableMarkdown.startsWith(previous.markdown) &&
+    append &&
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
         !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
-        !stableMarkdown.includes("<") &&
+        !hasHtml &&
         !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
@@ -709,23 +711,18 @@ export function toStreamingMarkdownParts(
         : stableHtml + appendedHtml;
   }
   if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml };
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
   }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
   // The whole input was classified above; an isolated tail is not block art.
-  const tailHtml =
+  const tailHtml = renderSanitizedMarkdown(
     tailRepairStart === null
-      ? renderSanitizedMarkdown(
-          streamingTail,
-          { ...renderOptions, streamingOpenFence: true },
-          false,
-        )
-      : renderSanitizedMarkdown(
-          repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-          renderOptions,
-          false,
-        );
+      ? streamingTail
+      : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
+    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
+    false,
+  );
   return [stableHtml, tailHtml];
 }

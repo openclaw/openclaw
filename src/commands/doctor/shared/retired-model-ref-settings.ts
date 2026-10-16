@@ -1,8 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMutableAgentEntry } from "../../../agents/agent-scope-config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { mergeAgentModelEntryForConfig } from "../../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../../config/types.agent-defaults.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ModelRetirementScope } from "./retired-model-ref-repair.types.js";
 
 type RetiredModelSettings<T> = {
@@ -42,13 +42,13 @@ export function mergeRetiredModelSettings(params: RetiredModelSettings<unknown>)
 
 /** Read-only auth evaluation must see the settings the repair will preserve. */
 export function projectRetiredModelSuccessorConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   agentId: string;
   sourceModelRef: string;
   successorModelRef: string;
   retirementScope: ModelRetirementScope;
   resolveModelRef: (modelRef: string) => string | undefined;
-}): OpenClawConfig {
+}): OpenClawConfigWithLegacyRoster {
   const { cfg, agentId, sourceModelRef, successorModelRef } = params;
   const entry = resolveMutableAgentEntry(cfg, agentId);
   const inheritedModels = cfg.agents?.defaults?.models;
@@ -102,12 +102,9 @@ export function projectRetiredModelSuccessorConfig(params: {
       }
     }
   } else if (agents.list) {
-    agents.list = agents.list.slice();
-    for (const [index, candidate] of agents.list.entries()) {
-      if (candidate === entry) {
-        agents.list[index] = { ...candidate, models: projectedModels };
-      }
-    }
+    agents.list = agents.list.map((candidate) =>
+      candidate === entry ? { ...candidate, models: projectedModels } : candidate,
+    );
   }
   return { ...cfg, agents };
 }

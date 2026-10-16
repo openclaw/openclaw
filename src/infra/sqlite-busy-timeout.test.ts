@@ -2,7 +2,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runWithSqliteBusyTimeout, shouldReportSqliteLockFailure } from "./sqlite-busy-timeout.js";
+import {
+  readSqliteBusyTimeout,
+  runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
+  shouldReportSqliteLockFailure,
+} from "./sqlite-busy-timeout.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -13,6 +18,7 @@ describe("runWithSqliteBusyTimeout", () => {
   afterEach(() => {
     database?.close();
     database = undefined;
+    vi.restoreAllMocks();
   });
 
   it("restores the previous timeout after success and failure", () => {
@@ -35,6 +41,7 @@ describe("runWithSqliteBusyTimeout", () => {
   it("restores timeout and lock reporting before the admitted operation finishes", () => {
     database = new DatabaseSync(":memory:");
     database.exec("PRAGMA busy_timeout = 5000");
+    const exec = vi.spyOn(database, "exec");
     runWithSqliteBusyTimeout(
       database,
       25,
@@ -47,9 +54,21 @@ describe("runWithSqliteBusyTimeout", () => {
       { lockFailureReporting: "suppress" },
     );
     expect(shouldReportSqliteLockFailure(database)).toBe(true);
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+    expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
   });
 
-  it.each([-1, 1.5])("rejects invalid timeout %s", (timeout) => {
+  it("discards the connection policy when the native connection closes and reopens", () => {
+    database = new DatabaseSync(":memory:");
+    setSqliteBusyTimeout(database, 37);
+    database.close();
+    database.open();
+    expect(readSqliteBusyTimeout(database)).toBe(0);
+    runWithSqliteBusyTimeout(database, 25, () => undefined);
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
+  });
+
+  it.each([-1])("rejects invalid timeout %s", (timeout) => {
     database = new DatabaseSync(":memory:");
     expect(() => runWithSqliteBusyTimeout(database!, timeout, () => undefined)).toThrow(
       "busyTimeoutMs must be a non-negative integer",

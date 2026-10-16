@@ -68,6 +68,18 @@ public struct OpenClawChatUsageCost: Codable, Hashable, Sendable {
     public let total: Double?
 }
 
+/// Latest model call's context snapshot. Only an available marker decodes; an
+/// unavailable or unknown state reads as no marker.
+public struct OpenClawChatUsageContextSnapshot: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case available
+    }
+
+    public let state: State
+    public let promptTokens: Int
+    public let totalTokens: Int
+}
+
 public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let input: Int?
     public let output: Int?
@@ -75,8 +87,10 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     public let cacheWrite: Int?
     public let cost: OpenClawChatUsageCost?
     public let total: Int?
+    /// Counters can cover a whole multi-call turn; context readers size the window from this.
+    public let contextUsage: OpenClawChatUsageContextSnapshot?
 
-    enum CodingKeys: String, CodingKey {
+    private enum DecodingKeys: String, CodingKey {
         case input
         case output
         case cacheRead
@@ -84,10 +98,11 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         case cost
         case total
         case totalTokens
+        case contextUsage
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let container = try decoder.container(keyedBy: DecodingKeys.self)
         self.input = try container.decodeIfPresent(Int.self, forKey: .input)
         self.output = try container.decodeIfPresent(Int.self, forKey: .output)
         self.cacheRead = try container.decodeIfPresent(Int.self, forKey: .cacheRead)
@@ -96,16 +111,10 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
         self.total =
             try container.decodeIfPresent(Int.self, forKey: .total) ??
             container.decodeIfPresent(Int.self, forKey: .totalTokens)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(self.input, forKey: .input)
-        try container.encodeIfPresent(self.output, forKey: .output)
-        try container.encodeIfPresent(self.cacheRead, forKey: .cacheRead)
-        try container.encodeIfPresent(self.cacheWrite, forKey: .cacheWrite)
-        try container.encodeIfPresent(self.cost, forKey: .cost)
-        try container.encodeIfPresent(self.total, forKey: .total)
+        // A malformed marker must not fail the message; readers fall back to the counters.
+        self.contextUsage = try? container.decodeIfPresent(
+            OpenClawChatUsageContextSnapshot.self,
+            forKey: .contextUsage)
     }
 }
 
@@ -119,7 +128,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public internal(set) var text: String?
     public let textSignature: String?
     public let thinking: String?
-    public let thinkingSignature: String?
+    public internal(set) var thinkingSignature: String?
     public let mimeType: String?
     public let fileName: String?
     public let artifactId: String?
@@ -130,16 +139,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let height: Int?
     public let sizeBytes: Int?
     public internal(set) var durationSeconds: Double?
-    public let playback: OpenClawChatPlaybackMode?
-    public let content: AnyCodable?
-    public let preview: OpenClawChatCanvasPreview?
+    public internal(set) var playback: OpenClawChatPlaybackMode?
+    public internal(set) var content: AnyCodable?
+    public internal(set) var preview: OpenClawChatCanvasPreview?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
-    public let runId: String?
+    public internal(set) var runId: String?
     public let id: String?
     public let name: String?
-    public let arguments: AnyCodable?
-    public let details: AnyCodable?
+    public internal(set) var arguments: AnyCodable?
+    public internal(set) var details: AnyCodable?
     public let isError: Bool?
 
     var isToolCall: Bool {
@@ -236,7 +245,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         let url: String?
     }
 
-    enum CodingKeys: String, CodingKey {
+    private enum DecodingKeys: String, CodingKey {
         case attachment
         case type
         case text
@@ -271,7 +280,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let container = try decoder.container(keyedBy: DecodingKeys.self)
         self.type = try container.decodeIfPresent(String.self, forKey: .type)
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.textSignature = try container.decodeIfPresent(String.self, forKey: .textSignature)
@@ -298,7 +307,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
         self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
         self.runId = try container.decodeIfPresent(String.self, forKey: .runId)
-        self.id = try [CodingKeys.id, .tool_call_id, .toolCallId, .tool_use_id, .toolUseId]
+        self.id = try [DecodingKeys.id, .tool_call_id, .toolCallId, .tool_use_id, .toolUseId]
             .compactMap { key in
                 try container.decodeIfPresent(String.self, forKey: key)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -312,34 +321,6 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
         self.content = try container.decodeIfPresent(AnyCodable.self, forKey: .content)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(self.type, forKey: .type)
-        try container.encodeIfPresent(self.text, forKey: .text)
-        try container.encodeIfPresent(self.textSignature, forKey: .textSignature)
-        try container.encodeIfPresent(self.thinking, forKey: .thinking)
-        try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
-        try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
-        try container.encodeIfPresent(self.fileName, forKey: .fileName)
-        try container.encodeIfPresent(self.artifactId, forKey: .artifactId)
-        try container.encodeIfPresent(self.url, forKey: .url)
-        try container.encodeIfPresent(self.openUrl, forKey: .openUrl)
-        try container.encodeIfPresent(self.alt, forKey: .alt)
-        try container.encodeIfPresent(self.width, forKey: .width)
-        try container.encodeIfPresent(self.height, forKey: .height)
-        try container.encodeIfPresent(self.sizeBytes, forKey: .sizeBytes)
-        try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
-        try container.encodeIfPresent(self.playback, forKey: .playback)
-        try container.encodeIfPresent(self.content, forKey: .content)
-        try container.encodeIfPresent(self.preview, forKey: .preview)
-        try container.encodeIfPresent(self.id, forKey: .id)
-        try container.encodeIfPresent(self.name, forKey: .name)
-        try container.encodeIfPresent(self.arguments, forKey: .arguments)
-        try container.encodeIfPresent(self.runId, forKey: .runId)
-        try container.encodeIfPresent(self.details, forKey: .details)
-        try container.encodeIfPresent(self.isError, forKey: .isError)
     }
 
     private static func managedArtifactId(
@@ -448,12 +429,6 @@ public struct OpenClawChatStreamFallback: Codable, Hashable, Sendable {
         self.runId = runId
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case source
-        case itemId
-        case runId
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.source = try? container.decode(String.self, forKey: .source)
@@ -540,7 +515,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
     public let errorMessage: String?
-    public let details: AnyCodable?
+    public internal(set) var details: AnyCodable?
     public let isError: Bool?
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
@@ -876,6 +851,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let agentId: String?
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    public let reasoningLevel: String?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil, key: String? = nil, agentId: String? = nil) {
@@ -883,6 +859,7 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
         self.agentId = agentId
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.reasoningLevel = nil
     }
 }
 
@@ -899,6 +876,12 @@ public struct OpenClawAgentActivityItem: Codable, Hashable, Sendable {
 
     var isVisible: Bool {
         self.hideFromChannelProgress != true && self.suppressChannelProgress != true
+    }
+
+    /// The Gateway's title, unless it is the fallback for a call whose outcome it never saw: that one
+    /// names only the raw tool ("Mcp Openclaw Exec — outcome unknown") and says less than the call itself.
+    var preparedTitle: String? {
+        self.phase == "end" && self.status == nil ? nil : self.title
     }
 }
 
@@ -1045,6 +1028,15 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let state: String?
     public let message: AnyCodable?
     public let errorMessage: String?
+    /// With `state == "status"`: what the run is doing before it produces anything.
+    public var phase: String?
+    public var retry: Retry?
+    public var seq: Int?
+
+    public struct Retry: Codable, Sendable {
+        public let attempt: Int
+        public let maxAttempts: Int
+    }
 
     // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
@@ -1139,6 +1131,14 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
         case hasActiveRun
         case activeRunIds
     }
+}
+
+/// The existing Gateway refresh receipt, including the authoritative pre-refresh baseline.
+public struct OpenClawChatProgressCardRefreshResult: Decodable, Sendable {
+    private enum Status: String, Decodable, Sendable { case accepted }
+    public let runId: String
+    public let revision: Int
+    private let status: Status
 }
 
 public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {

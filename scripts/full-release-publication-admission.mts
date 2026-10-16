@@ -24,6 +24,7 @@ import {
 } from "./lib/plugin-npm-release.ts";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-publication-collector.ts";
+import { publicationSourceToolingPaths as toolingPaths } from "./lib/publication-source-paths.mjs";
 import {
   classifyReleaseTrain,
   parsePinnedReleaseVersion,
@@ -35,67 +36,17 @@ const executionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadataPath =
   /^(?:package\.json|apps\/android\/version\.json|extensions\/[^/]+\/(?:package\.json|README\.md)|packages\/[^/]+\/package\.json)$/u;
 const platformHelperPath = "scripts/lib/release-publish-children.sh";
-// Acquisition includes the producer's committed runtime and policy inputs. The producer
-// remains responsible for verifying its executing bootstrap, fixed imports and YAML bytes.
-const toolingPaths = new Set([
-  "package.json",
-  "pnpm-lock.yaml",
-  "packages/normalization-core/src/record-coerce.ts",
-  "packages/normalization-core/src/string-coerce.ts",
-  "packages/plugin-package-contract/src/categories.ts",
-  "packages/plugin-package-contract/src/index.ts",
-  "scripts/lib/bounded-response.mjs",
-  "scripts/lib/canonical-json.mjs",
-  "scripts/lib/clawhub-publication-state.mjs",
-  "scripts/lib/npm-publish-plan.mjs",
-  "scripts/lib/npm-core-release-packages.json",
-  "scripts/lib/plugin-publication-candidates.ts",
-  "scripts/lib/plugin-publication-collector.ts",
-  "scripts/lib/plugin-publication-target.mjs",
-  "scripts/lib/pnpm-lockfile-documents.mjs",
-  "scripts/lib/record-shared.mjs",
-  "scripts/lib/release-version.mjs",
-  "scripts/release-plan-producer.mts",
-  "scripts/release-plan-producer-core.mts",
-  "scripts/release-plan-contract.mjs",
-  "scripts/release-tooling-identity.mjs",
-  "scripts/release-validation-intent.mjs",
-  "scripts/full-release-publication-admission.mts",
-  "scripts/full-release-publication-contract.mjs",
-  "scripts/lib/plugin-npm-release.ts",
-  "scripts/lib/npm-json-output.mts",
-  "packages/normalization-core/src/expect.ts",
-  "src/utils/run-with-concurrency.ts",
-  "scripts/full-release-publication-observations.mts",
-  "scripts/lib/plugin-clawhub-release.ts",
-  "scripts/clawhub-prepared-artifact.mjs",
-  "scripts/clawhub-parent-authorization.mjs",
-  "scripts/plugin-publication-artifact.mjs",
-  "scripts/lib/actions-artifact-archive.mjs",
-  "scripts/lib/arg-utils.runtime.mjs",
-  "scripts/tsx.mjs",
-  "scripts/lib/tsx-cli-shim.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "packages/normalization-core/src/number-coercion.ts",
-  "packages/normalization-core/src/utf16-slice.ts",
-  "packages/ai/src/internal/retry-after.ts",
-  "packages/retry/src/index.ts",
-  "src/infra/clawhub-retry.ts",
-  "src/infra/map-size.ts",
-  "src/infra/retry-after.ts",
-  "src/infra/retry-attempt-errors.ts",
-  "src/infra/retry.ts",
-  "src/infra/secure-random.ts",
-  "src/logging/secret-redaction-registry.ts",
-  "src/shared/global-singleton.ts",
-  "src/shared/regexp.ts",
-]);
 type Request = ReturnType<
   typeof import("./full-release-publication-contract.mjs").publicationSourceRequest
 >;
 type SourceEntry = { oid: string; mode: string; path: string; type: string };
 
-function localGit(root: string, args: string[], input?: Buffer | string) {
+function localGit(
+  root: string,
+  args: string[],
+  input?: Buffer | string,
+  maxBuffer = 64 * 1024 * 1024,
+) {
   return execFileSync("git", ["--no-lazy-fetch", "--no-replace-objects", "-C", root, ...args], {
     env: {
       PATH: process.env.PATH,
@@ -107,7 +58,7 @@ function localGit(root: string, args: string[], input?: Buffer | string) {
     },
     input,
     timeout: 120_000,
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
@@ -199,10 +150,14 @@ function retainSource(root: string, sha: string, store: string, tooling: boolean
   if (sizes.length !== objectIds.length + 1 || sizes.at(-1) !== "") {
     throw new Error("invalid publication source object-size response");
   }
+  // This retained pack is local and short-lived; skip cross-object delta search.
   const pack = localGit(
     root,
-    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object"],
+    ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object", "--window=0"],
     objectInput,
+    // Up to 8192 zlib streams and pack headers add overhead beyond the 64 MiB
+    // raw-object limit. Reserve 1 MiB for that framing, only for pack output.
+    65 * 1024 * 1024,
   );
   localGit(store, ["index-pack", "--stdin"], pack);
   return selected.filter((entry) => entry.type === "blob");
@@ -460,6 +415,12 @@ async function admitPublicationSource(
       candidateSha: request.candidateSha,
       toolingSha: request.tooling.sha,
       toolingFullRef: request.tooling.ref,
+      ...(request.qualificationAdmission === undefined
+        ? {}
+        : {
+            qualificationAdmission: request.qualificationAdmission,
+            qualificationInputs: request.qualificationInputs,
+          }),
     });
     // Only regular committed metadata is materialized, after complete inventory verification.
     for (const entry of entries) {

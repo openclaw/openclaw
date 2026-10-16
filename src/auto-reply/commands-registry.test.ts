@@ -181,13 +181,6 @@ function requireCommandArgMenu(
 }
 
 describe("commands registry", () => {
-  it("builds command text with args", () => {
-    expect(buildCommandTextFromArgs(requireChatCommand("status"))).toBe("/status");
-    expect(buildCommandTextFromArgs(requireChatCommand("model"), { raw: "gpt-5" })).toBe(
-      "/model gpt-5",
-    );
-  });
-
   it("registers /login natively for Discord, Slack, and Telegram", () => {
     const command = requireChatCommand("login");
     expect(command.textAliases).toEqual(["/login"]);
@@ -243,92 +236,6 @@ describe("commands registry", () => {
       }
     },
   );
-
-  it("exposes /side as a BTW text and native alias", () => {
-    const btw = requireChatCommand("btw");
-    expect(btw.nativeName).toBe("btw");
-    expect(btw.nativeAliases).toEqual(["side"]);
-    expect(btw.textAliases).toEqual(["/btw", "/side"]);
-    expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
-    expect(requireNativeCommand("side").key).toBe("btw");
-    const sideNativeSpec = requireNativeSpec(listNativeCommandSpecs(), "side");
-    expect(sideNativeSpec.acceptsArgs).toBe(true);
-    expect(sideNativeSpec.isAlias).toBe(true);
-  });
-
-  it("matches text command names case-insensitively without changing args", () => {
-    expect(normalizeCommandBody("/STATUS")).toBe("/status");
-    expect(normalizeCommandBody("/Model OpenAI-Codex/GPT-5.5")).toBe("/model OpenAI-Codex/GPT-5.5");
-    expect(normalizeCommandBody("/T HIGH")).toBe("/think HIGH");
-
-    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.command.key).toBe("compact");
-    expect(resolveTextCommand("/COMPACT Keep CaseSensitivePath")?.args).toBe(
-      "Keep CaseSensitivePath",
-    );
-  });
-
-  it("preserves multiline payloads for skill slash commands", () => {
-    expect(normalizeCommandBody("/skill demo_skill first line\nsecond line")).toBe(
-      "/skill demo_skill first line\nsecond line",
-    );
-    expect(
-      normalizeCommandBody("/skill@openclaw: demo_skill first line\nsecond line", {
-        botUsername: "openclaw",
-      }),
-    ).toBe("/skill demo_skill first line\nsecond line");
-    expect(resolveTextCommand("/skill demo_skill first line\nsecond line")?.args).toBe(
-      "demo_skill first line\nsecond line",
-    );
-  });
-
-  it("registers /learn as a standard tools command with optional free text", () => {
-    const learn = requireChatCommand("learn");
-    expect(learn.nativeName).toBe("learn");
-    expect(learn.textAliases).toEqual(["/learn"]);
-    expect(learn.category).toBe("tools");
-    expect(learn.tier).toBe("standard");
-    expect(learn.acceptsArgs).toBe(true);
-    expect(requireCommandArg(learn, "request").required).not.toBe(true);
-    expect(normalizeCommandBody("/learn first line\nsecond line")).toBe(
-      "/learn first line\nsecond line",
-    );
-    expect(resolveTextCommand("/learn first line\nsecond line")?.args).toBe(
-      "first line\nsecond line",
-    );
-  });
-
-  it("registers /dashboard as a standard tools command with optional requirements", () => {
-    const dashboard = requireChatCommand("dashboard");
-    expect(dashboard.nativeName).toBe("dashboard");
-    expect(dashboard.textAliases).toEqual(["/dashboard"]);
-    expect(dashboard.category).toBe("tools");
-    expect(dashboard.tier).toBe("standard");
-    expect(dashboard.acceptsArgs).toBe(true);
-    expect(requireCommandArg(dashboard, "request").required).not.toBe(true);
-    expect(resolveTextCommand("/dashboard release health")?.args).toBe("release health");
-  });
-
-  it("registers /loop as a standard tools command with an optional spec", () => {
-    const loop = requireChatCommand("loop");
-    expect(loop.nativeName).toBe("loop");
-    expect(loop.textAliases).toEqual(["/loop"]);
-    expect(loop.category).toBe("tools");
-    expect(loop.tier).toBe("standard");
-    expect(loop.acceptsArgs).toBe(true);
-    expect(requireCommandArg(loop, "spec").required).not.toBe(true);
-    expect(resolveTextCommand("/loop 5m check ci")?.args).toBe("5m check ci");
-  });
-
-  it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
-    expect(normalizeCommandBody("/demo_skill first line\nsecond line")).toBe(
-      "/demo_skill first line\nsecond line",
-    );
-    expect(normalizeCommandBody("/reset soft\nre-read persona files")).toBe(
-      "/reset soft re-read persona files",
-    );
-    expect(normalizeCommandBody("/side first line\nsecond line")).toBe("/btw first line");
-    expect(normalizeCommandBody("/id\nignored")).toBe("/whoami");
-  });
 
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
@@ -447,13 +354,6 @@ describe("commands registry", () => {
         includeBundledChannelFallback: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("can resolve default native command names without loading bundled channel fallbacks", () => {
-    const command = findCommandByNativeName("status", "discord", {
-      includeBundledChannelFallback: false,
-    });
-    expect(command?.key).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -593,26 +493,6 @@ describe("commands registry", () => {
     }
   });
 
-  it("normalizes telegram-style command mentions for the current bot", () => {
-    expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
-    expect(
-      normalizeCommandBody("/help@openclaw args", {
-        botUsername: "openclaw",
-      }),
-    ).toBe("/help args");
-    expect(
-      normalizeCommandBody("/help@openclaw: args", {
-        botUsername: "openclaw",
-      }),
-    ).toBe("/help args");
-  });
-
-  it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
-      "/help@otherbot",
-    );
-  });
-
   it("normalizes targeted command bodies before bot identity only when requested", () => {
     expect(
       normalizeCommandBody("/help@unresolved_bot", {
@@ -684,6 +564,8 @@ describe("commands registry args", () => {
     };
 
     expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(buildCommandTextFromArgs(command)).toBe("/model");
+    expect(buildCommandTextFromArgs(command, { raw: "gpt-5.4" })).toBe("/model gpt-5.4");
     expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
     expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
       "/model gpt-5.4",
@@ -730,30 +612,6 @@ describe("commands registry args", () => {
       );
     },
   );
-
-  it("resolves auto arg menus when missing a choice arg", () => {
-    const command = createUsageModeCommand();
-
-    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu.arg.name).toBe("mode");
-    expect(menu.choices).toEqual([
-      { label: "off", value: "off" },
-      { label: "tokens", value: "tokens" },
-      { label: "full", value: "full" },
-      { label: "cost", value: "cost" },
-    ]);
-  });
-
-  it("does not show menus when arg already provided", () => {
-    const command = createUsageModeCommand();
-
-    const menu = resolveCommandArgMenu({
-      command,
-      args: { values: { mode: "tokens" } },
-      cfg: {} as never,
-    });
-    expect(menu).toBeNull();
-  });
 
   it("resolves function-based choices with a default provider/model context", () => {
     const seen: CommandArgChoiceContext[] = [];

@@ -10,7 +10,7 @@ import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveDiscordChannelIdSafe, resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -24,10 +24,6 @@ import {
 } from "./thread-bindings.types.js";
 
 const log = createSubsystemLogger("discord/thread-bindings");
-
-function buildThreadTarget(threadId: string): string {
-  return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
-}
 
 export function isThreadArchived(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") {
@@ -61,10 +57,8 @@ export function summarizeDiscordError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === "string") {
-    return err;
-  }
   if (
+    typeof err === "string" ||
     typeof err === "number" ||
     typeof err === "boolean" ||
     typeof err === "bigint" ||
@@ -75,47 +69,31 @@ export function summarizeDiscordError(err: unknown): string {
   return "error";
 }
 
-function extractDiscordErrorStatus(err: unknown): number | undefined {
+export function isDiscordThreadGoneError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
-    return undefined;
+    return false;
   }
   const candidate = err as {
     status?: unknown;
     statusCode?: unknown;
-    response?: { status?: unknown };
-  };
-  return (
-    parseStrictNonNegativeInteger(candidate.status) ??
-    parseStrictNonNegativeInteger(candidate.statusCode) ??
-    parseStrictNonNegativeInteger(candidate.response?.status)
-  );
-}
-
-function extractDiscordErrorCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as {
     code?: unknown;
     rawError?: { code?: unknown };
     body?: { code?: unknown };
-    response?: { body?: { code?: unknown }; data?: { code?: unknown } };
+    response?: { status?: unknown; body?: { code?: unknown }; data?: { code?: unknown } };
   };
-  return (
+  const code =
     parseStrictNonNegativeInteger(candidate.code) ??
     parseStrictNonNegativeInteger(candidate.rawError?.code) ??
     parseStrictNonNegativeInteger(candidate.body?.code) ??
     parseStrictNonNegativeInteger(candidate.response?.body?.code) ??
-    parseStrictNonNegativeInteger(candidate.response?.data?.code)
-  );
-}
-
-export function isDiscordThreadGoneError(err: unknown): boolean {
-  const code = extractDiscordErrorCode(err);
+    parseStrictNonNegativeInteger(candidate.response?.data?.code);
   if (code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE) {
     return true;
   }
-  const status = extractDiscordErrorStatus(err);
+  const status =
+    parseStrictNonNegativeInteger(candidate.status) ??
+    parseStrictNonNegativeInteger(candidate.statusCode) ??
+    parseStrictNonNegativeInteger(candidate.response?.status);
   // 404: deleted/unknown channel. 403: bot no longer has access.
   return status === 404 || status === 403;
 }
@@ -162,7 +140,9 @@ export async function maybeSendBindingMessage(params: {
   try {
     await withDiscordRequestAuthority(assertCurrent, () => {
       assertCurrent?.();
-      return sendMessageDiscord(buildThreadTarget(record.threadId), text, {
+      const threadId = record.threadId;
+      const target = /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
+      return sendMessageDiscord(target, text, {
         cfg: params.cfg,
         accountId: record.accountId,
       });
@@ -261,7 +241,7 @@ export async function resolveChannelIdForBinding(params: {
     }).rest;
     const channel = await getChannel(rest, lookupThreadId);
     const channelInfo = resolveDiscordChannelInfoSafe(channel);
-    const channelId = normalizeOptionalString(resolveDiscordChannelIdSafe(channel)) ?? "";
+    const channelId = normalizeOptionalString(channelInfo.id) ?? "";
     const type = channelInfo.type;
     const parentId = normalizeOptionalString(channelInfo.parentId) ?? "";
     // Only thread channels should resolve to their parent channel.
@@ -300,8 +280,7 @@ export async function createThreadForBinding(params: {
         ...(assertCreateAllowed ? { assertCreateAllowed } : {}),
       },
     );
-    const createdId = normalizeOptionalString(created?.id) ?? "";
-    return createdId || null;
+    return normalizeOptionalString(created?.id) ?? null;
   } catch (err) {
     logVerbose(
       `discord thread binding auto-thread create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,

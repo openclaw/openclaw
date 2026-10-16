@@ -11,7 +11,7 @@ Docker is **optional**. Use it for an isolated, throwaway Gateway environment or
 
 The default Docker sandbox backend uses only the `docker` CLI. Set the backend to `"podman"` to select native Podman directly. Sandboxing is off by default and does not require the Gateway itself to run in a container. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
-Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+Hosting mutually untrusted users? Run a separate Gateway for each trust boundary, ideally under separate OS users or hosts. See [Security trust model](/gateway/security/trust-model).
 
 ## Prerequisites
 
@@ -233,6 +233,15 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
+Activation retains a full pre-repair copy of local state under
+`<state-dir>.update-captures/` the first time Doctor captures in a container.
+Later starts of the same container (`docker stop`/`docker start`, restart
+policies, host reboots) still run the Doctor repair pass but skip that repeated
+full copy, keep it, and still retire other Doctor copies older than 30 days;
+repair-specific backups still apply. If a capture fails, the next
+start tries again. A new image, a recreated container, or a container whose
+`/tmp` does not persist across restarts captures again.
+
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.
 Current images use the guarded filesystem fallback; keep native filesystem
@@ -251,7 +260,11 @@ Gateway; a custom entrypoint bypasses this activation step.
 This includes agent database schema upgrades, shared-state audit migrations, and
 legacy workspace setup imports. Before advancing database schemas, Doctor saves
 verified SQLite copies beside the originals as
-`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+`<database>.pre-startup-migration-<id>.bak`. Fully declared table migrations may
+instead use `.scoped.bak` archives; restore those with
+`openclaw database restore-migration-backup`, never by replacing the database file.
+See [declared migration scopes](/reference/database-schemas/versioning#declared-migration-backup-scopes).
+The shared database and affected agent
 databases use the same backup ID. Config backups and retired workspace-file
 archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
@@ -272,17 +285,21 @@ confirmation. Older unrecorded `.bak` files are listed as protected. Keep these
 files with your pre-upgrade backups while you still need the matching rollback.
 
 On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
-does not require an operator step. The migration owner publishes a complete,
-exclusive hardlink, syncs it before removing the old name, and can recover an
-interrupted source/claim pair without replacing another file. This preserves the
-source inode and exact bytes. The filesystem must support same-directory hardlinks
-and directory synchronization when native no-replace rename is unavailable.
+does not require an operator step in native `auto` mode when same-directory
+hardlinks are supported. fs-safe preserves the source inode and bytes through
+exclusive hardlink publication and unlink. Native `require` mode still refuses
+the unsupported primitive. Doctor recovers interrupted source/claim pairs without
+replacing another file. Its separate missing-addon/native-off compatibility path
+syncs the source and directory before removing the old name; native moves do not
+promise per-move crash durability. Archive hardening and durable recovery
+checkpoints remain owned by Doctor.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
 
 Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
 agent remains isolated while healthy agents can serve requests.
 
-Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
 database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,
@@ -339,6 +356,12 @@ runtime. Ordinary source builds generate its runtime through the separate
 external-plugin build path; root npm artifacts continue to exclude it. Selected
 plugins must compile successfully; unselected external plugin source and
 runtime output are pruned.
+
+The install layer stages every workspace's `package.json` so frozen-lockfile
+validation can check the complete workspace. The build stage installs workspace
+dependencies needed to compile plugin assets; the production stage installs only
+core, shared packages, and required or selected plugins. Staging a plugin manifest
+does not select that plugin for the runtime image.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo Gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
@@ -415,7 +438,7 @@ The route is protected by Gateway authentication; don't expose a separate public
 
 ### Health checks
 
-Container probe endpoints (no auth required):
+Container check endpoints (no auth required):
 
 ```bash
 curl -fsS http://127.0.0.1:18789/healthz   # liveness
@@ -424,7 +447,7 @@ curl -fsS http://127.0.0.1:18789/readyz    # deep, channel-aware readiness
 ```
 
 The image's built-in `HEALTHCHECK` pings `/healthz`; repeated failures mark the container `unhealthy` so orchestrators can restart or replace it.
-Use `/startupz` for an orchestrator startup or readiness probe so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
+Use `/startupz` for an orchestrator startup or readiness check so a failed channel account does not remove the otherwise healthy Gateway and Control UI from service. Use `/readyz` for monitoring that intentionally treats hard channel failures as not ready. See [Health checks](/gateway/health#http-probes) for response details.
 
 Authenticated deep health snapshot:
 

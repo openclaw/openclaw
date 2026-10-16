@@ -14,6 +14,7 @@ function createRootAdmissionObservation() {
       "runWithGatewayDetachedWorkAdmission",
       "runWithGatewayIndependentRootWorkAdmission",
       "runWithGatewayIndependentRootWorkContinuation",
+      "runWithGatewayDetachedWorkContinuation",
     ] as const
   ).map((name) => {
     const original: typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission =

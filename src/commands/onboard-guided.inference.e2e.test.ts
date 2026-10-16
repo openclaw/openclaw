@@ -155,10 +155,8 @@ describe("guided onboarding inference composition", () => {
                 platform: "linux",
                 deps: {
                   probeLocalCommand,
-                  detectClaudeLoginState: async () => ({ credentials: false }),
-                  readCodexCliCredentials: () => null,
+                  hasCodexCliAuthFile: () => false,
                   readGeminiCliCredentials: () => null,
-                  randomInt: () => 0,
                 },
               }),
             resolveManifestProviderAuthChoices: () => [],

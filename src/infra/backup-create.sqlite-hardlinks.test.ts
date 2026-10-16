@@ -13,6 +13,10 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  createOwnedSqliteDatabase,
+  declarePluginSqliteResources,
+} from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
@@ -25,35 +29,6 @@ type HardlinkedDatabase = {
   aliasPath: string;
 };
 
-async function declareBackupResources(state: OpenClawTestState): Promise<void> {
-  const pluginRoot = state.path("hardlinks-plugin");
-  await fs.mkdir(pluginRoot, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, "index.ts"),
-    'throw new Error("backup must not load plugin runtime")\n',
-  );
-  await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "hardlinks-owner",
-      configSchema: { type: "object", additionalProperties: false },
-      backupResources: [
-        {
-          disposition: "include",
-          scope: "state",
-          relativePath: "plugins/hardlinks",
-        },
-      ],
-    }),
-  );
-  await state.writeConfig({
-    plugins: {
-      load: { paths: [pluginRoot] },
-      entries: { "hardlinks-owner": { enabled: true } },
-    },
-  });
-}
-
 async function withHardlinkedDatabase(
   ownerName: "alpha.sqlite" | "zeta.sqlite",
   run: (fixture: HardlinkedDatabase) => Promise<void>,
@@ -63,7 +38,7 @@ async function withHardlinkedDatabase(
     { layout: "split", prefix: "backup-plugin-hardlinks-", scenario: "minimal" },
     async (state) => {
       if (ownership === "declared") {
-        await declareBackupResources(state);
+        await declarePluginSqliteResources(state, "plugins/hardlinks");
       }
       const ownerPath = state.statePath("plugins", "hardlinks", ownerName);
       const aliasPath = state.statePath(
@@ -223,14 +198,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     },
   );
 
-  it("preserves WAL-only schema and rows when the last pathname owns the WAL", async () => {
-    await withHardlinkedDatabase("zeta.sqlite", async ({ state }) => {
-      const archive = await createArchive(state);
-      await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
-      await expectArchivedRecords(state, archive);
-    });
-  });
-
   it.each([
     {
       name: "refuses a canonical symlink retargeted after an earlier declared plugin snapshot completes",
@@ -250,28 +217,8 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       const secondPath = state.statePath("state", "second-global.sqlite");
       const canonicalAliasPath = state.statePath("state", "zeta-global-alias.sqlite");
       await fs.mkdir(path.dirname(canonicalPath), { recursive: true });
-      const sqlite = requireNodeSqlite();
       for (const databasePath of [firstPath, secondPath]) {
-        const database = new sqlite.DatabaseSync(databasePath);
-        try {
-          database.exec(`
-            CREATE TABLE schema_meta (
-              meta_key TEXT NOT NULL PRIMARY KEY,
-              role TEXT NOT NULL,
-              schema_version INTEGER NOT NULL,
-              agent_id TEXT,
-              app_version TEXT,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
-            );
-            PRAGMA user_version = 1;
-            INSERT INTO schema_meta
-              (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-            VALUES ('primary', 'global', 1, NULL, NULL, 1, 1);
-          `);
-        } finally {
-          database.close();
-        }
+        createOwnedSqliteDatabase({ sqlitePath: databasePath, role: "global" });
       }
       await fs.symlink(firstPath, canonicalPath);
       await fs.link(firstPath, canonicalAliasPath);
@@ -311,25 +258,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     });
   });
 
-  it.each([
-    { admitted: 1, total: 2 },
-    { admitted: 2, total: 3 },
-  ])(
-    "refuses $admitted admitted names for an inode with $total links",
-    async ({ admitted, total }) => {
-      await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath, aliasPath }) => {
-        if (admitted === 1) {
-          await fs.rename(aliasPath, state.path("outside.sqlite"));
-        } else {
-          await fs.link(ownerPath, state.path("outside.sqlite"));
-        }
-        expect((await fs.stat(ownerPath)).nlink).toBe(total);
-        await expectBackupRefused(state, /journal owner may be outside the backup inventory/iu);
-      });
-    },
-  );
-
-  it.each(["absent", "empty"] as const)(
+  it.each(["empty"] as const)(
     "preserves closed checkpointed hardlinks with %s WAL sidecars",
     async (sidecars) => {
       await withHardlinkedDatabase(

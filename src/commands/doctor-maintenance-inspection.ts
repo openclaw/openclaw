@@ -17,13 +17,62 @@ import {
   type DoctorMaintenanceRefusal,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
+
+/** An app's package-update authority does not own repair of its already offline state. */
+export async function readOfflineAppOwnedDoctorInspection(
+  error: unknown,
+  env: NodeJS.ProcessEnv,
+): Promise<(PreManagedServiceStop & { serviceMutationSkipMessage: string }) | undefined> {
+  const { GatewayServiceUpdateOwnershipError } =
+    await import("../cli/update-cli/update-command-service-plan.js");
+  if (
+    hasCommandProcessCleanupError(error) ||
+    !(error instanceof GatewayServiceUpdateOwnershipError) ||
+    !error.failureFacts.some(
+      (fact) => fact.check === "managed-service" && fact.code === "service-mutation-refused",
+    )
+  ) {
+    return undefined;
+  }
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
+  const { assertDoctorServiceSelection } = await import("./doctor-service-repair-policy.js");
+  const state = await readGatewayServiceState(resolveGatewayService(), {
+    env,
+    requireEffective: true,
+    validateEnvBeforeStatusRead: (serviceEnv) => assertDoctorServiceSelection(env, serviceEnv),
+  });
+  if (!state.command) {
+    return undefined;
+  }
+  const { summarizeGatewayServiceLayout } = await import("../daemon/service-layout.js");
+  const { readInstallOwner, formatInstallOwnerMessage } = await import("../infra/install-owner.js");
+  const owner = await readInstallOwner(
+    (await summarizeGatewayServiceLayout(state.command))?.packageRootReal ?? null,
+  );
+  const { isManagedGatewayServiceOffline } =
+    await import("../cli/update-cli/update-command-service-publication.js");
+  if (!owner || !(await isManagedGatewayServiceOffline(state))) {
+    return undefined;
+  }
+  const message = `${formatInstallOwnerMessage(owner)} Doctor can repair offline state; Gateway service installation and activation remain with the app.`;
+  return {
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: false,
+    offline: true,
+    serviceEnv: state.env,
+    serviceMutationAllowed: false,
+    serviceUpdateVerdict: { kind: "unavailable", message },
+    serviceMutationSkipMessage: message,
+  };
+}
 
 /** Observe the selected installation without bootstrapping it or inheriting a discovery view. */
 export async function readDoctorGatewayOwnerLease(
@@ -34,7 +83,7 @@ export async function readDoctorGatewayOwnerLease(
   const reply = await withArtifactPreservingStateReads(() =>
     executeExistingOpenClawStateRead(
       options,
-      { type: "doctor.gatewayOwnerLease.read" },
+      { type: "gatewayOwnerLease.read", schemaMaintenance: true },
       { current: true, signal },
     ),
   );
@@ -42,12 +91,15 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "doctor.gatewayOwnerLease.read") {
+  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
     throw new Error("Unexpected Doctor Gateway owner lease read result");
   }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
-    ? { ...reply.lease, state: readStateLeaseProcessOwnerStatus(reply.lease) }
+    ? {
+        ...reply.lease,
+        state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+      }
     : undefined;
 }
 
@@ -147,23 +199,6 @@ export async function assertDoctorMaintenanceReady(
     }
   }
   return { schemaPublicationDeferred };
-}
-
-/** Repair may have committed config before a later diagnostic failed. */
-export async function readDoctorMaintenanceRecoveryConfig(
-  resources: Pick<OpenClawDatabaseMaintenanceScope, "run">,
-  env: NodeJS.ProcessEnv,
-  log: (message: string) => void,
-): Promise<OpenClawConfig> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  return resources.run(async () => {
-    const { config } = await readConfigFileSnapshot({
-      skipPluginValidation: true,
-      observe: false,
-    });
-    await assertDoctorMaintenanceReady(config, env, log);
-    return config;
-  });
 }
 
 export function assertDoctorMaintenanceInspection(

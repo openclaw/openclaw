@@ -45,6 +45,7 @@ export function createRequesterWakeContextFixture(
     },
     pendingRequesterSettleWakeCommits: new Map(),
     pendingRequesterSettleWakeRearms: new Set(),
+    waitingRequesterSettleWakeRuns: new WeakMap(),
     cancelledRequesterSettleWakeRuns: new Set(),
     scheduledRequesterSettleWakeRuns: new Set(),
     scheduledRequesterSettleWakeTimers: new Map(),
@@ -80,7 +81,6 @@ export function createRequesterInitialTransferFixture(
       ...(params.release ? { release: wrap(params.release) } : {}),
       stateContext: captureOpenClawStateWorkerContext(),
       assertCurrent: options.assertCurrent ?? (() => {}),
-      scheduleRetry: () => {},
     });
   };
 }

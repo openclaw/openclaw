@@ -1,6 +1,5 @@
 /** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
@@ -25,7 +24,6 @@ type DiscoverModelsOptions = {
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
-  providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
@@ -39,12 +37,7 @@ type DiscoverCapturedModelsOptions = Omit<
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
 
-function createOpenClawModelRegistry(
-  authStorage: AuthStorage,
-  modelsJsonPath: string,
-  agentDir: string | undefined,
-  options?: DiscoverModelsOptions,
-): ModelRegistry {
+function prepareModelRegistryOptions(options?: DiscoverModelsOptions) {
   const pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
     ...(options?.config ? { config: options.config } : {}),
     ...(options?.pluginMetadataSnapshot
@@ -52,9 +45,8 @@ function createOpenClawModelRegistry(
       : {}),
     ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
     allowWorkspaceScopedCurrent: options?.workspaceDir === undefined,
-    useRuntimeConfig: options?.config === undefined,
   });
-  const registryOptions = {
+  return {
     config: options?.config,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(options?.includePluginCatalogs !== undefined
@@ -66,14 +58,19 @@ function createOpenClawModelRegistry(
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
     staticProviderConfigs: options?.staticProviderConfigs,
   };
-  const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
+}
+
+function normalizeOpenClawModelRegistry(
+  registry: ModelRegistry,
+  agentDir: string | undefined,
+  options?: DiscoverModelsOptions,
+): ModelRegistry {
+  const providerMetadataOwners = registry.getProviderMetadataOwners();
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
   const refresh = registry.refresh.bind(registry);
-  const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
-  const matchesProviderFilter = (entry: Model) =>
-    !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
+  const refreshAsync = registry.refreshAsync.bind(registry);
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
   const normalizeEntry = (entry: Model) => {
@@ -85,23 +82,14 @@ function createOpenClawModelRegistry(
     }
     return normalizeDiscoveredAgentModel(entry, agentDir, {
       ...options,
-      ...(pluginMetadataSnapshot?.owners
-        ? { providerMetadataOwners: pluginMetadataSnapshot.owners }
-        : {}),
+      ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
     });
   };
 
-  registry.getAll = () => {
-    const entries = getAll().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
-  registry.getAvailable = () => {
-    const entries = getAvailable().filter(matchesProviderFilter);
-    return shouldNormalize ? entries.map(normalizeEntry) : entries;
-  };
+  registry.getAll = () => getAll().map(normalizeEntry);
+  registry.getAvailable = () => getAvailable().map(normalizeEntry);
   registry.find = (provider: string, modelId: string) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    const key = `${normalizedProvider}\0${modelId}`;
+    const key = `${provider}\0${modelId}`;
     if (findCache.has(key)) {
       return findCache.get(key);
     }
@@ -114,46 +102,42 @@ function createOpenClawModelRegistry(
     findCache.clear();
     return refresh();
   };
+  registry.refreshAsync = async () => {
+    await refreshAsync();
+    findCache.clear();
+  };
 
   return registry;
 }
 
-/** Builds auth storage for model discovery without prompting for secrets. */
-export function discoverAuthStorage(
-  agentDir: string,
-  options?: DiscoverAuthStorageOptions,
-): AuthStorage {
-  return discoverAuthStorageFacts(agentDir, options).authStorage;
-}
-
 /** Captures the effective profile store and its AuthStorage projection as one generation. */
-export function discoverAuthStorageFacts(
+export async function discoverAuthStorageFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): {
+): Promise<{
   authStorage: AuthStorage;
   store: import("./auth-profiles/types.js").AuthProfileStore;
   credentials: import("./agent-auth-credentials.js").AgentCredentialMap;
-} {
+}> {
   const facts =
     options?.skipCredentials === true
       ? { store: { version: 1, profiles: {} }, credentials: {} }
-      : resolveAgentDiscoveryAuthFacts(agentDir, options);
+      : await resolveAgentDiscoveryAuthFacts(agentDir, options);
   return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
 }
 
-/** Creates a model registry for one agent directory, optionally filtered and plugin-normalized. */
-export function discoverModels(
+/** Discover persisted catalogs off the Gateway thread before publishing normalized models. */
+export async function discoverModelsAsync(
   authStorage: AuthStorage,
   agentDir: string,
   options?: DiscoverModelsOptions,
-): ModelRegistry {
-  return createOpenClawModelRegistry(
+): Promise<ModelRegistry> {
+  const registry = await ModelRegistry.createAsync(
     authStorage,
     path.join(agentDir, "models.json"),
-    agentDir,
-    options,
+    prepareModelRegistryOptions(options),
   );
+  return normalizeOpenClawModelRegistry(registry, agentDir, options);
 }
 
 /**
@@ -164,7 +148,12 @@ export function discoverModelsFromCapturedSources(
   authStorage: AuthStorage,
   options: DiscoverCapturedModelsOptions,
 ): ModelRegistry {
-  return createOpenClawModelRegistry(authStorage, CAPTURED_MODELS_JSON_SOURCE_PATH, undefined, {
+  const registry = ModelRegistry.fromCapturedSources(
+    authStorage,
+    CAPTURED_MODELS_JSON_SOURCE_PATH,
+    { ...prepareModelRegistryOptions(options), pluginCatalogs: options.pluginCatalogs },
+  );
+  return normalizeOpenClawModelRegistry(registry, undefined, {
     ...options,
     normalizeModels: false,
   });

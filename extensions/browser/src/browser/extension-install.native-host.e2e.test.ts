@@ -4,8 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
-import { chromeProductRoots, installStableChromeExtension } from "./extension-install-layout.js";
-import { installChromeExtensionBootstrap } from "./extension-install.js";
+import {
+  chromeProductRoots,
+  installStableChromeExtension,
+  installChromeExtensionBootstrap,
+} from "./extension-install-fixture.test-support.js";
 import {
   predictedId,
   useExtensionInstallFixture,

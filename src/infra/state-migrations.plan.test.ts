@@ -4,8 +4,6 @@ import { endianness } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAppliedLegacyProposal } from "../commands/doctor-skill-workshop-sqlite.test-support.js";
-import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -77,22 +75,17 @@ afterEach(async () => {
 });
 
 describe("legacy state migration plan identity", () => {
-  it("defers the Workshop owner without adopting its external recorded targets", async () => {
+  it("defers the Workshop proposal export without touching copied proposal files", async () => {
     const fixture = await makeFixture();
-    const skillDir = path.join(fixture.root, "external-workspace", "skills", "retained");
-    const content = "---\nname: retained\ndescription: Retained skill\n---\n\n# Retained\n";
-    const record = createAppliedLegacyProposal({
-      id: "retained-workshop-20260905-1234567890",
-      title: "Retained skill",
-      description: "Retained skill",
-      content,
-      target: { skillKey: "retained", skillDir },
-    });
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(record.target.skillFile, content);
-    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: fixture.env } });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    const draft = path.join(
+      fixture.stateDir,
+      "skill-workshop",
+      "proposals",
+      "retained-workshop-20260905-1234567890",
+      "PROPOSAL.md",
+    );
+    fs.mkdirSync(path.dirname(draft), { recursive: true });
+    fs.writeFileSync(draft, "---\nname: retained\ndescription: Retained skill\n---\n");
     const before = await captureLegacyStateSnapshotIdentity(fixture);
 
     const plan = await planFixture(fixture);
@@ -113,7 +106,7 @@ describe("legacy state migration plan identity", () => {
       refusal: { code: "skill-workshop-planning-deferred" },
     });
     expect(await captureLegacyStateSnapshotIdentity(fixture)).toEqual(before);
-    expect(fs.readFileSync(record.target.skillFile, "utf8")).toBe(content);
+    expect(fs.readFileSync(draft, "utf8")).toContain("name: retained");
   });
 
   it("does not treat SQLite shared-memory coordination as a copied-state mutation", async () => {

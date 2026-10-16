@@ -1,6 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export const SESSION_PROGRESS_CARDS_TABLE = "session_progress_cards";
 export const AGENT_PROGRESS_CARD_SCHEMA_SQL = extractSqliteTableSchema(
@@ -16,9 +17,12 @@ export const AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL =
   OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL.replace(AGENT_PROGRESS_CARD_SCHEMA_SQL, "");
 
 /** Ensure the additive progress-card table inside the caller's write transaction. */
-export function ensureOpenClawAgentProgressCardSchemaInTransaction(db: DatabaseSync): void {
+export function ensureOpenClawAgentProgressCardSchemaInTransaction(db: EngineConnection): void {
   if (!db.isTransaction) {
     throw new Error("progress-card schema ensure requires an active transaction");
+  }
+  if (isPostgresSqlConnection(db) || tableExists(db, SESSION_PROGRESS_CARDS_TABLE)) {
+    return;
   }
   db.exec(AGENT_PROGRESS_CARD_SCHEMA_SQL); // sqlite-allow-raw -- Canonical DDL bootstrap for the lazy progress-card schema.
 }

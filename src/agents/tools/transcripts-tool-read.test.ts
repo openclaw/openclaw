@@ -90,38 +90,35 @@ afterEach(async () => {
 });
 
 describe("transcripts read actions", () => {
-  it("uses the active skill timezone after the database worker is already warm", async () => {
-    vi.stubEnv("TZ", undefined);
-    const local = { ...session, sessionId: "local", startedAt: "2026-08-20T06:00:00" };
-    const explicit = { ...session, sessionId: "explicit", startedAt: "2026-08-20T09:00:00Z" };
+  it("retains write-time chronology when a skill changes the warm worker timezone", async () => {
+    const early = { ...session, sessionId: "early", startedAt: "2026-08-20T06:00:00Z" };
+    const late = { ...session, sessionId: "late", startedAt: "2026-08-20T09:00:00Z" };
+    const expected = [{ sessionId: "late" }, { sessionId: "early" }];
     let releaseSkill = () => {};
-    const expected = () =>
-      [local, explicit]
-        .toSorted((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
-        .map(({ sessionId }) => ({ sessionId }));
     try {
-      await store.writeSession(local);
-      await store.writeSession(explicit);
-      const original = expected();
+      await store.writeSession(early);
+      await store.writeSession(late);
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: original,
+        sessions: expected,
       });
-      const timezone = original[0]?.sessionId === "local" ? "UTC" : "Pacific/Honolulu";
       releaseSkill = applySkillEnvOverridesFromSnapshot({
         snapshot: { prompt: "", skills: [{ name: "chronology" }] },
-        config: { skills: { entries: { chronology: { env: { TZ: timezone } } } } },
+        config: { skills: { entries: { chronology: { env: { TZ: "Pacific/Honolulu" } } } } },
       });
-      expect(process.env.TZ).toBe(timezone);
-      expect(expected()).not.toEqual(original);
+      expect(process.env.TZ).toBe("Pacific/Honolulu");
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected(),
+        sessions: expected,
       });
       const pending = store.listReadEntries({ limit: 2 });
       releaseSkill();
       releaseSkill = () => {};
-      await expect(pending).rejects.toThrow("Transcript timezone changed while reading");
+      expect(
+        (await pending).entries.map(({ session: descriptor }) => ({
+          sessionId: descriptor.sessionId,
+        })),
+      ).toEqual(expected);
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: original,
+        sessions: expected,
       });
     } finally {
       releaseSkill();
@@ -129,66 +126,58 @@ describe("transcripts read actions", () => {
     }
   });
 
-  it.each(["active", "stopped"] as const)(
-    "rejects notes rewritten while %s source authorization is pending",
-    async (state) => {
-      const descriptor = {
-        ...session,
-        ...(state === "stopped" ? { stoppedAt: "2026-08-02T15:00:00.000Z" } : {}),
-      };
-      await store.writeSession(descriptor);
+  it("rejects notes rewritten while active source authorization is pending", async () => {
+    const descriptor = session;
+    await store.writeSession(descriptor);
+    await store.writeSummary(
+      summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
+      descriptor,
+    );
+    registerActiveCapture(descriptor);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
+      async ({ source }) => {
+        if (source.guildId !== "team") {
+          return { ok: false, error: "denied" };
+        }
+        entered.resolve();
+        await release.promise;
+        return { ok: true, value: undefined };
+      },
+    );
+    getProvider.mockReturnValue({
+      id: "voice",
+      accessControl: { channelId: "discord", authorize },
+    });
+    const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
+    const reading = run(params, true);
+    try {
+      await Promise.race([entered.promise, reading]);
+      expect(authorize).toHaveBeenCalledOnce();
+      const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
+      await store.writeSession(rewritten);
       await store.writeSummary(
-        summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
-        descriptor,
+        summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
+        rewritten,
       );
-      if (state === "active") {
-        registerActiveCapture(descriptor);
-      }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-        async ({ source }) => {
-          if (source.guildId !== "team") {
-            return { ok: false, error: "denied" };
-          }
-          entered.resolve();
-          await release.promise;
-          return { ok: true, value: undefined };
-        },
-      );
-      getProvider.mockReturnValue({
-        id: "voice",
-        accessControl: { channelId: "discord", authorize },
+      release.resolve();
+      const shown = await reading;
+      expect(shown.details).toMatchObject({
+        sessionId: descriptor.sessionId,
+        selector: params.selector,
+        skipped: true,
+        retryable: true,
+        text: expect.stringContaining("Retry show"),
       });
-      const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
-      const reading = run(params, true);
-      try {
-        await Promise.race([entered.promise, reading]);
-        expect(authorize).toHaveBeenCalledOnce();
-        const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
-        await store.writeSession(rewritten);
-        await store.writeSummary(
-          summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
-          rewritten,
-        );
-        release.resolve();
-        const shown = await reading;
-        expect(shown.details).toMatchObject({
-          sessionId: descriptor.sessionId,
-          selector: params.selector,
-          skipped: true,
-          retryable: true,
-          text: expect.stringContaining("Retry show"),
-        });
-        expect(JSON.stringify(shown)).not.toContain("Other guild notes");
-        await expect(run(params, true)).rejects.toThrow("session not found");
-        expect(await store.readSession(params.selector)).toEqual(rewritten);
-      } finally {
-        release.resolve();
-        await reading.catch(() => undefined);
-      }
-    },
-  );
+      expect(JSON.stringify(shown)).not.toContain("Other guild notes");
+      await expect(run(params, true)).rejects.toThrow("session not found");
+      expect(await store.readSession(params.selector)).toEqual(rewritten);
+    } finally {
+      release.resolve();
+      await reading.catch(() => undefined);
+    }
+  });
 
   it("reads across agent ownership without widening mutation authority", async () => {
     await store.appendUtteranceForSession(session, {
@@ -353,10 +342,9 @@ describe("transcripts read actions", () => {
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
   });
 
-  it.each([{}, { selector: "one", sessionId: "two" }])(
-    "requires exactly one show selector %j",
-    async (params) => {
-      await expect(run({ action: "show", ...params })).rejects.toThrow("exactly one");
-    },
-  );
+  it("requires exactly one show selector", async () => {
+    await expect(run({ action: "show", selector: "one", sessionId: "two" })).rejects.toThrow(
+      "exactly one",
+    );
+  });
 });

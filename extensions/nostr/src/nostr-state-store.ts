@@ -19,7 +19,6 @@ type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
-  /** Event ID of the last published profile */
   lastPublishedEventId: string | null;
   /** Per-relay publish results from last attempt */
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;

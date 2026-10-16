@@ -27,25 +27,18 @@ export class NodeWorkerTransferHttpError extends Error {
 const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
 
 function transferUrl(gatewayUrl: string, routePath: string): URL {
-  const gateway = new URL(gatewayUrl);
-  if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
+  const url = new URL(gatewayUrl);
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new NodeWorkerTransferHttpError(
       "invalid-gateway-transport",
       "worker transfer gateway must use WebSocket transport",
     );
   }
-  const url = new URL(gateway.toString());
-  url.protocol = gateway.protocol === "wss:" ? "https:" : "http:";
-  const basePath = gateway.pathname.replace(/\/$/u, "");
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  const basePath = url.pathname.replace(/\/$/u, "");
   url.pathname = `${basePath}${routePath}`;
   url.search = "";
   url.hash = "";
-  if (url.host !== gateway.host) {
-    throw new NodeWorkerTransferHttpError(
-      "invalid-gateway-transport",
-      "worker transfer endpoint must stay on the connected gateway host",
-    );
-  }
   return url;
 }
 
@@ -87,21 +80,10 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
     bindSocket = (socket) => {
       tlsSocket = socket as TLSSocket;
       const validated = validatedTlsSocketPins.get(tlsSocket);
-      if (validated) {
-        finish(
-          validated === expected
-            ? undefined
-            : new NodeWorkerTransferHttpError(
-                "tls-fingerprint-mismatch",
-                "worker transfer gateway TLS fingerprint mismatch",
-              ),
-        );
-        return;
-      }
       verify = () => {
-        const actual = normalizeTlsFingerprint(
-          tlsSocket!.getPeerCertificate().fingerprint256 ?? "",
-        );
+        const actual =
+          validated ??
+          normalizeTlsFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
         if (!actual || expected !== actual) {
           finish(
             new NodeWorkerTransferHttpError(
@@ -114,7 +96,7 @@ function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<vo
         validatedTlsSocketPins.set(tlsSocket!, actual);
         finish();
       };
-      const peerFingerprint = tlsSocket.getPeerCertificate().fingerprint256;
+      const peerFingerprint = validated || tlsSocket.getPeerCertificate().fingerprint256;
       if (request.reusedSocket || peerFingerprint) {
         verify();
       } else {

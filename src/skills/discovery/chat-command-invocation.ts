@@ -67,23 +67,19 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
 
 // Skill commands allow spaces/underscores in names but compare through dash-normalized lookup.
 function normalizeSkillCommandLookup(value: string): string {
-  return (normalizeOptionalLowercaseString(value) ?? "").replace(/[\s_]+/g, "-");
+  return normalizeLowercaseStringOrEmpty(value).replace(/[\s_]+/g, "-");
 }
 
 function findSkillCommand(
   skillCommands: SkillCommandSpec[],
   rawName: string,
 ): SkillCommandSpec | undefined {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
+  const normalized = normalizeSkillCommandLookup(rawName);
+  if (!normalized) {
     return undefined;
   }
-  const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
-  const normalized = normalizeSkillCommandLookup(trimmed);
   return skillCommands.find(
     (entry) =>
-      normalizeOptionalLowercaseString(entry.name) === lowered ||
-      normalizeOptionalLowercaseString(entry.skillName) === lowered ||
       normalizeSkillCommandLookup(entry.name) === normalized ||
       normalizeSkillCommandLookup(entry.skillName) === normalized,
   );
@@ -115,7 +111,7 @@ export function hasSkillReferenceCandidate(text: string): boolean {
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
-}): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
+}): { command: SkillCommandSpec; args?: string } | null {
   const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!match) {
     return null;

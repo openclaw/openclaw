@@ -20,7 +20,8 @@ Read only the references needed for the selected phase:
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
-- Stable postpublish synchronization: [main closeout](references/stable-main-closeout.md).
+- Stable postpublish synchronization and the exact-SHA deployment handoff:
+  [main closeout](references/stable-main-closeout.md).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
@@ -73,7 +74,8 @@ publication within an hour, not measured guarantees. Source-only children start
 alongside artifact producers; candidate consumers start as soon as the candidate
 is ready. Independently sealed green children can be reused for the same exact
 target and inputs even when their parent failed, was cancelled, or remains active;
-verify their original trusted-main workflow SHA and current attempt. The sealed
+verify their original admitted qualification identity (or historical trusted-main
+workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
 `plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
@@ -101,7 +103,7 @@ publication instruction before releasing artifacts or a bridge version.
 
 Keep one compact state record using
 [the handoff template](references/release-handoff-template.md): effective goal,
-version/tag/branch, cut/Code/Tooling/Release SHAs, active parent run and attempt,
+version/tag/branch, cut/Code/Release SHAs, C/Q/P identities, active parent run and attempt,
 successful child artifacts, approved changes, phase and next action. Latest
 operator steering replaces superseded scope. Completed evidence stays complete
 until a named change invalidates it.
@@ -111,13 +113,17 @@ possible. If those notes are final, **Code SHA and Release SHA are the same
 commit**: one successful fresh full qualification can supply both roles and
 their exact publication bytes. Do not create another commit or run solely to
 separate the labels. If notes change after qualification, a descendant whose
-complete delta includes `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its
+complete delta includes `CHANGELOG/<version>.md` (exact beta version or stable
+base) and only that entry, its
 matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
-Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
-not justify changing the candidate.
+New qualification freezes **Q=C**: the entire qualification workflow closure
+belongs to the candidate. Keep independently trusted **P** (admission, verifier,
+and publisher) separate. A Q harness repair requires a new C/Q and newly bound
+evidence; P-only or infrastructure repairs can preserve the candidate. Missing
+qualification contracts need a deliberate backport, never future-main fallback.
 
 Once a candidate is cut, its base is the operator's decision. Never re-cut
 (re-base the candidate on newer `main`) unless Peter explicitly asks for it in
@@ -131,8 +137,9 @@ fix that cherry-picks cleanly enough with a small conflict resolution.
 Release process improvements made during a release land on both branches.
 Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
 merge to `main` first, then get cherry-picked (`-x`) onto `release/YYYY.M.PATCH`
-after the tag without moving the Code SHA, so recovery and the next patch run
-the same tooling. Where `main`-only CI infrastructure is missing on the branch,
+for the next candidate or patch. A qualification repair needed for this release
+must land before freezing a new C/Q; never silently swap the harness for an
+already qualified candidate. Where `main`-only CI infrastructure is missing on the branch,
 keep the branch's expression form and port only the logic. Product code on the
 release branch stays blocker-only per the rule above.
 

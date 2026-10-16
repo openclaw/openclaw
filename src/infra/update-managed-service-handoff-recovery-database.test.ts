@@ -85,21 +85,6 @@ function writeMetadata(withDatabase: ReturnType<typeof createManagedHandoffLease
 }
 
 describe("managed handoff database repair metadata compatibility", () => {
-  it("leaves legacy stores unchanged during ordinary read and write admission", () => {
-    createOldStore();
-    const before = fs.readFileSync(databasePath);
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    for (const write of [false, true]) {
-      withDatabase(write, (db) => {
-        expect(recoveryColumn(db)).toBeUndefined();
-        expect(
-          db.prepare("SELECT owner, payload_json, updated_at FROM managed_update_handoffs").get(),
-        ).toEqual({ owner: "owner", payload_json: oldPayload, updated_at: 123 });
-      });
-    }
-    expect(fs.readFileSync(databasePath)).toEqual(before);
-  });
-
   it.each(["existing", "new"] as const)(
     "preserves old-reader payload bytes and named-column writes on a %s store",
     (kind) => {
@@ -107,6 +92,20 @@ describe("managed handoff database repair metadata compatibility", () => {
         createOldStore();
       }
       const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
+      if (kind === "existing") {
+        const before = fs.readFileSync(databasePath);
+        for (const write of [false, true]) {
+          withDatabase(write, (db) => {
+            expect(recoveryColumn(db)).toBeUndefined();
+            expect(
+              db
+                .prepare("SELECT owner, payload_json, updated_at FROM managed_update_handoffs")
+                .get(),
+            ).toEqual({ owner: "owner", payload_json: oldPayload, updated_at: 123 });
+          });
+        }
+        expect(fs.readFileSync(databasePath)).toEqual(before);
+      }
       if (kind === "new") {
         withDatabase(true, (db) =>
           db

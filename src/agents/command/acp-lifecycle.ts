@@ -5,7 +5,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
-import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -15,16 +14,13 @@ import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 
 export function buildAcpResult(params: {
   payloadText: string;
-  terminalReply?: AgentRunTerminalReplySnapshot;
+  terminalReply: AgentRunTerminalReplySnapshot;
   startedAt: number;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
   abortSignal?: AbortSignal;
 }) {
-  const normalizedFinalPayload = normalizeReplyPayload({
-    text: params.payloadText,
-  });
-  const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
+  const payloads = params.payloadText ? [{ text: params.payloadText }] : [];
   const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
   const resultCancelled = params.resultStatus === "cancelled";
   return {
@@ -33,7 +29,8 @@ export function buildAcpResult(params: {
       durationMs: Date.now() - params.startedAt,
       aborted: abortFields.aborted ?? resultCancelled,
       stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
-      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
+      terminalReply: params.terminalReply,
+      finalAssistantVisibleText: params.payloadText,
     },
   };
 }
@@ -91,7 +88,6 @@ type ActiveAcpTool = AcpRunIdentity & {
 type AcpToolLifecycleTracker = {
   active: Map<string, ActiveAcpTool>;
   terminalToolCallIds: Set<string>;
-  saturated: boolean;
 };
 
 const MAX_TRACKED_ACP_TOOLS = 4_096;
@@ -100,7 +96,6 @@ export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
   return {
     active: new Map(),
     terminalToolCallIds: new Set(),
-    saturated: false,
   };
 }
 
@@ -203,8 +198,7 @@ function emitAcpToolExecutionEvent(
     // lifecycle cleanup releases the complete set. Other runs own independent trackers.
     const trackedIdentities =
       params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
-    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
-      params.toolTracker.saturated = true;
+    if (trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
       return;
     }
   }
@@ -286,7 +280,6 @@ function finalizeAcpToolsForRun(
   }
   toolTracker.active.clear();
   toolTracker.terminalToolCallIds.clear();
-  toolTracker.saturated = false;
 }
 
 function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -421,6 +414,7 @@ export function emitAcpLifecycleError(
     error: unknown;
     abortSignal?: AbortSignal;
     terminalOutcome?: "blocked";
+    terminalReply?: AgentRunTerminalReplySnapshot;
   },
 ) {
   const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
@@ -436,6 +430,7 @@ export function emitAcpLifecycleError(
     ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
     endedAt: Date.now(),
     ...lifecycleFields,
+    ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }
 
@@ -444,6 +439,7 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     runId: params.runId,
     stream: "assistant",
     data: {
+      itemId: params.runId,
       text: params.text,
       delta: params.delta,
     },

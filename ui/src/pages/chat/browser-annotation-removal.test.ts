@@ -1,7 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import type { ToastOptions } from "../../lib/toast.ts";
+import { showToast, type ToastOptions } from "../../lib/toast.ts";
+import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
 import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts";
+
+// mock-isolation: Observe Undo callbacks without registering a toast host in shared DOM state.
+vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
+// mock-isolation: Observe release without retaining shared attachment blobs and object URLs.
+vi.mock("./attachment-payload-store.ts", () => ({ releaseChatAttachmentPayload: vi.fn() }));
+
+const releasePayload = vi.mocked(releaseChatAttachmentPayload);
+const presentToast = vi.mocked(showToast);
+
+beforeEach(() => {
+  releasePayload.mockClear();
+  presentToast.mockReset();
+});
 
 const labels = {
   removed: "Removed",
@@ -56,17 +70,12 @@ describe("browser annotation removal", () => {
     const second = annotation("second");
     const state = createHost([ordinary, first, second]);
     let toast: ToastOptions | undefined;
-    const releasePayload = vi.fn();
+    presentToast.mockImplementation((options) => {
+      toast = options;
+      return true;
+    });
 
-    expect(
-      removeBrowserAnnotationWithUndo(state.host, first, labels, {
-        presentToast: (options) => {
-          toast = options;
-          return true;
-        },
-        releasePayload,
-      }),
-    ).toBe(true);
+    expect(removeBrowserAnnotationWithUndo(state.host, first, labels)).toBe(true);
     expect(state.attachments()).toEqual([ordinary, second]);
 
     toast?.onDismiss?.("action");
@@ -82,14 +91,11 @@ describe("browser annotation removal", () => {
     const target = annotation("target");
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
-    const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
-      presentToast: (options) => {
-        toast = options;
-        return true;
-      },
-      releasePayload,
+    presentToast.mockImplementation((options) => {
+      toast = options;
+      return true;
     });
+    removeBrowserAnnotationWithUndo(state.host, target, labels);
 
     toast?.onDismiss?.("timeout");
     toast?.onDismiss?.("timeout");
@@ -102,14 +108,11 @@ describe("browser annotation removal", () => {
     const target = annotation("target");
     const state = createHost([target]);
     let toast: ToastOptions | undefined;
-    const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
-      presentToast: (options) => {
-        toast = options;
-        return true;
-      },
-      releasePayload,
+    presentToast.mockImplementation((options) => {
+      toast = options;
+      return true;
     });
+    removeBrowserAnnotationWithUndo(state.host, target, labels);
     if (replacement === "session") {
       state.switchSession("agent:other");
     } else {
@@ -133,14 +136,11 @@ describe("browser annotation removal", () => {
       annotation("fourth"),
     ]);
     const toasts: ToastOptions[] = [];
-    const releasePayload = vi.fn();
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
-      presentToast: (options) => {
-        toasts.push(options);
-        return true;
-      },
-      releasePayload,
+    presentToast.mockImplementation((options) => {
+      toasts.push(options);
+      return true;
     });
+    removeBrowserAnnotationWithUndo(state.host, target, labels);
     state.host.setAttachments([...state.attachments(), annotation("replacement")]);
 
     toasts[0]?.onDismiss?.("action");
@@ -155,12 +155,9 @@ describe("browser annotation removal", () => {
   it("releases immediately when no toast host can present Undo", () => {
     const target = annotation("target");
     const state = createHost([target]);
-    const releasePayload = vi.fn();
+    presentToast.mockReturnValue(false);
 
-    removeBrowserAnnotationWithUndo(state.host, target, labels, {
-      presentToast: () => false,
-      releasePayload,
-    });
+    removeBrowserAnnotationWithUndo(state.host, target, labels);
 
     expect(releasePayload).toHaveBeenCalledOnce();
   });

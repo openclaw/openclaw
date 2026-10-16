@@ -1,7 +1,10 @@
 import { expect } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
 import type { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import type { SessionTranscriptVisitor } from "../session-transcript-read.types.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
@@ -33,9 +36,7 @@ export function artifactFixtureSessionFacts(
 
 export function withArtifactFixtureReader(
   actual: typeof import("../session-transcript-readers.js"),
-  visitSessionMessagesAsync: ReturnType<
-    typeof import("../session-transcript-read-kernel.js").createSessionTranscriptReader
-  >["visitSessionMessagesAsync"],
+  visitSessionMessagesAsync: SessionTranscriptVisitor["visitSessionMessagesAsync"],
 ) {
   return {
     ...actual,
@@ -50,7 +51,8 @@ export function withArtifactFixtureReader(
   };
 }
 
-export function runtimeContext(config: Record<string, unknown>) {
+export function runtimeContext(config: OpenClawConfig) {
+  setRuntimeConfigSnapshot(config);
   return { getRuntimeConfig: () => config };
 }
 

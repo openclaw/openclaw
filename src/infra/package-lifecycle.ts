@@ -8,6 +8,7 @@ import {
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
@@ -71,10 +72,6 @@ const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
     relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
   },
 ];
-function resolveLifecycleBudgetMs(scriptTimeoutMs: number): number {
-  return scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length;
-}
-
 function hasErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
@@ -163,7 +160,7 @@ async function acquireLifecycleLock(
 ) {
   // Preserve the shipped admission envelope without timing or expiring healthy script work.
   const waitBudgetMs =
-    resolveLifecycleBudgetMs(scriptTimeoutMs) + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
+    scriptTimeoutMs * PACKAGE_LIFECYCLE_SCRIPTS.length + PACKAGE_LIFECYCLE_LOCK_WAIT_GRACE_MS;
   if (!Number.isFinite(scriptTimeoutMs) || scriptTimeoutMs < 0 || !Number.isFinite(waitBudgetMs)) {
     throw new RangeError("Package lifecycle script timeout must be finite and non-negative");
   }
@@ -253,9 +250,7 @@ async function acquireLifecycleLock(
           error,
         );
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
-      });
+      await sleep(Math.min(PACKAGE_LIFECYCLE_LOCK_POLL_MS, remainingMs));
     }
   }
 }

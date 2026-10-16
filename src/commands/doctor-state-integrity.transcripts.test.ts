@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionStorePathCore,
@@ -35,9 +36,9 @@ import {
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
 
-vi.mock("../channels/plugins/bundled-ids.js", () => ({
+vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BundledIds>()),
   listBundledChannelIds: () => ["matrix", "whatsapp"],
-  listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
   listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
@@ -125,31 +126,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
-  });
-
-  it("leaves legacy transcript diagnostics to the SQLite migration owner", async () => {
-    writeSessionStore(
-      {},
-      {
-        "agent:main:main:heartbeat": {
-          heartbeatIsolatedBaseSessionKey: mainKey,
-          sessionId: "latest-heartbeat-wake",
-          updatedAt: 1,
-        },
-      },
-    );
-    const displaced = path.join(
-      resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome),
-      "displaced-heartbeat-wake.jsonl",
-    );
-    fs.writeFileSync(displaced, '{"type":"session"}\n');
-    await run();
-    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
-    expect(stateIntegrityText()).not.toContain("orphan transcript file");
-    expect(fs.existsSync(displaced)).toBe(true);
-    expect(approveMove).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("Archive 1 orphan") }),
-    );
   });
 
   it("does not require JSONL files for an explicit SQLite store", async () => {

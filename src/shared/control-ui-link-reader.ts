@@ -1,25 +1,14 @@
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { ControlUiLinkReaderDescriptorSchema } from "../../packages/gateway-protocol/src/schema/control-ui-link-reader.js";
+
 /** Passive link-reader models shared by plugins and the Control UI. */
-export type ControlUiLinkReaderMetadata = {
-  /** Exact lowercase DNS hostnames; no schemes, ports, or wildcards. */
-  hosts: string[];
-  /** Anchored pathname regular expression authored by the installed trusted plugin. */
-  pathPattern: string;
-  /** Same-plugin gateway method requiring operator.read. */
-  detailMethod: string;
-  previewMethod?: string;
-  /** Optional same-plugin read method resolving inline images without browser CORS. */
-  imageMethod?: string;
-};
+export type ControlUiLinkReaderMetadata = ControlUiLinkReaderDescriptor["linkReader"];
 
 /** Scope-filtered descriptor advertised in hello.controlUiLinkReaders. */
-export type ControlUiLinkReaderDescriptor = {
-  pluginId: string;
-  id: string;
-  label: string;
-  /** Existing Control UI icon name; unknown names use the generic link icon. */
-  icon?: string;
-  linkReader: ControlUiLinkReaderMetadata;
-};
+export type ControlUiLinkReaderDescriptor = SchemaContract<
+  Static<typeof ControlUiLinkReaderDescriptorSchema>
+>;
 
 export type ControlUiLinkReaderPreviewParams = {
   url: string;
@@ -37,6 +26,8 @@ export type ControlUiLinkReaderImage = {
 };
 
 export type ControlUiLinkReaderPreview = {
+  /** Last-known metadata while its bounded refresh is in progress. */
+  stale?: boolean;
   /** Echo the validated requested URL; query parameters remain part of the resource identity. */
   url: string;
   title: string;

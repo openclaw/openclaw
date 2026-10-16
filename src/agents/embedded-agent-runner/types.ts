@@ -19,7 +19,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
-import type { ReplyDeliveryState } from "../reply-completion.js";
+import type { ReplyDeliveryState, ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -47,7 +47,7 @@ export type EmbeddedAgentMeta = {
   provider: string;
   model: string;
   contextTokens?: number;
-  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
   agentHarnessId?: string;
   /** Sanitized provider-policy refusal attached to this physical attempt. */
   providerRefusal?: {
@@ -78,7 +78,7 @@ export type EmbeddedAgentMeta = {
    */
   promptTokens?: number;
   usage?: EmbeddedAgentUsage;
-  /** Terminal cumulative usage reserved for turn-level diagnostics. */
+  /** Terminal cumulative usage for turn-level diagnostics and persisted CLI transcript accounting. */
   diagnosticUsage?: EmbeddedAgentUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
@@ -132,34 +132,6 @@ export type TraceAttempt = {
   status?: number;
 };
 
-type ExecutionTrace = {
-  winnerProvider?: string;
-  winnerModel?: string;
-  attempts?: TraceAttempt[];
-  fallbackUsed?: boolean;
-  runner?: "embedded" | "cli";
-  providerPolicyRetry?: {
-    category: "cyber";
-    provider: string;
-    model: string;
-  };
-};
-
-type RequestShapingTrace = {
-  authMode?: string;
-  thinking?: string;
-  reasoning?: string;
-  verbose?: string;
-  trace?: string;
-  fallbackEligible?: boolean;
-  blockStreaming?: string;
-};
-
-type PromptSegmentTrace = {
-  key: string;
-  chars: number;
-};
-
 export type ToolSummaryTrace = {
   calls: number;
   tools: string[];
@@ -167,19 +139,6 @@ export type ToolSummaryTrace = {
   /** Latest tool failure not cleared by same-tool success, independent of reply presentation. */
   unresolvedError?: { toolName: string };
   totalToolTimeMs?: number;
-};
-
-type CompletionTrace = {
-  finishReason?: string;
-  stopReason?: string;
-  refusal?: boolean;
-};
-
-type ContextManagementTrace = {
-  sessionCompactions?: number;
-  lastTurnCompactions?: number;
-  preflightCompactionApplied?: boolean;
-  postCompactionContextInjected?: boolean;
 };
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
@@ -207,6 +166,13 @@ export type EmbeddedAgentRunMeta = {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  /**
+   * Raw text of only the model's own latest message; "" when that message had
+   * no final text (empty, or it ended in a tool call). finalAssistantRawText can
+   * be cumulative (CLI) or runner-substituted earlier text, so diagnostics prefer
+   * this field. Unset when the runtime exposes no message (assistantTexts only).
+   */
+  finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
@@ -217,10 +183,12 @@ export type EmbeddedAgentRunMeta = {
     | "idle_timeout_circuit_breaker"
     | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
-  terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
   intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
+  terminalReplyExpectation?: ReplyExpectation;
+  /** Retain a failed internal result without a user-facing retry notice. */
+  suppressErrorNotice?: boolean;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
@@ -256,12 +224,44 @@ export type EmbeddedAgentRunMeta = {
     name: string;
     arguments: string;
   }>;
-  executionTrace?: ExecutionTrace;
-  requestShaping?: RequestShapingTrace;
-  promptSegments?: PromptSegmentTrace[];
+  executionTrace?: {
+    winnerProvider?: string;
+    winnerModel?: string;
+    attempts?: TraceAttempt[];
+    fallbackUsed?: boolean;
+    runner?: "embedded" | "cli";
+    providerPolicyRetry?: {
+      category: "cyber";
+      provider: string;
+      model: string;
+    };
+  };
+  requestShaping?: {
+    authMode?: string;
+    thinking?: string;
+    thinkingClamp?: string;
+    reasoning?: string;
+    verbose?: string;
+    trace?: string;
+    fallbackEligible?: boolean;
+    blockStreaming?: string;
+  };
+  promptSegments?: {
+    key: string;
+    chars: number;
+  }[];
   toolSummary?: ToolSummaryTrace;
-  completion?: CompletionTrace;
-  contextManagement?: ContextManagementTrace;
+  completion?: {
+    finishReason?: string;
+    stopReason?: string;
+    refusal?: boolean;
+  };
+  contextManagement?: {
+    sessionCompactions?: number;
+    lastTurnCompactions?: number;
+    preflightCompactionApplied?: boolean;
+    postCompactionContextInjected?: boolean;
+  };
 };
 
 export type EmbeddedAgentRunResult = {
@@ -273,6 +273,7 @@ export type EmbeddedAgentRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    isStatusNotice?: boolean;
     isReasoning?: boolean;
     /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
     isCommentary?: boolean;

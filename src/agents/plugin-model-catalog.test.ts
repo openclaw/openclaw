@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fileLocks from "../infra/file-lock.js";
+import * as sqliteQueries from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -107,14 +108,58 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "legacy"), { recursive: true });
     writeFileSync(legacyPath, catalogContents("legacy"), "utf8");
 
-    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["zai"])).toEqual([
-      { pluginId: "zai", contents: zai },
-    ]);
+    const reads = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ["missing", "zai", "zai"])).toEqual(
+        [{ pluginId: "zai", contents: zai }],
+      );
+      const materializedRows = reads.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.rows : [],
+      );
+      expect(materializedRows).toContainEqual({ key: "zai", value_json: zai });
+      expect(materializedRows).not.toContainEqual({ key: "anthropic", value_json: anthropic });
+      reads.mockClear();
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, [])).toEqual([]);
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
     ]);
     expect(existsSync(legacyPath)).toBe(true);
+
+    const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      const insert = database.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+      );
+      insert.run("plugin-model-catalog-v1", "λ🦞", "unicode catalog bytes");
+      insert.run("plugin-model-catalog-v1", "\uFFFD", "replacement catalog bytes");
+      insert.run("plugin-model-catalog-v1", "null", null);
+    } finally {
+      database.close();
+    }
+    for (const { ids, expected } of [
+      {
+        ids: ["zai", "anthropic", "zai", "missing"],
+        expected: [
+          { pluginId: "anthropic", contents: anthropic },
+          { pluginId: "zai", contents: zai },
+        ],
+      },
+      { ids: ["missing", "null"], expected: [] },
+      { ids: ["λ🦞"], expected: [{ pluginId: "λ🦞", contents: "unicode catalog bytes" }] },
+      {
+        ids: ["\uFFFD"],
+        expected: [{ pluginId: "\uFFFD", contents: "replacement catalog bytes" }],
+      },
+      { ids: ["\uD800"], expected: [] },
+      { ids: ["\uDC00"], expected: [] },
+    ]) {
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir, ids)).toEqual(expected);
+    }
   });
 
   it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {
@@ -962,11 +1007,14 @@ describe("SQLite-backed plugin model catalogs", () => {
   it("recognizes unchanged payloads and atomically removes stale provider rows", async () => {
     const agentDir = createAgentDir();
     const zai = catalogContents("zai");
-    const anthropic = catalogContents("anthropic");
-    const both = {
-      [encodePluginModelCatalogRelativePath("zai")]: zai,
-      [encodePluginModelCatalogRelativePath("anthropic")]: anthropic,
-    };
+    const catalogRows = (prefix: string) =>
+      Object.fromEntries(
+        Array.from({ length: 70 }, (_, index) => [
+          encodePluginModelCatalogRelativePath(`${prefix}-${index}`),
+          catalogContents(`${prefix}-${index}`),
+        ]),
+      );
+    const both = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("stale") };
 
     expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
       true,
@@ -974,16 +1022,32 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(await replacePersistedPluginModelCatalogs({ agentDir, pluginCatalogWrites: both })).toBe(
       false,
     );
+    const unchanged = readCatalogCacheRow(agentDir, "zai");
+    const refreshed = catalogContents("fresh");
+    const next = { [encodePluginModelCatalogRelativePath("zai")]: zai, ...catalogRows("new") };
+    // Exercise both row and payload batch boundaries without changing JSON semantics.
+    next[encodePluginModelCatalogRelativePath("new-35")] += " ".repeat(1024 * 1024);
+    expect(
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: next,
+      }),
+    ).toBe(true);
+    expect(readCatalogCacheRow(agentDir, "zai")).toEqual(unchanged);
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toHaveLength(71);
+    expect(readCatalogCacheRow(agentDir, "new-35").value_json).toBe(
+      next[encodePluginModelCatalogRelativePath("new-35")],
+    );
     expect(
       await replacePersistedPluginModelCatalogs({
         agentDir,
         pluginCatalogWrites: {
-          [encodePluginModelCatalogRelativePath("zai")]: zai,
+          [encodePluginModelCatalogRelativePath("zai")]: refreshed,
         },
       }),
     ).toBe(true);
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
-      { pluginId: "zai", contents: zai },
+      { pluginId: "zai", contents: refreshed },
     ]);
   });
 

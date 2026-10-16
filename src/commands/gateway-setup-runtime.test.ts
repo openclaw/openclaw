@@ -6,7 +6,11 @@ import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
 const readPin = vi.hoisted(() => vi.fn<() => DaemonRuntimePinSnapshot>());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Runtime selection tests use supplied pin snapshots without opening disk state.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => run(),
+  readDaemonRuntimePinForInstall: readPin,
+}));
 
 describe("setup runtime intent", () => {
   beforeEach(() => {
@@ -14,44 +18,28 @@ describe("setup runtime intent", () => {
     readPin.mockReturnValue({ revision: "empty", stored: false });
   });
 
-  it.each(["node", "bun"] as const)(
-    "preserves %s pins and the inspected revision",
-    async (runtime) => {
-      const pin = { runtime, path: `/opt/pinned/${runtime}` };
-      const expected = { revision: "version-2", stored: true, pin };
+  it.each([true, false])(
+    "keeps explicit runtime intent and persists only an existing pin (pinned=%s)",
+    async (pinned) => {
+      const pin = pinned ? { runtime: "bun" as const, path: "/opt/pinned/bun" } : undefined;
+      const expected = { revision: pinned ? "version-2" : "empty", stored: pinned, pin };
       readPin.mockReturnValue(expected);
-      const selectRuntime = vi.fn(async () => "node" as const);
+      const selectRuntime = vi.fn(async () => (pinned ? ("node" as const) : ("bun" as const)));
       const result = await resolveGatewaySetupRuntime({
         env: {},
         existingCommand: null,
         selectRuntime,
       });
       expect(result).toMatchObject({
-        runtime,
+        runtime: "bun",
         runtimeExplicit: true,
-        pinnedRuntimePath: pin.path,
+        pinnedRuntimePath: pin?.path,
         runtimePinUpdate: { expected, pin },
       });
       expect(result.runtimePinUpdate.expected).toBe(expected);
-      expect(selectRuntime).not.toHaveBeenCalled();
+      expect(selectRuntime).toHaveBeenCalledTimes(pinned ? 0 : 1);
     },
   );
-
-  it("keeps picker choices explicit without persisting a pin", async () => {
-    const selectRuntime = vi.fn(async () => "bun" as const);
-    const result = await resolveGatewaySetupRuntime({
-      env: {},
-      existingCommand: null,
-      selectRuntime,
-    });
-    expect(result).toMatchObject({
-      runtime: "bun",
-      runtimeExplicit: true,
-      runtimePinUpdate: { pin: undefined },
-    });
-    expect(result.pinnedRuntimePath).toBeUndefined();
-    expect(selectRuntime).toHaveBeenCalledOnce();
-  });
 
   it.each([
     { flow: "advanced", nodePath: undefined, suggested: "bun" },
@@ -61,13 +49,13 @@ describe("setup runtime intent", () => {
     "suggests $suggested for $flow with Node at $nodePath",
     async ({ flow, nodePath, suggested }) => {
       const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+      Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
       const discoverNode = vi
         .spyOn(runtimePaths, "resolvePreferredNodePath")
         .mockResolvedValue(nodePath);
       const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
         status: "supported",
-        version: "1.4.2",
+        version: "1.4.3",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
         nodeSharedSqlite: false,

@@ -14,6 +14,7 @@ import { createContext } from "../../../gateway/server-plugin-in-process-dispatc
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRuntime from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
@@ -29,6 +30,7 @@ import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js"
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import * as registryReads from "./subagent-registry-read-cache.js";
 import * as registryRead from "./subagent-registry-read.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import {
   prepareSubagentSessionCleanupRevocation,
@@ -37,7 +39,6 @@ import {
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
@@ -130,6 +131,8 @@ async function registerCompletion(
   await registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: `${runId}-session`, lifecycleRevision: "original-child" },
     requesterSessionKey: options.requesterSessionKey ?? "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -460,7 +463,11 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
     if (!(result.error instanceof Error)) {
       throw new Error("Expected the retained registry write failure");
     }
-    await fixture.settle();
+    await expect(fixture.settle()).rejects.toMatchObject({
+      name: "AggregateError",
+      message: "Failed to settle subagent cleanup roots",
+      errors: [result.error],
+    });
     expect(lost).toBe(true);
     expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery?.status).toBe("delivered");
     expect(subagentRuns.get(run.runId)?.delivery?.status).toBe("pending");
@@ -525,6 +532,8 @@ it("refuses an old registered wake after its descendant read outlives a successo
       expect(loadSubagentRegistryFromSqlite().get(run.runId)?.requesterSettleWake).toBeDefined();
       await registerSubagentRun({
         ...run,
+        childAgentId: "main",
+        sessionEntry: original.childSessionIdentity,
         requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -607,31 +616,24 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
     vi.spyOn(hookRuntime, "getGlobalHookRunner").mockReturnValue(runner);
     let held = false;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        nativeWorker.runOpenClawStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              async execute(command, executeOptions) {
-                const result = await scope.execute(command, executeOptions);
-                if (
-                  !held &&
-                  command.type === "sessionDelivery.mutateSubagentCompletion" &&
-                  subagentRuns.get(run.runId)?.cleanupCompletedAt !== undefined
-                ) {
-                  held = true;
-                  // The actual wake has committed; row admission retains its ACK until publication.
-                  mutationReady.resolve();
-                  await release.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        const result = await scope.execute(command, executeOptions);
+        if (
+          !held &&
+          command.type === "sessionDelivery.mutateSubagentCompletion" &&
+          subagentRuns.get(run.runId)?.cleanupCompletedAt !== undefined
+        ) {
+          held = true;
+          // The actual wake has committed; row admission retains its ACK until publication.
+          mutationReady.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+      { original: nativeWorker.runOpenClawStateWorkerOperation },
+    );
     try {
       completeRegistered(run);
       await mutationReady.promise;
@@ -645,6 +647,8 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       if (change === "successor") {
         authorityChange = registerSubagentRun({
           ...run,
+          childAgentId: "main",
+          sessionEntry: original.childSessionIdentity,
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",

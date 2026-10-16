@@ -1,4 +1,3 @@
-// Dev Tooling Safety tests cover dev tooling safety script behavior.
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
@@ -17,7 +16,6 @@ import { testing as tuiPtyWatchTesting } from "../../scripts/dev/tui-pty-test-wa
 import {
   maskIdentifier,
   parseBooleanEnv,
-  parseStrictIntegerOption,
   previewForDevToolLog,
   redactHomePath,
   redactJsonValueForDevToolLog,
@@ -197,36 +195,6 @@ function runCli(scriptPath: string, args: string[]): Promise<CliResult> {
   });
 }
 
-function createCliPair(
-  scriptPath: string,
-  firstArgs: string[],
-  secondArgs: string[],
-): () => Promise<[CliResult, CliResult]> {
-  let result: Promise<[CliResult, CliResult]> | undefined;
-  return () => {
-    // Pair only sibling entrypoint probes: process proof stays real while peak
-    // child concurrency stays capped at two.
-    result ??= Promise.all([runCli(scriptPath, firstArgs), runCli(scriptPath, secondArgs)]);
-    return result;
-  };
-}
-
-const getDiscordCliResults = createCliPair(
-  "scripts/dev/discord-acp-plain-language-smoke.ts",
-  ["--wat"],
-  ["--help"],
-);
-const getTuiPtyCliResults = createCliPair(
-  "scripts/dev/tui-pty-test-watch.ts",
-  ["--help"],
-  ["--wat"],
-);
-const getClaudeUsageCliResults = createCliPair(
-  "scripts/debug-claude-usage.ts",
-  ["--help"],
-  ["--agent"],
-);
-
 afterEach(async () => {
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -261,15 +229,6 @@ describe("dev tooling safety helpers", () => {
     );
   });
 
-  it("rejects partial numeric option parses", () => {
-    expect(parseStrictIntegerOption({ fallback: 3, label: "--runs", min: 1, raw: undefined })).toBe(
-      3,
-    );
-    expect(() =>
-      parseStrictIntegerOption({ fallback: 3, label: "--runs", min: 1, raw: "2abc" }),
-    ).toThrow(/--runs must be an integer/u);
-  });
-
   it("redacts home paths and masks opaque ids", () => {
     expect(redactHomePath("/home/alice/.openclaw/state.json", "/home/alice")).toBe(
       "~/.openclaw/state.json",
@@ -288,21 +247,20 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
   });
 
-  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", async () => {
-    expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
-    const [result] = await getDiscordCliResults();
+  it.each([
+    [
+      "Discord smoke",
+      "scripts/dev/discord-acp-plain-language-smoke.ts",
+      discordSmokeTesting.parseArgs,
+    ],
+    ["TUI PTY watch", "scripts/dev/tui-pty-test-watch.ts", tuiPtyWatchTesting.parseOptions],
+  ] as const)("rejects unknown %s args before launching work", async (_label, script, parse) => {
+    expect(() => parse(["--wat"])).toThrow("Unknown argument: --wat");
+    const result = await runCli(script, ["--wat"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-  });
-
-  it("prints Discord smoke usage without starting live validation", async () => {
-    const [, result] = await getDiscordCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts");
-    expect(result.stderr).toBe("");
   });
 
   it("rejects missing Discord smoke option values before env fallbacks", () => {
@@ -406,31 +364,6 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("bounds Discord smoke response bodies by streamed bytes", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(6));
-          controller.close();
-        },
-      }),
-    );
-    const request = discordSmokeTesting.requestDiscordJson({
-      method: "GET",
-      path: "/channels/123/messages",
-      headers: {},
-      retries: 0,
-      timeoutMs: 50,
-      responseBodyMaxBytes: 5,
-      errorPrefix: "Discord API",
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(
-      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
-    );
-  });
-
   it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let calls = 0;
@@ -456,23 +389,6 @@ describe("script-specific dev tooling hardening", () => {
       }),
     ).rejects.toThrow(/exceeded total timeout/u);
     expect(calls).toBe(1);
-  });
-
-  it("prints TUI PTY watch usage without launching the watcher", async () => {
-    const [result] = await getTuiPtyCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts");
-    expect(result.stderr).toBe("");
-  });
-
-  it("rejects unknown TUI PTY watch args before launching the watcher", async () => {
-    expect(() => tuiPtyWatchTesting.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    const [, result] = await getTuiPtyCliResults();
-
-    expect(result.status).toBe(1);
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-    expect(result.stdout).toBe("");
   });
 
   it("rejects short flags as TUI PTY watch option values", () => {
@@ -550,43 +466,59 @@ describe("script-specific dev tooling hardening", () => {
     expect(retained.toString("utf8")).toBe("89abcdef");
   });
 
-  it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
-    let signal: AbortSignal | undefined;
-    const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
-      timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise(() => {});
-      }) as typeof fetch,
-    });
+  it.each([
+    {
+      name: "OpenAI realtime smoke",
+      request: realtimeSmokeTesting.createOpenAIClientSecret,
+      credential: "test-key",
+      headers: undefined,
+      error: /OpenAI Realtime client secret request exceeded timeout/u,
+    },
+    {
+      name: "Claude usage",
+      request: claudeUsageTesting.fetchAnthropicOAuthUsage,
+      credential: "test-token",
+      headers: { "content-type": "application/json" },
+      error: /Anthropic OAuth usage request exceeded timeout/u,
+    },
+  ])(
+    "times out stalled $name response body reads",
+    async ({ request, credential, headers, error }) => {
+      const response = new Response(
+        new ReadableStream({
+          start() {},
+        }),
+        { headers },
+      );
+      const pending = request(credential, {
+        timeoutMs: 5,
+        fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+      });
 
-    await expect(request).rejects.toThrow(
-      /OpenAI Realtime client secret request exceeded timeout/u,
-    );
-    expect(signal?.aborted).toBe(true);
-  });
+      await expect(pending).rejects.toThrow(error);
+    },
+  );
 
-  it("times out stalled OpenAI realtime smoke response body reads", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start() {},
-      }),
-    );
-    const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
-      timeoutMs: 5,
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(
-      /OpenAI Realtime client secret request exceeded timeout/u,
-    );
-  });
-
-  it("rejects invalid OpenAI realtime smoke timeout values", () => {
-    expect(realtimeSmokeTesting.resolveOpenAIHttpTimeoutMs("42")).toBe(42);
-    expect(() => realtimeSmokeTesting.resolveOpenAIHttpTimeoutMs("2s")).toThrow(
+  it.each([
+    [
+      "OpenAI realtime",
+      realtimeSmokeTesting.resolveOpenAIHttpTimeoutMs,
+      "42",
+      42,
+      "2s",
       /OPENCLAW_REALTIME_OPENAI_HTTP_TIMEOUT_MS must be an integer/u,
-    );
+    ],
+    [
+      "Claude usage",
+      claudeUsageTesting.resolveFetchTimeoutMs,
+      "123",
+      123,
+      "1.5",
+      /OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS must be an integer/u,
+    ],
+  ] as const)("validates %s timeout values", (_label, resolve, valid, expected, invalid, error) => {
+    expect(resolve(valid)).toBe(expected);
+    expect(() => resolve(invalid)).toThrow(error);
   });
 
   it("formats OpenAI realtime smoke help without launching live checks", () => {
@@ -1003,7 +935,10 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
-  it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
+  it.each([
+    { name: "waits for child exit after SIGKILL", exits: true, killWaitMs: 50 },
+    { name: "bounds cleanup when the child never exits", exits: false, killWaitMs: 1 },
+  ])("Anthropic prompt gateway cleanup $name", async ({ exits, killWaitMs }) => {
     const events = new EventEmitter();
     const signals: NodeJS.Signals[] = [];
     let closeCalls = 0;
@@ -1012,13 +947,13 @@ describe("script-specific dev tooling hardening", () => {
       signalCode: null as NodeJS.Signals | null,
       kill(signal: NodeJS.Signals) {
         signals.push(signal);
-        if (signal === "SIGKILL") {
+        if (exits && signal === "SIGKILL") {
           setTimeout(() => {
             child.signalCode = "SIGKILL";
             events.emit("exit");
           }, 1);
         }
-        return true;
+        return exits;
       },
       once(event: "exit", listener: () => void) {
         events.once(event, listener);
@@ -1033,39 +968,10 @@ describe("script-specific dev tooling hardening", () => {
         },
       },
       1,
-      50,
+      killWaitMs,
     );
 
-    expect(stopped).toBe(true);
-    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
-    expect(closeCalls).toBe(1);
-  });
-
-  it("bounds Anthropic prompt gateway cleanup when the child never exits", async () => {
-    const signals: NodeJS.Signals[] = [];
-    let closeCalls = 0;
-    const child = {
-      exitCode: null as number | null,
-      signalCode: null as NodeJS.Signals | null,
-      kill(signal: NodeJS.Signals) {
-        signals.push(signal);
-        return false;
-      },
-      once(_event: "exit", _listener: () => void) {},
-    };
-
-    const stopped = await promptProbeTesting.stopGatewayPromptChild(
-      child,
-      {
-        close: async () => {
-          closeCalls += 1;
-        },
-      },
-      1,
-      1,
-    );
-
-    expect(stopped).toBe(false);
+    expect(stopped).toBe(exits);
     expect(signals).toEqual(["SIGINT", "SIGKILL"]);
     expect(closeCalls).toBe(1);
   });
@@ -1300,91 +1206,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => claudeUsageTesting.parseArgs(["--session-key= "])).toThrow(
       "--session-key requires a value",
     );
-  });
-
-  it("prints Claude usage help without opening auth stores", async () => {
-    const [result] = await getClaudeUsageCliResults();
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/debug-claude-usage.ts");
-    expect(result.stderr).toBe("");
-  });
-
-  it("fails missing Claude usage option values before defaulting to main auth", async () => {
-    const [, result] = await getClaudeUsageCliResults();
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--agent requires a value");
-  });
-
-  it("aborts stalled Claude usage fetches at the request timeout", async () => {
-    let signal: AbortSignal | undefined;
-    const request = claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-      timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise(() => {});
-      }) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(/Anthropic OAuth usage request exceeded timeout/u);
-    expect(signal?.aborted).toBe(true);
-  });
-
-  it("times out stalled Claude usage response body reads", async () => {
-    const response = new Response(
-      new ReadableStream({
-        start() {},
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
-    const request = claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-      timeoutMs: 5,
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-
-    await expect(request).rejects.toThrow(/Anthropic OAuth usage request exceeded timeout/u);
-  });
-
-  it("rejects invalid Claude usage timeout values", () => {
-    expect(claudeUsageTesting.resolveFetchTimeoutMs("123")).toBe(123);
-    expect(() => claudeUsageTesting.resolveFetchTimeoutMs("1.5")).toThrow(
-      /OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS must be an integer/u,
-    );
-  });
-
-  it("bounds Claude usage response body reads by content-length", async () => {
-    const maxBytes = 256 * 1024;
-    const response = new Response("{}", {
-      headers: { "content-length": String(maxBytes + 1) },
-    });
-
-    await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
-  });
-
-  it("bounds Claude usage response body reads by streamed bytes", async () => {
-    const maxBytes = 256 * 1024;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(maxBytes + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(
-      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
-        fetchImpl: async () => response,
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it.each([

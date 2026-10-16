@@ -1,19 +1,15 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
-  type CallToolRequest,
   CallToolRequestSchema,
-  type ListResourcesRequest,
   ListResourcesRequestSchema,
-  type ListResourceTemplatesRequest,
   ListResourceTemplatesRequestSchema,
-  type ListToolsRequest,
   ListToolsRequestSchema,
-  type ReadResourceRequest,
   ReadResourceRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import {
@@ -64,12 +60,14 @@ export class McpAppViewExpiredError extends Error {
   }
 }
 
-export type McpAppOperation =
-  | Pick<CallToolRequest, "method" | "params">
-  | Pick<ListToolsRequest, "method" | "params">
-  | Pick<ListResourcesRequest, "method" | "params">
-  | Pick<ListResourceTemplatesRequest, "method" | "params">
-  | Pick<ReadResourceRequest, "method" | "params">;
+const McpAppOperationSchema = z.discriminatedUnion("method", [
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
+  ReadResourceRequestSchema,
+]);
+export type McpAppOperation = z.infer<typeof McpAppOperationSchema>;
 
 function isAppCallableTool(
   view: Pick<McpAppViewLease, "serverName" | "allowedAppToolNames">,
@@ -235,6 +233,7 @@ export async function prepareModelCreatedAppToolCall(
     options: GatewayRequestHandlerOptions;
     toolName: string;
     input: Record<string, unknown>;
+    view?: McpAppViewLease;
     assertCurrent: () => void;
   },
 ): Promise<() => void> {
@@ -372,6 +371,8 @@ export async function prepareModelCreatedAppToolCall(
       serverName: view.serverName,
       toolName: request.toolName,
       input: request.input,
+      view: request.view,
+      requesterId,
       signal: options.signal,
       assertCurrent: () => {
         assertPolicy();
@@ -425,6 +426,7 @@ export async function executeMcpAppOperation(
           options: request.options,
           toolName: operation.params.name,
           input,
+          view,
           assertCurrent: assertViewCurrent,
           signal: request.options.signal,
         });
@@ -434,6 +436,7 @@ export async function executeMcpAppOperation(
           options: request.options,
           toolName: operation.params.name,
           input,
+          view,
           assertCurrent: assertViewCurrent,
         });
       }
@@ -486,7 +489,9 @@ export async function executeMcpAppOperation(
         const [listed, catalog] = await Promise.all([
           runtime.listTools(
             view.serverName,
-            operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+            operation.params?.cursor !== undefined
+              ? { cursor: operation.params.cursor }
+              : undefined,
           ),
           getRequestCatalog(runtime),
         ]);
@@ -517,7 +522,7 @@ export async function executeMcpAppOperation(
         }
         return await runtime.listResourceTemplates(
           view.serverName,
-          operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+          operation.params?.cursor !== undefined ? { cursor: operation.params.cursor } : undefined,
         );
       case "resources/read":
         if (!runtime.readResource) {
@@ -533,24 +538,8 @@ export async function executeMcpAppOperation(
 }
 
 export function parseMcpAppOperation(value: unknown): McpAppOperation | undefined {
-  const method = asOptionalRecord(value)?.method;
-  const schema =
-    method === "tools/call"
-      ? CallToolRequestSchema
-      : method === "tools/list"
-        ? ListToolsRequestSchema
-        : method === "resources/list"
-          ? ListResourcesRequestSchema
-          : method === "resources/templates/list"
-            ? ListResourceTemplatesRequestSchema
-            : method === "resources/read"
-              ? ReadResourceRequestSchema
-              : undefined;
-  if (!schema) {
-    return undefined;
-  }
-  const parsed = schema.safeParse(value);
-  return parsed.success ? (parsed.data as McpAppOperation) : undefined;
+  const parsed = McpAppOperationSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /** The current UI request owns approval/question delivery; upstream server callbacks retain that scope. */
@@ -645,7 +634,8 @@ export async function callMcpAppToolWithElicitation(params: {
       const { createMcpAppFormResourceContext } = await import("./mcp-app-form-resources.js");
       assertCurrent();
       return createMcpAppFormResourceContext({
-        ...request,
+        snapshot: request.snapshot,
+        signal: request.signal,
         origin: params.origin,
         uploadResources: params.uploadResources,
       });

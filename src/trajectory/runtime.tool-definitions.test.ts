@@ -1,3 +1,4 @@
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as nodeCrypto from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
@@ -38,18 +39,48 @@ describe("trajectory tool definition preparation", () => {
     expect(digest).toHaveBeenCalledTimes(2);
     registerSecretValueForRedaction("synthetic-new-registration");
     expect(project()[0]?.parameters).toMatchObject({ nested: { ordinary: "changed" } });
-    expect(digest).toHaveBeenCalledTimes(3);
+    expect(digest).toHaveBeenCalledTimes(2);
   });
 
-  it("rechecks changed schemas and current secret registrations after repeated projections", () => {
+  it("reuses published schemas while isolating results and replacement publications", () => {
+    const source = { type: "object", properties: { value: { type: "string" } } };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    const first = projectParameters(published);
+    expect(first).toEqual(source);
+    Object.assign(first ?? {}, { properties: {} });
+    expect(projectParameters(published)).toEqual(source);
+
+    source.properties.value.type = "number";
+    expect(projectParameters(published)).toMatchObject({
+      properties: { value: { type: "string" } },
+    });
+    expect(projectParameters(publishRuntimeToolInputSchema(source).schema)).toEqual(source);
+  });
+
+  it("still bounds published JSON before caching its diagnostic projection", () => {
+    const source = { description: "x".repeat(32_769) };
+    const published = publishRuntimeToolInputSchema(source).schema;
+    for (const parameters of [source, published, source, published]) {
+      expect(projectParameters(parameters)).toEqual({
+        description: {
+          truncated: true,
+          reason: "trajectory-field-size-limit",
+          originalChars: 32_769,
+          limitChars: 32_768,
+        },
+      });
+    }
+  });
+
+  it("keeps schema text unchanged across secret registrations and log policy changes", async () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
-    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
       write: (_event, line) => writes.push(line),
       flush: async () => {},
       describeFlushState: () => undefined,
     });
-    const recorder = createTrajectoryRuntimeRecorder({
+    const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: "tool-projection",
     });
     const record = (text: string) =>
@@ -70,11 +101,13 @@ describe("trajectory tool definition preparation", () => {
     expect(writes).toHaveLength(7);
     expect(writes[0]).toContain(description);
     expect(writes[1]).toContain(description);
-    expect(writes[2]).not.toContain(description);
-    expect(writes[3]).not.toContain("synthetic-changed-value");
-    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toContain("redacted");
+    expect(writes[2]).toContain(description);
+    expect(writes[3]).toContain("synthetic-changed-value");
+    expect(JSON.parse(writes[3]!).data.tools[0].parameters.description).toBe(
+      "Authorization: Bearer synthetic-changed-value",
+    );
     expect(writes[4]).toContain("policy-fixture-value");
-    expect(writes[5]).not.toContain("policy-fixture-value");
+    expect(writes[5]).toContain("policy-fixture-value");
     expect(writes[6]).toContain("policy-fixture-value");
   });
 
@@ -101,30 +134,30 @@ describe("trajectory tool definition preparation", () => {
     expect(has).not.toHaveBeenCalled();
   });
 
-  it("preserves native retry metadata returned by custom array operations", () => {
-    const headers = new Headers({
-      "retry-after": "7",
-      authorization: "Bearer synthetic-credential",
-    });
-
-    expect(projectParameters({ ordinary: "kept", nested: arrayReturning(headers) })).toEqual({
-      ordinary: "kept",
-      nested: { "retry-after-ms": 7_000 },
-    });
-  });
-
-  it("preserves prototype traps when a copied field changes the prepared record prototype", () => {
-    const getPrototypeOf = vi.fn(() => null);
-    const prototype = new Proxy({}, { getPrototypeOf });
-    const parameters = {
-      ["__proto__"]: arrayReturning(prototype),
-      ordinary: "kept",
-    };
-
-    expect(projectParameters(parameters)).toEqual({ ordinary: "kept" });
-    expect(getPrototypeOf).toHaveBeenCalled();
-    expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
-  });
+  it.each(["native headers", "prototype traps"])(
+    "preserves %s returned by custom array operations",
+    (kind) => {
+      const native = kind === "native headers";
+      const getPrototypeOf = vi.fn(() => null);
+      const value = native
+        ? new Headers({
+            "retry-after": "7",
+            authorization: "Bearer synthetic-credential",
+          })
+        : new Proxy({}, { getPrototypeOf });
+      const parameters = {
+        [native ? "nested" : "__proto__"]: arrayReturning(value),
+        ordinary: "kept",
+      };
+      expect(projectParameters(parameters)).toEqual(
+        native ? { ordinary: "kept", nested: { "retry-after-ms": 7_000 } } : { ordinary: "kept" },
+      );
+      if (!native) {
+        expect(getPrototypeOf).toHaveBeenCalled();
+        expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
+      }
+    },
+  );
 
   it("reads source getters once while preserving inert serialization hooks", () => {
     const toJSON = vi.fn(() => ({ unexpected: true }));
@@ -134,7 +167,9 @@ describe("trajectory tool definition preparation", () => {
       get: readNested,
     });
 
-    expect(projectParameters(parameters)).toEqual({ nested: { ordinary: "kept", toJSON } });
+    expect(projectParameters(parameters)).toEqual({
+      nested: { ordinary: "kept", password: "synthetic-secret", toJSON },
+    });
     expect(readNested).toHaveBeenCalledOnce();
     expect(toJSON).not.toHaveBeenCalled();
   });

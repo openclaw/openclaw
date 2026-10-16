@@ -11,6 +11,7 @@ import {
   mockMainSessionEntry,
   waitForAssertion,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 
 const mocks = getAgentTestMocks();
@@ -38,7 +39,7 @@ export function registerAgentSendEventTests(): void {
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "sess-followup",
         updatedAt,
@@ -219,8 +220,8 @@ export function registerAgentGlobalGoalEventTest(): void {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
-      cfg: { agents: { list: [{ id: "main" }, { id: "work" }] }, session: { scope: "global" } },
-      storePath: "/tmp/sessions.json",
+      cfg: { agents: { entries: { main: {}, work: {} } }, session: { scope: "global" } },
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-session-id",
         updatedAt: Date.now(),

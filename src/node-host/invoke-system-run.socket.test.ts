@@ -11,7 +11,7 @@ import {
   testing as approvalsTesting,
 } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecHostRequest } from "../infra/exec-host.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
@@ -22,7 +22,7 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
       await withEnvAsync(
         { OPENCLAW_HOME: dir, OPENCLAW_STATE_DIR: path.join(dir, "state") },
         async () => {
-          closeOpenClawStateDatabaseForTest();
+          await closeOpenClawStateDatabaseAsync();
           approvalsTesting.reset();
           const socketPath = path.join(dir, "host.sock");
           const token = "enforced-exec-host-test-token";
@@ -101,9 +101,6 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             await handleSystemRunInvoke({
               params: { command, cwd: dir, sessionKey: "agent:main:proof" },
               skillBins: { current: async () => [] },
-              execHostEnforced: true,
-              // Production defaults this preference to true; enforcement still forbids replay.
-              execHostFallbackAllowed: true,
               preferMacAppExecHost: true,
               getRuntimeConfig: () => ({}),
               runCommand,
@@ -114,12 +111,17 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             expect(failures).toEqual([]);
             expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
-            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ ok: false }),
-            );
+            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith({
+              ok: false,
+              error: {
+                code: "UNKNOWN",
+                message:
+                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+              },
+            });
             expect(sendNodeEvent).toHaveBeenCalledExactlyOnceWith(
               "exec.denied",
-              expect.objectContaining({ host: "node" }),
+              expect.objectContaining({ host: "node", reason: "response-lost" }),
             );
             expect(await fs.readFile(marker, "utf8")).toBe("START\nCOMPLETE\n");
           } finally {
@@ -132,7 +134,7 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
               server.close((error) => (error ? reject(error) : resolve()));
             });
             approvalsTesting.reset();
-            closeOpenClawStateDatabaseForTest();
+            await closeOpenClawStateDatabaseAsync();
           }
         },
       );

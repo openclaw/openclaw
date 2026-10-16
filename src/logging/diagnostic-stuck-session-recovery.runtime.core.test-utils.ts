@@ -2,6 +2,10 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -183,6 +187,7 @@ describe("stuck session recovery", () => {
       layout: "state-only",
       prefix: "openclaw-recovery-context-",
     });
+    setRuntimeConfigSnapshot({});
     const tempDir = openClawState.stateDir;
     try {
       await saveCronStore(path.join(tempDir, "cron", "jobs.json"), {
@@ -225,11 +230,12 @@ describe("stuck session recovery", () => {
       await logged;
     } finally {
       await openClawState.cleanup();
+      clearRuntimeConfigSnapshot();
     }
 
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0",
-      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 cronJobId=job-123 cronRunId=run-456 stopped="Twitter Mention Moderation Agent" lastAssistant="There are 40 cached mentions."',
+      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 cronJobId=job-123 cronRunId=run-456 stopped="Twitter Mention Moderation Agent"',
     ]);
   });
 
@@ -594,13 +600,9 @@ describe("stuck session recovery", () => {
   });
 
   it("coalesces duplicate recovery attempts for the same session", async () => {
-    let resolveWait: ((value: boolean) => void) | undefined;
-    const waitPromise = new Promise<boolean>((resolve) => {
-      resolveWait = resolve;
-    });
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
-    mocks.waitForEmbeddedAgentRunEnd.mockReturnValue(waitPromise);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
     const first = recoverStuckDiagnosticSession({
       sessionId: "session-1",
@@ -608,18 +610,19 @@ describe("stuck session recovery", () => {
       ageMs: 180_000,
       allowActiveAbort: true,
     });
-    await recoverStuckDiagnosticSession({
+    const second = recoverStuckDiagnosticSession({
       sessionId: "session-1",
       sessionKey: "agent:main:main",
       ageMs: 210_000,
       allowActiveAbort: true,
     });
 
+    const [, duplicate] = await Promise.all([first, second]);
+    expect(duplicate).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "already_in_flight",
+    });
     expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(1);
-    if (!resolveWait) {
-      throw new Error("Expected diagnostic recovery wait resolver to be initialized");
-    }
-    resolveWait(true);
-    await first;
   });
 });

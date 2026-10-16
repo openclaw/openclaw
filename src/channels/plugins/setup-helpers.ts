@@ -27,6 +27,22 @@ export function readChannelConfigSection(
   return section && typeof section === "object" ? (section as ChannelSectionBase) : undefined;
 }
 
+function resolveSetupAccountKey(
+  accounts: ChannelSectionBase["accounts"],
+  accountId: string,
+  params: { channelKey: string; accountKeyPolicy?: ChannelAccountKeyPolicy },
+): string {
+  return (
+    resolveChannelAccountKey(
+      accounts,
+      accountId,
+      params.channelKey,
+      (id) => id,
+      params.accountKeyPolicy,
+    ) ?? accountId
+  );
+}
+
 export function applyAccountNameToChannelSection(params: {
   cfg: OpenClawConfig;
   channelKey: string;
@@ -42,14 +58,7 @@ export function applyAccountNameToChannelSection(params: {
   const accountId = normalizeAccountId(params.accountId);
   const base = readChannelConfigSection(params.cfg, params.channelKey);
   const accounts = base?.accounts ?? {};
-  const accountKey =
-    resolveChannelAccountKey(
-      accounts,
-      accountId,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveSetupAccountKey(accounts, accountId, params);
   const useAccounts =
     params.alwaysUseAccounts ||
     accountId !== DEFAULT_ACCOUNT_ID ||
@@ -85,14 +94,7 @@ export function migrateBaseNameToDefaultAccount(params: {
   const accounts: Record<string, Record<string, unknown>> = {
     ...base?.accounts,
   };
-  const defaultAccountKey =
-    resolveChannelAccountKey(
-      accounts,
-      DEFAULT_ACCOUNT_ID,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? DEFAULT_ACCOUNT_ID;
+  const defaultAccountKey = resolveSetupAccountKey(accounts, DEFAULT_ACCOUNT_ID, params);
   const defaultAccount = accounts[defaultAccountKey] ?? {};
   if (!defaultAccount.name) {
     accounts[defaultAccountKey] = { ...defaultAccount, name: baseName };
@@ -102,15 +104,9 @@ export function migrateBaseNameToDefaultAccount(params: {
 }
 
 /** Applies setup-time account naming and optional root-name migration in one step. */
-export function prepareScopedSetupConfig(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  accountId: string;
-  name?: string;
-  alwaysUseAccounts?: boolean;
-  migrateBaseName?: boolean;
-}): OpenClawConfig {
+export function prepareScopedSetupConfig(
+  params: Parameters<typeof applyAccountNameToChannelSection>[0] & { migrateBaseName?: boolean },
+): OpenClawConfig {
   const namedConfig = applyAccountNameToChannelSection(params);
   if (!params.migrateBaseName || normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID) {
     return namedConfig;
@@ -192,7 +188,7 @@ export function createSetupInputPresenceValidator<
 >(params: {
   defaultAccountOnlyEnvError?: string;
   whenNotUseEnv?: SetupInputPresenceRequirement[];
-  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: Input }) => string | null;
+  validate?: NonNullable<ChannelSetupAdapter<Input>["validateInput"]>;
 }): NonNullable<ChannelSetupAdapter<Input>["validateInput"]> {
   return (inputParams) => {
     if (
@@ -216,18 +212,13 @@ export function createSetupInputPresenceValidator<
 }
 
 /** Creates a setup adapter that supports env-backed default account auth and patched credentials. */
-export function createEnvPatchedAccountSetupAdapter(params: {
-  channelKey: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  alwaysUseAccounts?: boolean;
-  ensureChannelEnabled?: boolean;
-  ensureAccountEnabled?: boolean;
-  defaultAccountOnlyEnvError: string;
-  missingCredentialError: string;
-  hasCredentials: (input: ChannelSetupInput) => boolean;
-  validateInput?: ChannelSetupAdapter["validateInput"];
-  buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
-}): ChannelSetupAdapter {
+export function createEnvPatchedAccountSetupAdapter(
+  params: Parameters<typeof createPatchedAccountSetupAdapter<ChannelSetupInput>>[0] & {
+    defaultAccountOnlyEnvError: string;
+    missingCredentialError: string;
+    hasCredentials: (input: ChannelSetupInput) => boolean;
+  },
+): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     ...params,
     validateInput: (inputParams) => {
@@ -281,14 +272,7 @@ export function patchScopedAccountConfig(params: {
   }
 
   const accounts = base?.accounts ?? {};
-  const accountKey =
-    resolveChannelAccountKey(
-      accounts,
-      accountId,
-      params.channelKey,
-      (id) => id,
-      params.accountKeyPolicy,
-    ) ?? accountId;
+  const accountKey = resolveSetupAccountKey(accounts, accountId, params);
   const existingAccount = clearFields(accounts[accountKey] ?? {});
   // Preserve an explicit disabled account while enabling newly created accounts by default.
   return writeChannelSection(params.cfg, params.channelKey, {

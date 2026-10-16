@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -48,14 +47,6 @@ const MIRROR_BODY_BUDGET_BYTES = BEAM_MAX_BODY_BYTES - 2_048;
 const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
 const MIRROR_UPLOAD_TIMEOUT_MS = 15_000;
 
-type BeamMirrorConfig = {
-  endpoint: string;
-  token?: unknown;
-  catalogs: string[];
-  pollSeconds: number;
-  activeWindowMinutes: number;
-};
-
 function isLoopbackHostname(hostname: string): boolean {
   const bare = hostname.replace(/^\[|\]$/g, "");
   return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
@@ -70,9 +61,7 @@ const MIRROR_KEYS = new Set([
 ]);
 
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
-export function parseBeamMirrorConfig(
-  config: ReturnType<PluginRuntime["config"]["current"]>,
-): BeamMirrorConfig | undefined | string {
+export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]["current"]>) {
   const mirror = config.plugins?.entries?.beam?.config?.mirror;
   if (mirror === undefined) {
     return undefined;
@@ -126,13 +115,9 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
 /**
  * Reduce newest-first catalog items to chronological Beam uploads. Only user/agent
  * message text crosses the wire; reasoning, tool calls, tool results, and raw
- * payloads collapse into compact counts. Redact credentials before clipping so
- * the character boundary cannot hide the suffix needed to recognize a secret.
+ * payloads collapse into compact counts.
  */
-export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]): {
-  items: BeamTranscriptItem[];
-  truncated: boolean;
-} {
+export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptItem[]) {
   const out: BeamTranscriptItem[] = [];
   const dropped = new Map<string, number>();
   let truncated = items.some((item) => item.truncated);
@@ -152,9 +137,8 @@ export function buildBeamMirrorItems(items: readonly SessionCatalogTranscriptIte
     const text = item.text?.trim();
     if ((item.type === "userMessage" || item.type === "agentMessage") && text) {
       flush();
-      const redacted = redactToolPayloadText(text);
-      const clipped = truncateUtf16Safe(redacted, BEAM_MAX_ITEM_CHARS);
-      truncated ||= clipped.length < redacted.length;
+      const clipped = truncateUtf16Safe(text, BEAM_MAX_ITEM_CHARS);
+      truncated ||= clipped.length < text.length;
       out.push({ type: item.type, text: clipped });
       continue;
     }
@@ -218,10 +202,6 @@ type TrackedMirrorSession = {
   expiresAt: number;
 };
 
-type BeamMirrorRunner = {
-  tick: () => Promise<void>;
-};
-
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
@@ -230,7 +210,7 @@ export function createBeamMirrorRunner(params: {
   now?: () => number;
   listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
-}): BeamMirrorRunner {
+}) {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
@@ -268,19 +248,15 @@ export function createBeamMirrorRunner(params: {
     candidate: BeamMirrorCandidate,
     fingerprint: string,
   ) => {
+    tracked.delete(key);
     tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
     if (tracked.size <= MIRROR_RETRY_CAP) {
       return;
     }
-    // Never discard the upload just accepted by the receiver, even after a clock rollback.
-    let oldest: [string, TrackedMirrorSession] | undefined;
-    for (const item of tracked) {
-      if (item[0] !== key && (!oldest || item[1].expiresAt < oldest[1].expiresAt)) {
-        oldest = item;
-      }
-    }
-    if (oldest) {
-      tracked.delete(oldest[0]);
+    // At capacity, retry order is best effort; retain the just-acknowledged upload.
+    for (const oldest of tracked.keys()) {
+      tracked.delete(oldest);
+      break;
     }
   };
 
@@ -371,7 +347,7 @@ export function createBeamMirrorRunner(params: {
       version: 1,
       beamId: beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId),
       source: candidate.catalogId,
-      title: truncateUtf16Safe(redactToolPayloadText(candidate.title), 160),
+      title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
       ...(sourceModel ? { sourceModel } : {}),

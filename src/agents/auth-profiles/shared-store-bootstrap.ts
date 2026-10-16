@@ -1,11 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeWithCachedStatement } from "../../infra/kysely-sync-cache-state.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { agentEngineInput, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -18,23 +27,34 @@ import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
-  resolveSharedAuthStoreOwnership,
-  type SharedAuthStoreOwnership,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import type { SharedAuthStoreOwnership } from "./types.js";
 
 const PRIMARY_ROW_KEY = "primary";
-const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
+export const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
 
 // Ownership objects are process-stable per state root. Doctor replaces the cached object
 // after relocation, so legacy inspection is memoized only for that ownership generation.
 const inspectedLegacySharedAuthOwnerships = new WeakSet<SharedAuthStoreOwnership>();
 
-type FreshSharedAuthStoreHandoff = {
+export function hasInspectedLegacySharedAuthOwnership(
+  ownership: SharedAuthStoreOwnership,
+): boolean {
+  return inspectedLegacySharedAuthOwnerships.has(ownership);
+}
+
+export function noteInspectedLegacySharedAuthOwnership(ownership: SharedAuthStoreOwnership): void {
+  inspectedLegacySharedAuthOwnerships.add(ownership);
+}
+
+export type FreshSharedAuthStoreHandoff = {
   previousSharedDatabasePath: string;
   sharedDatabasePath: string;
   env: NodeJS.ProcessEnv;
+  sourceStillCurrent: boolean;
 };
 const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHandoff) => void>();
 
@@ -42,8 +62,7 @@ const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHando
 export function registerFreshSharedAuthStoreHandoff(
   handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
 ): () => void {
-  freshSharedAuthStoreHandoffs.add(handoff);
-  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+  return registerListener(freshSharedAuthStoreHandoffs, handoff);
 }
 
 type SourceAuthDatabase = Pick<
@@ -102,33 +121,55 @@ export function inspectSharedAuthLegacySourceFile(
   return { status: "present", size: target.size };
 }
 
-export function readSharedAuthLegacyRowsFromDatabase(database: DatabaseSync): SharedAuthLegacyRows {
+export function readSharedAuthLegacyRowsFromDatabase(
+  database: EngineConnection,
+): SharedAuthLegacyRows {
   const db = getNodeSqliteKysely<SourceAuthDatabase>(database);
-  const store = tableExists(database, "auth_profile_store")
-    ? (executeSqliteQueryTakeFirstSync(
+  // Legacy sources can predate either auth table; admit their shape once before the row batch.
+  const tables = isPostgresSqlConnection(database)
+    ? [{ name: "auth_profile_store" }, { name: "auth_profile_state" }]
+    : executeWithCachedStatement(
         database,
-        db
-          .selectFrom("auth_profile_store")
-          .select(["store_json", "updated_at"])
-          .where("store_key", "=", PRIMARY_ROW_KEY),
-      ) ?? null)
-    : null;
-  const state = tableExists(database, "auth_profile_state")
-    ? (executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("auth_profile_state")
-          .select(["state_json", "updated_at"])
-          .where("state_key", "=", PRIMARY_ROW_KEY),
-      ) ?? null)
-    : null;
-  return { store, state };
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        ["auth_profile_store", "auth_profile_state"],
+        (statement) => statement.all("auth_profile_store", "auth_profile_state"),
+      );
+  const hasStore = tables.some((row) => row.name === "auth_profile_store");
+  const hasState = tables.some((row) => row.name === "auth_profile_state");
+  const store = db
+    .selectFrom("auth_profile_store")
+    .select(["store_json as json", "updated_at"])
+    .select((expression) => expression.val("store").as("kind"))
+    .where("store_key", "=", PRIMARY_ROW_KEY);
+  const state = db
+    .selectFrom("auth_profile_state")
+    .select(["state_json as json", "updated_at"])
+    .select((expression) => expression.val("state").as("kind"))
+    .where("state_key", "=", PRIMARY_ROW_KEY);
+  const query = hasStore
+    ? hasState
+      ? store.unionAll(state)
+      : store
+    : hasState
+      ? state
+      : undefined;
+  const rows = query ? executeSqliteQuerySync(database, query).rows : [];
+  const storeRow = rows.find((row) => row.kind === "store");
+  const stateRow = rows.find((row) => row.kind === "state");
+  return {
+    store: storeRow ? { store_json: storeRow.json, updated_at: storeRow.updated_at } : null,
+    state: stateRow ? { state_json: stateRow.json, updated_at: stateRow.updated_at } : null,
+  };
 }
 
 export function inspectSharedAuthLegacyRowsReadOnly(
   sourcePath: string,
   behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): SharedAuthLegacyRows {
+  const postgres = agentEngineInput() !== undefined;
+  if (postgres) {
+    assertEngineStoreExecutionAllowed();
+  }
   if (inspectSharedAuthLegacySourceFile(sourcePath).status === "missing") {
     return { store: null, state: null };
   }
@@ -136,25 +177,45 @@ export function inspectSharedAuthLegacyRowsReadOnly(
   try {
     // Prepare in a child: closing the original inode here can release this
     // process's live auth writer locks on Linux, even through a read-only handle.
-    prepared = behavior.artifactPreservingReadOnly
-      ? prepareSqliteReadOnlyLocationSync(sourcePath)
-      : undefined;
+    prepared =
+      !postgres && behavior.artifactPreservingReadOnly
+        ? prepareSqliteReadOnlyLocationSync(sourcePath)
+        : undefined;
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
   }
   try {
-    let database: DatabaseSync;
+    let anchor: DatabaseSync;
     try {
-      database = openNodeSqliteDatabase(prepared?.location ?? sourcePath, { readOnly: true });
+      anchor = openNodeSqliteDatabase(prepared?.location ?? sourcePath, { readOnly: !postgres });
     } catch (error) {
       throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
     }
+    let database: EngineConnection = anchor;
     try {
+      if (postgres) {
+        database = openAgentEngineStore(
+          anchor,
+          undefined,
+          sourcePath,
+          true,
+          (connection, error) => {
+            database = connection;
+            throw error;
+          },
+        );
+      }
       return readSharedAuthLegacyRowsFromDatabase(database);
     } catch (error) {
       throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
     } finally {
-      database.close();
+      try {
+        database.close();
+      } finally {
+        if (database !== anchor && anchor.isOpen) {
+          anchor.close();
+        }
+      }
     }
   } finally {
     prepared?.cleanup();
@@ -175,26 +236,51 @@ export function hasPendingSharedAuthCleanup(
         if (behavior.artifactPreservingReadOnly && !tableExists(database, "migration_sources")) {
           return false;
         }
-        const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
-        const row = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("migration_sources")
-            .select("source_key")
-            .where("migration_kind", "=", SHARED_AUTH_STORE_MIGRATION_KIND)
-            .where("source_path", "=", sourcePath)
-            .where("removed_source", "=", 0)
-            .limit(1),
-        );
-        return Boolean(row);
+        return hasPendingSharedAuthCleanupInDatabase(database, sourcePath);
       },
       { env },
     ) ?? false
   );
 }
 
+export function hasPendingSharedAuthCleanupInDatabase(
+  database: EngineConnection,
+  sourcePath: string,
+): boolean {
+  const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database,
+      db
+        .selectFrom("migration_sources")
+        .select("source_key")
+        .where("migration_kind", "=", SHARED_AUTH_STORE_MIGRATION_KIND)
+        .where("source_path", "=", sourcePath)
+        .where("removed_source", "=", 0)
+        .limit(1),
+    ),
+  );
+}
+
+export function publishFreshSharedAuthStoreHandoff(
+  sourcePath: string,
+  env: NodeJS.ProcessEnv,
+  sourceStillCurrent = true,
+): void {
+  noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+  const handoff = {
+    previousSharedDatabasePath: sourcePath,
+    sharedDatabasePath: resolveSharedAuthStorePath(env),
+    env,
+    sourceStillCurrent,
+  };
+  for (const publish of freshSharedAuthStoreHandoffs) {
+    publish(handoff);
+  }
+}
+
 function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
-  const ownership = resolveSharedAuthStoreOwnership(env);
+  const ownership = prepareSharedAuthStoreOwnershipForNative(env);
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }
@@ -215,15 +301,20 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
     return;
   }
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
-  noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
-  const handoff = {
-    previousSharedDatabasePath: sourcePath,
-    sharedDatabasePath: resolveSharedAuthStorePath(env),
-    env,
-  };
-  for (const publish of freshSharedAuthStoreHandoffs) {
-    publish(handoff);
-  }
+  publishFreshSharedAuthStoreHandoff(sourcePath, env);
+}
+
+export function isSharedAuthProfileWrite(params: {
+  agentDir: string | undefined;
+  allowExplicitMain: boolean;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  return (
+    params.agentDir === undefined ||
+    (params.allowExplicitMain &&
+      path.resolve(resolveUserPath(params.agentDir, params.env)) ===
+        path.resolve(resolveSharedMainAuthAgentDir(params.env)))
+  );
 }
 
 export function prepareFreshSharedAuthStoreWrite(params: {
@@ -233,11 +324,7 @@ export function prepareFreshSharedAuthStoreWrite(params: {
 }): boolean {
   // A main-agent credential is shared; explicit main writes must follow the shared target.
   // On legacy roots both routes already resolve to the same file, so redirecting is a no-op.
-  const isSharedWrite =
-    params.agentDir === undefined ||
-    (params.allowExplicitMain &&
-      path.resolve(resolveUserPath(params.agentDir, params.env)) ===
-        path.resolve(resolveSharedMainAuthAgentDir(params.env)));
+  const isSharedWrite = isSharedAuthProfileWrite(params);
   if (isSharedWrite) {
     initializeFreshSharedAuthStore(params.env);
   }

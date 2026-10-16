@@ -31,6 +31,7 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 
 BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
@@ -143,6 +144,11 @@ cleanup_dmg() {
   if [[ -n "$DMG_OUTPUT_TEMP" ]]; then
     rm -rf "$DMG_OUTPUT_TEMP" 2>/dev/null || true
   fi
+  # A failed attach can leave the RW image's devices attached without a mount.
+  if [[ -e "$DMG_RW_PATH" ]] && ! detach_disk_image "$DMG_RW_PATH"; then
+    echo "Error: Preserving DMG temp root because its RW image is still attached: $DMG_TEMP" >&2
+    exit 1
+  fi
   rm -rf "$DMG_TEMP" 2>/dev/null || true
 }
 trap cleanup_dmg EXIT
@@ -201,7 +207,6 @@ if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
     echo "WARN: DMG background missing: $DMG_BACKGROUND_SMALL / $DMG_BACKGROUND_PATH" >&2
   fi
 
-  # Volume icon: reuse the app icon if available.
   ICON_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"
   if [[ -f "$ICON_SRC" ]]; then
     cp "$ICON_SRC" "$MOUNT_POINT/.VolumeIcon.icns"

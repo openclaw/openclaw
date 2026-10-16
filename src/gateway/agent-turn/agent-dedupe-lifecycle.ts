@@ -72,8 +72,7 @@ export function createAgentDedupeLifecycle(params: {
     const acceptedAt = Date.now();
     const pendingTimeoutMs = resolveAgentTimeoutMs({
       cfg: params.cfg,
-      overrideSeconds:
-        typeof params.request.timeout === "number" ? params.request.timeout : undefined,
+      overrideSeconds: params.request.timeout,
     });
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,

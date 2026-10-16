@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
@@ -28,6 +29,7 @@ import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
   type ApplicationPlacementStartupDependencies,
+  type ApplicationPlacementStartupStatus,
 } from "./session-placement-startup.ts";
 
 registerNewSessionSetupEnglish();
@@ -309,6 +311,13 @@ export default function createApplicationPlacementStartupRuntime(
     }
   };
 
+  const restartEntry = (
+    entry: PlacementStartupEntry,
+    recovery: SessionPlacementRecovery,
+    mode: SessionPlacementStartMode,
+  ) =>
+    start({ recovery, persistRecovery: entry.persistRecovery, mode, createdAt: entry.createdAt });
+
   const handleGatewaySnapshot = (
     snapshot: ApplicationPlacementStartupDependencies["gateway"]["snapshot"],
   ) => {
@@ -328,12 +337,7 @@ export default function createApplicationPlacementStartupRuntime(
         entry.retainsConnection() &&
         ownsRecovery(entry)
       ) {
-        start({
-          recovery: entry.work.recovery,
-          persistRecovery: entry.persistRecovery,
-          mode: "recover",
-          createdAt: entry.createdAt,
-        });
+        restartEntry(entry, entry.work.recovery, "recover");
       }
     }
     for (const recovery of listSessionPlacementRecoveries(
@@ -376,11 +380,14 @@ export default function createApplicationPlacementStartupRuntime(
             : entry.work.recovery.phase === "sending"
               ? "sending"
               : "pending";
+      let startStatus: ApplicationPlacementStartupStatus["startStatus"];
       if (phase === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
         );
         const placementState = row?.placement?.state;
+        startStatus =
+          row?.placement?.state === "provisioning" ? row.placement.startStatus : undefined;
         if (placementState && isStartupPlacementPhase(placementState)) {
           phase = placementState;
         }
@@ -389,6 +396,7 @@ export default function createApplicationPlacementStartupRuntime(
         sessionKey: entry.owner.sessionKey,
         targetKind: entry.work.recovery.target.kind,
         phase,
+        ...(startStatus ? { startStatus } : {}),
         startedAt: entry.createdAt,
         initialTurn: buildPlacementStartupInitialTurn({
           recovery: entry.work.recovery,
@@ -432,12 +440,7 @@ export default function createApplicationPlacementStartupRuntime(
       // Replace the owner before Stop leaves the browser; late active dispatch replies lose send authority.
       entry.work = { kind: "paused", recovery };
       retireEntry(entry, false);
-      start({
-        recovery,
-        persistRecovery: entry.persistRecovery,
-        mode: "recover",
-        createdAt: entry.createdAt,
-      });
+      restartEntry(entry, recovery, "recover");
     },
     retry(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
@@ -465,17 +468,9 @@ export default function createApplicationPlacementStartupRuntime(
         pauseEntry(entry, entry.work.recovery, "placement recovery storage is unavailable");
         return;
       }
-      start({
-        recovery,
-        persistRecovery: entry.persistRecovery,
-        mode: "retry",
-        createdAt: entry.createdAt,
-      });
+      restartEntry(entry, recovery, "retry");
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
       entries.clear();

@@ -17,8 +17,6 @@ type TargetNormalizerCacheEntry = {
 };
 
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
-const preparedPluginSignatureIds = new WeakMap<ChannelPlugin, number>();
-let nextPreparedPluginSignatureId = 1;
 
 function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin | undefined {
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
@@ -89,17 +87,6 @@ function resolveTargetNormalizer(
   return normalizer;
 }
 
-function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
-  const existing = preparedPluginSignatureIds.get(plugin);
-  if (existing) {
-    return existing;
-  }
-  const id = nextPreparedPluginSignatureId;
-  nextPreparedPluginSignatureId += 1;
-  preparedPluginSignatureIds.set(plugin, id);
-  return id;
-}
-
 export function normalizeTargetForProvider(
   provider: string,
   raw = "",
@@ -114,11 +101,9 @@ export function normalizeTargetForProvider(
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
-type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
-
 export type ResolvedPluginMessagingTarget = {
   to: string;
-  kind: TargetResolveKindLike;
+  kind: ChannelDirectoryEntryKind;
   display?: string;
   source: "normalized" | "directory";
   resolutionSource: "plugin";
@@ -167,7 +152,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
   channel: ChannelId;
   input: string;
   accountId?: string | null;
-  preferredKind?: TargetResolveKindLike;
+  preferredKind?: ChannelDirectoryEntryKind;
   requireIdLike?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedPluginMessagingTarget | undefined> {
@@ -209,33 +194,4 @@ export async function maybeResolvePluginMessagingTarget(params: {
     source: resolved.source ?? "normalized",
     resolutionSource: "plugin",
   };
-}
-
-export function buildTargetResolverSignature(
-  channel: ChannelId,
-  preparedPlugin?: ChannelPlugin,
-): string {
-  const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
-  const registryScope = preparedPlugin
-    ? `prepared:${resolvePreparedPluginSignatureId(preparedPlugin)}`
-    : "pinned";
-  const resolver = plugin?.messaging?.targetResolver;
-  const hint = resolver?.hint ?? "";
-  const reserved = (resolver?.reservedLiterals ?? [])
-    .map(normalizeOptionalLowercaseString)
-    .filter((literal): literal is string => Boolean(literal))
-    .toSorted()
-    .join(",");
-  const looksLike = resolver?.looksLikeId;
-  // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
-  const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${registryScope}|${hint}|${reserved}|${source}`);
-}
-
-function hashSignature(value: string): string {
-  let hash = 5381;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
 }

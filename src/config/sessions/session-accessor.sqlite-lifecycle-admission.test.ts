@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as logging from "../../logging/logger.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -17,7 +18,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import {
@@ -153,7 +153,7 @@ function fixture() {
   };
   closeOpenClawAgentDatabaseByPath(database.path);
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  clearOpenClawAgentIntegrityVerification(database.path, databaseOptions.env);
+  revokeSqliteDatabaseAdmissionsForPath(database.path);
   return { scope, databaseOptions };
 }
 
@@ -405,24 +405,6 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
 });
 
-it("reuses warm lifecycle integrity proof without another validation", async () => {
-  const f = fixture();
-  openOpenClawAgentDatabase(f.databaseOptions);
-  const admission = observeColdAdmission(f.databaseOptions.path);
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
-    }),
-  );
-  expect(
-    await Promise.race([admission.entered.promise.then(() => false), work.then(() => true)]),
-  ).toBe(true);
-  await expect(work).resolves.toMatchObject({ deleted: true });
-  expect(admission.parentChecks()).toBe(0);
-});
-
 it("retains the selected state owner while cold deletion waits in the FIFO", async () => {
   const f = fixture();
   const blockerEntered = createDeferred();
@@ -489,11 +471,9 @@ it("keeps historical preparation asynchronous after materialization evicts its p
   const admission = observeColdAdmission(f.databaseOptions.path, "historical-check");
   archiveHook.afterMaterialize = () => {
     archiveHook.afterMaterialize = undefined;
-    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions), {
-      eviction: true,
-    });
+    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions));
     invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
-    clearOpenClawAgentIntegrityVerification(f.databaseOptions.path, f.databaseOptions.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.databaseOptions.path);
     admission.armHistoricalCheck();
   };
   const work = own(

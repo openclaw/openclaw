@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import {
   createAssistantMessage,
   createAttachmentBlock,
@@ -19,23 +20,27 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(nothing, container);
+  cleanupSolid();
   container.remove();
 });
 
 function renderAssistantMessage(
   target: HTMLElement,
   message: unknown,
-  options: Partial<Parameters<typeof renderMessageGroup>[1]>,
+  options: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
 ) {
-  render(
-    renderMessageGroup(createMessageGroup(message, "assistant"), {
-      showReasoning: false,
-      showToolCalls: false,
-      assistantName: "OpenClaw",
-      assistantAvatar: null,
-      ...options,
-    }),
+  mountSolid(
+    MessageGroup,
+    {
+      group: createMessageGroup(message, "assistant"),
+      options: {
+        showReasoning: false,
+        showToolCalls: false,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        ...options,
+      },
+    },
     target,
   );
 }
@@ -103,34 +108,22 @@ describe("message attachment image gallery projection", () => {
     },
   );
 
-  it("keeps duplicate attachment slots but not their persisted mirrors in the gallery", () => {
-    const source = "https://example.com/repeated.png";
-    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
+  const source = "https://example.com/repeated.png";
+  it.each([
+    {
+      name: "duplicate attachment slots without persisted mirrors",
+      message: createAssistantMessage(
         [
           createAttachmentBlock(source, "document", "Repeated", "image/png"),
           createAttachmentBlock(source, "document", "Repeated", "image/png"),
         ],
         { __openclaw: { media: [{ path: source, contentType: "image/png" }] } },
       ),
-      { onOpenImage },
-    );
-    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
-    expect(tiles).toHaveLength(2);
-    tiles[1]?.click();
-    expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({
       index: 1,
-      items: [expect.any(Function), expect.any(Function)],
-    });
-  });
-
-  it("includes persisted images identified by an opaque download filename in the gallery", () => {
-    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-    renderAssistantMessage(
-      container,
-      createAssistantMessage("", {
+    },
+    {
+      name: "persisted images with opaque download filenames",
+      message: createAssistantMessage("", {
         __openclaw: {
           media: [
             {
@@ -146,13 +139,16 @@ describe("message attachment image gallery projection", () => {
           ],
         },
       }),
-      { onOpenImage },
-    );
+      index: 0,
+    },
+  ])("projects $name into the gallery", ({ message, index }) => {
+    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+    renderAssistantMessage(container, message, { onOpenImage });
     const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
     expect(tiles).toHaveLength(2);
-    tiles[0]?.click();
+    tiles[index]?.click();
     expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({
-      index: 0,
+      index,
       items: [expect.any(Function), expect.any(Function)],
     });
   });

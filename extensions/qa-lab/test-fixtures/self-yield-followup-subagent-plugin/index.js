@@ -3,23 +3,19 @@ import { randomUUID } from "node:crypto";
 const TRIGGER = "qa self yield follow-up";
 const FOLLOW_UP_MESSAGE =
   "Subagent self yield qa remote job finished. Reply with only the exact marker.";
+const QA_SPAWNED_REPLY = "QA-SELF-YIELD-SPAWNED";
 const stateKey = Symbol.for("openclaw.qaSelfYieldFollowupState");
 
 function getState() {
   if (globalThis[stateKey]) {
     return globalThis[stateKey];
   }
-  let resolveFinalReply;
-  const finalReply = new Promise((resolve) => {
-    resolveFinalReply = resolve;
-  });
   return (globalThis[stateKey] = {
     childSessionKey: undefined,
-    finalReply,
     followUpRunId: undefined,
     kickoffRunId: undefined,
-    resolveFinalReply,
     yieldEntered: false,
+    releaseYield: undefined,
   });
 }
 
@@ -48,11 +44,16 @@ function writeJson(res, statusCode, body) {
 export default {
   id: "qa-self-yield-followup-subagent",
   register(api) {
-    api.on("after_tool_call", (event) => {
+    api.on("before_tool_call", async (event) => {
       if (event.toolName !== "sessions_yield") {
         return;
       }
-      getState().yieldEntered = true;
+      const state = getState();
+      state.yieldEntered = true;
+      // Admit the continuation before the paused turn can publish its requester notice.
+      await new Promise((resolve) => {
+        state.releaseYield = resolve;
+      });
     });
 
     api.on("before_dispatch", async (event) => {
@@ -75,8 +76,9 @@ export default {
           completionDelivery: "current-requester",
         });
         getState().kickoffRunId = result.runId;
-        const finalReply = await getState().finalReply;
-        return { handled: true, text: finalReply };
+        // The kickoff reply carries no child result: the follow-up's answer must
+        // reach this requester through the registry's completion announcement.
+        return { handled: true, text: QA_SPAWNED_REPLY };
       } catch (error) {
         return {
           handled: true,
@@ -145,10 +147,12 @@ export default {
       gatewayRuntimeScopeSurface: "trusted-operator",
       async handler(_req, res) {
         const state = getState();
-        if (!state.followUpRunId) {
+        if (!state.followUpRunId || !state.releaseYield) {
           writeJson(res, 409, { ok: false, error: "follow-up was not queued" });
           return true;
         }
+        state.releaseYield();
+        state.releaseYield = undefined;
         const terminal = await api.runtime.subagent.waitForRun({
           runId: state.followUpRunId,
           timeoutMs: 90_000,
@@ -164,9 +168,6 @@ export default {
             part?.type === "text" && typeof part.text === "string" ? [part.text] : [],
           )
           .at(-1);
-        if (terminal.status === "ok" && finalReply) {
-          state.resolveFinalReply(finalReply);
-        }
         writeJson(res, 200, {
           ok: terminal.status === "ok",
           kickoffRunId: state.kickoffRunId,

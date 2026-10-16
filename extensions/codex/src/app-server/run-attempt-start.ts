@@ -7,7 +7,7 @@ import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -33,7 +33,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     connection,
     runtimeParams,
-    preparedAuthBinding,
+    clientOptions,
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
@@ -44,7 +44,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
-    turnState.promptBuild.developerInstructions,
+    turnState.promptBuild.threadDeveloperInstructions ??
+      turnState.promptBuild.developerInstructions,
     attemptTools.configuredMcp?.diagnosticNotice,
   );
   const {
@@ -54,9 +55,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     appServer,
     pluginConfig,
     computerUseConfig,
-    startupClientAuthProfileId,
     runtimeArtifactRequest,
-    startupPreparedAuth,
     agentDir,
     sessionAgentId,
     effectiveWorkspace,
@@ -67,7 +66,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
-    startupAuthRequirement,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -83,23 +81,22 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     const startupResult = await startCodexAttemptThread({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
       appServer: pluginAppServer,
       pluginConfig,
       computerUseConfig,
-      startupAuthProfileId: startupClientAuthProfileId,
-      startupAuthRequirement,
-      startupAuthBindingFingerprint: preparedAuthBinding?.fingerprint,
+      clientOptions,
       ...(runtimeArtifactRequest ? { runtimeArtifactRequest } : {}),
-      startupPreparedAuth,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
       agentDir,
       config: params.config,
       shellEnvironment: connection.shellEnvironment,
       shellPathPrepend: connection.shellPathPrepend,
+      shellGitConfigParameters: connection.shellGitConfigParameters,
       disableLoginShell: connection.disableLoginShell,
       buildAttemptParams: () => ({ ...runtimeParams }),
       ...(effectiveRuntimeModelId !== runtimeParams.modelId
@@ -112,7 +109,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
-      refreshableInstructions: context.refreshableInstructions,
+      refreshableInstructions:
+        joinPresentSections(
+          context.refreshableInstructions,
+          turnState.promptBuild.turnDeveloperInstructions,
+        ) || undefined,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,
@@ -160,11 +161,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
-    toolBridge.setRemoteWorkspaceFileReader?.((request) =>
-      readBoundedCodexRemoteWorkspaceFile({
-        ...request,
-        client: startupResult.client,
-      }),
+    toolBridge.setRemoteWorkspaceFileReader?.(
+      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),
     );
     if (
       usesSupervisionConnection &&
@@ -176,10 +174,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     }
     if (state.thread.lifecycle.action === "started" || state.thread.lifecycle.action === "forked") {
       const activePolicy = resolveReviewerPolicyContext(state.thread);
-      const activeConfig = await resolveRuntimeOptionsForCurrentBinding({
-        modelProvider: activePolicy.modelProvider,
-        model: activePolicy.model,
-      });
+      const activeConfig = await resolveRuntimeOptionsForCurrentBinding(activePolicy);
       connection.assertCurrent();
       const activeAppServer = resolveCodexAppServerForModelProvider({
         appServer: activeConfig,

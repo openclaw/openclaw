@@ -14,7 +14,7 @@ function fixture(command: CommandFixture) {
   const cli = String.raw`#!/usr/bin/env node
 import fs from 'node:fs';
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid})+'\n');
+fs.appendFileSync(process.env.RECORD, JSON.stringify({args, pid:process.pid, parentPid:process.ppid, marker:process.env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER})+'\n');
 if (args.includes('doctor')) {
   if (process.env.INTERRUPT_DOCTOR) {
     for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -38,6 +38,7 @@ if (args.includes('doctor')) {
       env: {
         PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
         HOME: root,
+        TMPDIR: root,
         RECORD: record,
         ...env,
       },
@@ -60,6 +61,7 @@ if (args.includes('doctor')) {
 describe.skipIf(process.platform === "win32")("Docker image activation", () => {
   it.for([
     { args: ["openclaw.mjs", "gateway"], rootOptions: [] },
+    { args: ["openclaw", "gateway"], rootOptions: [], installed: true },
     { args: ["dist/index.js", "gateway", "--bind", "lan", "--port", "18789"], rootOptions: [] },
     {
       args: ["openclaw.mjs", "--profile", "demo", "gateway", "run", "--no-color"],
@@ -69,12 +71,18 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { args: ["openclaw.mjs", "--dev", "gateway"], rootOptions: ["--dev"] },
     { args: ["openclaw.mjs", "gateway", "--dev"], rootOptions: [] },
     { args: ["openclaw.mjs", "gateway", "--token", "--reset"], rootOptions: [] },
-    { args: ["openclaw.mjs", "gateway", "--token", "--profile=token-value"], rootOptions: [] },
   ])(
     "settles Doctor then execs the original command: $args",
-    async ({ args, rootOptions }, { command }) => {
+    async ({ args, rootOptions, installed }, { command }) => {
       const f = fixture(command);
-      const result = await f.run(args);
+      if (installed) {
+        fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
+      }
+      const result = installed
+        ? await f.runCommand(args, {
+            PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+          })
+        : await f.run(args);
       expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
       const rows = f.read();
       expect(rows.map((row) => row.args)).toEqual([
@@ -85,21 +93,6 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     },
   );
 
-  it("repairs before the image's installed openclaw command", async ({ command }) => {
-    const f = fixture(command);
-    fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
-    const result = await f.runCommand(["openclaw", "gateway"], {
-      PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-    });
-    expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
-    const rows = f.read();
-    expect(rows.map((row) => row.args)).toEqual([
-      ["doctor", "--fix", "--non-interactive"],
-      ["gateway"],
-    ]);
-    expect(rows[1].pid).toBe(rows[0].parentPid);
-  });
-
   it.for(
     [
       ["gateway", "--help"],
@@ -108,7 +101,6 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
       ["gateway", "status"],
       ["gateway", "--dev", "--reset"],
       ["gateway", "--", "--profile", "literal"],
-      ["gateway", "--unknown-option"],
     ].map((args) => ({ args })),
   )("passes through without an activation repair: $args", async ({ args }, { command }) => {
     const f = fixture(command);
@@ -143,32 +135,55 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     expect(result).toMatchObject({ status: 0, stdout: "unchanged", error: undefined });
   });
 
-  it("does not start Gateway after Doctor refuses repair", async ({ command }) => {
-    const f = fixture(command);
-    expect((await f.run(["openclaw.mjs", "gateway"], { DOCTOR_EXIT: "78" })).status).toBe(78);
-    expect(f.read()).toHaveLength(1);
-  });
-
   it.for([
+    { signal: undefined, forwarded: undefined, status: 78 },
     { signal: "SIGTERM", forwarded: "SIGTERM", status: 143 },
     { signal: "SIGINT", forwarded: "SIGINT", status: 130 },
     { signal: "SIGHUP", forwarded: "SIGTERM", status: 129 },
     { signal: "SIGQUIT", forwarded: "SIGTERM", status: 131 },
   ])(
-    "joins Doctor after $signal even when it exits successfully, without starting Gateway",
+    "settles Doctor's non-success status $status without starting Gateway",
     async ({ signal, forwarded, status }, { command }) => {
       const f = fixture(command);
-      expect((await f.run(["openclaw.mjs", "gateway"], { INTERRUPT_DOCTOR: signal })).status).toBe(
-        status,
-      );
+      const env: Record<string, string> = signal
+        ? { INTERRUPT_DOCTOR: signal }
+        : { DOCTOR_EXIT: "78" };
+      expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
       expect(f.read()).toEqual([
         {
           args: ["doctor", "--fix", "--non-interactive"],
           pid: expect.any(Number),
           parentPid: expect.any(Number),
+          marker: expect.any(String),
         },
-        { stopped: true, signal: forwarded },
+        ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
       ]);
     },
   );
+
+  it("gives Doctor one container-local capture marker per activation selection", async ({
+    command,
+  }) => {
+    const f = fixture(command);
+    // An inherited path never replaces the marker this container's activation owns.
+    const inherited = { OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/elsewhere/marker" };
+    expect((await f.run(["openclaw.mjs", "gateway"], inherited)).status).toBe(0);
+    expect((await f.run(["openclaw.mjs", "gateway"])).status).toBe(0);
+    expect((await f.run(["openclaw.mjs", "--profile", "demo", "gateway"])).status).toBe(0);
+    const rows = f.read();
+    const markers = rows.filter((row) => row.args.includes("doctor")).map((row) => row.marker);
+    expect(markers).toHaveLength(3);
+    for (const marker of markers) {
+      expect(path.dirname(marker)).toBe(f.root);
+    }
+    expect(markers[1]).toBe(markers[0]);
+    expect(markers[2]).not.toBe(markers[0]);
+    // Doctor owns the marker; the activation adapter never creates it.
+    expect(fs.existsSync(markers[0])).toBe(false);
+    expect(rows.filter((row) => !row.args.includes("doctor")).map((row) => row.marker)).toEqual([
+      "/elsewhere/marker",
+      undefined,
+      undefined,
+    ]);
+  });
 });

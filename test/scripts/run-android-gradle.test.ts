@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,9 +49,45 @@ describe("run-android-gradle", () => {
     );
   });
 
+  posixIt(
+    "reports an unavailable proof prerequisite without starting Gradle or counting tests",
+    () => {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/run-android-gradle.mts", "--proof", ":wear-shared:testDebugUnitTest"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            JAVA_HOME: "/openclaw-missing-proof-jdk",
+            OPENCLAW_ANDROID_GRADLE_ALLOW_LINUX_ARM: "1",
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "prerequisite failure; Gradle was not started and no tests executed",
+      );
+      expect(result.stderr).toContain("JAVA_HOME");
+      expect(result.stderr).not.toContain("Gradle failed after prerequisite checks");
+    },
+  );
+
   describe("resolveAndroidSdkEnv", () => {
     const macSdk = path.join("/Users/dev", "Library", "Android", "sdk");
     const linuxSdk = path.join("/home/dev", "Android", "Sdk");
+
+    it("discovers the SDK prepared by the existing Android toolchain action", () => {
+      const sdk = path.join("/home/dev", ".android-sdk");
+      expect(
+        resolveAndroidSdkEnv({
+          env: {},
+          homeDir: "/home/dev",
+          platform: "linux",
+          existsSync: (candidate) => candidate === sdk,
+        }),
+      ).toEqual({ ANDROID_HOME: sdk });
+    });
 
     it("keeps env untouched when ANDROID_HOME or ANDROID_SDK_ROOT is set", () => {
       const env = { ANDROID_HOME: "/opt/sdk" };
@@ -108,11 +144,14 @@ describe("run-android-gradle", () => {
 const { spawn } = require("node:child_process");
 const descendant = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);",
-], { stdio: "ignore" });
-process.stdout.write(
-  JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
-);
+  "setInterval(() => {}, 1_000); process.stdout.write('ready');",
+], { stdio: ["ignore", "pipe", "ignore"] });
+// Resistance/escalation is covered by managed-child-process.test.ts.
+descendant.stdout.once("data", () => {
+  process.stdout.write(
+    JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
+  );
+});
 setInterval(() => {}, 1_000);
 `;
       const runnerSource = `

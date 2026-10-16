@@ -84,6 +84,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       scope?: OperatorScope;
       profileAccess?: GatewayMethodProfileAccess;
       sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+      shareKey?: import("../gateway/methods/descriptor.js").GatewayReadSharing["shareKey"];
+      shareInvalidationEvents?: readonly string[];
+      shareMaxAgeMs?: number;
     },
   ) => {
     const trimmed = method.trim();
@@ -114,6 +117,18 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
         ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
+        ...(opts?.shareKey
+          ? {
+              shareKey: (caller, params) =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  scopedRuntime: true,
+                })?.() === true
+                  ? opts.shareKey!(caller, params)
+                  : null,
+              shareInvalidationEvents: opts.shareInvalidationEvents,
+              shareMaxAgeMs: opts.shareMaxAgeMs,
+            }
+          : {}),
       }),
     );
   };
@@ -144,15 +159,15 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     if (provider.continueSession) {
-      getPluginInstance(record)?.admitFactory(provider.continueSession);
+      getPluginInstance(record)?.admitFactory(provider.continueSession, ["afterConversationBound"]);
     }
     const normalizedProvider = { ...provider, id, label };
-    registry.sessionCatalogs.push(
-      createRegistration(record, {
-        provider:
-          state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider,
-      }),
-    );
+    const catalog =
+      state.getNativeCatalogGate(record)?.catalog(normalizedProvider) ?? normalizedProvider;
+    if (catalog.continueSession) {
+      getPluginInstance(record)?.admitFactory(catalog.continueSession, ["afterConversationBound"]);
+    }
+    registry.sessionCatalogs.push(createRegistration(record, { provider: catalog }));
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -320,7 +335,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const agentTools = plugin.agentTools;
     if (agentTools) {
       plugin.agentTools = typeof agentTools === "function" ? agentTools : () => agentTools;
-      getPluginInstance(record)?.admitFactory(plugin.agentTools);
+      getPluginInstance(record)?.admitFactory(plugin.agentTools, "tool");
     }
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.

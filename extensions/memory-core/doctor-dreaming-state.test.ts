@@ -61,7 +61,7 @@ describe("memory-core dreaming state migration boundary", () => {
 
   function migrationParams() {
     return {
-      config: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
+      config: { agents: { entries: { main: { workspace: workspaceDir } } } },
       env,
       stateDir: path.join(rootDir, "state"),
       oauthDir: path.join(rootDir, "oauth"),

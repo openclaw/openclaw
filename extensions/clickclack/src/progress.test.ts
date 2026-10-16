@@ -1,7 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
-import { createClickClackAgentProgressPublisher } from "./progress.js";
+import {
+  createClickClackAgentProgressPublisher,
+  type ClickClackItemEventPayload,
+} from "./progress.js";
 
 type PublisherOptions = Parameters<typeof createClickClackAgentProgressPublisher>[0];
+
+const retractionCases: {
+  name: string;
+  initial: ClickClackItemEventPayload;
+  end: ClickClackItemEventPayload;
+}[] = [
+  {
+    name: "commentary",
+    initial: { itemId: "preamble_1", kind: "preamble", progressText: "Temporary note" },
+    end: { itemId: "preamble_1", kind: "preamble", progressText: "" },
+  },
+  {
+    name: "model wait",
+    initial: {
+      itemId: "model-wait",
+      kind: "model-wait",
+      phase: "update",
+      progressText: "Waiting for the local model to respond",
+      suppressDurableProgress: true,
+    },
+    end: {
+      itemId: "model-wait",
+      kind: "model-wait",
+      phase: "end",
+      suppressDurableProgress: true,
+    },
+  },
+];
 
 function createPublisher(
   publishEphemeral: PublisherOptions["client"]["publishEphemeral"],
@@ -57,42 +88,13 @@ describe("ClickClack native agent progress", () => {
         id: "item:tool_1",
         kind: "tool",
         tool_name: "search",
-        text: "🧩 Search: Done",
+        text: "Search: Done",
         status: "completed",
       },
     });
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({
       turn_id: "msg_1",
       op: "clear",
-    });
-  });
-
-  it("retains canonical item identity through completion", async () => {
-    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-    const publisher = createPublisher(publishEphemeral);
-
-    publisher.start();
-    publisher.onItemEvent({
-      itemId: "tool:read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Reading",
-    });
-    publisher.onItemEvent({
-      itemId: "tool:read-1",
-      toolCallId: "read-1",
-      kind: "tool",
-      name: "read",
-      progressText: "Done",
-      phase: "end",
-      status: "completed",
-    });
-    await publisher.finalize();
-
-    expect(publishEphemeral).toHaveBeenCalledTimes(3);
-    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      op: "finalize",
-      line: { id: "item:tool:read-1", text: "📖 Read: Done", status: "completed" },
     });
   });
 
@@ -114,7 +116,7 @@ describe("ClickClack native agent progress", () => {
 
     expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-      line: { text: "🧩 Server.exec" },
+      line: { text: "Server.exec" },
     });
   });
 
@@ -164,97 +166,62 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({ op: "clear" });
   });
 
-  it("publishes streamed line updates at a bounded cadence", async () => {
-    vi.useFakeTimers();
-    try {
-      const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createPublisher(publishEphemeral);
+  it.each(retractionCases)(
+    "retracts an existing $name line without replacing it with a placeholder",
+    async ({ initial, end }) => {
+      vi.useFakeTimers();
+      try {
+        const publishEphemeral = vi.fn().mockResolvedValue(undefined);
+        const publisher = createPublisher(publishEphemeral);
 
-      publisher.start();
-      await vi.advanceTimersByTimeAsync(0);
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "first" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "second" });
-      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "latest" });
+        publisher.start();
+        await vi.advanceTimersByTimeAsync(0);
+        publisher.onItemEvent(initial);
+        await vi.advanceTimersByTimeAsync(100);
+        publisher.onItemEvent(end);
+        await vi.advanceTimersByTimeAsync(100);
+        await publisher.finalize();
 
-      expect(publishEphemeral).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(100);
+        expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
+          op: "append",
+          line: { id: `item:${initial.itemId}`, text: initial.progressText },
+        });
+        expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({
+          op: "update",
+          line: { id: `item:${initial.itemId}`, text: "" },
+        });
+        expect(publishEphemeral.mock.calls[3]?.[0].payload).toMatchObject({ op: "clear" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-      expect(publishEphemeral).toHaveBeenCalledTimes(2);
-      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-        op: "append",
-        line: { id: "item:tool_1", text: expect.stringContaining("latest") },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each(retractionCases)(
+    "drops $name retracted before its first progress frame is published",
+    async ({ initial, end }) => {
+      vi.useFakeTimers();
+      try {
+        const publishEphemeral = vi.fn().mockResolvedValue(undefined);
+        const publisher = createPublisher(publishEphemeral);
 
-  it("retracts an existing commentary line without replacing it with a placeholder", async () => {
-    vi.useFakeTimers();
-    try {
-      const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createPublisher(publishEphemeral);
+        publisher.start();
+        await vi.advanceTimersByTimeAsync(0);
+        publisher.onItemEvent(initial);
+        publisher.onItemEvent(end);
+        await publisher.finalize();
 
-      publisher.start();
-      await vi.advanceTimersByTimeAsync(0);
-      publisher.onItemEvent({
-        itemId: "preamble_1",
-        kind: "preamble",
-        progressText: "Temporary note",
-      });
-      await vi.advanceTimersByTimeAsync(100);
-      publisher.onItemEvent({
-        itemId: "preamble_1",
-        kind: "preamble",
-        progressText: "",
-      });
-      await vi.advanceTimersByTimeAsync(100);
-      await publisher.finalize();
-
-      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
-        op: "append",
-        line: { id: "item:preamble_1", text: "Temporary note" },
-      });
-      expect(publishEphemeral.mock.calls[2]?.[0].payload).toMatchObject({
-        op: "update",
-        line: { id: "item:preamble_1", text: "" },
-      });
-      expect(publishEphemeral.mock.calls[3]?.[0].payload).toMatchObject({ op: "clear" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("drops commentary retracted before its first progress frame is published", async () => {
-    vi.useFakeTimers();
-    try {
-      const publishEphemeral = vi.fn().mockResolvedValue(undefined);
-      const publisher = createPublisher(publishEphemeral);
-
-      publisher.start();
-      await vi.advanceTimersByTimeAsync(0);
-      publisher.onItemEvent({
-        itemId: "preamble_1",
-        kind: "preamble",
-        progressText: "Temporary note",
-      });
-      publisher.onItemEvent({
-        itemId: "preamble_1",
-        kind: "preamble",
-        progressText: "",
-      });
-      await publisher.finalize();
-
-      expect(publishEphemeral).toHaveBeenCalledTimes(2);
-      expect(publishEphemeral.mock.calls[0]?.[0].payload).toMatchObject({
-        op: "append",
-        line: { id: "turn" },
-      });
-      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({ op: "clear" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(publishEphemeral).toHaveBeenCalledTimes(2);
+        expect(publishEphemeral.mock.calls[0]?.[0].payload).toMatchObject({
+          op: "append",
+          line: { id: "turn" },
+        });
+        expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({ op: "clear" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("does not let a stalled transport hold turn finalization", async () => {
     vi.useFakeTimers();

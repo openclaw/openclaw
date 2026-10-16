@@ -9,6 +9,15 @@ type StateLocation = Pick<
 >;
 type StateSource = string | { directory: string; prefix?: string; suffix: string };
 
+/** Candidate-packaged, read-only retirement checks bound to installed migration identities. */
+export type PluginStateRetentionContract = {
+  packageName: string;
+  stateMigrations: readonly Pick<
+    ReturnType<typeof defineRetiredPluginStateMigration>,
+    "id" | "assertSupportedState"
+  >[];
+};
+
 /** Refuses retired files without parsing, importing, or removing their contents. */
 export function defineRetiredPluginStateMigration(params: {
   id: string;

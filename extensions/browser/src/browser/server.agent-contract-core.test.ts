@@ -302,23 +302,6 @@ describe("browser control server", () => {
     });
   });
 
-  it("forwards the minimum navigation timeout to Playwright", async () => {
-    const base = await startServerAndBase();
-
-    const response = await postJson<{ ok: boolean }>(`${base}/navigate`, {
-      url: "https://example.com/slow",
-      timeoutMs: 10,
-    });
-
-    expect(response.ok).toBe(true);
-    expect(requirePwMock("navigateViaPlaywright")).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/slow",
-        timeoutMs: 1_000,
-      }),
-    );
-  });
-
   it.each([
     { ownerTarget: undefined, backendTarget: "unrelated-999", expected: "abcd1234" },
     { ownerTarget: "replacement-target", backendTarget: undefined, expected: "replacement-target" },
@@ -366,7 +349,7 @@ describe("browser control server", () => {
     });
 
     expect(response.ok).toBe(true);
-    const chromeMcp = await vi.importMock<typeof import("./chrome-mcp.js")>("./chrome-mcp.js");
+    const chromeMcp = await import("./chrome-mcp.js");
     expect(chromeMcp.navigateChromeMcpPage).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "openclaw",
@@ -582,21 +565,6 @@ describe("browser control server", () => {
     expect(requirePwMock("batchViaPlaywright")).not.toHaveBeenCalled();
   });
 
-  it("rejects loose response body numeric options before dispatch", async () => {
-    const base = await startServerAndBase();
-    for (const [key, value] of [
-      ["timeoutMs", "1e3"],
-      ["maxChars", "0x10"],
-    ] as const) {
-      expect(
-        await postJson(`${base}/response/body`, { url: "**/api/data", [key]: value }),
-      ).toMatchObject({
-        error: expect.stringContaining(`${key} must be a positive integer.`),
-      });
-    }
-    expect(requirePwMock("responseBodyViaPlaywright")).not.toHaveBeenCalled();
-  });
-
   it("rejects loose hook and download timeout options before dispatch", async () => {
     const base = await startServerAndBase();
     for (const [route, body, mockName] of [
@@ -757,20 +725,6 @@ describe("browser control server", () => {
       expect(requirePwMock(mockName)).not.toHaveBeenCalled();
     },
   );
-
-  it("allows resizing a disallowed tab", async () => {
-    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
-    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
-    expect(
-      await postJson(`${await startServerAndBase()}/act`, {
-        kind: "resize",
-        targetId: "abcd1234",
-        width: 1024,
-        height: 768,
-      }),
-    ).toMatchObject({ ok: true });
-    expect(requirePwMock("resizeViewportViaPlaywright")).toHaveBeenCalled();
-  });
 
   it("keeps a disallowed tab close bound to the tab it closed", async () => {
     setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });

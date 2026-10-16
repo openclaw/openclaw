@@ -40,7 +40,6 @@ async function resolveLiveModel(): Promise<{
   const discovery = await discoverLlamaServer({
     baseUrl: LIVE_URL,
     apiKey: LIVE_KEY,
-    cacheTtlMs: 0,
   });
   if (discovery.kind !== "success") {
     throw new Error(`llama-server discovery failed: ${discovery.kind}`);

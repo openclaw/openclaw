@@ -106,16 +106,42 @@ describe("ACP operator model ceiling", () => {
     }
   }
 
-  it.each(["fixture/denied", undefined])(
-    "rejects an excluded or unqualified selection before backend preparation: %s",
-    async (model) => {
-      const { outcome, runtimeState } = await run(model);
-      expect(outcome).toBeInstanceOf(Error);
-      expect(String(outcome)).toContain("operator role cannot use this model");
+  it.each<[name: string, args: Parameters<typeof run>, beforeBackend: boolean]>([
+    ["unqualified selection", [undefined], true],
+    [
+      "native model alias with an exact exclusion",
+      [
+        "google/gemini-3-pro",
+        undefined,
+        undefined,
+        { allow: ["google/*"], deny: ["google/gemini-3-pro"] },
+      ],
+      true,
+    ],
+    [
+      "backend substitution of an excluded model",
+      ["fixture/allowed", undefined, "fixture/denied"],
+      false,
+    ],
+    [
+      "applied model revoked after admission while the requested model stays allowed",
+      [
+        "fixture/allowed",
+        (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
+        "fixture/applied",
+        { allow: ["fixture/allowed", "fixture/applied"] },
+      ],
+      false,
+    ],
+  ])("rejects %s without prompting", async (_name, args, beforeBackend) => {
+    const { outcome, runtimeState } = await run(...args);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(String(outcome)).toContain("operator role cannot use this model");
+    if (beforeBackend) {
       expect(runtimeState.ensureSession).not.toHaveBeenCalled();
-      expect(runtimeState.runTurn).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
 
   it("executes a qualified allowed model and keeps the existing pre-prompt guard", async () => {
     const before = vi.fn();
@@ -123,32 +149,5 @@ describe("ACP operator model ceiling", () => {
     expect(outcome).toBeUndefined();
     expect(before).toHaveBeenCalledOnce();
     expect(runtimeState.runTurn).toHaveBeenCalledOnce();
-  });
-
-  it("does not prompt a backend that substitutes an excluded model", async () => {
-    const { outcome, runtimeState } = await run("fixture/allowed", undefined, "fixture/denied");
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("rechecks the applied model after admission even when the requested model remains allowed", async () => {
-    const { outcome, runtimeState } = await run(
-      "fixture/allowed",
-      (changePolicy) => changePolicy({ allow: ["fixture/allowed"] }),
-      "fixture/applied",
-      { allow: ["fixture/allowed", "fixture/applied"] },
-    );
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-  });
-
-  it("normalizes native model aliases before checking an exact exclusion", async () => {
-    const { outcome, runtimeState } = await run("google/gemini-3-pro", undefined, undefined, {
-      allow: ["google/*"],
-      deny: ["google/gemini-3-pro"],
-    });
-    expect(String(outcome)).toContain("operator role cannot use this model");
-    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 });

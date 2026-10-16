@@ -1,24 +1,17 @@
-import { html, render } from "lit";
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { SessionMenuData } from "../components/session-menu-actions.ts";
-import "../components/session-menu.ts";
 import type {
   PluginSessionMenuAction,
   SessionMenuAction,
   SessionMenuActionKind,
   SessionMenuWork,
 } from "../components/session-menu.ts";
-import type { SessionOwnerOption } from "../components/session-owner-chip.ts";
+import "../components/session-menu.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
-type SessionMenuElement = HTMLElement & {
-  anchor: { x: number; y: number };
-  compact: boolean;
-  lastActive: string;
-  session: SessionMenuData;
-  updateComplete: Promise<boolean>;
-};
-export type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
+import { flush } from "./solid-settle.ts";
+type SessionMenuElement = HTMLElementTagNameMap["openclaw-session-menu"];
 
 export const containers: HTMLElement[] = [];
 
@@ -32,6 +25,7 @@ export async function mountMenu(
   options: {
     session?: Partial<SessionMenuData>;
     compact?: boolean;
+    involvingMeContext?: boolean;
     navigationAllowed?: boolean;
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
@@ -72,76 +66,109 @@ export async function mountMenu(
     categoryClearReturnsToGroups: false,
     ...options.session,
   };
-  render(
-    html`<openclaw-session-menu
-      .session=${session}
-      .compact=${options.compact ?? false}
-      .navigationAllowed=${options.navigationAllowed ?? true}
-      .copyMarkdownAllowed=${options.copyMarkdownAllowed ?? true}
-      .splitAllowed=${options.splitAllowed ?? false}
-      .selectionCount=${options.selectionCount ?? 1}
-      .lastActive=${options.lastActive ?? "57d"}
-      .anchor=${{ x: 100, y: 100 }}
-      .trigger=${options.trigger ?? null}
-      .disabled=${false}
-      .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
-      .forkDisabled=${false}
-      .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
-      .snoozeAllowed=${options.snoozeAllowed ?? false}
-      .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${
-        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
-      }
-      .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
-      .groups=${options.groups ?? []}
-      .currentOwner=${options.currentOwner ?? null}
-      .work=${options.work ?? null}
-      .pluginActions=${options.pluginActions ?? []}
-      .onAction=${options.onAction ?? (() => {})}
-      .onClose=${options.onClose ?? (() => {})}
-    ></openclaw-session-menu>`,
-    container,
-  );
-  const element = container.querySelector<SessionMenuElement>("openclaw-session-menu");
-  if (!element) {
-    throw new Error("Expected session menu");
-  }
-  await element.updateComplete;
+  const element = document.createElement("openclaw-session-menu");
+  Object.assign(element, {
+    session,
+    compact: options.compact ?? false,
+    involvingMeContext: options.involvingMeContext ?? false,
+    navigationAllowed: options.navigationAllowed ?? true,
+    copyMarkdownAllowed: options.copyMarkdownAllowed ?? true,
+    splitAllowed: options.splitAllowed ?? false,
+    selectionCount: options.selectionCount ?? 1,
+    lastActive: options.lastActive ?? "57d",
+    anchor: { x: 100, y: 100 },
+    trigger: options.trigger ?? null,
+    disabled: false,
+    actionDisabledReasons: options.actionDisabledReasons ?? {},
+    forkDisabled: false,
+    forkFromLastCompleted: options.forkFromLastCompleted ?? false,
+    snoozeAllowed: options.snoozeAllowed ?? false,
+    archiveAllowed: options.archiveAllowed ?? true,
+    deleteAllowed: options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true)),
+    cloudWorkerStopAllowed: options.cloudWorkerStopAllowed ?? false,
+    groups: options.groups ?? [],
+    currentOwner: options.currentOwner ?? null,
+    work: options.work ?? null,
+    pluginActions: options.pluginActions ?? [],
+    onAction: options.onAction ?? (() => {}),
+    onClose: options.onClose ?? (() => {}),
+  });
+  container.append(element);
+  await settleSessionMenu(element);
   return element;
 }
 
-function itemLabel(item: HTMLElement): string {
-  return item.querySelector(".session-menu__text")?.textContent?.trim() ?? "";
+export async function settleSessionMenu(menu: SessionMenuElement): Promise<void> {
+  await menu.updateComplete;
+  flush();
+  await Promise.resolve();
+}
+
+export function menuPanel(menu: ParentNode): HTMLElement {
+  const panel =
+    menu instanceof HTMLButtonElement
+      ? document.getElementById(menu.getAttribute("aria-controls") ?? "")
+      : menu instanceof HTMLElement && menu.matches('[role="menu"]')
+        ? menu
+        : menu.querySelector<HTMLElement>(".session-menu__panel");
+  if (!panel) {
+    throw new Error("Expected native menu panel");
+  }
+  return panel;
+}
+
+function itemLabel(item: HTMLButtonElement): string {
+  return item.getAttribute("aria-label") ?? "";
 }
 
 export function menuItemLabels(menu: ParentNode): string[] {
-  const selector =
-    menu instanceof Element && menu.matches("wa-dropdown-item")
-      ? ":scope > wa-dropdown-item[slot='submenu']"
-      : ":scope > wa-dropdown > wa-dropdown-item";
-  return Array.from(menu.querySelectorAll<HTMLElement>(selector)).map(itemLabel);
+  const panel = menuPanel(menu);
+  return [...panel.querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]')]
+    .filter((item) => item.closest('[role="menu"]') === panel)
+    .map(itemLabel);
 }
 
-export function menuItem(menu: ParentNode, label: string): SessionMenuItem {
-  const item = Array.from(menu.querySelectorAll<SessionMenuItem>("wa-dropdown-item")).find(
-    (candidate) => itemLabel(candidate) === label,
-  );
+export function menuItem(menu: ParentNode, label: string): HTMLButtonElement {
+  const item = [
+    ...menuPanel(menu).querySelectorAll<HTMLButtonElement>('button[role^="menuitem"]'),
+  ].find((candidate) => itemLabel(candidate) === label);
   if (!item) {
     throw new Error(`Expected menu item: ${label}`);
   }
   return item;
 }
 
-export function iconChoices(menu: ParentNode): HTMLButtonElement[] {
-  return Array.from(menu.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice"));
+export async function openSubmenu(menu: ParentNode, label: string): Promise<HTMLElement> {
+  const trigger = menuItem(menu, label);
+  const panel = menuPanel(trigger);
+  if (trigger.disabled || !trigger.closest('[role="menu"]')?.matches(":popover-open")) {
+    throw new Error(`Expected enabled submenu trigger in an open panel: ${label}`);
+  }
+  trigger.focus();
+  trigger.click();
+  flush();
+  await Promise.resolve();
+  if (!panel.matches(":popover-open")) {
+    throw new Error(`Expected open submenu: ${label}`);
+  }
+  return panel;
 }
 
-export function selectMenuValue(menu: SessionMenuElement, value: string) {
-  menu.querySelector("wa-dropdown")?.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
+export function iconChoices(menu: ParentNode): HTMLButtonElement[] {
+  return [...menuPanel(menu).querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice")];
+}
+
+export async function selectMenuValue(menu: SessionMenuElement, value: string) {
+  const item = [...menu.querySelectorAll<HTMLButtonElement>("button[value]")].find(
+    (candidate) =>
+      candidate.value === value &&
+      !candidate.disabled &&
+      candidate.closest('[role="menu"]')?.matches(":popover-open"),
   );
+  if (!item) {
+    throw new Error(`Expected enabled menu action in an open panel: ${value}`);
+  }
+  item.focus();
+  item.click();
+  await settleSessionMenu(menu);
 }

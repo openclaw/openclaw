@@ -1,18 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
+import { createAdminIngressFixture } from "../../channels/message-access/operator-authority.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
 import {
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "../../config/sessions/lifecycle.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryLifecycleMutation,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { deriveDeliveryQueueRetentionColumns } from "../../infra/delivery-queue-retention-columns.js";
 import { loadDeliveryQueueEntries } from "../../infra/delivery-queue-sqlite.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-namespaces.js";
@@ -43,6 +48,12 @@ import {
 } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
@@ -59,6 +70,26 @@ vi.mock("../../infra/tmp-openclaw-dir.js", () => ({
   },
 }));
 
+let suiteState: OpenClawTestState;
+beforeAll(async () => {
+  suiteState = await createOpenClawTestState({ scenario: "minimal" });
+});
+afterAll(async () => {
+  await suiteState.cleanup();
+});
+
+async function withAdminIngress(
+  run: (fixture: Awaited<ReturnType<typeof createAdminIngressFixture>>) => Promise<void>,
+  authority: "role",
+) {
+  const fixture = await createAdminIngressFixture(suiteState, authority, "discord");
+  try {
+    await run(fixture);
+  } finally {
+    fixture.unregister();
+  }
+}
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   const root = fs.realpathSync(tempDirs.make("openclaw-restart-final-"));
@@ -68,8 +99,17 @@ beforeEach(() => {
   // Check the physical parent before any executor/config write can open the store.
   expect(fs.realpathSync(path.dirname(databasePath))).toBe(root);
 });
-afterEach(() => {
+afterEach(async () => {
   resetPluginRuntimeStateForTest();
+  // Keep workers warm while removing the prior case's reused session identity and window.
+  await drainSessionStateForTest({ stateDir: suiteState.stateDir });
+  await applySessionEntryLifecycleMutation({
+    agentId: "main",
+    storePath: path.join(suiteState.sessionsDir(), "sessions.json"),
+    removals: [{ sessionKey: "agent:main:matrix:direct:restart-final", deleteOwnedWindows: true }],
+    skipMaintenance: true,
+  });
+  await drainSessionStateForTest({ stateDir: suiteState.stateDir });
   privatePaths.root = undefined;
 });
 
@@ -189,7 +229,6 @@ it.each(
       const target = { sessionKey, storePath };
       const entry = {
         sessionId: "restart-final",
-        status: "running" as const,
         updatedAt: Date.now(),
       };
       await replaceSessionEntry(target, entry);
@@ -414,10 +453,28 @@ it.each(
           expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
         }
         if (boundary.endsWith("reference")) {
-          const db = openOpenClawStateDatabase().db;
-          db.prepare(
-            "UPDATE delivery_queue_entries SET entry_json = json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') WHERE queue_name = ?",
-          ).run(COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME);
+          const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
+          const rows = db
+            .prepare(
+              "SELECT id, json_remove(entry_json, '$.deliveryCompletion.commandOwnerReference') AS entry_json FROM delivery_queue_entries WHERE queue_name = ?",
+            )
+            .all(COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME) as Array<{
+            id: string;
+            entry_json: string;
+          }>;
+          const update = db.prepare(`UPDATE delivery_queue_entries SET entry_json = ?,
+            retention_id_prefix = @retention_id_prefix,
+            retention_max_age_ms = @retention_max_age_ms,
+            retention_max_entries = @retention_max_entries
+            WHERE queue_name = ? AND id = ?`);
+          for (const row of rows) {
+            update.run(
+              deriveDeliveryQueueRetentionColumns(row.id, row.entry_json),
+              row.entry_json,
+              COMMAND_OWNER_OUTBOUND_DELIVERY_QUEUE_NAME,
+              row.id,
+            );
+          }
         }
         // Capture older executors' inventory before recovery consumes this intent.
         const olderQueueRows = recoverable

@@ -14,17 +14,21 @@ export interface FullReleaseCandidateRequest {
   releaseProfile: string;
   releaseSoak: boolean;
   repository: string;
-  schema: "openclaw.full-release-candidate-request/v2";
+  schema: "openclaw.full-release-candidate-request/v3";
   sharedImagePolicy: string;
   targetSha: string;
   toolingSha: string;
+  upgradeBaseline: string;
   upgradeSurvivorBaselines: string[];
   upgradeSurvivorScenarios: string[];
 }
 
 export type RecordedFullReleaseCandidateRequest =
   | FullReleaseCandidateRequest
-  | (Omit<FullReleaseCandidateRequest, "packagePublished" | "schema"> & {
+  | (Omit<FullReleaseCandidateRequest, "schema" | "upgradeBaseline"> & {
+      schema: "openclaw.full-release-candidate-request/v2";
+    })
+  | (Omit<FullReleaseCandidateRequest, "packagePublished" | "schema" | "upgradeBaseline"> & {
       schema: "openclaw.full-release-candidate-request/v1";
     });
 

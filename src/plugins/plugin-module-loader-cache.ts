@@ -23,6 +23,7 @@ import {
   getPluginCacheSource,
   withPluginCache,
 } from "./plugin-cache.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
@@ -35,6 +36,7 @@ import {
   isPluginSdkAliasSpecifier,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
+import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 export type PluginModuleLoaderFactory = typeof createJiti;
 type ResolvePluginModuleLoaderCacheEntryParams = {
@@ -225,6 +227,14 @@ function createPluginModuleLoader(
   },
 ): PluginModuleLoader {
   let loadWithSourceTransform: PluginModuleLoader | undefined;
+  const resolveNativeAlias = (specifier: string, parent?: string) => {
+    const target = params.resolveAlias(specifier);
+    const instance = target && pluginInstanceInvocation.getStore()?.instance;
+    if (instance && parent && instance.hasModuleSource(parent)) {
+      recordPluginSdkDeprecatedImport(instance.pluginId, specifier);
+    }
+    return target;
+  };
   const getLoadWithSourceTransform = () => {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
@@ -263,6 +273,10 @@ function createPluginModuleLoader(
                 `Unable to load host Plugin SDK natively: ${target}. Use a supported native TypeScript loader for a source host, or rebuild the host SDK.`,
               );
             }
+            const instance = pluginInstanceInvocation.getStore()?.instance;
+            if (instance && typeof key === "string") {
+              recordPluginSdkDeprecatedImport(instance.pluginId, key);
+            }
             return native.moduleExport;
           },
         },
@@ -286,7 +300,7 @@ function createPluginModuleLoader(
       pluginModuleLoaderStats.calls += 1;
       if (params.tryNative) {
         const native = tryNativeRequireJavaScriptModule(target, {
-          aliasMap: params.resolveAlias,
+          aliasMap: resolveNativeAlias,
           fallbackOnMissingDependency: true,
         });
         if (native.ok) {
@@ -388,7 +402,7 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
     throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
   }
   fs.closeSync(opened.fd);
-  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+  if (!sameFileIdentity(opened.exactIdentity, fs.statSync(opened.path, { bigint: true }))) {
     throw new Error(`${params.surfaceLabel} changed after validation`);
   }
   const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);
@@ -409,9 +423,10 @@ export function preparePluginModule(params: PluginModuleBoundaryParams) {
 export function loadPluginPublicSurfaceModuleSync(
   params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
+    capturedSource?: true;
   },
 ): object {
-  const instance = resolvePublicSurfaceInstance(params);
+  const instance = params.capturedSource ? undefined : resolvePublicSurfaceInstance(params);
   if (instance) {
     // SAFETY: Public-surface entrypoints have object exports; the instance owns this exact source.
     return instance.loadModule(params.modulePath) as object;

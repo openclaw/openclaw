@@ -8,7 +8,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import { captureRunNodeInputState } from "../../scripts/lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import { resolveBuildRequirement, resolveRunNodePreparation } from "../../scripts/run-node.mts";
 import {
   setupStampedProject,
@@ -107,18 +107,15 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
       configFiles: [],
     };
     await write("src/index.ts", "export const value = 2;\n");
-    const inputState = captureRunNodeInputState(deps, "build");
-    expect(inputState?.signature).toMatch(/^[a-f0-9]{64}$/u);
+    const inputSignature = resolveRunNodeInputSignature(deps, "build");
+    expect(inputSignature).toMatch(/^[a-f0-9]{64}$/u);
     await write("dist/entry.js", "export const value = 2;\n");
     writeBuildStamp({ cwd });
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
       "dirty_watched_tree",
     );
-    writeBuildStamp({ cwd, inputState });
+    writeBuildStamp({ cwd, inputSignature });
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
-    await write("src/stable.ts", "export const stable = 2;\n");
-    await write("src/stable.ts", "export const stable = 1;\n");
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
     expect(
       resolveBuildRequirement({
         ...deps,
@@ -171,9 +168,7 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
       "build_inputs_changed",
     );
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
     await write("src/index.ts", "export const value = 2;\n");
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
     await write("src/index.ts", "export const value = 1;\n");
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
     await write("src/index.ts", "export const value = 2;\n");
@@ -184,7 +179,7 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     await write("src/index.ts", "export const value = 1;\n");
     await write("config/tsconfig/base.json", "{}\n");
     await write("dist/entry.js", "export const value = 1;\n");
-    writeBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "build") });
+    writeBuildStamp({ cwd, inputSignature: resolveRunNodeInputSignature(deps, "build") });
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
     await fs.rm(path.join(cwd, "config"), { recursive: true });
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
@@ -201,24 +196,16 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
       JSON.stringify({ id: "example", configSchema: { enabled }, controlUi: { entry } });
     await write("extensions/example/openclaw.plugin.json", manifest("old.js"));
     await write("extensions/example/browser/index.css", "body { color: red; }");
-    const assetsBefore = captureRunNodeInputState(deps, "build", { assetPhase: true });
-    const compilerBefore = captureRunNodeInputState(deps, "build");
+    const assetsBefore = resolveRunNodeInputSignature(deps, "build");
     await write("extensions/example/openclaw.plugin.json", manifest("new.js"));
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })).toEqual(assetsBefore);
-    expect(captureRunNodeInputState(deps, "build")?.generation).not.toBe(
-      compilerBefore?.generation,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).toEqual(assetsBefore);
     await write("extensions/example/browser/index.test.ts", "fixture correction");
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })).toEqual(assetsBefore);
+    expect(resolveRunNodeInputSignature(deps, "build")).toEqual(assetsBefore);
     await write("extensions/example/openclaw.plugin.json", manifest("new.js", false));
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })?.signature).not.toBe(
-      assetsBefore?.signature,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).not.toBe(assetsBefore);
     await write("extensions/example/openclaw.plugin.json", manifest("new.js"));
     await write("extensions/example/browser/index.css", "body { color: blue; }");
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })?.signature).not.toBe(
-      assetsBefore?.signature,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).not.toBe(assetsBefore);
     await fs.unlink(deps.distEntry);
     expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
       "missing_dist_entry",
@@ -248,8 +235,11 @@ it("reuses clean test capsules across carrier commits but preserves strict CLI a
         "-qm",
         "carrier",
       );
-    writeBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "build") });
-    writeRuntimePostBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "runtime") });
+    writeBuildStamp({ cwd, inputSignature: resolveRunNodeInputSignature(deps, "build") });
+    writeRuntimePostBuildStamp({
+      cwd,
+      inputSignature: resolveRunNodeInputSignature(deps, "runtime"),
+    });
     commit();
     expect(resolveBuildRequirement(deps).reason).toBe("git_head_changed");
     expect(resolveRunNodePreparation(cwd, {}, { allowEquivalentInputs: true })).toEqual({

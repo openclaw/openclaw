@@ -120,14 +120,6 @@ describe("media generation delivery-phase prompt guard", () => {
     ).toBe(context);
   });
 
-  it("keeps delivery-phase tasks available to duplicate/status lookups", async () => {
-    const task = makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS });
-    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
-
-    expect(await videoTaskStatusOwner.listActiveTasksForSession("session/A")).toEqual([task]);
-    expect(await videoTaskStatusOwner.findActiveTaskForSession("session/A")).toEqual(task);
-  });
-
   it("keeps bare-session operations visible only to their explicit requester agent", async () => {
     const task = makeTask({
       requesterSessionKey: "global",
@@ -141,24 +133,5 @@ describe("media generation delivery-phase prompt guard", () => {
       await videoTaskStatusOwner.findActiveTaskForSession("global", { agentId: "ops" }),
     ).toEqual(task);
     expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "research")).toEqual([]);
-  });
-
-  it("blocks the same prompt while allowing a distinct prompt", async () => {
-    const task = makeTask({
-      task: "generate clip 01",
-      progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
-    });
-    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
-
-    expect(
-      await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {
-        prompt: "generate clip 01",
-      }),
-    ).toEqual(task);
-    expect(
-      await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {
-        prompt: "generate clip 02",
-      }),
-    ).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 import { spawnSync as realSpawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +81,71 @@ describe("Git runtime promotion", () => {
     await promotion.activate();
     await promotion.cleanup();
   }
+
+  it("stages a packaged plugin's checkout self-link without Windows symbolic-link privileges", async () => {
+    const candidateRoot = await createCandidate();
+    const relative = path.join("dist", "extensions", "x", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(path.join(candidateRoot, relative)), { recursive: true });
+    await fs.symlink(candidateRoot, path.join(candidateRoot, relative), "junction");
+    const copy = fs.cp.bind(fs);
+    const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      // Windows' native directory copy can expand junctions despite verbatimSymlinks.
+      expect(options?.filter).toBeTypeOf("function");
+      return copy(source, destination, {
+        ...options,
+        filter: async (sourceEntry, destinationEntry) => {
+          if (!(await options?.filter?.(sourceEntry, destinationEntry))) {
+            return false;
+          }
+          if (
+            (await fs.lstat(sourceEntry)).isSymbolicLink() &&
+            (await fs.stat(sourceEntry)).isDirectory()
+          ) {
+            throw Object.assign(new Error("Directory symbolic-link privilege is unavailable"), {
+              code: "EPERM",
+            });
+          }
+          return true;
+        },
+      });
+    });
+    const symlink = fsSync.symlinkSync.bind(fsSync);
+    const junctionSpy = vi.spyOn(fsSync, "symlinkSync").mockImplementation((target, dest, type) => {
+      if (type !== "junction") {
+        throw Object.assign(new Error("Symbolic-link privilege is unavailable"), { code: "EPERM" });
+      }
+      symlink(target, dest, type);
+    });
+    const hostPlatform = process.platform;
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    let promotion: Awaited<ReturnType<typeof preparePromotion>>;
+    try {
+      promotion = await prepareGitRuntimePromotion(
+        root,
+        candidateRoot,
+        async (argv, options) => {
+          platform.mockReturnValue(hostPlatform);
+          try {
+            return await runCommandWithTimeout(argv, options);
+          } finally {
+            platform.mockReturnValue("win32");
+          }
+        },
+        5000,
+        path.dirname(candidateRoot),
+      );
+    } finally {
+      platform.mockRestore();
+      copySpy.mockRestore();
+      junctionSpy.mockRestore();
+    }
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
+    await promotion.activate();
+    expect((await fs.lstat(path.join(root, relative))).isSymbolicLink()).toBe(true);
+    expect(await fs.realpath(path.join(root, relative))).toBe(root);
+    await expectRuntime(root, "candidate");
+    await promotion.cleanup();
+  });
 
   it.each([false, true])(
     "does not repeat completed restoration after authority is lost (previous runtime: %s)",
@@ -235,33 +301,31 @@ describe("Git runtime promotion", () => {
     },
   );
 
-  it("checks the source destination policy before any runtime staging writes", async () => {
-    const candidateRoot = await createCandidate();
-    const outside = path.join(directory, "outside-packages");
-    await fs.rename(path.join(root, "packages"), outside);
-    await fs.symlink(outside, path.join(root, "packages"), "junction");
-    const before = await fs.readdir(outside, { recursive: true });
-    await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
-      "symbolic link",
-    );
-    expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
-    // Restore the fixture's physical depth before resolving its relative dependency links.
-    await fs.unlink(path.join(root, "packages"));
-    await fs.rename(outside, path.join(root, "packages"));
-    await expectRuntime(root, "original");
-  });
-
-  it.each(["activate", "restore", "cleanup"] as const)(
+  it.each(["prepare", "activate", "restore", "cleanup"] as const)(
     "retains originals when a source destination parent changes before %s",
     async (phase) => {
       const candidateRoot = await createCandidate();
+      const outside = path.join(directory, "outside-packages");
+      if (phase === "prepare") {
+        await fs.rename(path.join(root, "packages"), outside);
+        await fs.symlink(outside, path.join(root, "packages"), "junction");
+        const before = await fs.readdir(outside, { recursive: true });
+        await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
+          "symbolic link",
+        );
+        expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
+        // Restore the fixture's physical depth before resolving its relative dependency links.
+        await fs.unlink(path.join(root, "packages"));
+        await fs.rename(outside, path.join(root, "packages"));
+        await expectRuntime(root, "original");
+        return;
+      }
       const promotion = await preparePromotion(candidateRoot, assertDestination);
       if (phase !== "activate") {
         await promotion.activate();
         await expectRuntime(root, "candidate");
       }
       const heldPackages = path.join(directory, "held-packages");
-      const outside = path.join(directory, "outside-packages");
       const outsideModules = path.join(outside, "runtime", "node_modules");
       await fs.mkdir(outsideModules, { recursive: true });
       await fs.writeFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
@@ -286,87 +350,77 @@ describe("Git runtime promotion", () => {
     },
   );
 
-  it.each(["dependency", "cache-link", "parent-link"] as const)(
-    "preserves tool cache paths owned by a %s",
-    async (layout) => {
-      const candidateRoot = await createCandidate();
-      const modules = path.join(candidateRoot, "node_modules");
-      const payload = path.join(modules, layout === "dependency" ? ".vite" : "payload");
-      await fs.mkdir(payload, { recursive: true });
-      await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'retained';\n");
-      if (layout === "dependency") {
-        await fs.symlink(payload, path.join(modules, "linked-runtime"), "junction");
-        // Once retained, this cache's own link must keep the second cache too.
-        await fs.mkdir(path.join(modules, ".cache", "jiti"), { recursive: true });
-        await fs.writeFile(
-          path.join(modules, ".cache", "jiti", "value.cjs"),
-          "module.exports = 'nested';\n",
-        );
-        await fs.symlink(
-          path.join(modules, ".cache", "jiti"),
-          path.join(payload, "nested"),
-          "junction",
-        );
-      } else if (layout === "cache-link") {
-        await fs.symlink(payload, path.join(modules, ".vite"), "junction");
-      } else {
-        await fs.mkdir(path.join(payload, "jiti"));
-        await fs.writeFile(
-          path.join(payload, "jiti", "index.cjs"),
-          "module.exports = 'retained';\n",
-        );
-        await fs.symlink(payload, path.join(modules, ".cache"), "junction");
-      }
-      await activate(candidateRoot);
-      const relative =
-        layout === "dependency"
-          ? "linked-runtime"
-          : layout === "cache-link"
-            ? ".vite"
-            : ".cache/jiti";
-      const probe = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          `console.log(require(${JSON.stringify(path.join(root, "node_modules", relative, "index.cjs"))}));`,
-        ],
-        { timeoutMs: 5000 },
-      );
-      expect(probe.code, probe.stderr).toBe(0);
-      expect(probe.stdout.trim()).toBe("retained");
-      if (layout === "dependency") {
-        expect(
-          await fs.readFile(
-            path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs"),
-            "utf8",
-          ),
-        ).toContain("nested");
-      }
-      await expectRuntime(root, "candidate");
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["missing", "cycle"])(
-    "preserves unresolved %s links without blocking runtime promotion",
-    async (layout) => {
-      const candidateRoot = await createCandidate();
-      const modules = path.join(candidateRoot, "node_modules");
+  it.each([
+    "dependency",
+    "cache-link",
+    "parent-link",
+    ...(process.platform === "win32" ? [] : ["missing", "cycle"]),
+  ])("preserves tool cache paths owned by a %s", async (layout) => {
+    const candidateRoot = await createCandidate();
+    const modules = path.join(candidateRoot, "node_modules");
+    if (layout === "missing" || layout === "cycle") {
       await fs.mkdir(path.join(modules, ".vite"));
       await fs.writeFile(path.join(modules, ".vite", "content"), "retained");
-      await fs.symlink(
-        layout === "cycle" ? "unresolved" : "missing",
-        path.join(modules, "unresolved"),
-      );
+      const target = layout === "cycle" ? "unresolved" : "missing";
+      await fs.symlink(target, path.join(modules, "unresolved"));
       await activate(candidateRoot);
-      expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(
-        layout === "cycle" ? "unresolved" : "missing",
-      );
+      expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(target);
       expect(await fs.readFile(path.join(root, "node_modules", ".vite", "content"), "utf8")).toBe(
         "retained",
       );
       await expectRuntime(root, "candidate");
-    },
-  );
+      return;
+    }
+    const payload = path.join(modules, layout === "dependency" ? ".vite" : "payload");
+    await fs.mkdir(payload, { recursive: true });
+    await fs.writeFile(path.join(payload, "index.cjs"), "module.exports = 'retained';\n");
+    if (layout === "dependency") {
+      await fs.symlink(payload, path.join(modules, "linked-runtime"), "junction");
+      // Once retained, this cache's own link must keep the second cache too.
+      await fs.mkdir(path.join(modules, ".cache", "jiti"), { recursive: true });
+      await fs.writeFile(
+        path.join(modules, ".cache", "jiti", "value.cjs"),
+        "module.exports = 'nested';\n",
+      );
+      await fs.symlink(
+        path.join(modules, ".cache", "jiti"),
+        path.join(payload, "nested"),
+        "junction",
+      );
+    } else if (layout === "cache-link") {
+      await fs.symlink(payload, path.join(modules, ".vite"), "junction");
+    } else {
+      await fs.mkdir(path.join(payload, "jiti"));
+      await fs.writeFile(path.join(payload, "jiti", "index.cjs"), "module.exports = 'retained';\n");
+      await fs.symlink(payload, path.join(modules, ".cache"), "junction");
+    }
+    await activate(candidateRoot);
+    const relative =
+      layout === "dependency"
+        ? "linked-runtime"
+        : layout === "cache-link"
+          ? ".vite"
+          : ".cache/jiti";
+    const probe = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        `console.log(require(${JSON.stringify(path.join(root, "node_modules", relative, "index.cjs"))}));`,
+      ],
+      { timeoutMs: 5000 },
+    );
+    expect(probe.code, probe.stderr).toBe(0);
+    expect(probe.stdout.trim()).toBe("retained");
+    if (layout === "dependency") {
+      expect(
+        await fs.readFile(
+          path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs"),
+          "utf8",
+        ),
+      ).toContain("nested");
+    }
+    await expectRuntime(root, "candidate");
+  });
 
   it.each([
     ".",

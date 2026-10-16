@@ -7,77 +7,36 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveMachineModelIdentifier } from "./machine-model.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
-export type SystemPresence = {
-  connectionId?: string;
-  host?: string;
-  clientId?: string;
-  ip?: string;
-  version?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  timeZone?: string;
-  lastInputSeconds?: number;
-  mode?: string;
-  reason?: string;
-  deviceId?: string;
-  roles?: string[];
-  scopes?: string[];
-  instanceId?: string;
+export type SystemPresence = SchemaContract<Omit<PresenceEntry, "tags" | "text" | "user">> & {
   user?: PresenceEntry["user"];
-  watchedSessions?: string[];
-  /** Server-owned timing for the person's current continuous live interval. */
-  onlineSince?: number;
-  lastActivityAt?: number;
-  /** Latest accepted OpenClaw interaction on this connection only. */
-  connectionLastActivityAt?: number;
   text: string;
-  /** Heartbeat freshness, independent of person activity and online duration. */
-  ts: number;
 };
 
 type StoredPresence = {
   presence: SystemPresence;
-  freshness: number;
   pending: boolean;
 };
 
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
-const TTL_MS = 5 * 60 * 1000; // 5 minutes
+const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
-const uptimeOrigin = os.uptime() * 1000 - performance.now();
-let freshnessTime = Date.now();
-let freshnessSample = continuousTimeNow();
-
-function continuousTimeNow(): number {
-  // Uptime covers suspend on platforms where the high-resolution clock pauses.
-  return Math.max(performance.now(), os.uptime() * 1000 - uptimeOrigin);
-}
-
-function freshnessNow(): number {
-  const sample = continuousTimeNow();
-  const elapsed = Math.max(0, sample - freshnessSample);
-  freshnessSample = sample;
-  // Preserve forward-clock expiry while continuous elapsed keeps rollback and suspend moving.
-  freshnessTime = Math.max(Date.now(), freshnessTime + elapsed);
-  return freshnessTime;
-}
 
 function setPresence(
   key: string | symbol,
   presence: SystemPresence,
   pending = entries.get(key)?.pending ?? false,
 ) {
-  entries.set(key, { presence, freshness: freshnessNow(), pending });
+  entries.set(key, { presence, pending });
 }
 
 function initSelfPresence() {
@@ -114,13 +73,13 @@ function initSelfPresence() {
   setPresence(SELF_KEY, selfEntry);
 }
 
-function touchSelfPresence() {
-  const existing = entries.get(SELF_KEY)?.presence;
-  if (existing) {
-    setPresence(SELF_KEY, { ...existing, ts: Date.now() });
-  } else {
-    initSelfPresence();
+function touchStoredPresence(key: string | symbol): boolean {
+  const existing = entries.get(key)?.presence;
+  if (!existing) {
+    return false;
   }
+  setPresence(key, { ...existing, ts: Date.now() });
+  return true;
 }
 
 initSelfPresence();
@@ -177,9 +136,7 @@ type SystemPresencePayload = {
 };
 
 function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
-  const merged = normalizeUniqueTrimmedStringList(
-    values.flatMap((list) => (Array.isArray(list) ? list : [])),
-  );
+  const merged = normalizeUniqueTrimmedStringList(values.flat());
   return merged.length > 0 ? merged : undefined;
 }
 
@@ -192,7 +149,7 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     parsed.ip ||
     truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
-  const existing = entries.get(key)?.presence ?? ({} as SystemPresence);
+  const existing: Partial<SystemPresence> = entries.get(key)?.presence ?? {};
   const merged: SystemPresence = {
     ...existing,
     ...parsed,
@@ -212,7 +169,7 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     roles: mergeStringList(existing.roles, payload.roles),
     scopes: mergeStringList(existing.scopes, payload.scopes),
     instanceId: payload.instanceId ?? existing.instanceId,
-    text: payload.text || parsed.text || existing.text,
+    text: payload.text,
     ts: Date.now(),
   };
   setPresence(key, merged);
@@ -266,27 +223,24 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  const existing = entries.get(normalizedKey)?.presence;
-  if (!existing) {
-    return false;
-  }
-  setPresence(normalizedKey, { ...existing, ts: Date.now() });
-  return true;
+  return touchStoredPresence(normalizedKey);
 }
 
 export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
-  touchSelfPresence();
-  const now = freshnessNow();
+  if (!touchStoredPresence(SELF_KEY)) {
+    initSelfPresence();
+  }
+  // Presence is ephemeral; clock corrections use best-effort wall-time expiry.
+  const now = Date.now();
   for (const [key, entry] of entries) {
-    if (key !== SELF_KEY && now - entry.freshness > TTL_MS) {
+    if (key !== SELF_KEY && now - entry.presence.ts > TTL_MS) {
       entries.delete(key);
     }
   }
-  // Expiry and capacity share one freshness order even when public timestamps roll back.
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()]
       .filter(([key]) => key !== SELF_KEY)
-      .toSorted((a, b) => a[1].freshness - b[1].freshness);
+      .toSorted((a, b) => a[1].presence.ts - b[1].presence.ts);
     const toDrop = entries.size - MAX_ENTRIES;
     for (const [key] of sorted.slice(0, toDrop)) {
       entries.delete(key);

@@ -1,7 +1,15 @@
 import path from "node:path";
 import type { AgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createNodeSkillLifecycle } from "./workspace-skill-lifecycle.js";
 import { runNodeWorkspaceWorker, type NodeWorkspaceWorkerOptions } from "./workspace-worker.js";
+
+const MAX_PAIRING_CHANGE_RETRIES = 2;
+
+function isPairingChange(error: unknown): boolean {
+  const record = asOptionalRecord(error);
+  return record?.retryable === true && asOptionalRecord(record.details)?.code === "PAIRING_CHANGED";
+}
 
 type SkillsAccess = Required<
   Pick<
@@ -64,9 +72,22 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
       ),
     );
   }
+  async function read<T>(operation: string, request: unknown, signal?: AbortSignal): Promise<T> {
+    // Pairing approvals advance the generation and node.invoke returns retryable PAIRING_CHANGED.
+    // Retry reads against the new generation; revoked nodes still fail after the bound.
+    for (let retries = 0; ; retries += 1) {
+      try {
+        return await call<T>(operation, request, signal);
+      } catch (error) {
+        if (!isPairingChange(error) || retries >= MAX_PAIRING_CHANGE_RETRIES) {
+          throw error;
+        }
+      }
+    }
+  }
   return {
     ...createNodeSkillLifecycle(options),
-    loadSkills: (request) => call("discovery", mapSources(request)),
+    loadSkills: (request) => read("discovery", mapSources(request)),
     async watchSkills(request, onChange, signal) {
       await runNodeWorkspaceWorker(
         options,
@@ -88,10 +109,10 @@ export function createNodeWorkspaceSkills(options: NodeWorkspaceWorkerOptions): 
     },
     // Resource identities already belong to the node that discovered the Skills.
     skillResources: {
-      readInstructions: (filePath, { signal }) => call("readInstructions", { filePath }, signal),
-      resolveExplicitSkill: (selection) => call("resolveResource", selection),
+      readInstructions: (filePath, { signal }) => read("readInstructions", { filePath }, signal),
+      resolveExplicitSkill: (selection) => read("resolveResource", selection),
       readSkillFiles: (skill, { allowMissingRoot }) =>
-        call("readResources", { skill, allowMissingRoot }),
+        read("readResources", { skill, allowMissingRoot }),
     },
     installSkillDependencies: (request) => call("installDependencies", request),
   };

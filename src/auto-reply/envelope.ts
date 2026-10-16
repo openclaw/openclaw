@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -72,7 +69,7 @@ function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvel
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }
@@ -86,12 +83,8 @@ function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvel
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-let utcWeekdayFormatter:
-  | {
-      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
-      formatter: Intl.DateTimeFormat;
-    }
-  | undefined;
+// Intl is process-stable; a filled cache ignores constructor replacement.
+let utcWeekdayFormatter: Intl.DateTimeFormat | undefined;
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
 export function formatAgentEnvelopeTimestamp(
@@ -116,17 +109,8 @@ export function formatAgentEnvelopeTimestamp(
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
   try {
-    const DateTimeFormat = Intl.DateTimeFormat;
-    const cached = utcWeekdayFormatter;
-    const formatter =
-      cached?.dateTimeFormatConstructor === DateTimeFormat
-        ? cached.formatter
-        : new DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
-    const weekday = formatter.format(date);
-    if (formatter !== cached?.formatter) {
-      utcWeekdayFormatter = { dateTimeFormatConstructor: DateTimeFormat, formatter };
-    }
-    return `${weekday} ${formatted}`;
+    utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+    return `${utcWeekdayFormatter.format(date)} ${formatted}`;
   } catch {
     return formatted;
   }
@@ -197,21 +181,14 @@ export function formatInboundEnvelope(params: {
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
   const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
-  const body =
-    isDirect && params.fromMe
-      ? `(self): ${params.body}`
-      : isDirect && directSender
-        ? `${directSender}: ${params.body}`
-        : !isDirect && resolvedSender
-          ? `${resolvedSender}: ${params.body}`
-          : params.body;
+  const bodyLabel = isDirect ? (params.fromMe ? "(self)" : directSender) : resolvedSender;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,
     timestamp: params.timestamp,
     previousTimestamp: params.previousTimestamp,
     envelope: params.envelope,
-    body,
+    body: bodyLabel ? `${bodyLabel}: ${params.body}` : params.body,
   });
 }
 
@@ -225,16 +202,9 @@ export function formatInboundFromLabel(params: {
   groupFallback?: string;
 }): string {
   // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
-  if (params.isGroup) {
-    const label = normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group";
-    const id = params.groupId?.trim();
-    return id ? `${label} id:${id}` : label;
-  }
-
-  const directLabel = params.directLabel.trim();
-  const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) {
-    return directLabel;
-  }
-  return `${directLabel} id:${directId}`;
+  const label = params.isGroup
+    ? normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group"
+    : params.directLabel.trim();
+  const id = (params.isGroup ? params.groupId : params.directId)?.trim();
+  return id && (params.isGroup || id !== label) ? `${label} id:${id}` : label;
 }

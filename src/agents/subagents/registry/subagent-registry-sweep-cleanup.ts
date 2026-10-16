@@ -1,20 +1,84 @@
 import type { callGateway } from "../../../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  mutateSubagentRuns,
+} from "./subagent-registry-persistence.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+
+export function createSubagentSweepReadScope(
+  runs: Map<string, SubagentRunRecord>,
+  getGatewayRuntime: () => GatewayRecoveryRuntime | undefined,
+) {
+  let source:
+    | { context: ReturnType<typeof captureOpenClawStateWorkerContext> }
+    | { error: unknown };
+  try {
+    source = { context: captureOpenClawStateWorkerContext() };
+  } catch (error) {
+    source = { error };
+  }
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const gatewayRuntime = getGatewayRuntime();
+  const retiredRead = new Error("Subagent sweep read lost its selected run");
+  let readsStarted = false;
+  const assertCurrent = () => {
+    // Memory-only sweeps need no read admission; a later read still uses this original source.
+    if (readsStarted) {
+      if ("error" in source) {
+        throw source.error;
+      }
+      assertSubagentRegistryWriteSourceCurrent(source.context);
+    }
+    if (
+      !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+      getGatewayRuntime() !== gatewayRuntime
+    ) {
+      throw new Error("Subagent sweep read lost its Gateway owner");
+    }
+  };
+  const isHostCurrent = () => {
+    try {
+      assertCurrent();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    assertCurrent,
+    retiredRead,
+    completionCurrent: { isHostCurrent, prepare: async () => isHostCurrent() },
+    assertRunCurrent: (entry: SubagentRunRecord) => {
+      assertCurrent();
+      if (runs.get(entry.runId) !== entry) {
+        throw retiredRead;
+      }
+      readsStarted = true;
+      assertCurrent();
+    },
+  };
+}
 
 export type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
 
-export function freezeSessionIdentity(childSessionKey: string): FrozenSessionIdentity | undefined {
-  const sessionEntry = loadSubagentSessionEntry({ childSessionKey });
-  const sessionId = sessionEntry?.sessionId?.trim();
-  const lifecycleRevision = sessionEntry?.lifecycleRevision?.trim();
-  return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
+export function freezeSessionIdentity(entry: SubagentRunRecord): FrozenSessionIdentity | undefined {
+  const authority = resolveSubagentChildAuthority(entry);
+  return authority.status === "verified" ? authority.sessionIdentity : undefined;
 }
 
 export const sweptContext = (entry: SubagentRunRecord) => ({
@@ -32,8 +96,8 @@ export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
       entry.delivery.payload !== undefined ||
       entry.delivery.disposition === "session_queued"));
 
-export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number) =>
-  entry.collectorCompletion &&
+export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
+  entry.collectorCompletion !== undefined &&
   entry.collectorLaunchCleanupPending !== true &&
   entry.archiveAtMs !== undefined &&
   entry.archiveAtMs <= now;
@@ -44,6 +108,7 @@ export function isCleanupCurrent(
 ): current is SubagentRunRecord {
   return (
     current !== undefined &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, expected) &&
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
@@ -62,13 +127,18 @@ export async function deleteSweptSession(
   identity: FrozenSessionIdentity,
   runs: Map<string, SubagentRunRecord>,
   call: typeof callGateway,
+  assertCurrent: () => void,
 ): Promise<"deleted" | "changed"> {
   let failure: unknown;
   const outcome = await deleteSubagentSessionForCleanup({
     callGateway: call,
     gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-    isCurrent: () => isCleanupCurrent(runs.get(entry.runId), entry),
+    isCurrent: () => {
+      assertCurrent();
+      return isCleanupCurrent(runs.get(entry.runId), entry);
+    },
     childSessionKey: entry.childSessionKey,
+    childAgentId: resolveSubagentChildAgentId(entry),
     expectedSessionId: identity.sessionId,
     expectedLifecycleRevision: identity.lifecycleRevision,
     onError: (error) => {
@@ -85,7 +155,7 @@ export function mutateCleanup(
   runs: Map<string, SubagentRunRecord>,
   entry: SubagentRunRecord,
   ready: (current: SubagentRunRecord) => boolean,
-  update: (draft: SubagentRunRecord) => SubagentRunRecord | null,
+  update: (draft: SubagentRunRecord) => void | null,
 ) {
   return mutateSubagentRuns(
     [entry.runId],
@@ -94,7 +164,8 @@ export function mutateCleanup(
       if (!isCleanupCurrent(current, entry) || !ready(current)) {
         return { value: undefined };
       }
-      const next = update(structuredClone(current));
+      const draft = structuredClone(current);
+      const next = update(draft) === null ? null : draft;
       return { value: next, postimages: new Map([[entry.runId, next]]) };
     },
     { runs },

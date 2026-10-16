@@ -1,24 +1,30 @@
 // @vitest-environment jsdom
-import { html, nothing, render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
+import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   makeChatHost,
   makeRequestMock,
   requestCalls,
   requireRecord,
 } from "./chat-host.test-support.ts";
-import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
+import {
+  ChatProviderReviewController,
+  ChatProviderReviewNotice,
+  ChatProviderReviewDialog,
+} from "./chat-provider-review-controller.tsx";
 
-const containers: HTMLElement[] = [];
+const containers: { element: HTMLElement; dispose: () => void }[] = [];
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(nothing, container);
-    container.remove();
+    container.dispose();
+    container.element.remove();
   }
   vi.restoreAllMocks();
 });
@@ -51,21 +57,33 @@ function fixture(review = row.providerReview) {
     .spyOn(state.sessions, "reconcileMutation")
     .mockResolvedValue({ status: "refreshed" });
   const container = document.createElement("div");
-  containers.push(container);
   document.body.append(container);
+  const [revision, setRevision] = createSignal(0);
   const paint = () => {
     controller.sync(true);
-    render(html`${controller.notice()}${controller.dialog()}`, container);
+    setRevision((value) => value + 1);
+    flush();
   };
-  const controller = new ChatProviderReviewController(
-    {
-      addController() {},
-      removeController() {},
-      requestUpdate: paint,
-      updateComplete: Promise.resolve(true),
-    },
-    () => state,
+  const lifecycle = new ControllerHost();
+  const controller = new ChatProviderReviewController(lifecycle, () => state, paint);
+  const mounted = mountSolid(
+    () => [
+      createComponent(ChatProviderReviewNotice, {
+        controller,
+        get revision() {
+          return revision();
+        },
+      }),
+      createComponent(ChatProviderReviewDialog, {
+        controller,
+        get revision() {
+          return revision();
+        },
+      }),
+    ],
+    { container },
   );
+  containers.push({ element: container, dispose: mounted.unmount });
   paint();
   const click = (text: string) => {
     const button = [...container.querySelectorAll("button")].find(
@@ -97,6 +115,7 @@ function fixture(review = row.providerReview) {
     outcome,
     request,
     refresh,
+    lifecycle,
   };
 }
 
@@ -119,39 +138,8 @@ async function expectFreshRetry(f: ReturnType<typeof fixture>, first: Record<str
   await f.refresh.mock.results.at(-1)?.value;
 }
 
-it("requires explicit review and acknowledgment, quotes exact text, and keeps the server pause after ACK", async () => {
-  const f = fixture();
-  expect(f.calls()).toHaveLength(0);
-  await f.open();
-  expect(f.container.textContent).toContain(row.providerReview!.explanation);
-  expect(f.container.querySelector("img")).toBeNull();
-  expect(f.container.querySelector("blockquote")?.textContent).toBe(
-    row.providerReview!.continuationMessage,
-  );
-  expect(f.calls()).toHaveLength(0);
-  f.click("Acknowledge findings and continue");
-  f.click("Requesting continuation…");
-  const calls = f.calls();
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.[1]).toEqual({
-    sessionKey: row.key,
-    agentId: "main",
-    sessionId: row.sessionId,
-    reviewId: row.providerReview!.id,
-    idempotencyKey: expect.any(String),
-  });
-  f.outcome.resolve({ runId: "resumed", status: "started" });
-  await f.outcome.promise;
-  await Promise.resolve();
-  expect(f.refresh).toHaveBeenCalledTimes(1);
-  await f.refresh.mock.results[0]?.value;
-  expect(f.container.textContent).toContain("Waiting for the provider to accept it.");
-  expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-  expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
-});
-
-it.each(["connection", "session", "review"] as const)(
-  "ignores a late continuation outcome after %s replacement",
+it.each(["connection", "session", "review", "disconnection"] as const)(
+  "ignores a late continuation outcome after %s changes",
   async (replacement) => {
     const f = fixture();
     await f.open();
@@ -175,6 +163,9 @@ it.each(["connection", "session", "review"] as const)(
       ],
       2,
     );
+    if (replacement === "disconnection") {
+      f.lifecycle.disconnect();
+    }
     f.paint();
     f.outcome.reject(new Error("Old connection failed"));
     await f.outcome.promise.catch(() => {});
@@ -201,7 +192,7 @@ it.each([
   expect(f.calls()).toHaveLength(0);
 });
 
-it("reports a failed status refresh and checks again without replaying an accepted acknowledgment", async () => {
+it("requires explicit safe review, retains the pause, and retries status without replaying ACK", async () => {
   const f = fixture();
   const firstRefresh = createDeferred<SessionRefreshOutcome>();
   const firstRefreshStarted = createDeferred();
@@ -212,8 +203,28 @@ it("reports a failed status refresh and checks again without replaying an accept
       return firstRefresh.promise;
     })
     .mockImplementationOnce(() => secondRefresh.promise);
+  expect(f.calls()).toHaveLength(0);
   await f.open();
+  const dialog = f.container.querySelector("openclaw-modal-dialog");
+  f.paint();
+  expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+  expect(f.container.textContent).toContain(row.providerReview!.explanation);
+  expect(f.container.querySelector("img")).toBeNull();
+  expect(f.container.querySelector("blockquote")?.textContent).toBe(
+    row.providerReview!.continuationMessage,
+  );
+  expect(f.calls()).toHaveLength(0);
   f.click("Acknowledge findings and continue");
+  f.click("Requesting continuation…");
+  const calls = f.calls();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.[1]).toEqual({
+    sessionKey: row.key,
+    agentId: "main",
+    sessionId: row.sessionId,
+    reviewId: row.providerReview!.id,
+    idempotencyKey: expect.any(String),
+  });
   f.outcome.resolve({ runId: "resumed", status: "started" });
   await firstRefreshStarted.promise;
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
@@ -224,6 +235,7 @@ it("reports a failed status refresh and checks again without replaying an accept
   expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
   expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
   expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
+  expect(f.refresh).toHaveBeenCalledTimes(1);
   f.click("Check continuation status");
   expect(f.refresh).toHaveBeenCalledTimes(2);
   expect(f.calls()).toHaveLength(1);
@@ -231,45 +243,56 @@ it("reports a failed status refresh and checks again without replaying an accept
   await secondRefresh.promise;
   expect(f.container.textContent).toContain("Waiting for the provider to accept it.");
   expect(f.container.textContent).not.toContain("status could not be refreshed");
+  expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
   expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
   expect(f.calls()).toHaveLength(1);
 });
 
 it.each([
-  { status: "failed", runIdentity: "request" },
-  { status: "timeout", runIdentity: "server" },
-  { status: "killed", runIdentity: "server" },
+  { source: "row", status: "failed", runIdentity: "request" },
+  { source: "row", status: "timeout", runIdentity: "server" },
+  { source: "row", status: "killed", runIdentity: "server" },
+  { source: "ack", status: "error", runIdentity: "server" },
+  { source: "ack", status: "timeout", runIdentity: "server" },
 ] as const)(
-  "offers a fresh explicit acknowledgment after the $runIdentity run is canonically $status",
-  async ({ status, runIdentity }) => {
+  "requires a fresh explicit acknowledgment after $source reports $status ($runIdentity)",
+  async ({ source, status, runIdentity }) => {
     const f = fixture();
     const first = await f.acknowledge();
     const runId =
       runIdentity === "server"
         ? `server-${String(first.idempotencyKey)}`
         : String(first.idempotencyKey);
-    f.outcome.resolve({ runId, status: "started" });
+    f.outcome.resolve({ runId, status: source === "ack" ? status : "started" });
     await f.outcome.promise;
     await Promise.resolve();
-    await f.refresh.mock.results[0]?.value;
-    await Promise.resolve();
-    f.state.sessionsResult = sessionsResult(
-      [
-        {
-          ...row,
-          lastRunId: runId,
-          status,
-          hasActiveRun: false,
-          activeRunIds: [],
-          lastRunError: "Provider authentication failed before acceptance.",
-        },
-      ],
-      2,
-    );
+    if (source === "row") {
+      await f.refresh.mock.results[0]?.value;
+      await Promise.resolve();
+      f.state.sessionsResult = sessionsResult(
+        [
+          {
+            ...row,
+            lastRunId: runId,
+            status,
+            hasActiveRun: false,
+            activeRunIds: [],
+            lastRunError: "Provider authentication failed before acceptance.",
+          },
+        ],
+        2,
+      );
+    }
     f.paint();
     expect(f.container.textContent).toContain("Continuation was not accepted.");
-    expect(f.container.textContent).toContain("Provider authentication failed before acceptance.");
-    expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
+    if (source === "row") {
+      expect(f.container.textContent).toContain(
+        "Provider authentication failed before acceptance.",
+      );
+      expect(f.container.textContent).not.toContain("Waiting for the provider to accept it.");
+    } else {
+      expect(f.refresh).not.toHaveBeenCalled();
+    }
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
     expect(f.calls()).toHaveLength(1);
     expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
@@ -356,21 +379,3 @@ it("preserves the same idempotency key after an uncertain transport failure with
   await f.outcome.promise.catch(() => {});
   await Promise.resolve();
 });
-
-it.each(["error", "timeout"] as const)(
-  "retires a definitive %s acknowledgment key until another explicit click",
-  async (status) => {
-    const f = fixture();
-    const first = await f.acknowledge();
-    f.outcome.resolve({ runId: "terminal-continuation", status });
-    await f.outcome.promise;
-    await Promise.resolve();
-    f.paint();
-    expect(f.container.textContent).toContain("Continuation was not accepted.");
-    expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
-    expect(f.refresh).not.toHaveBeenCalled();
-    expect(f.calls()).toHaveLength(1);
-    expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
-    await expectFreshRetry(f, first);
-  },
-);

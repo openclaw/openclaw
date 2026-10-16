@@ -3,6 +3,7 @@ import { isMainThread } from "node:worker_threads";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,16 +18,17 @@ import { createThreadBindingManager } from "./thread-bindings.manager.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-vi.mock("../runtime.js", () => {
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
   const runtime = {
     state: {
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("discord", options),
+      openKeyedStoreV2: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreV2ForTests("discord", options, { assertCurrent() {} }),
       openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests("discord", options),
     },
   };
-  return { getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
+  return { ...actual, getDiscordRuntime: () => runtime, getOptionalDiscordRuntime: () => runtime };
 });
 
 it("keeps binding restoration, mutation, and shutdown SQL off the process main thread", async () => {

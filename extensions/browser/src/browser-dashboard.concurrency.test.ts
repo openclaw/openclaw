@@ -267,7 +267,11 @@ describe("Browser dashboard operation ordering", () => {
         });
         const retained = await getBrowserSessionTabStore().entries();
         finish.resolve();
-        await expect(cleanup).resolves.toBe(0);
+        if (changed === "runtime") {
+          await expect(cleanup).rejects.toThrow("Browser session tab store owner changed");
+        } else {
+          await expect(cleanup).resolves.toBe(0);
+        }
         expect(await getBrowserSessionTabStore().entries()).toEqual(retained);
         expect(closeTab).not.toHaveBeenCalled();
         expect(browser.closeOwned).not.toHaveBeenCalled();
@@ -279,7 +283,7 @@ describe("Browser dashboard operation ordering", () => {
       } finally {
         finish.resolve();
         storeRead?.mockRestore();
-        await cleanup;
+        await Promise.allSettled([cleanup]);
       }
     },
   );
@@ -385,57 +389,38 @@ describe("Browser dashboard operation ordering", () => {
     },
   );
 
-  it.each(["cancelled intermediate", "successful successor"] as const)(
-    "preserves failure ownership through a %s",
-    async (condition) => {
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const backendError = new Error("Chrome startup failed");
-      browser.open.mockImplementationOnce(async () => {
-        started.resolve();
-        await finish.promise;
-        throw backendError;
-      });
-      const opening = requestBrowserDashboard(request);
-      await started.promise;
-      const middle = new AbortController();
-      const originalUrl = fixture.widgets[0]!.props.url;
-      const updatedUrl = "http://updated.example/";
-      if (condition === "successful successor") {
-        fixture.widgets[0]!.props.url = updatedUrl;
+  it("resolves the current definition after a failed queued open", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const backendError = new Error("Chrome startup failed");
+    browser.open.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      throw backendError;
+    });
+    const opening = requestBrowserDashboard(request);
+    await started.promise;
+    const originalUrl = fixture.widgets[0]!.props.url;
+    const updatedUrl = "http://updated.example/";
+    fixture.widgets[0]!.props.url = updatedUrl;
+    const waiting = requestBrowserDashboard(request);
+    const following = requestBrowserDashboard(request);
+    const settled = Promise.allSettled([opening, waiting, following]);
+    await setImmediate();
+    fixture.readBoard.mockImplementation(async () => {
+      if ((await readBrowserDashboardTabs()).some((tab) => tab.dashboard?.url === updatedUrl)) {
+        fixture.widgets[0]!.props.url = originalUrl;
       }
-      const waiting = requestBrowserDashboard(request, { signal: middle.signal });
-      const following = requestBrowserDashboard(request);
-      const settled = Promise.allSettled([opening, waiting, following]);
-      await setImmediate();
-      if (condition === "cancelled intermediate") {
-        middle.abort(new Error("queued caller cancelled"));
-      } else {
-        fixture.readBoard.mockImplementation(async () => {
-          if ((await readBrowserDashboardTabs()).some((tab) => tab.dashboard?.url === updatedUrl)) {
-            fixture.widgets[0]!.props.url = originalUrl;
-          }
-          return structuredClone({ sessionKey, widgets: fixture.widgets });
-        });
-      }
-      finish.resolve();
-      const results = await settled;
-      expect(results[0]).toEqual({ status: "rejected", reason: backendError });
-      if (condition === "cancelled intermediate") {
-        expect(results.slice(1)).toEqual([
-          { status: "rejected", reason: middle.signal.reason },
-          { status: "rejected", reason: backendError },
-        ]);
-        expect(browser.open).toHaveBeenCalledOnce();
-        expect(fixture.tabs).toEqual([]);
-      } else {
-        expect(results.slice(1)).toMatchObject([
-          { status: "fulfilled", value: { url: updatedUrl } },
-          { status: "fulfilled", value: { url: originalUrl } },
-        ]);
-        expect(browser.open).toHaveBeenCalledTimes(3);
-        expect(fixture.tabs.map((tab) => tab.url)).toEqual([originalUrl]);
-      }
-    },
-  );
+      return structuredClone({ sessionKey, widgets: fixture.widgets });
+    });
+    finish.resolve();
+    const results = await settled;
+    expect(results[0]).toEqual({ status: "rejected", reason: backendError });
+    expect(results.slice(1)).toMatchObject([
+      { status: "fulfilled", value: { url: updatedUrl } },
+      { status: "fulfilled", value: { url: originalUrl } },
+    ]);
+    expect(browser.open).toHaveBeenCalledTimes(3);
+    expect(fixture.tabs.map((tab) => tab.url)).toEqual([originalUrl]);
+  });
 });

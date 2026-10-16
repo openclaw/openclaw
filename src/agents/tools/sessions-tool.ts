@@ -5,7 +5,13 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -29,6 +35,7 @@ import {
 } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
+  getInProcessGatewayToolContext,
   hasInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,
@@ -41,10 +48,11 @@ import {
   runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
 import { listSessionCloudProfiles } from "./sessions-cloud-profiles.js";
-import { resolveSessionToolContext } from "./sessions-helpers.js";
+import { isSessionToolMainAlias, resolveSessionToolContext } from "./sessions-helpers.js";
 import {
+  captureSessionControlAuthority,
   hasSessionControlAuthority,
-  hasSessionRenameAuthority,
+  hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
@@ -67,7 +75,6 @@ import {
 } from "./sessions-tool-schema.js";
 
 const GROUP_NAME_MAX_LENGTH = 512;
-const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsToolOptions = {
@@ -84,33 +91,15 @@ type SessionsToolOptions = {
   hasInProcessGatewayContext?: () => boolean;
 };
 
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const value = params[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "boolean") {
-    throw new ToolInputError(`${key} must be boolean`);
-  }
-  return value;
-}
-
 function readGroupName(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) {
     throw new ToolInputError(`${label} required`);
   }
-  const name = value.trim();
   if (name.length > GROUP_NAME_MAX_LENGTH) {
     throw new ToolInputError(`${label} too long`);
   }
   return name;
-}
-
-function readGroupNames(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    throw new ToolInputError("names required");
-  }
-  return value.map((name, index) => readGroupName(name, `names[${index}]`));
 }
 
 async function resolvePatchTarget(
@@ -134,11 +123,7 @@ async function resolvePatchTarget(
   });
   const normalizedRawKey = rawKey.trim();
   const isCurrentSession = normalizedRawKey === "current";
-  const isConfiguredMainAlias =
-    normalizedRawKey === "main" ||
-    normalizedRawKey === "global" ||
-    normalizedRawKey === context.mainKey ||
-    normalizedRawKey === context.alias;
+  const isConfiguredMainAlias = isSessionToolMainAlias(normalizedRawKey, context);
   const inputAgentId = isCurrentSession
     ? requesterAgentId
     : shouldResolveSessionIdInput(rawKey) && !isConfiguredMainAlias
@@ -174,8 +159,8 @@ async function resolvePatchTarget(
   const isRequesterSession =
     resolved.key === context.effectiveRequesterKey && agentId === requesterAgentId;
   if (!isRequesterSession) {
-    // Session visibility is the configured read/write scope for session tools;
-    // the action only selects error copy. Owner gating remains separate.
+    // Session controls require status visibility, never an outbound-only send grant.
+    // Owner gating remains separate.
     const authorizationKey =
       agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
         ? `agent:${agentId}:${resolved.key}`
@@ -216,7 +201,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   // Absence is the existing senderless system surface, not an explicit non-owner.
   const sandboxRenameOnly = opts.sandboxSessionRenameOnly === true;
   const controlOnly = opts.senderIsOwner === false || sandboxRenameOnly;
-  const renameAllowed = controlOnly && hasSessionRenameAuthority(opts.sessionControlAuthority);
+  const renameAllowed = controlOnly && hasSessionWriteAuthority(opts.sessionControlAuthority);
   const renameOnly = controlOnly && !hasSessionControlAuthority(opts.sessionControlAuthority);
   const assignmentOnly = renameOnly && !renameAllowed;
   const stopAllowed = opts.stopAllowed !== false;
@@ -229,11 +214,11 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description: sandboxRenameOnly
-      ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. No other session actions or settings."
+      ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. Archive and restore are unavailable in this authority context. No other session actions or settings."
       : assignmentOnly
-        ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access."
+        ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access. Archive and restore are unavailable in this authority context."
         : renameOnly
-          ? "Rename a session created by the requesting operator: use patch with label (empty string clears it). Default target: current session; another session requires sessionKey and expectedSessionId from sessions_list. assign_owner assigns responsibility for a visible session to a human or agent. No other settings or session controls."
+          ? "Rename a session created by the requesting operator: use patch with label (empty string clears it). Default target: current session; another session requires sessionKey and expectedSessionId from sessions_list. assign_owner assigns responsibility for a visible session to a human or agent. Archive and restore are unavailable in this authority context. No other settings or session controls."
           : controlOnly
             ? `Rename sessions created by the requesting operator with patch and label. Archive or restore sessions created by the requesting operator requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, other settings, batch, or global group changes.`
             : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
@@ -268,7 +253,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         params = Object.fromEntries(
           Object.keys(SessionRenameToolSchema.properties).map((key) => [key, params[key]]),
         );
-        if (!hasSessionRenameAuthority()) {
+        if (!hasSessionWriteAuthority()) {
           throw new ToolAuthorizationError(
             "Session rename requires current session write authority",
           );
@@ -338,70 +323,63 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           throw new ToolInputError(`Cannot ${action} the session running this tool`);
         }
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
-        if (action === "reset") {
-          const result = await runSessionToolActionWithConflictReceipt({
-            operation: "reset",
+        let mutationParams: Record<string, unknown> = { key, ...agentScope, reason: "reset" };
+        if (action === "delete") {
+          // Archive returns the exact row generation. Carry it into the locked
+          // delete so a concurrent reset cannot delete a replacement session.
+          const expectedSessionId = readToolStringParam(params, "expectedSessionId");
+          if (!expectedSessionId) {
+            throw new ToolInputError(
+              "Session lifecycle action requires a durable session identity",
+            );
+          }
+          const archived = await runSessionToolActionWithConflictReceipt({
+            operation: action,
             targetAgentId: agentId,
             targetSessionKey: key,
             run: async () =>
-              await callGateway("sessions.reset", {
+              await callGateway<{
+                entry?: { sessionId?: string; lifecycleRevision?: string };
+              }>("sessions.patch", {
                 key,
                 ...agentScope,
-                reason: "reset",
+                expectedSessionId,
+                archived: true,
               }),
           });
-          recordSessionToolActionFact({
-            operation: "reset",
-            fact: "committed",
-            targetAgentId: agentId,
-            targetSessionKey: key,
-          });
-          return jsonResult(result);
+          const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
+          if (!archivedSessionId) {
+            throw new ToolInputError("Session archive did not return its session identity");
+          }
+          const expectedLifecycleRevision = normalizeOptionalString(
+            archived.entry?.lifecycleRevision,
+          );
+          mutationParams = {
+            key,
+            ...agentScope,
+            archivedOnly: true,
+            expectedSessionId: archivedSessionId,
+            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+          };
         }
-        // Archive returns the exact row generation. Carry it into the locked
-        // delete so a concurrent reset cannot delete a replacement session.
-        const expectedSessionId = readToolStringParam(params, "expectedSessionId");
-        if (!expectedSessionId) {
-          throw new ToolInputError("Session lifecycle action requires a durable session identity");
-        }
-        const archived = await runSessionToolActionWithConflictReceipt({
-          operation: "delete",
-          targetAgentId: agentId,
-          targetSessionKey: key,
-          run: async () =>
-            await callGateway<{
-              entry?: { sessionId?: string; lifecycleRevision?: string };
-            }>("sessions.patch", {
-              key,
-              ...agentScope,
-              expectedSessionId,
-              archived: true,
-            }),
-        });
-        const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
-        if (!archivedSessionId) {
-          throw new ToolInputError("Session archive did not return its session identity");
-        }
-        const expectedLifecycleRevision = normalizeOptionalString(
-          archived.entry?.lifecycleRevision,
-        );
         const result = await runSessionToolActionWithConflictReceipt({
-          operation: "delete",
+          operation: action,
           targetAgentId: agentId,
           targetSessionKey: key,
-          run: async () =>
-            await callGateway<{ deleted?: boolean }>("sessions.delete", {
-              key,
-              ...agentScope,
-              archivedOnly: true,
-              expectedSessionId: archivedSessionId,
-              ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-              deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
-            }),
+          run: async () => {
+            if (action === "delete") {
+              const deleteTranscript = params.deleteTranscript;
+              if (deleteTranscript !== undefined && typeof deleteTranscript !== "boolean") {
+                throw new ToolInputError("deleteTranscript must be boolean");
+              }
+              mutationParams.deleteTranscript = deleteTranscript ?? true;
+            }
+            return await callGateway(`sessions.${action}`, mutationParams);
+          },
         });
         recordSessionToolActionFact({
-          operation: "delete",
-          // Archive is part of this composite action and already committed.
+          operation: action,
+          // Delete's archive is part of this action and already committed.
           // A delete miss therefore cannot make the whole operation a no-op.
           fact: "committed",
           targetAgentId: agentId,
@@ -454,21 +432,18 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       // Group catalog is global by contract. The action-level owner gate protects mutations.
       if (action === "group_set") {
-        const names = readGroupNames(params.names);
+        const requestedNames = params.names;
+        if (!Array.isArray(requestedNames)) {
+          throw new ToolInputError("names required");
+        }
+        const names = requestedNames.map((name, index) => readGroupName(name, `names[${index}]`));
         return jsonResult(await callGateway("sessions.groups.put", { names }));
       }
-      if (action === "group_rename") {
+      if (action === "group_rename" || action === "group_delete") {
         return jsonResult(
-          await callGateway("sessions.groups.rename", {
+          await callGateway(`sessions.groups.${action === "group_rename" ? "rename" : "delete"}`, {
             name: readGroupName(params.name, "name"),
-            to: readGroupName(params.to, "to"),
-          }),
-        );
-      }
-      if (action === "group_delete") {
-        return jsonResult(
-          await callGateway("sessions.groups.delete", {
-            name: readGroupName(params.name, "name"),
+            ...(action === "group_rename" ? { to: readGroupName(params.to, "to") } : {}),
           }),
         );
       }
@@ -522,9 +497,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (typeof archived === "boolean" && !expectedSessionId) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
-      const lifecycleIdentity:
-        | { expectedSessionId: string; expectedLifecycleRevision?: string }
-        | undefined = expectedSessionId ? { expectedSessionId } : undefined;
+      const lifecycleIdentity = expectedSessionId ? { expectedSessionId } : undefined;
       const patch = { key, ...lifecycleIdentity, ...values };
       let selectedLifecycleRevision: string | null | undefined;
       const controlTarget = () => ({
@@ -559,7 +532,11 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (patch.archived === true && isRequesterSession && key !== "global") {
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-          const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+          const currentEntry = await readSessionEntryReadOnlyInWorker({
+            agentId,
+            sessionKey: key,
+            storePath,
+          });
           const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
@@ -579,7 +556,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             const {
               archived: _archived,
               expectedSessionId: _expectedSessionId,
-              expectedLifecycleRevision: _expectedLifecycleRevision,
               ...immediatePatch
             } = patch;
             let immediateResult: SessionsPatchResult | undefined;
@@ -596,87 +572,101 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // keeps a reset replacement from being archived between checks.
             // Accepted work retains its source authority, not the request/turn
             // lifetime that must end before the archive can commit.
+            const archiveGatewayContext = getInProcessGatewayToolContext();
             void runWithGatewayToolContinuationContext(() =>
-              released.then(async () => {
-                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
-                const archivePatch = {
-                  key,
-                  ...agentScope,
-                  archived: true,
-                  ...expectedSessionIdentity,
-                };
-                let unobservedRunRetries = 0;
-
-                while (true) {
-                  const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-                  if (
-                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
-                    (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
-                      latestEntry.lifecycleRevision !==
-                        expectedSessionIdentity.expectedLifecycleRevision)
-                  ) {
-                    return;
-                  }
-
-                  const competingRelease = getSessionWorkAdmissionRelease({
-                    scope: storePath,
-                    identities: archiveIdentities,
-                  });
-                  if (competingRelease) {
-                    unobservedRunRetries = 0;
-                    await competingRelease;
-                    continue;
-                  }
-
-                  try {
-                    await (controlOnly
-                      ? callSessionPatch(archivePatch)
-                      : callGateway("sessions.patch", archivePatch));
-                    return;
-                  } catch (error) {
-                    // A new turn can enter after the idle check. Wait for that
-                    // admitted owner, or retry a transient gateway disconnect,
-                    // instead of losing an archive that was already scheduled.
-                    const message = formatErrorMessage(error);
-                    const retryableGatewayFailure =
-                      error instanceof GatewayTransportError ||
-                      isTransientNetworkError(error) ||
-                      (typeof error === "object" &&
-                        error !== null &&
-                        "retryable" in error &&
-                        error.retryable === true);
-                    if (!retryableGatewayFailure) {
-                      throw error;
-                    }
-                    log.warn(`retrying deferred self-archive for ${key}: ${message}`);
-                    const retryAfterRelease = getSessionWorkAdmissionRelease({
+              released
+                .then(async () => {
+                  const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
+                  const archivePatch = {
+                    key,
+                    ...agentScope,
+                    archived: true,
+                    ...expectedSessionIdentity,
+                  };
+                  while (true) {
+                    const competingRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,
                     });
-                    if (retryAfterRelease) {
-                      unobservedRunRetries = 0;
-                      await retryAfterRelease;
-                    } else {
-                      // Projected work can outlive local admission tracking.
-                      // Cap the interval, not the archive, so it cannot spin or
-                      // abandon a session whose remote turn is still running.
-                      const retryDelayMs = Math.min(
-                        25 * 2 ** Math.min(unobservedRunRetries, 8),
-                        SELF_ARCHIVE_MAX_RETRY_DELAY_MS,
-                      );
-                      await new Promise<void>((resolve) => {
-                        // A pending self-archive must not keep a shutting-down
-                        // gateway alive solely to retry its own transport.
-                        const retryTimer = setTimeout(resolve, retryDelayMs);
-                        retryTimer.unref?.();
+                    if (competingRelease) {
+                      await competingRelease;
+                      continue;
+                    }
+
+                    try {
+                      await (controlOnly
+                        ? callSessionPatch(archivePatch)
+                        : callGateway("sessions.patch", archivePatch));
+                      return;
+                    } catch (error) {
+                      // A tracked competing turn can delay archival. Untracked
+                      // races and transport failures are best effort: warn below.
+                      const retryableGatewayFailure =
+                        error instanceof GatewayTransportError ||
+                        isTransientNetworkError(error) ||
+                        (typeof error === "object" &&
+                          error !== null &&
+                          "retryable" in error &&
+                          error.retryable === true);
+                      if (!retryableGatewayFailure) {
+                        throw error;
+                      }
+                      const retryAfterRelease = getSessionWorkAdmissionRelease({
+                        scope: storePath,
+                        identities: archiveIdentities,
                       });
-                      unobservedRunRetries = Math.min(unobservedRunRetries + 1, 8);
+                      if (!retryAfterRelease) {
+                        throw error;
+                      }
+                      await retryAfterRelease;
                     }
                   }
-                }
-              }),
+                })
+                .catch(async (error: unknown) => {
+                  log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
+                  const source = captureSessionControlAuthority();
+                  const target = {
+                    agentId,
+                    storePath,
+                    sessionKey: key,
+                    sessionId: expectedSessionIdentity.expectedSessionId,
+                  };
+                  // The settled model writer no longer owns this accepted outcome.
+                  // Keep the retained source and exact session generation at the report commit.
+                  const report = await runWithoutOwnedSessionTranscriptWrites(() =>
+                    withSessionTranscriptWriteAssertion(
+                      target,
+                      composeSessionSourceAssertion([source?.assertCurrent], (assertSource) => {
+                        assertSource();
+                        if (getInProcessGatewayToolContext() !== archiveGatewayContext) {
+                          throw new Error("Deferred archive Gateway owner changed");
+                        }
+                      }),
+                      () =>
+                        appendSessionTranscriptReport(target, {
+                          kind: "custom",
+                          customTypes: ["session-archive-failed"],
+                          selectReport: () => ({
+                            customType: "session-archive-failed",
+                            content:
+                              "The scheduled session archive could not be confirmed. Check whether this session is archived before trying again.",
+                            display: true,
+                            excludeFromContext: true,
+                            details: { operation: "archive", outcome: "unconfirmed" },
+                          }),
+                        }),
+                    ),
+                  );
+                  if (!report.ok) {
+                    log.warn(
+                      `deferred self-archive notice unavailable for ${key}: ${report.error.code}`,
+                    );
+                  }
+                }),
             ).catch((error: unknown) => {
-              log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
+              log.warn(
+                `deferred self-archive outcome unavailable for ${key}: ${formatErrorMessage(error)}`,
+              );
             });
 
             recordSessionToolActionFact({

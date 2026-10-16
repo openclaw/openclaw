@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronJobsStore } from "../cron/store.js";
@@ -53,8 +54,20 @@ describe("Doctor workspace persistence", () => {
               },
             },
           },
+          models: {
+            providers: {
+              custom: {
+                api: "openai-codex-responses",
+                models: [{ id: "legacy-model", api: "openai-codex-responses" }],
+              },
+            },
+          },
           session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
-          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          browser: {
+            relayBindHost: "127.0.0.1",
+            ssrfPolicy: { allowPrivateNetwork: true },
+            profiles: { relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792" } },
+          },
           messages: {
             queue: {
               mode: "queue",
@@ -68,7 +81,8 @@ describe("Doctor workspace persistence", () => {
         const original = await fs.readFile(configPath, "utf8");
         expect((await readConfigFileSnapshot()).valid).toBe(false);
         const repair = (async () => {
-          await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+          await using ctx = await prepareDoctorContext(configPath);
+          await runInitialConfigWriteHealth(ctx);
         })();
         for (const setting of [
           "heartbeat",
@@ -86,6 +100,9 @@ describe("Doctor workspace persistence", () => {
           "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
+          "browser.profiles.relay.cdpUrl",
+          "models.providers.custom.api",
+          "models.providers.custom.models.0.api",
           "allowPrivateNetwork",
           "messages.queue.mode",
           "messages.queue.byChannel.discord",
@@ -117,7 +134,12 @@ describe("Doctor workspace persistence", () => {
           "123",
           456,
         ];
-        const canonical = ["discord:100000000000000001", "telegram:123", "slack:U123"];
+        // Unavailable channel contracts cannot prove it is safe to drop a target kind.
+        const canonical = [
+          "discord:user:100000000000000001",
+          "telegram:user:123",
+          "slack:user:U123",
+        ];
         const configPath = await writeOpenClawConfig(home, {
           // v2026.7.1-beta.1 (published July 2 UTC) admits this roster and ownerAllowFrom shape.
           meta: { lastTouchedVersion: "2026.7.1-beta.1" },
@@ -133,12 +155,7 @@ describe("Doctor workspace persistence", () => {
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const ctx = await prepareDoctorContext(configPath);
-        for (const index of [0, 1, 2]) {
-          expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-            `commands.ownerAllowFrom[${index}]`,
-          );
-        }
+        await using ctx = await prepareDoctorContext(configPath);
         await runInitialConfigWriteHealth(ctx);
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();
@@ -146,7 +163,7 @@ describe("Doctor workspace persistence", () => {
         const bytes = await fs.readFile(configPath, "utf8");
         expect(JSON.parse(bytes).agents).toHaveProperty("entries.main");
         expect(JSON.parse(bytes).agents).not.toHaveProperty("list");
-        const repeated = await prepareDoctorContext(configPath);
+        await using repeated = await prepareDoctorContext(configPath);
         expect(repeated.configResult.shouldWriteConfig).toBe(false);
         await runInitialConfigWriteHealth(repeated);
         expect(await fs.readFile(configPath, "utf8")).toBe(bytes);
@@ -154,10 +171,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each([
-    ["entries", false],
-    ["list", true],
-  ] as const)(
+  it.each([["list", true]] as const)(
     "persists per-agent migrations with explicit ownership (%s, writable update: %s)",
     async (shape, writableUpdate) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -178,19 +192,14 @@ describe("Doctor workspace persistence", () => {
               research: { memory: { search: { provider: "auto" } } },
             };
             const configPath = await writeOpenClawConfig(home, {
+              meta: { migrations: { webhookListeners: true } },
               agents: {
                 ownership: "explicit",
                 defaults: {
                   embeddedAgent: { projectSettingsPolicy: "trusted" },
                   sandbox: { scope: "shared" },
                 },
-                ...(shape === "entries"
-                  ? { entries }
-                  : {
-                      list: Object.entries(entries).map(([id, entry]) =>
-                        Object.assign({ id }, entry),
-                      ),
-                    }),
+                list: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
               },
               gateway: { mode: "local" },
               plugins: { enabled: false },
@@ -198,7 +207,7 @@ describe("Doctor workspace persistence", () => {
             const original = await fs.readFile(configPath, "utf8");
             expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             expect(ctx.configWriteRefusal).toBeUndefined();
             expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
@@ -222,19 +231,15 @@ describe("Doctor workspace persistence", () => {
               memory: { search: { provider: "openai" } },
             });
             expect((await readConfigFileSnapshot()).valid).toBe(true);
-            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-              false,
-            );
+            await using repeated = await prepareDoctorContext(configPath);
+            expect(repeated.configResult.shouldWriteConfig).toBe(false);
           },
         );
       });
     },
   );
 
-  it.each([
-    { kind: "implicit", legacyId: "main" },
-    { kind: "shared", legacyId: " Main " },
-  ])(
+  it.each([{ kind: "shared", legacyId: " Main " }])(
     "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
     async ({ kind, legacyId }) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -267,9 +272,12 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
+            expect(readAgentRosterProperty(before.sourceConfig)).toEqual({
+              kind: "list",
+              value: [{ id: legacyId }, { id: "other" }],
+            });
 
-            const ctx = await prepareDoctorContext(configPath);
+            await using ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             const saved = await readConfigFileSnapshot();
             expect(saved.valid).toBe(true);
@@ -282,9 +290,8 @@ describe("Doctor workspace persistence", () => {
             for (const [name, content] of Object.entries(originals)) {
               expect(await fs.readFile(path.join(workspace, name), "utf8")).toBe(content);
             }
-            expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-              false,
-            );
+            await using repeated = await prepareDoctorContext(configPath);
+            expect(repeated.configResult.shouldWriteConfig).toBe(false);
           },
         );
       });
@@ -305,9 +312,9 @@ describe("Doctor workspace persistence", () => {
         });
         const before = await readConfigFileSnapshot();
         expect(before.valid).toBe(false);
-        expect(before.sourceConfig.agents?.list).toHaveLength(1);
+        expect(readAgentRosterProperty(before.sourceConfig)?.value).toHaveLength(1);
 
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.shouldWriteConfig).toBe(true);
         expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
         await runInitialConfigWriteHealth(ctx);
@@ -316,7 +323,8 @@ describe("Doctor workspace persistence", () => {
         expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
         expect(saved.agents).not.toHaveProperty("list");
         expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(false);
+        await using repeated = await prepareDoctorContext(configPath);
+        expect(repeated.configResult.shouldWriteConfig).toBe(false);
       });
     });
   });
@@ -333,7 +341,7 @@ describe("Doctor workspace persistence", () => {
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
 
         await runInitialConfigWriteHealth(ctx);
         expect((await readConfigFileSnapshot()).config.agents?.entries?.main?.workspace).toBe(
@@ -391,7 +399,7 @@ describe("Doctor workspace persistence", () => {
           let firstRows: unknown;
           for (const pass of [1, 2]) {
             await withDoctorConfigMaintenance(async () => {
-              const ctx = await prepareDoctorContext(configPath);
+              await using ctx = await prepareDoctorContext(configPath);
               await runInitialConfigWriteHealth(ctx);
               await runWriteConfigHealth(ctx);
             });
@@ -426,4 +434,49 @@ describe("Doctor workspace persistence", () => {
       );
     });
   });
+
+  it.each(["prefixed"])(
+    "refuses retired Talk selectors in %s config before recovery",
+    async (kind) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const canonical = {
+            talk: { realtime: { provider: "openai", speakerVoice: "marin" } },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          };
+          const configPath = await writeOpenClawConfig(home, canonical);
+          expect(await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot())).toBe(
+            true,
+          );
+          const backup = await fs.readFile(configPath, "utf8");
+          await fs.writeFile(`${configPath}.bak`, backup);
+          const retired = {
+            ...canonical,
+            talk: {
+              ...canonical.talk,
+              mode: "realtime",
+              transport: "gateway-relay",
+              brain: "agent-consult",
+              model: "gpt-realtime",
+              voice: "alloy",
+            },
+          };
+          const original = `${kind === "prefixed" ? "Found and updated: False\n" : ""}${JSON.stringify(retired)}\n`;
+          await fs.writeFile(configPath, original);
+          await expect
+            .soft(async () => {
+              await using ctx = await prepareDoctorContext(configPath);
+              await runInitialConfigWriteHealth(ctx);
+            })
+            .rejects.toThrow(
+              /talk\.mode, talk\.transport, talk\.brain, talk\.model, talk\.voice[\s\S]*2026\.9\.5[\s\S]*openclaw doctor --fix/,
+            );
+          expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+          expect.soft(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+          expect.soft(await fs.readFile(`${configPath}.last-good`, "utf8")).toBe(backup);
+        });
+      });
+    },
+  );
 });

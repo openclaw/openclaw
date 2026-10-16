@@ -4,11 +4,15 @@
  * Session metadata uses this report to account for prompt size, bootstrap file
  * injection, skills, and tool schema footprint without storing raw prompt text.
  */
+import {
+  splitSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "@openclaw/ai/internal/shared";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
-import type { AgentTool } from "./runtime/index.js";
+type PromptReportTool = { name: string; parameters: unknown; description?: string; label?: string };
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
@@ -31,7 +35,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 }
 
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: unknown,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
     return { schemaChars: 0, schemaHash: sha256Hex(""), propertiesCount: null };
@@ -73,7 +77,9 @@ function resolveSummaryHash(summary: string): string {
   return hash;
 }
 
-function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
+function buildToolsEntries(
+  tools: PromptReportTool[],
+): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
@@ -84,13 +90,13 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
 }
 
 function measureRenderedProjectContextChars(systemPrompt: string): number {
-  // Include the project heading; without Silent Replies, the range extends to the prompt end.
+  // Project Context ends before the run-scoped capability and catalog instructions.
   const startMarker = "\n# Project Context\n";
   const start = systemPrompt.indexOf(startMarker);
   if (start === -1) {
     return 0;
   }
-  const end = systemPrompt.indexOf("\n## Silent Replies\n", start + startMarker.length);
+  const end = systemPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY, start + startMarker.length);
   return (end === -1 ? systemPrompt.length : end) - start;
 }
 
@@ -99,22 +105,16 @@ function resolveRenderedSkillsPrompt(systemPrompt: string, skillsPrompt: string)
   if (!catalog) {
     return "";
   }
-  // Use the renderer's workspace preamble; provider guidance can use the same
-  // heading names. Workspace examples are not the injected skills catalog.
-  const workspaceStart = systemPrompt.indexOf(
-    "\n## Workspace Files (injected)\nUser-editable; OpenClaw loads below as Project Context.\n",
-  );
-  for (const heading of systemPrompt.matchAll(/(?:^|\n)## Skills\n/g)) {
+  // The renderer places the catalog after this boundary. Workspace examples and
+  // provider headings in the stable prefix are not the rendered Skills section.
+  const prompt = splitSystemPromptCacheBoundary(systemPrompt)?.dynamicSuffix ?? systemPrompt;
+  for (const heading of prompt.matchAll(/(?:^|\n)## Skills\n/g)) {
     const sectionStart = heading.index + heading[0].length;
-    const catalogStart = systemPrompt.indexOf(catalog, sectionStart);
-    const nextSection = systemPrompt.indexOf("\n#", sectionStart);
+    const catalogStart = prompt.indexOf(catalog, sectionStart);
+    const nextSection = prompt.indexOf("\n#", sectionStart);
     // Match the whole known catalog, allowing headings inside its descriptions,
-    // only when it starts in a Skills section before injected workspace content.
-    if (
-      catalogStart >= 0 &&
-      (nextSection < 0 || catalogStart < nextSection) &&
-      (workspaceStart < 0 || catalogStart < workspaceStart)
-    ) {
+    // only when it starts in the rendered Skills section.
+    if (catalogStart >= 0 && (nextSection < 0 || catalogStart < nextSection)) {
       return catalog;
     }
   }
@@ -137,7 +137,7 @@ export function buildSystemPromptReport(params: {
   systemPrompt: string;
   injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
-  tools: AgentTool[];
+  tools: PromptReportTool[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;

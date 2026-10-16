@@ -1,13 +1,11 @@
 // Exercises wired plugin hooks after tool-call completion.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
- * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)
+ * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.completion.ts)
  */
 import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "../agents/embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionStart } from "../agents/embedded-agent-subscribe.handlers.tools.start.js";
+import { endTool } from "../agents/embedded-agent-subscribe.handlers.tools.test-support.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -137,7 +135,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    await handleToolExecutionEnd(
+    await endTool(
       ctx as never,
       {
         type: "tool_execution_end",
@@ -185,7 +183,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    await handleToolExecutionEnd(
+    await endTool(
       ctx as never,
       {
         type: "tool_execution_end",
@@ -207,7 +205,7 @@ describe("after_tool_call hook wiring", () => {
 
     const ctx = createToolHandlerCtx({ runId: "r" });
 
-    await handleToolExecutionEnd(
+    await endTool(
       ctx as never,
       {
         type: "tool_execution_end",
@@ -257,7 +255,7 @@ describe("after_tool_call hook wiring", () => {
       } as never,
     );
 
-    await handleToolExecutionEnd(
+    await endTool(
       ctxA as never,
       {
         type: "tool_execution_end",
@@ -267,7 +265,7 @@ describe("after_tool_call hook wiring", () => {
         result: { content: [{ type: "text", text: "done-a" }] },
       } as never,
     );
-    await handleToolExecutionEnd(
+    await endTool(
       ctxB as never,
       {
         type: "tool_execution_end",

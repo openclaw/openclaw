@@ -15,6 +15,8 @@ export type PluginHookBeforeModelResolveResult = {
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "local-provider" */
   providerOverride?: string;
+  /** Replace this run's fallback chain. An empty list disables model fallback. */
+  fallbacksOverride?: string[];
 };
 
 export type PluginHookBeforePromptBuildEvent = {

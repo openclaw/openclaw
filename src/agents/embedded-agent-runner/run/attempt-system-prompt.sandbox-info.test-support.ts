@@ -55,7 +55,7 @@ export async function withPromptFixture(
       agents: {
         ownership: "explicit",
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-        list: [{ id: "main", sandbox: { mode: "all" } }],
+        entries: { main: { sandbox: { mode: "all" } } },
       },
       session: { store: database.path },
       tools: { exec: { host: "gateway", mode: "full" } },

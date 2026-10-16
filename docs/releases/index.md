@@ -9,6 +9,11 @@ who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.10.4](/releases/2026.10.4)
+- [v2026.10.3](/releases/2026.10.3)
+- [v2026.10.2](/releases/2026.10.2)
+- [v2026.10.1](/releases/2026.10.1)
+- [v2026.9.9](/releases/2026.9.9)
 - [v2026.9.8](/releases/2026.9.8)
 - [v2026.9.7](/releases/2026.9.7) - Snappier under load, smoother long conversations, update recovery, OpenAI Agents API, and Sign in with ChatGPT (Beta).
 - [v2026.9.6](/releases/2026.9.6) - Start background tasks from the command palette, create personal themes, follow live meeting notes, and retain Telegram group history.

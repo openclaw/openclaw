@@ -1,3 +1,5 @@
+import type { MessagePort } from "node:worker_threads";
+import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import type { StateLeaseProcessOwner } from "../infra/state-lease-process-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
@@ -44,6 +46,8 @@ export type LeaseHeartbeatLoss = {
 };
 
 export type LeaseHeartbeatWorkerData = {
+  databaseEngineInput?: DatabaseEngineInput;
+  databaseAdmissionPort: MessagePort;
   path: string;
   expectedIdentity: string;
   /** The actor's startup operations settle before this worker begins renewal. */
@@ -56,6 +60,8 @@ export type LeaseHeartbeatWorkerData = {
   shared: SharedArrayBuffer;
   /** Odd while native renewal is in flight; progress is never lease authority. */
   renewalProgress: SharedArrayBuffer;
+  /** Latest completed asynchronous request; completion is never lease authority. */
+  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {

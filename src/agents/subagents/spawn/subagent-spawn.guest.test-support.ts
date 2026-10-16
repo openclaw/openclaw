@@ -14,10 +14,13 @@ import {
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
 import {
   createBoundSpawnInvocation,
+  recordSpawnBoundaryFinal,
   type createSpawnBoundaryParent,
   type createSpawnOperatorSource,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -72,7 +75,10 @@ export function registerGuestSpawnCases(options: {
       });
       const started = createDeferred();
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
-      const parentPrompts: string[] = [];
+      const parentTurns: Array<{
+        prompt: string;
+        internalEvents?: AgentInternalEvent[];
+      }> = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
         const admitted = await resolvePreparedRunAdmission({
           runId: params.runId,
@@ -89,11 +95,33 @@ export function registerGuestSpawnCases(options: {
         );
         await params.onExecutionStarted?.();
         if (params.sessionKey === bound.parentSessionKey) {
-          parentPrompts.push(params.prompt);
-          return { payloads: [{ text: "Parent received the result" }], meta: { durationMs: 1 } };
+          parentTurns.push({
+            prompt: params.prompt,
+            internalEvents: params.internalEvents,
+          });
+          await recordSpawnBoundaryFinal({
+            storePath: bound.storePath,
+            sessionKey: bound.parentSessionKey,
+            runId: params.runId,
+            text: "Parent received the result",
+          });
+          return {
+            payloads: [{ text: "Parent received the result" }],
+            meta: {
+              durationMs: 1,
+              terminalReply: { disposition: "visible", text: "Parent received the result" },
+            },
+          };
         }
         started.resolve();
-        return await modelResult.promise;
+        const result = await modelResult.promise;
+        await recordSpawnBoundaryFinal({
+          storePath: bound.storePath,
+          sessionKey: expectDefined(params.sessionKey, "child session"),
+          runId: params.runId,
+          text: "guest child complete",
+        });
+        return result;
       });
       let childRunId: string | undefined;
       const failures: unknown[] = [];
@@ -130,17 +158,27 @@ export function registerGuestSpawnCases(options: {
         source.closeRequest();
         modelResult.resolve({
           payloads: [{ text: "guest child complete" }],
-          meta: { durationMs: 1, finalAssistantVisibleText: "guest child complete" },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "guest child complete" },
+          },
         });
         expect(await withinTest(delivered.promise, signal)).toBe("delivered");
-        expect(parentPrompts).toHaveLength(1);
-        expect(parentPrompts[0]).toContain("guest child complete");
+        expect(parentTurns).toHaveLength(1);
+        expect(parentTurns[0]?.prompt).toContain(RUNTIME_EVENT_USER_PROMPT);
+        expect(buildAgentInternalEventContext(parentTurns[0]?.internalEvents)).toContainEqual({
+          kind: "conversation-data",
+          text: expect.stringContaining("guest child complete"),
+        });
       } catch (error) {
         failures.push(error);
       } finally {
         modelResult.resolve({
           payloads: [{ text: "guest child complete" }],
-          meta: { durationMs: 1 },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "guest child complete" },
+          },
         });
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
         options.throwBoundFailures(failures);

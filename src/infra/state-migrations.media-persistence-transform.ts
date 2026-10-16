@@ -25,32 +25,6 @@ export function parseTranscriptEvent(raw: string, owner: string): TranscriptEven
   }
 }
 
-export function eventIdentity(event: TranscriptEvent): string {
-  if (!isRecord(event)) {
-    return JSON.stringify({ id: null, parentId: null, type: null });
-  }
-  return JSON.stringify({
-    id: typeof event.id === "string" ? event.id : null,
-    parentId: typeof event.parentId === "string" ? event.parentId : null,
-    type: typeof event.type === "string" ? event.type : null,
-  });
-}
-
-function assertEventIdentitiesUnchanged(
-  before: readonly TranscriptEvent[],
-  after: readonly TranscriptEvent[],
-  owner: string,
-): void {
-  if (before.length !== after.length) {
-    throw new Error(`${owner} event count changed during media migration`);
-  }
-  for (let index = 0; index < before.length; index += 1) {
-    if (eventIdentity(before[index]) !== eventIdentity(after[index])) {
-      throw new Error(`${owner} event identity changed at index ${index}`);
-    }
-  }
-}
-
 function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
   if (content === "") {
     return [];
@@ -68,9 +42,6 @@ function serializeArchiveEvents(
   events: readonly TranscriptEvent[],
   trailingNewline: boolean,
 ): string {
-  if (events.length === 0) {
-    return "";
-  }
   return `${events.map((event) => JSON.stringify(event)).join("\n")}${trailingNewline ? "\n" : ""}`;
 }
 
@@ -99,7 +70,6 @@ export function transformMediaArchiveContent(
   if (!hasTerminalNulSuffix && !mediaChanged) {
     return { changed: false, content };
   }
-  assertEventIdentitiesUnchanged(events, transformed, filePath);
   const rewritten = mediaChanged
     ? serializeArchiveEvents(transformed, recoveredContent.endsWith("\n"))
     : recoveredContent;

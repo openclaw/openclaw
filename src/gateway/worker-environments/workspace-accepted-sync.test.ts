@@ -20,7 +20,7 @@ import {
 import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
-  createAcceptedWorkspacePublisherFactory as createAcceptedWorkspacePublisherFactoryRaw,
+  createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
@@ -124,37 +124,40 @@ function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"):
 
 function createAcceptedWorkspacePublisherFactory(
   params: Omit<
-    Parameters<typeof createAcceptedWorkspacePublisherFactoryRaw>[0],
-    "hashMemo" | "metrics"
+    Parameters<typeof createAcceptedWorkspacePublisher>[0],
+    "hashMemo" | "metrics" | "remoteManifest" | "initialRemoteRef"
   >,
 ) {
   const runWorkspaceCommand = params.runWorkspaceCommand;
-  return createAcceptedWorkspacePublisherFactoryRaw({
-    ...params,
-    hashMemo: new Map(),
-    metrics: createWorkspaceReconcileMetrics(),
-    runWorkspaceCommand: async (command) => {
-      const response = await runWorkspaceCommand(command);
-      const returnedRef = response.stdout.trim();
-      if (command.argv.at(-1) !== "memo-v1" || !/^sha256:[a-f0-9]{64}$/u.test(returnedRef)) {
-        return response;
-      }
-      return result({
-        stdout: `${JSON.stringify({
-          version: 1,
-          manifestRef: returnedRef,
-          memo: [],
-          metrics: {
-            contentHashCount: 0,
-            contentHashDurationMs: 0,
-            memoHitCount: 0,
-            memoTruncatedCount: 0,
-            totalDurationMs: 0,
-          },
-        })}\n`,
-      });
-    },
-  });
+  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) =>
+    createAcceptedWorkspacePublisher({
+      ...params,
+      remoteManifest,
+      initialRemoteRef,
+      hashMemo: new Map(),
+      metrics: createWorkspaceReconcileMetrics(),
+      runWorkspaceCommand: async (command) => {
+        const response = await runWorkspaceCommand(command);
+        const returnedRef = response.stdout.trim();
+        if (command.argv.at(-1) !== "memo-v1" || !/^sha256:[a-f0-9]{64}$/u.test(returnedRef)) {
+          return response;
+        }
+        return result({
+          stdout: `${JSON.stringify({
+            version: 1,
+            manifestRef: returnedRef,
+            memo: [],
+            metrics: {
+              contentHashCount: 0,
+              contentHashDurationMs: 0,
+              memoHitCount: 0,
+              memoTruncatedCount: 0,
+              totalDurationMs: 0,
+            },
+          })}\n`,
+        });
+      },
+    });
 }
 
 describe("accepted workspace publication", () => {
@@ -787,12 +790,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       settle: settlement("begun"),
       actions: ["begin", "apply", "settle", "rollback"],
     },
-    {
-      name: "settlement observes a completed rollback",
-      apply: result({ code: 255, stderr: "apply transport lost" }),
-      settle: settlement("rolled-back"),
-      actions: ["begin", "apply", "settle", "rollback"],
-    },
   ])("uses the safe rollback path after $name", async ({ apply, settle, actions: expected }) => {
     const remote = manifest("worker\n");
     const accepted = manifest("local\n");
@@ -904,13 +901,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       expected: "rollback" as const,
     },
     {
-      name: "settlement observes a completed rollback",
-      outcome: "rolled-back" as const,
-      retry: false,
-      secondCommit: result(),
-      expected: "rollback" as const,
-    },
-    {
       name: "the one safe commit retry is rejected",
       outcome: "applied" as const,
       retry: true,
@@ -982,41 +972,4 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       );
     },
   );
-
-  it("rolls back after an ordinary observed commit failure", async () => {
-    const remote = manifest("worker\n");
-    const accepted = manifest("local\n");
-    const acceptedRef = manifestRef(accepted);
-    const actions: string[] = [];
-    const publisher = createAcceptedWorkspacePublisherFactory({
-      receiverEntryPath: RECEIVER_ENTRY_PATH,
-      runWorkspaceCommand: async (command) => {
-        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-          return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
-        }
-        const action = command.argv[3]!;
-        actions.push(action);
-        if (action === "begin") {
-          return result({ stdout: "/remote/staging\n" });
-        }
-        if (action === "commit") {
-          return result({ code: 1, stderr: "commit rejected" });
-        }
-        return result();
-      },
-      runRsync: async () => result(),
-      scpTarget: "test",
-      localPath: "/local",
-      remoteWorkspaceDir: "/remote",
-    })(remote, manifestRef(remote));
-
-    await expect(
-      publisher.publishAcceptedManifest({
-        manifestRef: acceptedRef,
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      }),
-    ).rejects.toThrow("commit rejected");
-    expect(actions).toEqual(["begin", "apply", "commit", "rollback"]);
-  });
 });

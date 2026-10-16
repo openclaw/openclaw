@@ -174,6 +174,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
       "gateway.controlUi.experimental.customPlugins",
+      "gateway.controlUi.experimental.claws",
+      "gateway.controlUi.experimental.chatBubbles",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
@@ -234,11 +236,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["refreshHooksPolicy"],
   },
   {
-    prefixes: ["skills.workshop.autonomous.mode"],
-    kind: "hot",
-    actions: ["reconcileSystemJobs"],
-  },
-  {
     prefixes: ["agents.defaults.decisionModel"],
     kind: "hot",
     actions: ["reloadPlugins"],
@@ -289,6 +286,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "broadcast",
       "memory.citations",
       "worktreeRoot",
+      "worktreeMaxCount",
       "worktreeAcceleration",
       "security.audit.suppressions",
       "security.installPolicy",

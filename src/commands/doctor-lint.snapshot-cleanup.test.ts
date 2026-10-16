@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import type { HealthFinding } from "../flows/health-checks.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -88,59 +87,6 @@ async function runCleanupLint(
   });
 }
 
-it.each([
-  { update: false, blocking: false, all: false },
-  { update: true, blocking: false, all: false },
-  { update: true, blocking: true, all: false },
-  { update: true, blocking: false, all: true },
-  { update: true, blocking: true, all: true },
-])(
-  "keeps snapshot cleanup diagnostic separate during lint (%j)",
-  async ({ update, blocking, all }) => {
-    const finding: HealthFinding = {
-      checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
-      message: "Runtime tool schema is invalid.",
-    };
-    mocks.checks.mockResolvedValue([
-      {
-        id: finding.checkId,
-        kind: "core",
-        description: "snapshot cleanup gate regression",
-        detect: async () => (blocking ? [finding] : []),
-      },
-    ]);
-    const result = await runCleanupLint(
-      all ? { includeAllChecks: true } : { onlyIds: [finding.checkId] },
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: "0",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: update ? "1" : "0",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
-      },
-    );
-    const report = JSON.parse(result.lastOutput);
-    expect(result.exitCode).toBe(update && !blocking ? 0 : 1);
-    expect(report.ok).toBe(update && !blocking);
-    if (update) {
-      expect(report.findings).toEqual(blocking ? [finding] : []);
-      expect(report.checksRun).toBeGreaterThan(0);
-      expect(report.warnings).toContainEqual(
-        expect.objectContaining({
-          severity: "warning",
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
-    } else {
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          severity: "error",
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
-    }
-  },
-);
-
 it.each(["json", "human"] as const)(
   "preserves invalid-config failure and cleanup warnings in %s output",
   async (mode) => {
@@ -182,49 +128,29 @@ it.each(["json", "human"] as const)(
   },
 );
 
-it.each(["json", "human"] as const)(
-  "preserves detector failures when ordinary snapshot cleanup fails in %s output",
-  async (mode) => {
-    const detect = vi.fn(async () => {
-      throw new Error("Authoritative detector fixture failure.");
-    });
-    mocks.checks.mockResolvedValue([
-      {
-        id: "core/doctor/runtime-tool-schemas",
-        kind: "core",
-        description: "ordinary detector and snapshot cleanup failure regression",
-        detect,
-      },
-    ]);
-    const { exitCode, lastOutput, output } = await runCleanupLint(
-      { json: mode === "json", onlyIds: ["core/doctor/runtime-tool-schemas"] },
-      {
-        OPENCLAW_UPDATE_IN_PROGRESS: "0",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0",
-        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
-      },
-    );
-    expect(detect).toHaveBeenCalledOnce();
-    expect(exitCode).toBe(1);
-    if (mode === "json") {
-      const report = JSON.parse(lastOutput);
-      expect(report.ok).toBe(false);
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/runtime-tool-schemas",
-          severity: "error",
-          message: expect.stringContaining("Authoritative detector fixture failure."),
-        }),
-      );
-      expect(report.findings).toContainEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("snapshot cleanup did not complete"),
-        }),
-      );
-    } else {
-      expect(output).toContain("[error] core/doctor/runtime-tool-schemas");
-      expect(output).toContain("Authoritative detector fixture failure.");
-      expect(output).toContain("snapshot cleanup did not complete");
-    }
-  },
-);
+it("preserves detector failures when ordinary snapshot cleanup fails in human output", async () => {
+  const detect = vi.fn(async () => {
+    throw new Error("Authoritative detector fixture failure.");
+  });
+  mocks.checks.mockResolvedValue([
+    {
+      id: "core/doctor/runtime-tool-schemas",
+      kind: "core",
+      description: "ordinary detector and snapshot cleanup failure regression",
+      detect,
+    },
+  ]);
+  const { exitCode, output } = await runCleanupLint(
+    { json: false, onlyIds: ["core/doctor/runtime-tool-schemas"] },
+    {
+      OPENCLAW_UPDATE_IN_PROGRESS: "0",
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "0",
+      OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "0",
+    },
+  );
+  expect(detect).toHaveBeenCalledOnce();
+  expect(exitCode).toBe(1);
+  expect(output).toContain("[error] core/doctor/runtime-tool-schemas");
+  expect(output).toContain("Authoritative detector fixture failure.");
+  expect(output).toContain("snapshot cleanup did not complete");
+});

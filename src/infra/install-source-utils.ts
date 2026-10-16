@@ -45,7 +45,6 @@ export function formatNpmCommandFailureOutput(result: SpawnResult): string {
   return `termination ${result.termination} (no output from npm)`;
 }
 
-/** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
   name?: string;
   version?: string;
@@ -56,7 +55,8 @@ export type NpmSpecResolution = {
   packageOpenClaw?: Record<string, unknown>;
 };
 
-/** Flattened npm resolution fields stored on install results and diagnostics. */
+type InstallSourceResult<T> = ({ ok: true } & T) | { ok: false; error: string };
+
 type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
@@ -66,7 +66,6 @@ type NpmResolutionFields = {
   resolvedAt?: string;
 };
 
-/** Converts npm resolution metadata into stable result field names. */
 export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
   return {
     resolvedName: resolution?.name,
@@ -123,11 +122,6 @@ export async function loadNpmPackageVersions({
   );
 }
 
-function resolveNpmSpecVersionSelector(spec: string): string | undefined {
-  const separator = spec.lastIndexOf("@");
-  return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
-}
-
 function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   if (!Array.isArray(value)) {
     return value;
@@ -138,7 +132,8 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
     // Rechecking a semver-like tag against its spelling would reject a valid tag target.
     return entries[0];
   }
-  const selector = resolveNpmSpecVersionSelector(spec);
+  const separator = spec.lastIndexOf("@");
+  const selector = separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
   const range = selector ? validSemverRange(selector) : null;
   if (range) {
     // npm view output order tracks publication, not SemVer (a backport can be
@@ -183,8 +178,6 @@ export function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecR
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
-type NpmMetadataFailureCategory = "metadata-env";
-
 export async function resolveNpmSpecMetadata(params: {
   spec: string;
   timeoutMs?: number;
@@ -197,7 +190,7 @@ export async function resolveNpmSpecMetadata(params: {
   | {
       ok: false;
       error: string;
-      category?: NpmMetadataFailureCategory;
+      category?: "metadata-env";
     }
 > {
   const res = await runCommandWithTimeout(
@@ -252,7 +245,6 @@ export async function resolveNpmSpecMetadata(params: {
   }
 }
 
-/** Captures expected and actual npm integrity values when an install source drifts. */
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;
@@ -268,17 +260,9 @@ export async function withInstallWorkspace<T>(
   return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 
-/** Resolves and validates a user-supplied archive path before extraction. */
-export async function resolveArchiveSourcePath(archivePath: string): Promise<
-  | {
-      ok: true;
-      path: string;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+export async function resolveArchiveSourcePath(
+  archivePath: string,
+): Promise<InstallSourceResult<{ path: string }>> {
   const resolved = resolveUserPath(archivePath);
   if (!(await pathExists(resolved))) {
     return { ok: false, error: `archive not found: ${resolved}` };
@@ -381,24 +365,13 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
   return archives.length === 1 ? archives[0]?.name : undefined;
 }
 
-/** Packs an npm spec into a tarball in `cwd` and returns archive metadata. */
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
   workTimeoutMs?: number | null;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
-> {
+}): Promise<InstallSourceResult<{ archivePath: string; metadata: NpmSpecResolution }>> {
   const res = await runCommandWithTimeout(
     resolveNpmCommand([
       "pack",
@@ -458,16 +431,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<
-  | {
-      ok: true;
-      archivePath: string;
-      tarballName: string;
-      metadata: NpmSpecResolution;
-    }
-  | {
-      ok: false;
-      error: string;
-    }
+  InstallSourceResult<{ archivePath: string; tarballName: string; metadata: NpmSpecResolution }>
 > {
   const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
   if (!archivePathResult.ok) {

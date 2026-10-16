@@ -12,10 +12,11 @@ export function withSqliteSourceReadDatabase<T>(
   pathname: string,
   inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
+  options: { timeout?: number } = {},
 ): T {
   assertStateDatabaseAccessAllowed(pathname);
   const database = withSqliteInspectionOperation(inspectionOperation, () =>
-    openNodeSqliteDatabase(pathname, { readOnly: true }),
+    openNodeSqliteDatabase(pathname, { readOnly: true, timeout: options.timeout }),
   );
   try {
     assertStateDatabaseAccessAllowed(pathname);

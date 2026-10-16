@@ -1,4 +1,3 @@
-import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import { parseDiscordTarget } from "./target-parsing.js";
 
@@ -42,10 +41,8 @@ export function normalizeDiscordOutboundTarget(
     };
   }
   if (/^\d+$/.test(trimmed)) {
-    if (allowFromContainsDiscordUserId(allowFrom, trimmed)) {
-      return { ok: true, to: `user:${trimmed}` };
-    }
-    return { ok: true, to: `channel:${trimmed}` };
+    const kind = allowFromContainsDiscordUserId(allowFrom, trimmed) ? "user" : "channel";
+    return { ok: true, to: `${kind}:${trimmed}` };
   }
   return { ok: true, to: trimmed };
 }
@@ -58,20 +55,11 @@ export function allowFromContainsDiscordUserId(
   if (!normalizedUserId) {
     return false;
   }
-  const normalizedAllowFrom = (allowFrom ?? [])
-    .map(normalizeAllowFromDiscordUserId)
-    .filter((entry): entry is string => Boolean(entry));
-  return resolveAllowlistMatchByCandidates({
-    allowList: normalizedAllowFrom,
-    candidates: [{ value: normalizedUserId, source: "id" }],
-  }).allowed;
+  return (allowFrom ?? []).map(normalizeAllowFromDiscordUserId).includes(normalizedUserId);
 }
 
 function normalizeAllowFromDiscordUserId(entry: string): string | undefined {
   const trimmed = entry.trim().toLowerCase();
-  if (!trimmed || trimmed === "*") {
-    return undefined;
-  }
   const mentionMatch = /^<@!?(\d+)>$/.exec(trimmed);
   if (mentionMatch) {
     return mentionMatch[1];

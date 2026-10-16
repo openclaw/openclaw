@@ -83,10 +83,7 @@ describe("openclaw plugin tool context", () => {
     const config = {
       agents: {
         defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
-        list: [
-          { id: "main", default: true },
-          { id: "recall", workspace: recallWorkspace },
-        ],
+        entries: { main: {}, recall: { workspace: recallWorkspace } },
       },
     } as never;
     const result = resolveOpenClawPluginToolInputs({
@@ -110,5 +107,17 @@ describe("openclaw plugin tool context", () => {
     });
 
     expect(result.context.deliveryContext?.to).toBe("user:U123");
+  });
+
+  it("carries the host-selected approval reviewer into plugin tools", () => {
+    const result = resolve({ approvalReviewerDeviceIds: ["device-reviewer"] });
+
+    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
+  });
+
+  it("maps a single host-selected approval reviewer into plugin tools", () => {
+    const result = resolve({ approvalReviewerDeviceId: "device-reviewer" });
+
+    expect(result.context.approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
   });
 });

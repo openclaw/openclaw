@@ -122,21 +122,21 @@ async function seedPlacement(
   session: SessionIdentity,
 ) {
   let placement = await store.startDispatch(session);
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: ENVIRONMENT_ID },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "syncing",
     to: "starting",
@@ -199,14 +199,14 @@ async function seedUnknownWorkerState(
       )
       .run(ENVIRONMENT_ID);
     let other = await store.startDispatch(isolated);
-    other = store.transition({
+    other = await store.transition({
       sessionId: isolated.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: other.generation,
       patch: { environmentId: INDEPENDENT_ENVIRONMENT_ID },
     });
-    store.fail({
+    await store.fail({
       sessionId: isolated.sessionId,
       expectedGeneration: other.generation,
       recoveryError: INDEPENDENT_REASON,

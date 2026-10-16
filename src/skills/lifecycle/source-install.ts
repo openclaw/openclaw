@@ -5,9 +5,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
@@ -20,6 +22,8 @@ import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js"
 import { installExtractedSkillRoot } from "./archive-install.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { recordSkillSourceInstall, type SkillSourceOrigin } from "./source-install-metadata.js";
+
+const log = createSubsystemLogger("skills");
 
 type Logger = {
   info?: (message: string) => void;
@@ -46,17 +50,6 @@ type SkillSourceInstallResult =
       git?: SkillSourceOrigin["git"];
     }
   | { ok: false; error: string };
-
-function createGitCommandEnv(): NodeJS.ProcessEnv {
-  return sanitizeHostExecEnv({
-    baseEnv: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    blockPathOverrides: false,
-  });
-}
 
 async function resolveSkillInstallSlug(params: {
   sourceDir: string;
@@ -184,6 +177,12 @@ async function installLocalSkillDir(
       ...(params.git ? { git: params.git } : {}),
     },
   });
+  try {
+    const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+    await refreshSkillsDiscovery({ workspaceDir: params.workspaceDir, config: params.config });
+  } catch (error) {
+    log.warn(`Skill source saved, but discovery refresh failed: ${formatErrorMessage(error)}`);
+  }
 
   return {
     ok: true,
@@ -213,7 +212,13 @@ async function installGitSkill(
       repoDir,
       refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
-      commandEnv: () => ({ baseEnv: {}, env: createGitCommandEnv() }),
+      commandEnv: () => ({
+        baseEnv: {},
+        env: sanitizeHostExecEnv({
+          baseEnv: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+          blockPathOverrides: false,
+        }),
+      }),
     });
     if (!acquired.ok) {
       return acquired;
@@ -245,28 +250,6 @@ async function installGitSkill(
   });
 }
 
-async function installPathSkill(
-  params: SkillSourceInstallParams,
-): Promise<SkillSourceInstallResult> {
-  const sourceDir = resolveUserPath(params.spec);
-  let stat;
-  try {
-    stat = await fs.stat(sourceDir);
-  } catch {
-    return { ok: false, error: `Skill path not found: ${sourceDir}` };
-  }
-  if (!stat.isDirectory()) {
-    return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
-  }
-  return await installLocalSkillDir({
-    ...params,
-    sourceDir,
-    sourceSpec: params.spec,
-    source: "path",
-    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
-  });
-}
-
 export function isSkillSourceInstallSpec(raw: string): boolean {
   const trimmed = raw.trim();
   return (
@@ -285,5 +268,21 @@ export async function installSkillFromSource(
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });
   }
-  return await installPathSkill({ ...params, spec });
+  const sourceDir = resolveUserPath(spec);
+  let stat;
+  try {
+    stat = await fs.stat(sourceDir);
+  } catch {
+    return { ok: false, error: `Skill path not found: ${sourceDir}` };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
+  }
+  return await installLocalSkillDir({
+    ...params,
+    sourceDir,
+    sourceSpec: spec,
+    source: "path",
+    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
+  });
 }

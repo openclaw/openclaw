@@ -5,7 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { annotateSourceDelivery } from "./message-action-execution.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const ttsMocks = vi.hoisted(() => ({
@@ -136,6 +136,72 @@ describe("runMessageAction core send routing", () => {
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
 
+  it.each(["off", "first", "all"] as const)(
+    "delivers the first implicit auto-thread reply to the thread with replyToMode=%s",
+    async (replyToMode) => {
+      const sendText = vi.fn(async ({ to }: { to: string }) => ({
+        channel: "discord",
+        messageId: "sent",
+        channelId: to.replace(/^channel:/, ""),
+      }));
+      const plugin: ChannelPlugin = {
+        ...createOutboundTestPlugin({
+          id: "discord",
+          messaging: { targetResolver: { looksLikeId: () => true } },
+          outbound: { deliveryMode: "direct", sendText },
+        }),
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+        threading: {
+          matchesToolContextTarget: ({ target, toolContext }) =>
+            [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+              (current) => current?.replace(/^channel:/, "") === target.replace(/^channel:/, ""),
+            ),
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "discord", source: "test", plugin }]),
+      );
+      const toolContext = {
+        currentChannelProvider: "discord",
+        currentChatType: "channel" as const,
+        currentChannelId: "channel:parent",
+        currentMessagingTarget: "channel:thread",
+        currentMessageId: "thread",
+        currentSourceTurnId: "source-turn-1",
+        replyToMode,
+        hasRepliedRef: { value: false },
+      };
+      const input = {
+        cfg: {},
+        action: "send" as const,
+        toolContext,
+        messageActionAuthorization: { requesterAccountId: "default", toolContext },
+        sessionKey: "agent:main:discord:channel:thread",
+        defaultAccountId: "default",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        dryRun: false,
+      };
+      const result = await runMessageAction({
+        ...input,
+        params: { channel: "discord", message: "first thread reply" },
+      });
+      expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ to: "channel:thread" }));
+      expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+
+      sendText.mockClear();
+      const parentResult = await runMessageAction({
+        ...input,
+        params: { channel: "discord", target: "channel:parent", message: "explicit parent reply" },
+      });
+      expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ to: "channel:parent" }));
+      expect(parentResult.payload).not.toHaveProperty("sourceReplyRoute");
+    },
+  );
+
   // Regression for #157277: a Telegram topic send reports the bare chat id at
   // top level with the topic only inside the receipt. The delivered reply must
   // still be recognized as delivered to the topic-qualified current source.
@@ -237,14 +303,6 @@ describe("runMessageAction core send routing", () => {
       false,
     );
 
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-  it("marks explicit sends to the trusted current source conversation", async () => {
-    registerSlackTextPlugin();
-
-    const result = await runSlackSourceReply();
-
-    expect(result.kind).toBe("send");
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
   });
 

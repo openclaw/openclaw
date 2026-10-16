@@ -54,9 +54,9 @@ export function createControlUiMockPresence(
         user: {
           id: user.id,
           ...(user.identity ? { identity: user.identity } : {}),
-          name: user.name ?? null,
-          email: user.email ?? null,
-          avatarUrl: user.avatarUrl ?? null,
+          name: user.name ?? undefined,
+          email: user.email ?? undefined,
+          avatarUrl: user.avatarUrl ?? undefined,
         },
         watchedSessions: user.watchedSessions ?? [],
       })),

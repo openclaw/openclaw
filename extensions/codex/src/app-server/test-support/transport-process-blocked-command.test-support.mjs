@@ -77,7 +77,7 @@ fixtureFs.openSync = (file, ...args) => file === ${JSON.stringify(commandPath)}
   try {
     await readCodexAppServerProcessCommand(
       { pid: process.pid, ppid: process.ppid, pgid: process.pid, state: "S", startedAt: "fixture" },
-      Date.now() + 1000,
+      performance.now() + 1000,
     );
     outcome = { status: "fulfilled" };
   } catch (error) {

@@ -1,5 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import type { SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareApprovalChannelCustody } from "./approval-channel-custody.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,13 +15,14 @@ const mocks = vi.hoisted(() => ({
   supportsScopedPluginReviewers: { value: false },
 }));
 
+// mock-isolation: Custody tests supply account and approver fixtures without loading channel plugins.
 vi.mock("../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: () => ({
-    config: {
-      listAccountIds: mocks.listAccountIds,
-      defaultAccountId: mocks.defaultAccountId,
-    },
-  }),
+  getLoadedChannelPlugin: (() => {
+    const plugin = {
+      config: { listAccountIds: mocks.listAccountIds, defaultAccountId: mocks.defaultAccountId },
+    };
+    return () => plugin;
+  })(),
   resolveChannelApprovalCapability: () =>
     mocks.hasApproverSettings.value
       ? {
@@ -58,81 +64,128 @@ describe("prepareApprovalChannelCustody", () => {
     mocks.supportsScopedPluginReviewers.value = false;
   });
 
-  it("authorizes only the account recorded by the request source", () => {
-    const approval = request({
-      command: "printf approval",
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "ops",
-    });
-    expect(
-      prepareApprovalChannelCustody({
-        cfg: {},
-        approvalKind: "exec",
-        reviewer: reviewer("ops"),
-      })?.authorizes(approval),
-    ).toBe(true);
-    expect(
-      prepareApprovalChannelCustody({
-        cfg: {},
-        approvalKind: "exec",
-        reviewer: reviewer("default"),
-      })?.authorizes(approval),
-    ).toBe(false);
-  });
-
-  it("unions explicit scoped targets with the documented default account", () => {
-    const cfg: OpenClawConfig = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [
-            { channel: "telegram", to: "1" },
-            { channel: "telegram", to: "2", accountId: "ops" },
-          ],
-        },
+  it("selects source-bound, targeted, and uniquely authorized accounts", async () => {
+    const cases: {
+      cfg?: OpenClawConfig;
+      source?: { turnSourceChannel: string; turnSourceAccountId: string };
+      accounts?: string[];
+      eligible?: string[];
+      expected: Record<string, boolean>;
+    }[] = [
+      {
+        source: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
+        expected: { ops: true, default: false },
       },
-    };
-    mocks.listAccountIds.mockReturnValue(["default", "ops", "other"]);
-    for (const accountId of ["default", "ops"]) {
-      expect(
-        prepareApprovalChannelCustody({
-          cfg,
-          approvalKind: "exec",
-          reviewer: reviewer(accountId),
-        })?.authorizes(request({ command: "printf approval" })),
-      ).toBe(true);
+      {
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              mode: "targets",
+              targets: [
+                { channel: "telegram", to: "1" },
+                { channel: "telegram", to: "2", accountId: "ops" },
+              ],
+            },
+          },
+        },
+        accounts: ["default", "ops", "other"],
+        expected: { default: true, ops: true, other: false },
+      },
+      { eligible: ["ops"], expected: { ops: true } },
+      { expected: { ops: false } },
+    ];
+    for (const {
+      cfg = {},
+      source,
+      accounts = ["default", "ops"],
+      eligible = accounts,
+      expected,
+    } of cases) {
+      mocks.listAccountIds.mockReturnValue(accounts);
+      mocks.authorize.mockImplementation(({ accountId }: { accountId: string }) => ({
+        authorized: eligible.includes(accountId),
+      }));
+      for (const [accountId, authorized] of Object.entries(expected)) {
+        expect(
+          await prepareApprovalChannelCustody({
+            cfg,
+            approvalKind: "exec",
+            reviewer: reviewer(accountId),
+          })?.authorizes(request({ command: "printf approval", ...source })),
+          accountId,
+        ).toBe(authorized);
+      }
     }
-    expect(
-      prepareApprovalChannelCustody({
-        cfg,
-        approvalKind: "exec",
-        reviewer: reviewer("other"),
-      })?.authorizes(request({ command: "printf approval" })),
-    ).toBe(false);
   });
 
-  it("allows an unbound request only for one actor-authorized account", () => {
-    mocks.authorize.mockImplementation(({ accountId }) => ({ authorized: accountId === "ops" }));
-    expect(
-      prepareApprovalChannelCustody({
-        cfg: {},
-        approvalKind: "exec",
-        reviewer: reviewer("ops"),
-      })?.authorizes(request({ command: "printf approval" })),
-    ).toBe(true);
+  it("invalidates unbound incognito custody after the memory delivery account changes", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-custody";
+    const sessionId = "incognito-custody";
+    const location = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: "/synthetic/approval-channel-custody" },
+      }),
+    };
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const authority = { assertCurrent() {}, authorize() {} };
+    const delivery = (accountId: string): SessionDeliveryState => ({
+      kind: "external",
+      route: { channel: "telegram", accountId },
+      context: { channel: "telegram", accountId },
+      origin: { provider: "telegram", accountId },
+    });
+    const custody = prepareApprovalChannelCustody({
+      cfg: { session: { store: location.path } },
+      approvalKind: "exec",
+      reviewer: reviewer("ops"),
+    });
+    const pending = {
+      ...request({ command: "printf approval" }),
+      request: { command: "printf approval", sessionKey },
+    };
+    try {
+      const storage = expectDefined(actor.storage, "memory actor storage");
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.metadata.initialize",
+            input: {
+              scope: { agentId: "main", storePath: location.path, sessionKey, sessionId },
+              entry: { sessionId, updatedAt: 1, incognito: true, delivery: delivery("ops") },
+            },
+          },
+          authority,
+        ),
+      );
+      expect(await custody?.authorizes(pending)).toBe(true);
+      expect(custody?.isCurrent(pending)).toBe(true);
 
-    mocks.authorize.mockReturnValue({ authorized: true });
-    expect(
-      prepareApprovalChannelCustody({
-        cfg: {},
-        approvalKind: "exec",
-        reviewer: reviewer("ops"),
-      })?.authorizes(request({ command: "printf approval" })),
-    ).toBe(false);
+      readSessionActorStorageResult(
+        await storage.mutate(
+          {
+            type: "session.entry.patch",
+            input: { operation: { kind: "fields", patch: { delivery: delivery("default") } } },
+          },
+          authority,
+        ),
+      );
+      expect(custody?.isCurrent(pending)).toBe(false);
+      expect(await custody?.authorizes(pending)).toBe(false);
+    } finally {
+      custody?.[Symbol.dispose]();
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(location);
+    }
   });
 
-  it("checks plugin reviewer custody against the pending request", () => {
+  it("checks plugin reviewer custody against the pending request", async () => {
     mocks.authorize.mockImplementation(({ request: pending }) => ({
       authorized: pending?.request.policySubject?.pluginKey === "calendar",
     }));
@@ -154,14 +207,14 @@ describe("prepareApprovalChannelCustody", () => {
       expiresAtMs: 2,
     });
 
-    expect(custody?.authorizes(pending("calendar"))).toBe(true);
-    expect(custody?.authorizes(pending("other"))).toBe(false);
+    expect(await custody?.authorizes(pending("calendar"))).toBe(true);
+    expect(await custody?.authorizes(pending("other"))).toBe(false);
     expect(mocks.authorize).toHaveBeenCalledWith(
       expect.objectContaining({ request: pending("calendar") }),
     );
   });
 
-  it("requires a channel capability to enforce configured plugin reviewers", () => {
+  it("requires a channel capability to enforce configured plugin reviewers", async () => {
     const cfg = {
       approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
     } as OpenClawConfig;
@@ -185,7 +238,7 @@ describe("prepareApprovalChannelCustody", () => {
 
     mocks.supportsScopedPluginReviewers.value = true;
     expect(
-      prepareApprovalChannelCustody({
+      await prepareApprovalChannelCustody({
         cfg,
         approvalKind: "plugin",
         reviewer: slackReviewer,
@@ -193,38 +246,27 @@ describe("prepareApprovalChannelCustody", () => {
     ).toBe(true);
   });
 
-  describe("channels without approver settings", () => {
+  it("grants owner custody only for system changes on channels without approver settings", async () => {
     const ircSender = { channel: "irc", accountId: "default", senderId: "alice" };
-    const ownerCfg = { commands: { ownerAllowFrom: ["irc:alice"] } } as OpenClawConfig;
+    const cfg: OpenClawConfig = { commands: { ownerAllowFrom: ["irc:alice"] } };
     const change = request({ command: "set config logging.level to info" });
-
-    beforeEach(() => {
-      mocks.hasApproverSettings.value = false;
-    });
-
-    it("lets only a configured owner decide an OpenClaw change", () => {
-      expect(
-        prepareApprovalChannelCustody({
-          cfg: ownerCfg,
-          approvalKind: "system-agent",
-          reviewer: ircSender,
-        })?.authorizes(change),
-      ).toBe(true);
-      expect(
-        prepareApprovalChannelCustody({
-          cfg: ownerCfg,
-          approvalKind: "system-agent",
-          reviewer: { ...ircSender, senderId: "bob" },
-        }),
-      ).toBeNull();
-    });
-
-    it("grants no owner custody for exec or plugin approvals", () => {
-      for (const approvalKind of ["exec", "plugin"] as const) {
-        expect(
-          prepareApprovalChannelCustody({ cfg: ownerCfg, approvalKind, reviewer: ircSender }),
-        ).toBeNull();
+    mocks.hasApproverSettings.value = false;
+    for (const [approvalKind, senderId, allowed] of [
+      ["system-agent", "alice", true],
+      ["system-agent", "bob", false],
+      ["exec", "alice", false],
+      ["plugin", "alice", false],
+    ] as const) {
+      const custody = prepareApprovalChannelCustody({
+        cfg,
+        approvalKind,
+        reviewer: { ...ircSender, senderId },
+      });
+      if (allowed) {
+        expect(await custody?.authorizes(change)).toBe(true);
+      } else {
+        expect(custody).toBeNull();
       }
-    });
+    }
   });
 });

@@ -1,9 +1,11 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { unauthorizedHintForMessage } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 /** Return color helpers that degrade to plain text in non-rich terminals. */
@@ -36,9 +38,19 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
     const message = formatErrorMessage(err);
     const { error, warn } = getNodesTheme();
     defaultRuntime.error(error(`nodes ${label} failed: ${message}`));
-    const hint = unauthorizedHintForMessage(message);
-    if (hint) {
-      defaultRuntime.error(warn(hint));
+    const normalized = normalizeLowercaseStringOrEmpty(message);
+    if (
+      normalized.includes("unauthorizedclient") ||
+      normalized.includes("bridge client is not authorized") ||
+      normalized.includes("unsigned bridge clients are not allowed")
+    ) {
+      defaultRuntime.error(
+        warn(
+          "peekaboo bridge rejected the client. " +
+            "sign the peekaboo CLI (TeamID Y5PE65HELJ) or launch the host with " +
+            "PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1 for local dev.",
+        ),
+      );
     }
     defaultRuntime.exit(1);
   });

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
@@ -21,9 +20,12 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  applyChatModelCatalogSnapshot,
+  refreshChatMetadata,
   refreshChatModelCatalogOnDemand,
   refreshPageChat,
   retireChatMetadataRequests,
@@ -45,6 +47,85 @@ function composerControls(state: ChatPageHost) {
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it.each([
+    { entry: "direct", retained: false },
+    { entry: "direct", retained: true },
+    { entry: "automatic", retained: false },
+    { entry: "automatic", retained: true },
+  ])(
+    "rechecks a failed $entry catalog with retained models $retained",
+    async ({ entry, retained }) => {
+      const checking = createDeferred<ModelCatalogResult>();
+      const request = makeRequestMock({ "models.list": () => checking.promise });
+      const client = createTestGatewayClient(request);
+      const { state } = createRefreshChatPane(client);
+      state.sessionKey = "agent:main:main";
+      state.chatModelCatalogInitialized = false;
+      const container = document.createElement("div");
+      const draw = () => renderPaneModelControl(composerControls(state), container);
+      onTestFinished(() => {
+        checking.resolve({ models: [] });
+        retireChatMetadataRequests(state);
+      });
+      if (retained) {
+        const scope = { agentId: "main", sessionKey: state.sessionKey };
+        expect(
+          publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
+            models: cachedModels,
+          }),
+        ).toBe(true);
+        await refreshChatModelCatalogOnDemand(state);
+        invalidateModelCatalogCache(client, scope);
+      }
+      request.mockRejectedValueOnce(new Error("Previous runtime preparation failed"));
+      await refreshChatModelCatalogOnDemand(state);
+      expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
+      expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
+      const failureLabel = retained
+        ? "Some models could not be refreshed. Open Models to try again."
+        : "Models unavailable";
+      draw();
+      expect(container.textContent).toContain(failureLabel);
+
+      const refresh =
+        entry === "automatic"
+          ? refreshChatMetadata(state, { automatic: true })
+          : refreshChatModelCatalogOnDemand(state);
+      expect(applyChatModelCatalogSnapshot(state)).toBe(false);
+      draw();
+      expect(state.chatModelsLoading).toBe(true);
+      expect(container.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
+      expect(container.querySelector(".btn__spinner")).not.toBeNull();
+      expect(container.textContent).not.toContain(failureLabel);
+      if (retained) {
+        expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull();
+        expect(container.textContent).toContain("Refreshing models…");
+        expect(
+          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
+        ).toBe(false);
+        expect(container.textContent).toContain("Cached Model");
+      } else {
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
+        expect(container.textContent).toContain("Loading models…");
+      }
+
+      checking.reject(new Error("Runtime preparation still failed"));
+      await refresh;
+      draw();
+      expect(container.querySelector('[data-chat-model-catalog-state="error"]')).not.toBeNull();
+      expect(container.textContent).toContain(failureLabel);
+      expect(container.querySelector(".btn__spinner")).toBeNull();
+      expect(container.textContent).not.toContain("Loading models…");
+      expect(state.chatModelCatalogError).toContain("Runtime preparation still failed");
+
+      request.mockResolvedValueOnce({ models: cachedModels });
+      await refreshChatModelCatalogOnDemand(state);
+      draw();
+      expect(container.textContent).toContain("Cached Model");
+      expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+    },
+  );
+
   it.each<{ label: string; cachedCatalog?: ModelCatalogResult }>([
     {
       label: "warm restricted",
@@ -57,7 +138,7 @@ describe("chat pane composer controls", () => {
   ])(
     "revalidates the $label configured model catalog when the picker opens",
     async ({ cachedCatalog }) => {
-      const container = document.createElement("div");
+      const container = document.body.appendChild(document.createElement("div"));
       const catalog = createDeferred<ModelCatalogResult>();
       const session: GatewaySessionRow = {
         key: "main",
@@ -73,15 +154,17 @@ describe("chat pane composer controls", () => {
           : catalog.promise,
       );
       const client = createTestGatewayClient(request);
+      const requestUpdate = vi.fn();
       const state = makeChatHost({
         client,
         connectionEpoch: 1,
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
-        requestUpdate: vi.fn(),
+        requestUpdate,
       }) as unknown as ChatPageHost;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
+        container.remove();
         retireChatMetadataRequests(state);
         state.sessions.dispose();
       });
@@ -96,9 +179,12 @@ describe("chat pane composer controls", () => {
         expect(state.chatModelCatalog).toEqual(cachedCatalog.models);
         expect(request).not.toHaveBeenCalled();
         await initialized;
+        requestUpdate.mockClear();
+        await refreshChatModelCatalogOnDemand(state);
+        expect(requestUpdate).not.toHaveBeenCalled();
         invalidateModelCatalogCache(client, scope);
       }
-      render(composerControls(state), container);
+      renderPaneModelControl(composerControls(state), container);
 
       const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
       picker!.open = true;
@@ -112,7 +198,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
-      render(composerControls(state), container);
+      renderPaneModelControl(composerControls(state), container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -185,7 +271,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
-    render(composerControls(host), container);
+    renderPaneModelControl(composerControls(host), container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

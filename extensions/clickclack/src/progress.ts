@@ -3,6 +3,7 @@ import {
   isCompleteAgentPreamble,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { ClickClackClient } from "./http-client.js";
 
 export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
@@ -86,12 +87,6 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
   };
 }
 
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
-
 type QueuedProgressFrame = {
   lineId?: string;
   payload: Record<string, unknown>;
@@ -106,7 +101,7 @@ export function createClickClackAgentProgressPublisher(params: {
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -176,26 +171,6 @@ export function createClickClackAgentProgressPublisher(params: {
     queue.splice(0, queue.length, ...controlFrames);
   };
 
-  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let drained = false;
-    try {
-      await Promise.race([
-        pending.then(() => {
-          drained = true;
-        }),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
-        }),
-      ]);
-      return drained;
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
-  };
-
   const scheduleLineDrain = (): void => {
     if (lineDrainTimer) {
       return;
@@ -242,7 +217,7 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }
@@ -253,24 +228,30 @@ export function createClickClackAgentProgressPublisher(params: {
         return false;
       }
       const id = resolveLineId(payload);
-      if (payload.hideFromChannelProgress) {
-        if (seenLines.delete(id)) {
-          enqueueLine(id, { op: "update", line: { id, kind: normalizedKind(payload), text: "" } });
-        }
-        return false;
-      }
-      const final = isFinal(payload);
       const kind = normalizedKind(payload);
+      const hidesLine =
+        payload.hideFromChannelProgress ||
+        (payload.kind === "model-wait" && payload.phase === "end");
       const retractsExistingCommentary =
         kind === "commentary" &&
         seenLines.has(id) &&
         payload.progressText !== undefined &&
         payload.progressText.trim() === "";
-      if (retractsExistingCommentary && queuedLines.get(id)?.payload.op === "append") {
+      if (
+        (hidesLine || retractsExistingCommentary) &&
+        queuedLines.get(id)?.payload.op === "append"
+      ) {
         queuedLines.delete(id);
         seenLines.delete(id);
         return false;
       }
+      if (hidesLine) {
+        if (seenLines.delete(id)) {
+          enqueueLine(id, { op: "update", line: { id, kind, text: "" } });
+        }
+        return false;
+      }
+      const final = isFinal(payload);
       const line: Record<string, unknown> = {
         id,
         kind,
@@ -298,7 +279,11 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      const drained = await raceWithTimeout(
+        drain().then(() => true),
+        CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+        () => false,
+      );
       if (!drained) {
         // Once the durable reply has been sent and the grace period expires,
         // stale detail frames no longer help the user. Keep only control frames

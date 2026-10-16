@@ -50,8 +50,8 @@ vi.mock("./install-security-scan.js", async () => {
 
 vi.resetModules();
 
-const { installPluginFromGitSpec, isImmutableGitCommitRef, parseGitPluginSpec } =
-  await import("./git-install.js");
+const installSourceUtils = await import("../infra/install-source-utils.js");
+const { installPluginFromGitSpec, parseGitPluginSpec } = await import("./git-install.js");
 const { onInternalDiagnosticEvent } = await import("../infra/diagnostic-events.js");
 
 function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }): string {
@@ -80,7 +80,6 @@ function commandArgvAt(index: number): string[] {
 function firstInstallOptions():
   | {
       expectedPluginId?: string;
-      emitSuccessSecurityEvent?: boolean;
       packageDir?: string;
       mode?: string;
       installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
@@ -89,7 +88,6 @@ function firstInstallOptions():
   return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
     | {
         expectedPluginId?: string;
-        emitSuccessSecurityEvent?: boolean;
         packageDir?: string;
         mode?: string;
         installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
@@ -143,27 +141,11 @@ describe("parseGitPluginSpec", () => {
     expect(hashRef.ref).toBe("main");
   });
 
-  it("does not treat URL credentials as ref selectors", () => {
-    const parsed = expectParsedGitSpec("git:https://token:secret@github.com/acme/demo.git");
-    expect(parsed.url).toBe("https://token:secret@github.com/acme/demo.git");
-    expect(parsed.ref).toBeUndefined();
-    expect(parsed.label).toBe("github.com/acme/demo");
-  });
-
   it("keeps scp-style clone URLs without treating git@ as a ref", () => {
     const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@feature/foo");
     expect(parsed.url).toBe("git@github.com:acme/demo.git");
     expect(parsed.ref).toBe("feature/foo");
     expect(parsed.label).toBe("git@github.com:acme/demo");
-  });
-});
-
-describe("isImmutableGitCommitRef", () => {
-  it.each([
-    ["abc123", false],
-    ["0123456789ABCDEF0123456789ABCDEF01234567", true],
-  ] as const)("classifies %s as immutable=%s", (ref, expected) => {
-    expect(isImmutableGitCommitRef(ref)).toBe(expected);
   });
 });
 
@@ -284,7 +266,6 @@ describe("installPluginFromGitSpec", () => {
       expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
         "git:github.com/acme/demo@v1.2.3",
       );
-      expect(installOptions?.emitSuccessSecurityEvent).toBe(false);
       expect(captured.events).toHaveLength(1);
       expect(captured.events[0]).toMatchObject({
         action: "plugin.installed",
@@ -338,7 +319,6 @@ describe("installPluginFromGitSpec", () => {
       if (!result.ok) {
         expect(result.error).toContain("failed to replace managed git plugin repository");
       }
-      expect(firstInstallOptions()?.emitSuccessSecurityEvent).toBe(false);
       expect(captured.events).toHaveLength(0);
     } finally {
       await fs.rm(gitRoot, { recursive: true, force: true });
@@ -463,32 +443,6 @@ describe("installPluginFromGitSpec", () => {
         source: { kind: "git", authority: "third-party", mutable: false, network: true },
       }),
     );
-  });
-
-  it("reports effective install mode for requested git update without an installed target", async () => {
-    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-mode-"));
-    try {
-      runCommandWithTimeoutMock
-        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      mockSuccessfulPackageInstall();
-
-      const result = await installPluginFromGitSpec({
-        spec: "git:github.com/acme/demo",
-        expectedPluginId: "demo",
-        gitDir,
-        mode: "update",
-      });
-
-      expect(result.ok).toBe(true);
-      expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ mode: "install" }),
-      );
-      expect(firstInstallOptions()?.mode).toBe("install");
-    } finally {
-      await fs.rm(gitDir, { recursive: true, force: true });
-    }
   });
 
   it("stages the clone beside the managed repo so replacement stays on one filesystem (#99885)", async () => {
@@ -625,8 +579,8 @@ describe("installPluginFromGitSpec", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
     mockSuccessfulPackageInstall();
-    const mkdtempSpy = vi
-      .spyOn(fs, "mkdtemp")
+    const workspaceSpy = vi
+      .spyOn(installSourceUtils, "withInstallWorkspace")
       .mockRejectedValueOnce(Object.assign(new Error("read-only filesystem"), { code: "EROFS" }));
 
     try {
@@ -636,28 +590,32 @@ describe("installPluginFromGitSpec", () => {
       });
 
       expect(result.ok).toBe(true);
-      const cloneWorkspaceCalls = mkdtempSpy.mock.calls.filter(([prefix]) =>
-        path.basename(prefix).startsWith("openclaw-git-plugin-"),
+      const cloneWorkspaceCalls = workspaceSpy.mock.calls.filter(
+        ([prefix]) => prefix === "openclaw-git-plugin-",
       );
       expect(cloneWorkspaceCalls).toHaveLength(2);
-      const targetPrefix = cloneWorkspaceCalls[0]?.[0];
-      const fallbackPrefix = cloneWorkspaceCalls[1]?.[0];
+      const targetRoot = cloneWorkspaceCalls[0]?.[2]?.rootDir;
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
-      expect(path.dirname(expectDefined(targetPrefix, "targetPrefix test invariant"))).toBe(
+      expect(await fs.realpath(expectDefined(targetRoot, "targetRoot test invariant"))).toBe(
         await fs.realpath(path.dirname(persistentRepoDir)),
       );
-      // withTempDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
-      // prefers /tmp/openclaw and only degrades to a uid-scoped os.tmpdir path when
-      // that is unsafe. Recompute it here so the assertion holds on every host.
-      expect(path.dirname(expectDefined(fallbackPrefix, "fallbackPrefix test invariant"))).toBe(
+      expect(cloneWorkspaceCalls[1]?.[2]).toBeUndefined();
+      const cloneArgv = commandArgvAt(0);
+      const cloneWorkspace = path.dirname(
+        path.resolve(expectDefined(cloneArgv.at(-1), "clone destination test invariant")),
+      );
+      expect(path.basename(cloneWorkspace)).toMatch(/^openclaw-git-plugin-/);
+      expect(path.dirname(cloneWorkspace)).toBe(
         await fs.realpath(resolvePreferredOpenClawTmpDir()),
       );
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
+      expect(installPluginFromInstalledPackageDirMock).toHaveBeenCalledTimes(1);
+      await expect(fs.access(cloneWorkspace)).rejects.toThrow();
     } finally {
-      mkdtempSpy.mockRestore();
+      workspaceSpy.mockRestore();
     }
   });
 

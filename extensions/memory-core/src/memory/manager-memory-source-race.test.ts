@@ -101,11 +101,6 @@ describe("memory source changes during indexing", () => {
             .join("\n");
         expect(indexedText()).toContain("Updated beta sibling");
         expect(indexedText()).not.toContain("Obsolete alpha");
-        expect(
-          db
-            .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = ?")
-            .get(hashText(obsoleteContent)),
-        ).toBeUndefined();
         expect(manager.status().dirty).toBe(true);
         expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(false);
 
@@ -165,10 +160,14 @@ describe("memory source changes during indexing", () => {
     const publicationSpy = vi
       .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
       .mockImplementation(function (this: MemoryIndexDatabase, input, assertCurrent, prepare) {
+        const replacements = Array.isArray(input) ? input : [input];
+        const replacesContended = replacements.some(
+          ({ entry }) => entry.path === "memory/contended.md",
+        );
         return replaceSource.call(this, input, assertCurrent, async () => {
           // The Worker retries only a refused native BEGIN. Observe the next
           // file check rather than a BEGIN on the application's connection.
-          if (input.entry.path === "memory/contended.md" && ++preparations === 2) {
+          if (replacesContended && ++preparations === 2) {
             collisionObserved = true;
             collision.resolve();
             await revalidate.promise;

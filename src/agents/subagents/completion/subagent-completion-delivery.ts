@@ -9,7 +9,10 @@ import {
   type SessionDeliverySettledOutcome,
 } from "../../../infra/session-delivery-queue.records.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
+import {
+  RUNTIME_EVENT_USER_PROMPT,
+  type RuntimeContextFragment,
+} from "../../internal-runtime-context.js";
 import {
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
@@ -32,7 +35,7 @@ import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-i
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The result follows.`;
 
 /** Atomically admits a queue generation and publishes process mirrors only after commit. */
 export async function admitCorrelatedSubagentSessionDelivery(params: {
@@ -123,7 +126,7 @@ export function resolveCorrelatedSubagentDelivery(
   const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
   return {
     ...queued,
-    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    message: RUNTIME_EVENT_USER_PROMPT,
     runtimeContextFragments: [
       { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
       { kind: "conversation-data", text: result },

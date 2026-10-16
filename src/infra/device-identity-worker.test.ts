@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -5,8 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  loadChatRequestIdentityKeyAsync,
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateDeviceIdentityAsync,
+  loadOrCreateProcessDeviceIdentityAsync,
 } from "./device-identity-async.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
@@ -30,6 +33,23 @@ async function withIdentityWorkerState(
 }
 
 describe("device identity shared worker", () => {
+  it("keeps process identities cached by database path and identity key", async () => {
+    await withIdentityWorkerState(async (options, stateDir) => {
+      const secondaryOptions = { ...options, identityKey: "secondary" };
+      const primary = await loadOrCreateProcessDeviceIdentityAsync(options);
+      const secondary = await loadOrCreateProcessDeviceIdentityAsync(secondaryOptions);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(options)).toBe(primary);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(secondaryOptions)).toBe(secondary);
+      expect(secondary.deviceId).not.toBe(primary.deviceId);
+      const claimPath = path.join(stateDir, "identity", "device.json.doctor-importing");
+      await fs.mkdir(path.dirname(claimPath), { recursive: true });
+      await fs.writeFile(claimPath, "synthetic retired identity");
+      await closeOpenClawStateDatabaseByPathAsync(options.path);
+      expect(await loadOrCreateProcessDeviceIdentityAsync(options)).toBe(primary);
+      expect(await fs.readFile(claimPath, "utf8")).toBe("synthetic retired identity");
+    });
+  });
+
   it("does not initialize an existing empty database during a read", async () => {
     await withIdentityWorkerState(async (options) => {
       const directory = path.dirname(options.path);
@@ -39,6 +59,7 @@ describe("device identity shared worker", () => {
       const fileMode = (await fs.stat(options.path)).mode;
 
       expect(await loadDeviceIdentityIfPresentAsync(options)).toBeNull();
+      expect(await loadChatRequestIdentityKeyAsync(options)).toBeNull();
 
       expect(await fs.readFile(options.path)).toHaveLength(0);
       expect((await fs.stat(options.path)).mode).toBe(fileMode);
@@ -64,11 +85,12 @@ describe("device identity shared worker", () => {
           verifyDeviceSignature(first.publicKeyPem, "synthetic-identity-proof", signature),
         ).toBe(true);
         await closeOpenClawStateDatabaseByPathAsync(options.path);
-        const artifacts = await fs.readdir(path.dirname(options.path));
+        const bytes = await fs.readFile(options.path);
         const fileMode = (await fs.stat(options.path)).mode;
         expect(await loadDeviceIdentityIfPresentAsync(options)).toEqual(first);
         await closeOpenClawStateDatabaseByPathAsync(options.path);
-        expect(await fs.readdir(path.dirname(options.path))).toEqual(artifacts);
+        expect(await fs.readFile(options.path)).toEqual(bytes);
+        expect(statSync(`${options.path}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
         expect((await fs.stat(options.path)).mode).toBe(fileMode);
 
         expect(await loadDeviceIdentityIfPresentAsync(options)).toEqual(first);

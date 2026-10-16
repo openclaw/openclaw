@@ -114,8 +114,8 @@ Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
-`stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the idempotent
-`ensureQueueAvailable()` check when plugin-owned migration or preparation must
+`stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
+`ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must
 run after the queue opens but before the drain starts. `stop` first settles
 accepted admissions, then aborts and disposes the drain, waits for the pump and
 active deliveries, and disposes again to close the lazy-creation race.
@@ -324,6 +324,11 @@ final dispatch boundary may make this assertion. Never use the marker after a
 finalization/send call begins or returns an ambiguous result; false marking can
 duplicate messages.
 
+For a permanent local preflight rejection, such as an unresolved account owner,
+pass `{ cause: error, retryable: false }`. The delivery failed without dispatch;
+it is not an ambiguous send and should not be retried until the configuration
+is corrected.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the
@@ -418,19 +423,19 @@ the concrete transport branches the plugin can prove, such as `text` or
 Omitting the map means the callback claims every selected branch, so prefer an
 explicit map for new plugins.
 
-The callback must use provider-owned idempotency or authoritative readback to
+The callback must use provider-side duplicate prevention or authoritative readback to
 return `sent` with the actual provider receipt, `not_sent` only when a fresh
 send is provably safe, or `unresolved` when neither outcome can be proven.
 When reconciliation is explicitly required, unsupported prepared shapes fail
 before provider I/O. During recovery, missing, incomplete, or mismatched
-provider proof must fail closed rather than replaying content that could
+provider proof must stop recovery rather than replaying content that could
 already be visible.
 
 If reconciliation needs provider-owned persisted evidence, implement
 `afterUnknownSendTerminal(...)`. Core calls it after the ambiguous queue row
 has authoritatively moved to failed, including retry-budget exhaustion. Use it
 to remove provider-owned plans or payloads that are no longer needed. Cleanup
-is best effort and must be idempotent; a failure is logged without making the
+is best effort and must be safe to repeat; a failure is logged without making the
 terminal queue row replayable again.
 
 ## Deferred delivery admission

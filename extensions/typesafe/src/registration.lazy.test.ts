@@ -54,26 +54,6 @@ function evaluator() {
   }));
 }
 
-it("registers and checks readiness without initializing the evaluator, then shares concurrent first use", async () => {
-  const evaluate = evaluator();
-  const initialize = vi.fn(() => ({ evaluate }));
-  vi.doMock("./client.js", initialize);
-  const { provider } = await register();
-  expect(provider.isReady?.()).toBe(true);
-  expect(initialize).not.toHaveBeenCalled();
-
-  const outcomes = await Promise.all([
-    provider.evaluate(batch, context()),
-    provider.evaluate(batch, { ...context(), model: "jev-latest" }),
-  ]);
-  expect(initialize).toHaveBeenCalledOnce();
-  expect(evaluate).toHaveBeenCalledTimes(2);
-  expect(outcomes).toMatchObject([
-    { status: "ok", result: { model: "kev-latest", answers: { q: { probabilityTrue: 0.75 } } } },
-    { status: "ok", result: { model: "jev-latest", answers: { q: { probabilityTrue: 0.75 } } } },
-  ]);
-});
-
 it.each(["abort", "deadline", "config", "credentials"] as const)(
   "observes %s changes while the evaluator import is pending",
   async (change) => {
@@ -129,17 +109,25 @@ it("shares a pending evaluator initialization with a later first caller", async 
   });
   vi.doMock("./client.js", initialize);
   const { provider } = await register();
+  expect(provider.isReady?.()).toBe(true);
+  expect(initialize).not.toHaveBeenCalled();
   const first = provider.evaluate(batch, context());
   let second: ReturnType<DecisionProviderV1["evaluate"]> | undefined;
   try {
     await started.promise;
-    second = provider.evaluate(batch, context());
+    second = provider.evaluate(batch, { ...context(), model: "jev-latest" });
     expect(evaluate).not.toHaveBeenCalled();
   } finally {
     release.resolve();
   }
-  await expect(first).resolves.toMatchObject({ status: "ok" });
-  await expect(second).resolves.toMatchObject({ status: "ok" });
+  await expect(first).resolves.toMatchObject({
+    status: "ok",
+    result: { model: "kev-latest", answers: { q: { probabilityTrue: 0.75 } } },
+  });
+  await expect(second).resolves.toMatchObject({
+    status: "ok",
+    result: { model: "jev-latest", answers: { q: { probabilityTrue: 0.75 } } },
+  });
   expect(initialize).toHaveBeenCalledOnce();
   expect(evaluate).toHaveBeenCalledTimes(2);
 });

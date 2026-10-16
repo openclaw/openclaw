@@ -46,7 +46,8 @@ afterEach(() => {
 it("keeps a watched reaction on the runtime-bound global owner's queue", async () => {
   const sender = "+15550001111";
   const cfg = {
-    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    agents: { entries: { main: {}, research: {} } },
+    bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
     channels: {
       imessage: {
         dmPolicy: "allowlist" as const,

@@ -1,6 +1,6 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,7 +13,7 @@ export const readPackageVersion = vi.fn();
 export const syncPluginsForUpdateChannel = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
-export const pathExists = vi.fn();
+const pathExists = vi.fn();
 const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
@@ -434,18 +434,11 @@ export function installDeferredCompletionFixture() {
     if (sqliteHostPlatform !== "win32") {
       vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
         (dir) => {
-          fsSync.mkdirSync(dir, { mode: 0o700 });
+          createDirectorySync(dir, { mode: 0o700 });
         },
       );
       vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
-        fsSync.openSync(
-          file,
-          fsSync.constants.O_RDWR |
-            fsSync.constants.O_CREAT |
-            fsSync.constants.O_EXCL |
-            fsSync.constants.O_NOFOLLOW,
-          0o600,
-        ),
+        createFileSync(file, { mode: 0o600 }),
       );
     }
   });

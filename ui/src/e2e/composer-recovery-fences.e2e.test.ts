@@ -1,6 +1,6 @@
-import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -167,7 +167,7 @@ suite.define(() => {
           };
         });
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
             host: {
@@ -188,7 +188,6 @@ suite.define(() => {
           document.body.append(stage);
         });
         const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
-        expect(await notice.getAttribute("open")).not.toBeNull();
         await notice.getByRole("alert").waitFor();
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           const artifacts = createControlUiE2eArtifactDir("recovery-error");
@@ -196,12 +195,12 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 700 });
           await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
         }
-        expect((await notice.locator("summary").textContent())?.trim()).toBe(
-          "Saved messages could not be loaded",
+        expect(await notice.getByRole("alert").textContent()).toContain(
+          "We could not access your saved messages.",
         );
         expect(await notice.textContent()).not.toContain("older browser");
         expect(await notice.textContent()).not.toContain("Free browser storage");
-        expect(await notice.getByRole("button", { name: "Review in this chat" }).count()).toBe(0);
+        expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
       },
     );
   });
@@ -228,7 +227,7 @@ suite.define(() => {
           .locator(".chat-bubble")
           .getByText("Split seed completed.", { exact: true })
           .waitFor();
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         const left = panes.nth(0);
@@ -363,7 +362,7 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
         const legacyValue = JSON.stringify({
           version: 2,
@@ -402,6 +401,7 @@ suite.define(() => {
               {
                 host,
                 identity: "unchanged-route-and-owner",
+                id: "recovery-fence-fixture",
               },
             );
             component.style.cssText =
@@ -411,18 +411,19 @@ suite.define(() => {
           },
           { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
         );
-        const notice = page.locator("openclaw-chat-outbox-recovery");
-        const restore = notice.getByRole("button", { name: "Review in this chat" });
+        const notice = page.locator("#recovery-fence-fixture");
+        const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
-            const component = element as LitElement;
+            // SAFETY: This locator selects the registered recovery element created above.
+            const component = element as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
             await component.updateComplete;
             await component.updateComplete;
           });
-          expect(await notice.locator("summary").count()).toBe(0);
+          expect(await notice.locator(".chat-outbox-recovery-row").count()).toBe(0);
           expect(
             await notice
-              .locator(".chat-outbox-recovery__content")
+              .locator(".chat-outbox-recovery-row")
               .getByText("Retained confirmation draft", { exact: true })
               .count(),
           ).toBe(0);
@@ -434,15 +435,14 @@ suite.define(() => {
           // Leaving Incognito reveals the retained source, never an adopted destination.
           await hostHandle.evaluate((host) => {
             host.selectedChatSessionIncognito = false;
+            // SAFETY: The fixture above creates this registered recovery element with this ID.
             const component = document.querySelector(
-              "openclaw-chat-outbox-recovery",
-            ) as LitElement & {
-              identity: string;
-            };
+              "#recovery-fence-fixture",
+            ) as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
             component.identity = "non-incognito-review-owner";
           });
         }
-        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
+        await notice.locator(".chat-outbox-recovery-row").first().waitFor();
         if (change === "incognito") {
           expect(await restore.isDisabled()).toBe(false);
         } else {
@@ -463,7 +463,7 @@ suite.define(() => {
             },
             { host: hostHandle, change },
           );
-          await dialog.getByRole("button", { name: "Review in this chat" }).click();
+          await dialog.getByRole("button", { name: "Restore", exact: true }).click();
           await dialog.waitFor({ state: "detached" });
           await expect
             .poll(
@@ -504,7 +504,7 @@ suite.define(() => {
           });
         }
         await notice
-          .locator(".chat-outbox-recovery__content")
+          .locator(".chat-outbox-recovery-row")
           .getByText("Retained confirmation draft", { exact: true })
           .waitFor();
       });

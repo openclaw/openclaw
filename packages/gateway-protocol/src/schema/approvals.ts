@@ -4,6 +4,7 @@ import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -13,54 +14,36 @@ const ApprovalIdSchema = Type.String({
   description: "Exact full approval id encoded safely in deep-link paths.",
 });
 
-export const ApprovalKindSchema = Type.Union([
-  Type.Literal("exec"),
-  Type.Literal("plugin"),
-  Type.Literal("system-agent"),
-]);
+export const ApprovalKindSchema = stringLiteralUnion(["exec", "plugin", "system-agent"]);
 
-export const ApprovalDecisionSchema = Type.Union([
-  Type.Literal("allow-once"),
-  Type.Literal("allow-always"),
-  Type.Literal("deny"),
-]);
+export const ApprovalDecisionSchema = stringLiteralUnion(["allow-once", "allow-always", "deny"]);
 
-export const ApprovalAllowDecisionSchema = Type.Union([
-  Type.Literal("allow-once"),
-  Type.Literal("allow-always"),
-]);
+export const ApprovalAllowDecisionSchema = stringLiteralUnion(["allow-once", "allow-always"]);
 
-export const ApprovalTerminalReasonSchema = Type.Union([
-  Type.Literal("user"),
-  Type.Literal("timeout"),
-  Type.Literal("malformed-verdict"),
-  Type.Literal("no-route"),
-  Type.Literal("run-aborted"),
-  Type.Literal("gateway-restart"),
-  Type.Literal("storage-corrupt"),
+export const ApprovalTerminalReasonSchema = stringLiteralUnion([
+  "user",
+  "timeout",
+  "malformed-verdict",
+  "no-route",
+  "run-aborted",
+  "gateway-restart",
+  "storage-corrupt",
 ]);
 
 export const ApprovalAllowedReasonSchema = Type.Union([Type.Literal("user")]);
 
-export const ApprovalDeniedReasonSchema = Type.Union([
-  Type.Literal("user"),
-  Type.Literal("malformed-verdict"),
-  Type.Literal("no-route"),
-  Type.Literal("storage-corrupt"),
+export const ApprovalDeniedReasonSchema = stringLiteralUnion([
+  "user",
+  "malformed-verdict",
+  "no-route",
+  "storage-corrupt",
 ]);
 
 export const ApprovalExpiredReasonSchema = Type.Union([Type.Literal("timeout")]);
 
-export const ApprovalCancelledReasonSchema = Type.Union([
-  Type.Literal("run-aborted"),
-  Type.Literal("gateway-restart"),
-]);
+export const ApprovalCancelledReasonSchema = stringLiteralUnion(["run-aborted", "gateway-restart"]);
 
-export const PluginApprovalSeveritySchema = Type.Union([
-  Type.Literal("info"),
-  Type.Literal("warning"),
-  Type.Literal("critical"),
-]);
+export const PluginApprovalSeveritySchema = stringLiteralUnion(["info", "warning", "critical"]);
 
 /** Message/email delivery blast radius declared by the approval owner. */
 export const MessageSendApprovalScopeSchema = closedObject({
@@ -70,7 +53,7 @@ export const MessageSendApprovalScopeSchema = closedObject({
   recipients: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 5 }),
   ),
-  audience: Type.Optional(Type.Union([Type.Literal("internal"), Type.Literal("external")])),
+  audience: Type.Optional(stringLiteralUnion(["internal", "external"])),
 });
 
 /** Payment blast radius declared by the approval owner. */
@@ -85,7 +68,7 @@ export const PaymentApprovalScopeSchema = closedObject({
 export const ExternalPostApprovalScopeSchema = closedObject({
   kind: Type.Literal("external-post"),
   target: Type.String({ minLength: 1, maxLength: 128 }),
-  visibility: Type.Union([Type.Literal("public"), Type.Literal("restricted")]),
+  visibility: stringLiteralUnion(["public", "restricted"]),
 });
 
 /**
@@ -127,7 +110,7 @@ const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   uniqueItems: true,
   contains: Type.Literal("deny"),
   description:
-    "Available reviewer decisions. Deny is always available so malformed or unsafe input can fail closed.",
+    "Available reviewer decisions. Deny is always available so malformed or unsafe input can be rejected.",
 });
 
 const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
@@ -202,12 +185,7 @@ const ApprovalHistorySourceAttributionSchema = closedObject({
 
 /** Reviewer attribution recorded by the durable approval ledger. */
 const ApprovalHistoryResolverAttributionSchema = closedObject({
-  kind: Type.Union([
-    Type.Literal("device"),
-    Type.Literal("channel"),
-    Type.Literal("runtime"),
-    Type.Literal("system"),
-  ]),
+  kind: stringLiteralUnion(["device", "channel", "runtime", "system"]),
   id: Type.Optional(NonEmptyString),
 });
 

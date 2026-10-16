@@ -271,25 +271,23 @@ describe("automatic campaign handoff failure", () => {
       const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
       const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
-      let record: MockInstance<typeof import("./update-run-codec.js").encodeRun> | undefined;
+      let record:
+        | MockInstance<
+            typeof import("../state/openclaw-state-worker-store.js").runOpenClawStateWorkerOperation
+          >
+        | undefined;
       transfer.mockImplementationOnce(async () => {
-        const codec = await import("./update-run-codec.js");
-        const encode = codec.encodeRun;
-        record = vi.spyOn(codec, "encodeRun").mockImplementation((current, options) => {
-          if (
-            failure === "state"
-              ? current.reason === "managed-service-handoff-failed"
-              : current.steps.some((step) =>
-                  step.failureFacts?.some((fact) => fact.check === "managed-service"),
-                )
-          ) {
-            record?.mockRestore();
-            throw Object.assign(new Error("diagnostic ledger is read-only"), {
-              code: "SQLITE_READONLY",
-            });
-          }
-          return encode(current, options);
-        });
+        const worker = await import("../state/openclaw-state-worker-store.js");
+        const execute = worker.runOpenClawStateWorkerOperation;
+        record = vi.spyOn(worker, "runOpenClawStateWorkerOperation");
+        if (failure === "diagnostics") {
+          record.mockImplementationOnce(execute);
+        }
+        record.mockRejectedValueOnce(
+          Object.assign(new Error("diagnostic ledger is read-only"), {
+            code: "SQLITE_READONLY",
+          }),
+        );
         throw new Error("pipe closed");
       });
       try {
@@ -335,9 +333,7 @@ describe("automatic campaign handoff failure", () => {
 
   it.each([
     { throws: false, diagnosticFailure: null },
-    { throws: true, diagnosticFailure: "read" },
-    { throws: true, diagnosticFailure: "write" },
-    { throws: true, diagnosticFailure: "stale" },
+    { throws: true, diagnosticFailure: "unavailable" },
   ] as const)(
     "preserves cause and verified recovery when transfer throws=$throws and diagnostics=$diagnosticFailure",
     async ({ throws, diagnosticFailure }) => {
@@ -347,7 +343,6 @@ describe("automatic campaign handoff failure", () => {
         transfer.mockResolvedValueOnce(false);
       }
       let stepsBeforeCancellation: ReturnType<typeof listUpdateRuns>[number]["steps"] = [];
-      let beforeCancellation: ReturnType<typeof listUpdateRuns>[number] | undefined;
       cancel.mockImplementationOnce(async () => {
         const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
         expect(run).toMatchObject({
@@ -356,7 +351,6 @@ describe("automatic campaign handoff failure", () => {
             expect.objectContaining({ step: "requested", status: "failed" }),
           ]),
         });
-        beforeCancellation = run;
         stepsBeforeCancellation = run.steps;
         recordUpdateRunVerification(run.runId, {
           rollbackOutcome: {
@@ -384,22 +378,14 @@ describe("automatic campaign handoff failure", () => {
             runAuto: async (params) => {
               const outcome = await runAutoUpdateCommand(params, log);
               if (diagnosticFailure) {
-                const reader = await import("./update-run-reader.js");
-                const readKernel = await import("./update-run-read.kernel.js");
-                const verificationOwner = await import("./update-run-verification.js");
-                const failed = () => {
-                  throw Object.assign(new Error("summary diagnostics unavailable"), {
-                    code: "SQLITE_READONLY",
-                  });
-                };
-                const fault =
-                  diagnosticFailure === "stale"
-                    ? vi.spyOn(reader, "getUpdateRun").mockReturnValueOnce(beforeCancellation)
-                    : diagnosticFailure === "read"
-                      ? vi.spyOn(readKernel, "readUpdateRunRecord").mockImplementationOnce(failed)
-                      : vi
-                          .spyOn(verificationOwner, "recordUpdateRunVerificationRecord")
-                          .mockImplementationOnce(failed);
+                const worker = await import("../state/openclaw-state-worker-store.js");
+                const fault = vi
+                  .spyOn(worker, "runOpenClawStateWorkerOperation")
+                  .mockRejectedValueOnce(
+                    Object.assign(new Error("summary diagnostics unavailable"), {
+                      code: "SQLITE_READONLY",
+                    }),
+                  );
                 restoreDiagnosticFailure = () => fault.mockRestore();
               }
               return outcome;
@@ -455,7 +441,7 @@ describe("automatic campaign handoff failure", () => {
         );
         expect(report.body).toContain("managed-service");
         expect(report.body).toContain("Rollback outcome: not needed");
-        if (diagnosticFailure && diagnosticFailure !== "stale") {
+        if (diagnosticFailure) {
           expect(log.info).toHaveBeenCalledWith(
             expect.stringContaining("Update diagnostics could not be recorded"),
           );
@@ -494,10 +480,13 @@ describe("automatic campaign handoff failure", () => {
               const read =
                 failure === "read"
                   ? vi
-                      .spyOn(await import("./update-run-ledger.js"), "getUpdateRun")
+                      .spyOn(await import("./update-run-reader.js"), "getUpdateRunAsync")
                       .mockImplementationOnce(fail)
                   : vi
-                      .spyOn(await import("./update-run-codec.js"), "encodeRun")
+                      .spyOn(
+                        await import("../state/openclaw-state-worker-store.js"),
+                        "runOpenClawStateWorkerOperation",
+                      )
                       .mockImplementationOnce(fail);
               restoreRead = () => read.mockRestore();
               throw original;

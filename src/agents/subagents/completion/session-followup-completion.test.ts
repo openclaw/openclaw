@@ -19,7 +19,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function fixture() {
+function fixture() {
   const controller = new AbortController();
   const release = vi.fn();
   const owner = SessionFollowupCompletion.bind({
@@ -84,62 +84,43 @@ const final = {
 };
 
 describe("session followup completion", () => {
-  it("requires a fresh committed cohort when an admitted successor yields again", async () => {
-    const f = await fixture();
-    const c = child();
-    f.owner.promoteYield("first", [c], 1);
-    expect(await settleExecution(f.owner, "first", { status: "ok", yielded: true })).toEqual({
-      kind: "yielded",
-    });
-    const next = f.owner.successor([c], "second", () => {});
-    await f.owner.prepareSuccessor(next);
-    f.owner.adopt(next);
-    f.owner.markAccepted("second");
-    await settleExecution(f.owner, "second", { status: "ok", yielded: true });
-    await expect(f.owner.take()).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("without a committed"),
-    });
-  });
-
-  it("follows only the canonical child's committed same-task replacement", async () => {
-    const f = await fixture();
-    const c = child();
-    f.owner.promoteYield("first", [c], 1);
-    const next = { ...c, runId: "C-next", taskRunId: c.runId };
-    transferFollowupCohort(c, next);
-    expect(getFollowupForCohort([next])).toBe(f.owner);
-    expect(() => f.owner.successor([next], "second", () => {})).not.toThrow();
-    expect(() => f.owner.successor([c], "second", () => {})).toThrow("cohort");
-  });
-
-  it.each([false, true])(
-    "rejects a retained successor after publication clears its wake (adopted=%s)",
-    async (adopted) => {
-      const f = await fixture();
+  it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
+    "retains only the canonical committed cohort after publication: %s",
+    async (publication) => {
+      const f = fixture();
       const c = child();
       f.owner.promoteYield("first", [c], 1);
       await settleExecution(f.owner, "first", { status: "ok", yielded: true });
       const successor = f.owner.successor([c], "second", () => {});
       await f.owner.prepareSuccessor(successor);
-      if (adopted) {
+      if (publication === "cleared adopted wake") {
         f.owner.adopt(successor);
         f.owner.markAccepted("second");
       }
-      const published = copySubagentRunRuntimeOwner(c, {
-        ...c,
-        requesterSettleWake: undefined,
-        suppressCompletionDelivery: true,
-      });
+      const published =
+        publication === "replacement"
+          ? { ...c, runId: "C-next", taskRunId: c.runId }
+          : copySubagentRunRuntimeOwner(c, {
+              ...c,
+              requesterSettleWake: undefined,
+              suppressCompletionDelivery: true,
+            });
       transferFollowupCohort(c, published);
       expect(getFollowupForCohort([published])).toBe(f.owner);
-      expect(() => successor.assertCurrent()).toThrow("completion cohort");
-      expect(() => f.owner.successor([published], "second", () => {})).toThrow("completion cohort");
+      if (publication === "replacement") {
+        expect(() => f.owner.successor([published], "second", () => {})).not.toThrow();
+        expect(() => f.owner.successor([c], "second", () => {})).toThrow("cohort");
+      } else {
+        expect(() => successor.assertCurrent()).toThrow("completion cohort");
+        expect(() => f.owner.successor([published], "second", () => {})).toThrow(
+          "completion cohort",
+        );
+      }
     },
   );
 
-  it("publishes only after the caller joins physical execution cleanup", async () => {
-    const f = await fixture();
+  it("publishes to exactly one consumer after the caller joins physical execution cleanup", async () => {
+    const f = fixture();
     const cleanupEntered = createDeferred();
     const cleanupReleased = createDeferred();
     let published = false;
@@ -163,6 +144,7 @@ describe("session followup completion", () => {
       expect(await settled).toEqual({ kind: "terminal", reply: final });
       await expect(taken).resolves.toEqual(final);
       expect(published).toBe(true);
+      await expect(f.owner.take()).rejects.toThrow("consumer");
     } finally {
       cleanupReleased.resolve();
       await Promise.allSettled([settled]);
@@ -171,97 +153,88 @@ describe("session followup completion", () => {
     }
   });
 
-  it("returns a non-yielding final to exactly one consumer", async () => {
-    const f = await fixture();
-    await settleExecution(f.owner, "first", final);
-    await expect(f.owner.take()).resolves.toEqual(final);
-    await expect(f.owner.take()).rejects.toThrow("consumer");
-  });
+  it.each(["terminal", "uncommitted yield", "inline timeout"] as const)(
+    "settles only the admitted successor across committed yields: %s",
+    async (mode) => {
+      const f = fixture();
+      if (mode === "inline timeout") {
+        vi.useFakeTimers();
+        const inline = f.owner.take(10);
+        await vi.advanceTimersByTimeAsync(10);
+        await expect(inline).resolves.toBeUndefined();
+      }
+      const asynchronous = mode === "inline timeout" ? f.owner.take() : undefined;
+      const chain = ["first", "second", "third"];
+      const yields = mode === "inline timeout" ? 2 : 1;
+      for (let index = 0; index < yields; index++) {
+        const runId = chain[index]!;
+        const nextRunId = chain[index + 1]!;
+        const c = child(index + 1);
+        promoteFollowupYield({
+          requesterTurnRunId: runId,
+          entries: [c],
+          rearmGeneration: index + 1,
+        });
+        expect(
+          await settleExecution(f.owner, runId, {
+            status: "ok",
+            yielded: true,
+            terminalReply: { disposition: "empty" },
+          }),
+        ).toEqual({ kind: "yielded" });
+        const successor = f.owner.successor([c], nextRunId, () => {});
+        await f.owner.prepareSuccessor(successor);
+        f.owner.adopt(successor);
+        f.owner.markAccepted(nextRunId);
+      }
+      await expect(f.owner.settle("unrelated", final)).rejects.toThrow("replaced");
+      await settleExecution(
+        f.owner,
+        chain[yields]!,
+        mode === "uncommitted yield" ? { status: "ok", yielded: true } : final,
+      );
+      const result = asynchronous ?? f.owner.take();
+      if (mode === "uncommitted yield") {
+        await expect(result).resolves.toMatchObject({
+          status: "error",
+          error: expect.stringContaining("without a committed"),
+        });
+      } else {
+        await expect(result).resolves.toEqual(final);
+      }
+    },
+  );
 
-  it("keeps an empty yielded predecessor pending until its exact admitted successor finishes", async () => {
-    const f = await fixture();
-    const c = child();
-    promoteFollowupYield({ requesterTurnRunId: "first", entries: [c], rearmGeneration: 1 });
-    expect(
-      await settleExecution(f.owner, "first", {
-        status: "ok",
-        yielded: true,
-        terminalReply: { disposition: "empty" },
-      }),
-    ).toEqual({ kind: "yielded" });
-    const successor = f.owner.successor([c], "second", () => {});
-    await f.owner.prepareSuccessor(successor);
-    f.owner.adopt(successor);
-    f.owner.markAccepted("second");
-    await expect(f.owner.settle("unrelated", final)).rejects.toThrow("replaced");
-    await settleExecution(f.owner, "second", final);
-    await expect(f.owner.take()).resolves.toEqual(final);
-  });
-
-  it("transfers an inline timeout to one asynchronous consumer across repeated yields", async () => {
-    vi.useFakeTimers();
-    const f = await fixture();
-    const inline = f.owner.take(10);
-    await vi.advanceTimersByTimeAsync(10);
-    await expect(inline).resolves.toBeUndefined();
-    const asynchronous = f.owner.take();
-    for (const [runId, nextRunId, generation] of [
-      ["first", "second", 1],
-      ["second", "third", 2],
-    ] as const) {
-      const c = child(generation);
-      promoteFollowupYield({
-        requesterTurnRunId: runId,
-        entries: [c],
-        rearmGeneration: generation,
-      });
-      await settleExecution(f.owner, runId, { status: "ok", yielded: true });
-      const successor = f.owner.successor([c], nextRunId, () => {});
-      await f.owner.prepareSuccessor(successor);
-      f.owner.adopt(successor);
-      f.owner.markAccepted(nextRunId);
-    }
-    await settleExecution(f.owner, "third", final);
-    await expect(asynchronous).resolves.toEqual(final);
-  });
-
-  it("closes a pending yielded result when the Gateway lifecycle rotates", async () => {
-    const f = await fixture();
-    const c = child();
-    f.owner.promoteYield("first", [c], 1);
-    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
-    const rejected = expect(f.owner.take()).rejects.toThrow();
-    rotateAgentEventLifecycleGeneration();
-    try {
-      expect(f.release).toHaveBeenCalledOnce();
-      expect(f.owner.signal.aborted).toBe(true);
-      await rejected;
-      expect(getFollowupForCohort([c])).toBe(f.owner);
-      expect(() => f.owner.successor([c], "second", () => {})).toThrow();
-    } finally {
-      f.owner.close();
-      await rejected;
-    }
-  });
-
-  it.each(["source revocation", "explicit close", "generation retirement"] as const)(
+  it.each([
+    "source revocation",
+    "explicit close",
+    "generation retirement",
+    "Gateway rotation",
+  ] as const)(
     "rejects a waiting successor and retains its cohort tombstone after %s",
     async (retirement) => {
-      const f = await fixture();
+      const f = fixture();
       const c = child();
       f.owner.promoteYield("first", [c], 1);
       await f.owner.settle("first", { status: "ok", yielded: true });
       const successor = f.owner.successor([c], "second", () => {});
       const prepared = expect(f.owner.prepareSuccessor(successor)).rejects.toThrow();
+      const rejected =
+        retirement === "Gateway rotation" ? expect(f.owner.take()).rejects.toThrow() : undefined;
       if (retirement === "source revocation") {
         f.controller.abort(new Error("Original source revoked"));
       } else if (retirement === "generation retirement") {
         rotateAgentRunRegistryLifecycleGeneration();
         f.owner.finishExecution("first");
+      } else if (retirement === "Gateway rotation") {
+        f.owner.finishExecution("first");
+        rotateAgentEventLifecycleGeneration();
+        expect(f.release).toHaveBeenCalledOnce();
       } else {
         f.owner.close();
       }
       await prepared;
+      await rejected;
       expect(getFollowupForCohort([c])).toBe(f.owner);
       expect(() => f.owner.successor([c], "second", () => {})).toThrow();
       await expect(f.owner.take()).rejects.toThrow();

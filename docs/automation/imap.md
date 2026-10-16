@@ -153,7 +153,7 @@ The IMAP dispatch log with a `runId` records admission, not completed processing
 
 ## Watcher runtime behavior
 
-The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A stopped watcher does not keep retrying.
+The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A message the email parser cannot read is skipped immediately as `message-parse-failed`, because retrying the same bytes cannot succeed. A stopped watcher does not keep retrying.
 
 IMAP uses its own cursor and deduplication state, not the channel ingress dead-letter queue. Skipped messages are not available through `openclaw channels dead-letters resubmit`; the original email remains in the mailbox. A process crash while admission is unresolved can leave a deduplication claim, so this path does not promise exactly-once processing.
 
@@ -167,7 +167,7 @@ Existing messages are baselined without dispatch when the plugin first starts. N
 
 **Messages from a self-hosted sender are rejected.** Check logs for the sender domain and failing gate. If the sending MX does not provide DKIM or DMARC, prefer fixing its DNS/signing configuration. Otherwise explicitly lower `senderAuth.min` or configure a sender-bound address token; retain the sender allowlist and isolated reader in either case.
 
-**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model probe succeeds. Rejections are logged without message subjects or bodies.
+**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model check succeeds. Rejections are logged without message subjects or bodies.
 
 ## Related
 

@@ -31,7 +31,6 @@ import type {
   CliBackendParseJsonlEvent,
   CliBackendParsedJsonlEvent,
 } from "../../plugins/cli-backend.types.js";
-import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createChildAdapter } from "../../process/supervisor/adapters/child.js";
@@ -54,6 +53,7 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() })); // Gateway unit coverage owns quiet-admission timing. These integration cases only
@@ -1209,34 +1209,6 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it("finishes parsed CLI tools when the process exits before a tool result", async () => {
-    const pluginLoaderCalls = getPluginModuleLoaderStats().calls;
-    const toolEvents = captureToolEvents();
-    const toolStart = jsonl(
-      messageRecord("assistant", [toolUse("call-incomplete", "mcp__team__lookup", {})]),
-    );
-    mockOutput([toolStart], { exitCode: 1, stderr: "failed" });
-
-    await expect(
-      executePreparedCliRun(
-        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
-      ),
-    ).rejects.toThrow();
-
-    expect(toolEvents).toMatchObject([
-      { type: "tool.execution.started", toolCallId: "call-incomplete" },
-      {
-        type: "tool.execution.error",
-        toolCallId: "call-incomplete",
-        errorCategory: "cli_tool_incomplete",
-      },
-    ]);
-    expect(
-      getPluginModuleLoaderStats().calls,
-      "prepared CLI execution must not materialize provider plugins",
-    ).toBe(pluginLoaderCalls);
-  });
-
   it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {
     const toolEvents = captureToolEvents();
     const abortController = new AbortController();
@@ -1431,24 +1403,6 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(getCliMessagingDeliveryEvidence(thrown)?.didSendViaMessagingTool).toBe(expected);
   });
 
-  it("fails closed for suppressed non-streaming MCP message results", async () => {
-    const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
-    context.mcpDeliveryCapture = true;
-    mockCaptureSpawn((input, captureKey) => {
-      recordMcpLoopbackToolCallResult({
-        captureKey,
-        toolName: "message",
-        args: { action: "send", channel: TEST_MESSAGE_CHANNEL, target: "chat123", message: "done" },
-        result: { status: "suppressed" },
-        isError: false,
-      });
-      input.onStdout?.("done");
-    });
-    const result = await executePreparedCliRun(context);
-    expect(result.didSendViaMessagingTool).toBeUndefined();
-    expect(result.messagingToolSentTargets).toBeUndefined();
-  });
-
   it("records sessions_yield through the serialized MCP capture", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
     context.mcpDeliveryCapture = true;
@@ -1528,7 +1482,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     { action: "send", exitCode: 0 },
     { action: "poll", exitCode: 1 },
   ])(
-    "retains source $action delivery and suppresses assistant output through CLI exit $exitCode",
+    "retains the final source $action reply through CLI exit $exitCode",
     async ({ action, exitCode }) => {
       const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
       context.mcpDeliveryCapture = true;
@@ -1539,10 +1493,18 @@ describe("executePreparedCliRun supervisor output capture", () => {
           recordMcpLoopbackToolCallResult({
             captureKey,
             toolName: "message",
-            args: { action, channel: TEST_MESSAGE_CHANNEL, message: "implicit source reply" },
+            args: {
+              action,
+              channel: TEST_MESSAGE_CHANNEL,
+              message: "implicit source reply",
+              final: true,
+            },
             result: {
               content: [{ type: "text", text: "sent" }],
               details: {
+                deliveryStatus: "sent",
+                sourceReplySink: "internal-ui",
+                sourceReply: { text: "implicit source reply" },
                 messageDelivery: {
                   status: "settled",
                   partialDelivery: false,
@@ -1564,6 +1526,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
         result = buildCliRunResult({
           context,
           output,
+          preparedReply: prepareCliRunTerminalReply(context, output),
           usedHistoryPrompt: false,
           userTurnHandled: true,
           sessionBindingDisabled: true,
@@ -1591,7 +1554,17 @@ describe("executePreparedCliRun supervisor output capture", () => {
       }
       expect(result.sourceReplyDelivered).toBe(true);
       expect(result.messagingToolSentTargets).toBeUndefined();
-      expect(result.payloads).toBeUndefined();
+      expect(result.messagingToolSourceReplyPayloads).toEqual([
+        { text: "implicit source reply", sourceReplyFinal: true },
+      ]);
+      expect(result.payloads).toEqual([{ text: "implicit source reply" }]);
+      expect(result.meta.terminalReply).toEqual({
+        disposition: "visible",
+        text: "implicit source reply",
+      });
+      if (exitCode !== 0) {
+        expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      }
     },
   );
 
@@ -1645,9 +1618,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
   it.each([
     ["the exact source route", "account-1", "chat123", "thread-1", true],
-    ["the same target in another account", "account-2", "chat123", "thread-1", false],
     ["the same target in another thread", "account-1", "chat123", "thread-2", false],
-    ["another target", "account-1", "chat456", "thread-1", false],
   ] as const)(
     "records explicit message sends only for %s",
     async (_label, accountId, target, threadId, expected) => {

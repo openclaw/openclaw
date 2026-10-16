@@ -22,25 +22,6 @@ function stripCodeFences(s: string): string {
   return trimmed;
 }
 
-function toModelKey(provider?: string, model?: string): string | undefined {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return undefined;
-  }
-  return `${p}/${m}`;
-}
-
-function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return m || undefined;
-  }
-  const prefix = `${p}/`;
-  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
-}
-
 function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
@@ -51,16 +32,20 @@ function resolveLlmTaskModelRef(params: {
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
   const rawModel = normalizeOptionalString(params.rawModel);
+  const providerPrefix = params.provider?.trim();
   const selectedModelRef = {
     provider: params.provider,
-    model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    model:
+      providerPrefix && rawModel?.startsWith(`${providerPrefix}/`)
+        ? rawModel.slice(providerPrefix.length + 1)
+        : rawModel,
   };
   if (!rawModel || !defaultProvider) {
     return selectedModelRef;
   }
 
   const cfg = params.api.config;
-  const aliasIndex = cfg ? buildModelAliasIndex({ cfg, defaultProvider }) : undefined;
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
   const resolved = resolveModelRefFromString({
     cfg,
     raw: rawModel,
@@ -87,14 +72,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = api.pluginConfig ?? {};
 
-      const defaultsModel = api.config?.agents?.defaults?.model;
+      const defaultsModel = api.config.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
           ? normalizeOptionalString(defaultsModel)
           : normalizeOptionalString(defaultsModel?.primary);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-      const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+      const primaryProvider = primary?.split("/")[0];
+      const primaryModel = primary?.split("/").slice(1).join("/");
 
       const requestProvider = normalizeOptionalString(params.provider);
       const configuredProvider = normalizeOptionalString(pluginCfg.defaultProvider);
@@ -117,8 +101,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         normalizeOptionalString(params.authProfileId) ??
         normalizeOptionalString(pluginCfg.defaultAuthProfileId);
 
-      const modelKey = toModelKey(provider, model);
-      if (!provider || !model || !modelKey) {
+      const providerId = provider?.trim();
+      const modelId = model?.trim();
+      if (!providerId || !modelId) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
@@ -165,7 +150,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           },
         ],
         systemPrompt: system,
-        model: hasModelOverride ? modelKey : undefined,
+        model: hasModelOverride ? `${providerId}/${modelId}` : undefined,
         reasoning: thinkLevel,
         maxTokens,
         temperature,

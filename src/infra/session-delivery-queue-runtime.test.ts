@@ -30,6 +30,15 @@ const logger = {
   error: vi.fn(),
 };
 
+function agentTurn(messageId = "artifact:ready") {
+  return {
+    kind: "agentTurn" as const,
+    sessionKey: "agent:main:main",
+    message: "generated artifact ready",
+    messageId,
+  };
+}
+
 type StartRuntimeForTest = (
   params: Omit<Parameters<typeof startSessionDeliveryRuntime>[0], "queueContext" | "scheduler">,
 ) => ReturnType<typeof startSessionDeliveryRuntime>;
@@ -96,65 +105,28 @@ afterEach(() => {
 });
 
 describe("session delivery queue runtime", () => {
-  it("drains a newly scheduled durable entry", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-1:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {});
-      const onSettled = vi.fn(async () => {});
-      const stop = startRuntime({ deliver, log: logger, onSettled });
-
-      await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
-      await time.advanceBy(0);
-      await stop();
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(onSettled).toHaveBeenCalledWith(
-        expect.objectContaining({ id }),
-        "recovered",
-        queueContext,
-      );
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
   it("drains one scheduled id without requesting the pending inventory", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "target delivery",
-          messageId: "target:agent-loop",
-        },
-        queueContext,
-      );
+      const id = await enqueueSessionDelivery(agentTurn(), queueContext);
       const unrelatedIds: string[] = [];
       for (let index = 0; index < 8; index += 1) {
         unrelatedIds.push(
-          await enqueueSessionDelivery(
-            {
-              kind: "agentTurn",
-              sessionKey: "agent:main:main",
-              message: `unrelated delivery ${index}`,
-              messageId: `unrelated:${index}:agent-loop`,
-            },
-            queueContext,
-          ),
+          await enqueueSessionDelivery(agentTurn(`unrelated:${index}`), queueContext),
         );
       }
       const deliver = vi.fn(async () => {});
       const reloadPending = vi.fn(loadPendingSessionDelivery);
       const listPending = vi.fn(loadPendingSessionDeliveries);
       const drain = vi.fn(drainPendingSessionDelivery);
-      const stop = startRuntime({ deliver, reloadPending, listPending, drain, log: logger });
+      const onSettled = vi.fn(async () => {});
+      const stop = startRuntime({
+        deliver,
+        reloadPending,
+        listPending,
+        drain,
+        onSettled,
+        log: logger,
+      });
 
       await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
       expect(reloadPending).toHaveBeenCalledExactlyOnceWith(id, queueContext);
@@ -166,77 +138,111 @@ describe("session delivery queue runtime", () => {
       expect(deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), {
         queueContext,
       });
+      expect(onSettled).toHaveBeenCalledWith(
+        expect.objectContaining({ id }),
+        "recovered",
+        queueContext,
+      );
       expect(await loadPendingSessionDelivery(id, queueContext)).toBeNull();
       const pending = await loadPendingSessionDeliveries(queueContext);
       expect(pending.map((entry) => entry.id).toSorted()).toEqual(unrelatedIds.toSorted());
     });
   });
 
-  it("retries a transient initial queue lookup failure", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-initial-load:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {});
-      const reloadPending = vi
-        .fn<typeof loadPendingSessionDelivery>()
-        .mockRejectedValueOnce(new Error("database busy"))
-        .mockImplementation((entryId) => loadPendingSessionDelivery(entryId, queueContext));
-      const stop = startRuntime({ deliver, log: logger, reloadPending });
+  it.each(["lookup failure", "drain failure", "unchanged row"] as const)(
+    "backs off after a transient %s without losing the durable entry",
+    async (mode) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const id = await enqueueSessionDelivery(agentTurn(), queueContext);
+        const deliver = vi.fn(async () => {});
+        const reloadPending = vi.fn(loadPendingSessionDelivery);
+        const drain = vi.fn(drainPendingSessionDelivery);
+        if (mode === "lookup failure") {
+          reloadPending.mockRejectedValueOnce(new Error("database busy"));
+        } else if (mode === "drain failure") {
+          drain.mockRejectedValueOnce(new Error("database scan failed"));
+        } else {
+          drain.mockImplementationOnce((params) =>
+            loadPendingSessionDelivery(params.id, params.queueContext),
+          );
+        }
+        const stop = startRuntime({ deliver, reloadPending, drain, log: logger });
 
-      await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to load"));
-      expect(deliver).not.toHaveBeenCalled();
+        await expect(scheduleSessionDelivery(id, queueContext)).resolves.toBe(true);
+        await time.advanceBy(0);
+        if (mode === "lookup failure") {
+          expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to load"));
+        } else if (mode === "drain failure") {
+          await expect(drain.mock.results[0]?.value).rejects.toThrow("database scan failed");
+          expect(logger.error).toHaveBeenCalledWith(
+            expect.stringContaining("runtime drain failed"),
+          );
+        } else {
+          await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 0 });
+        }
+        expect(deliver).not.toHaveBeenCalled();
+        await time.advanceBy(999);
+        expect(deliver).not.toHaveBeenCalled();
+        await time.advanceBy(1);
+        await stop();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      });
+    },
+  );
 
-      await time.advanceBy(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await time.advanceBy(1);
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("holds a claimed entry until release then rearms it immediately", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const { id } = await enqueueClaimedSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-lease:agent-loop",
-          idempotencyKey: "image:task-lease:agent-loop",
-        },
-        60_000,
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {});
-      const stop = startRuntime({ deliver, log: logger });
-
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(30_000);
-      expect(deliver).not.toHaveBeenCalled();
-
-      await releaseSessionDeliveryClaim(id, queueContext);
-      const released = await loadPendingSessionDelivery(id, queueContext);
-      if (released?.availableAt === undefined) {
-        throw new Error("Expected the worker to persist the released claim time");
-      }
-      time.clock.setTime(released.availableAt);
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await stop();
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
+  it.each(["steady", "rollback", "forward jump"] as const)(
+    "rearms a released claim immediately after a %s clock",
+    async (mode) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const { id } = await enqueueClaimedSessionDelivery(
+          { ...agentTurn(), idempotencyKey: "artifact:ready" },
+          60_000,
+          queueContext,
+        );
+        const claimed = await loadPendingSessionDelivery(id, queueContext);
+        if (claimed?.availableAt === undefined) {
+          throw new Error("Expected a durable claim deadline");
+        }
+        const entered = createDeferredCore();
+        const deliver = vi.fn(async () => {
+          entered.resolve();
+        });
+        const stop = startRuntime({ deliver, log: logger });
+        if (mode === "rollback") {
+          time.clock.setTime(claimed.availableAt);
+        }
+        await scheduleSessionDelivery(id, queueContext);
+        if (mode === "steady") {
+          await time.advanceBy(30_000);
+          expect(deliver).not.toHaveBeenCalled();
+        } else if (mode === "forward jump") {
+          time.clock.setTime(time.scheduler.now() + 24 * 60 * 60 * 1_000);
+        }
+        await releaseSessionDeliveryClaim(id, queueContext);
+        const released = await loadPendingSessionDelivery(id, queueContext);
+        if (released?.availableAt === undefined) {
+          throw new Error("Expected the worker to persist the released claim time");
+        }
+        if (mode === "rollback") {
+          expect(released.availableAt).toBeLessThan(claimed.availableAt);
+        }
+        if (mode !== "forward jump") {
+          time.clock.setTime(released.availableAt);
+        }
+        await scheduleSessionDelivery(id, queueContext);
+        if (mode === "forward jump") {
+          expect(time.scheduler.nextWakeAtMs).toBeLessThanOrEqual(time.scheduler.now());
+          expect(time.clock.wakes.at(-1)?.delayMs).toBe(0);
+        }
+        await time.advanceBy(0);
+        await entered.promise;
+        await stop();
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      });
+    },
+  );
 
   it("recomputes a future claim timer after the wall clock jumps forward", async () => {
     const dayMs = 24 * 60 * 60 * 1_000;
@@ -271,44 +277,6 @@ describe("session delivery queue runtime", () => {
       await stop();
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("rearms an immediate released claim after a rollback leaves its old wake in the future", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const { id } = await enqueueClaimedSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-clock-rollback:agent-loop",
-          idempotencyKey: "image:task-clock-rollback:agent-loop",
-        },
-        60_000,
-        queueContext,
-      );
-      const claimed = await loadPendingSessionDelivery(id, queueContext);
-      if (claimed?.availableAt === undefined) {
-        throw new Error("Expected a durable claim deadline");
-      }
-      const deliver = vi.fn(async () => {});
-      const stop = startRuntime({ deliver, log: logger });
-
-      time.clock.setTime(claimed.availableAt);
-      await scheduleSessionDelivery(id, queueContext);
-      await releaseSessionDeliveryClaim(id, queueContext);
-      const released = await loadPendingSessionDelivery(id, queueContext);
-      if (released?.availableAt === undefined) {
-        throw new Error("Expected the worker to persist the released claim time");
-      }
-      expect(released.availableAt).toBeLessThan(claimed.availableAt);
-      time.clock.setTime(released.availableAt);
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await stop();
-
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
     });
   });
 
@@ -373,49 +341,10 @@ describe("session delivery queue runtime", () => {
     });
   });
 
-  it("preempts a released claim after the wall clock jumps past its lease", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const { id } = await enqueueClaimedSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-expired-clock-jump:agent-loop",
-          idempotencyKey: "image:task-expired-clock-jump:agent-loop",
-        },
-        60_000,
-        queueContext,
-      );
-      const entered = createDeferredCore();
-      const deliver = vi.fn(async () => {
-        entered.resolve();
-      });
-      const stop = startRuntime({ deliver, log: logger });
-
-      await scheduleSessionDelivery(id, queueContext);
-      time.clock.setTime(time.scheduler.now() + 24 * 60 * 60 * 1_000);
-      await releaseSessionDeliveryClaim(id, queueContext);
-      await scheduleSessionDelivery(id, queueContext);
-      expect(time.scheduler.nextWakeAtMs).toBeLessThanOrEqual(time.scheduler.now());
-      expect(time.clock.wakes.at(-1)?.delayMs).toBe(0);
-
-      await time.clock.advanceBy(0);
-      await entered.promise;
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
   it("coalesces duplicate schedules and joins the active drain on stop", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
       const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-in-flight:agent-loop",
-        },
+        agentTurn("image:task-in-flight:agent-loop"),
         queueContext,
       );
       const delivery = createDeferredCore();
@@ -464,166 +393,57 @@ describe("session delivery queue runtime", () => {
     });
   });
 
-  it("retries a failed agent turn after durable backoff", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated video ready",
-          messageId: "video:task-1:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(new Error("session locked"))
-        .mockResolvedValueOnce();
-      const drain = vi
-        .fn(drainPendingSessionDelivery)
-        .mockImplementationOnce((params) => drainAtPersistedAttemptTime(params, time));
-      const stop = startRuntime({ deliver, drain, log: logger });
+  it.each([false, true])(
+    "retries a failed agent turn after durable backoff (final lookup failure: %s)",
+    async (lookupFailure) => {
+      await withRuntime(async (startRuntime, queueContext, time) => {
+        const id = await enqueueSessionDelivery(agentTurn(), queueContext);
+        const deliver = vi
+          .fn<() => Promise<void>>()
+          .mockRejectedValueOnce(new Error("session locked"))
+          .mockResolvedValueOnce();
+        const drain = vi.fn(drainPendingSessionDelivery).mockImplementationOnce(async (params) => {
+          const pending = await drainAtPersistedAttemptTime(params, time);
+          if (lookupFailure) {
+            throw new Error("database busy");
+          }
+          return pending;
+        });
+        const stop = startRuntime({ deliver, drain, log: logger });
 
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 1 });
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
-        expect.objectContaining({ id, retryCount: 1, lastError: "session locked" }),
-      ]);
-
-      const attemptedAt = time.scheduler.now();
-      await time.advanceBy(4_999);
-      expect(time.scheduler.now() - attemptedAt).toBe(4_999);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      await time.advanceBy(1);
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(2);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("rearms a pending entry after a transient final-state lookup failure", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated video ready",
-          messageId: "video:task-reload:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(new Error("session locked"))
-        .mockResolvedValueOnce();
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockImplementationOnce(async (params) => {
-          await drainAtPersistedAttemptTime(params, time);
-          throw new Error("database busy");
-        })
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      const stop = startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await expect(drain.mock.results[0]?.value).rejects.toThrow("database busy");
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("runtime drain failed"));
-
-      const attemptedAt = time.scheduler.now();
-      await time.advanceBy(1_000);
-      await expect(drain.mock.results[1]?.value).resolves.toMatchObject({ id, retryCount: 1 });
-      await time.advanceBy(3_999);
-      expect(time.scheduler.now() - attemptedAt).toBe(4_999);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      await time.advanceBy(1);
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(2);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("backs off after a drain-level failure leaves retry metadata unchanged", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated video ready",
-          messageId: "video:task-drain:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {});
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockRejectedValueOnce(new Error("database scan failed"))
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      const stop = startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await expect(drain.mock.results[0]?.value).rejects.toThrow("database scan failed");
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("runtime drain failed"));
-      expect(deliver).not.toHaveBeenCalled();
-
-      await time.advanceBy(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await time.advanceBy(1);
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
-
-  it("backs off after a no-op drain leaves an immediately due row pending", async () => {
-    await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated video ready",
-          messageId: "video:task-owned-elsewhere:agent-loop",
-        },
-        queueContext,
-      );
-      const deliver = vi.fn(async () => {});
-      const drain = vi
-        .fn<typeof drainPendingSessionDelivery>()
-        .mockImplementationOnce((params) =>
-          loadPendingSessionDelivery(params.id, params.queueContext),
-        )
-        .mockImplementation((params) => drainPendingSessionDelivery(params));
-      const stop = startRuntime({ deliver, drain, log: logger });
-
-      await scheduleSessionDelivery(id, queueContext);
-      await time.advanceBy(0);
-      await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 0 });
-      expect(deliver).not.toHaveBeenCalled();
-
-      await time.advanceBy(999);
-      expect(deliver).not.toHaveBeenCalled();
-      await time.advanceBy(1);
-      await stop();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-    });
-  });
+        await scheduleSessionDelivery(id, queueContext);
+        await time.advanceBy(0);
+        if (lookupFailure) {
+          await expect(drain.mock.results[0]?.value).rejects.toThrow("database busy");
+          expect(logger.error).toHaveBeenCalledWith(
+            expect.stringContaining("runtime drain failed"),
+          );
+        } else {
+          await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 1 });
+        }
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([
+          expect.objectContaining({ id, retryCount: 1, lastError: "session locked" }),
+        ]);
+        const attemptedAt = time.scheduler.now();
+        if (lookupFailure) {
+          await time.advanceBy(1_000);
+          await expect(drain.mock.results[1]?.value).resolves.toMatchObject({ id, retryCount: 1 });
+        }
+        await time.advanceBy(lookupFailure ? 3_999 : 4_999);
+        expect(time.scheduler.now() - attemptedAt).toBe(4_999);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        await time.advanceBy(1);
+        await stop();
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+      });
+    },
+  );
 
   it("reschedules pending entries after the runtime owner restarts", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated music ready",
-          messageId: "music:task-1:agent-loop",
-        },
-        queueContext,
-      );
+      const id = await enqueueSessionDelivery(agentTurn("music:task-1:agent-loop"), queueContext);
       const oldDeliver = vi.fn(async () => {});
       const stopOldRuntime = startRuntime({ deliver: oldDeliver, log: logger });
       await scheduleSessionDelivery(id, queueContext);
@@ -662,24 +482,8 @@ describe("session delivery queue runtime", () => {
         newEntered.resolve();
         return newDelivery.promise;
       });
-      const oldId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "old owner delivery",
-          messageId: "old-owner-delivery",
-        },
-        queueContext,
-      );
-      const newId = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "new owner delivery",
-          messageId: "new-owner-delivery",
-        },
-        queueContext,
-      );
+      const oldId = await enqueueSessionDelivery(agentTurn("old-owner-delivery"), queueContext);
+      const newId = await enqueueSessionDelivery(agentTurn("new-owner-delivery"), queueContext);
       const stopOld = startRuntime({ deliver: oldDeliver, log: logger });
       let stopNew: ReturnType<typeof startSessionDeliveryRuntime> | undefined;
       const wakes: Promise<void>[] = [];
@@ -797,15 +601,7 @@ describe("session delivery queue runtime", () => {
 
   it("keeps the earliest retry after repeated startup pending-entry scan failures", async () => {
     await withRuntime(async (startRuntime, queueContext, time) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated music ready",
-          messageId: "music:task-scan:agent-loop",
-        },
-        queueContext,
-      );
+      await enqueueSessionDelivery(agentTurn("music:task-scan:agent-loop"), queueContext);
       const deliver = vi.fn(async () => {});
       const listPending = vi
         .fn<typeof loadPendingSessionDeliveries>()

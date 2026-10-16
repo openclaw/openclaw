@@ -97,30 +97,44 @@ async function fixture() {
 }
 
 describe("trusted Windows plan paths", () => {
-  it("accepts additive directory rights from native ACL facts without parsing a display summary", async () => {
-    const { directory } = await fixture();
-    facts.set(directory, { aces: [allow(0x000006)] });
-    await expect(resolveTrustedPlanDirectoryPath(directory)).resolves.toBe(directory);
-    expect(inspections.batch).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { scope: "parent", mask: 0x000002, accepted: false },
-    { scope: "parent", mask: 0x000004, accepted: false },
-    { scope: "ancestor", mask: 0x000006, accepted: true },
-    { scope: "parent", mask: 0x1200a9, accepted: true },
-    { scope: "parent", mask: 0x1f01ff, inheritOnly: true, accepted: true },
-    { scope: "file", mask: 0x000002, accepted: false },
-  ])("checks $scope rights $mask (accepted=$accepted)", async (row) => {
+  const writable = "path is writable by another user";
+  const unowned = "path is not owned by the current user or root";
+  it.each<
+    [
+      scope: "directory" | "parent" | "ancestor" | "file",
+      security: Partial<WindowsSecurity>,
+      error?: string,
+    ]
+  >([
+    ["directory", { aces: [allow(0x000006)] }],
+    ["parent", { aces: [allow(0x000002)] }, writable],
+    ["parent", { aces: [allow(0x000004)] }, writable],
+    ["ancestor", { aces: [allow(0x000006)] }],
+    ["parent", { aces: [allow(0x1200a9)] }],
+    ["parent", { aces: [allow(0x1f01ff, EVERYONE, true)] }],
+    ["file", { aces: [allow(0x000002)] }, writable],
+    ["directory", { daclPresent: false, aces: [] }, writable],
+    ["directory", { aces: [] }],
+    ["directory", { complete: false }, "permissions could not be verified"],
+    ["directory", { isLocal: false }, unowned],
+    ["directory", { ownerSid: EVERYONE }, unowned],
+    ["directory", { aces: [allow(0x00000200)] }],
+    ["directory", { aces: [allow(0x000004), allow(0)] }, writable],
+    ["directory", { aces: [{ ...allow(0x1f01ff), aceType: "deny" }] }],
+  ])("checks native %s descriptors: %j", async (scope, security, error) => {
     const { root, directory, executable } = await fixture();
-    const inspected = row.scope === "file" ? executable : row.scope === "parent" ? directory : root;
-    facts.set(inspected, { aces: [allow(row.mask, EVERYONE, row.inheritOnly)] });
-    const result = resolveTrustedExecutablePath(executable);
-    if (row.accepted) {
-      await expect(result).resolves.toBe(executable);
+    const inspected = scope === "file" ? executable : scope === "ancestor" ? root : directory;
+    facts.set(inspected, security);
+    const result =
+      scope === "directory"
+        ? resolveTrustedPlanDirectoryPath(directory)
+        : resolveTrustedExecutablePath(executable);
+    if (error) {
+      await expect(result).rejects.toThrow(`${error}: ${inspected}`);
     } else {
-      await expect(result).rejects.toThrow(`path is writable by another user: ${inspected}`);
+      await expect(result).resolves.toBe(scope === "directory" ? directory : executable);
     }
+    expect(inspections.batch).toHaveBeenCalledOnce();
   });
 
   it("limits TrustedInstaller ownership to ancestors and the system-executable resolver", async () => {
@@ -139,29 +153,6 @@ describe("trusted Windows plan paths", () => {
     await expect(resolveTrustedPlanDirectoryPath(directory)).rejects.toThrow(
       `path is not owned by the current user or root: ${directory}`,
     );
-  });
-
-  it.each([
-    { security: { daclPresent: false, aces: [] }, error: "path is writable by another user" },
-    { security: { aces: [] }, error: undefined },
-    { security: { complete: false }, error: "permissions could not be verified" },
-    { security: { isLocal: false }, error: "path is not owned by the current user or root" },
-    { security: { ownerSid: EVERYONE }, error: "path is not owned by the current user or root" },
-    { security: { aces: [allow(0x00000200)] }, error: undefined },
-    { security: { aces: [allow(0x000004), allow(0)] }, error: "path is writable by another user" },
-    {
-      security: { aces: [Object.assign(allow(0x1f01ff), { aceType: "deny" as const })] },
-      error: undefined,
-    },
-  ])("preserves descriptor policy for $security", async ({ security, error }) => {
-    const { directory } = await fixture();
-    facts.set(directory, security);
-    const result = resolveTrustedPlanDirectoryPath(directory);
-    if (error) {
-      await expect(result).rejects.toThrow(`${error}: ${directory}`);
-    } else {
-      await expect(result).resolves.toBe(directory);
-    }
   });
 
   it("reports a failed batch against the checked chain and retains its cause", async () => {

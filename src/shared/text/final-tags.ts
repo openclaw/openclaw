@@ -10,10 +10,6 @@ type FinalTagMatch = {
 
 const FINAL_TAG_CANDIDATE_RE = /<[^<>]*>/g;
 
-function isWhitespace(char: string): boolean {
-  return /\s/.test(char);
-}
-
 function parseAttributeList(text: string): boolean {
   const attribute = /[^\s=/"'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?/y;
   let index = skipWhitespace(text, 0);
@@ -29,10 +25,6 @@ function parseAttributeList(text: string): boolean {
 
 /** Parses a candidate `<final>` tag while rejecting lookalike names and malformed attributes. */
 function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | null {
-  if (!text.startsWith("<") || !text.endsWith(">")) {
-    return null;
-  }
-
   let body = text.slice(1, -1).trimStart();
   let isClose = false;
   if (body.startsWith("/")) {
@@ -44,7 +36,7 @@ function parseFinalTag(text: string): Omit<FinalTagMatch, "index" | "text"> | nu
     return null;
   }
   const boundary = body[5] ?? "";
-  if (boundary && !isWhitespace(boundary) && boundary !== "/") {
+  if (boundary && !/\s/.test(boundary) && boundary !== "/") {
     return null;
   }
 

@@ -1,4 +1,3 @@
-/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -14,8 +13,8 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
 } from "./service-types.js";
+import { isSystemdManagerUid } from "./systemd-bus-query.js";
 
-/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;
@@ -50,11 +49,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     isBunRuntime(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
-    (process.platform === "linux" &&
-      (managerUid === undefined ||
-        !Number.isInteger(managerUid) ||
-        managerUid < 0 ||
-        managerUid >= 0xffffffff)) ||
+    (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
     (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
     hasGatewayServiceLauncherOverride(command) ||
     resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||
@@ -77,6 +72,13 @@ export function resolveManagedServiceNodeRunner(
   return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
 }
 
+async function haveSameDirectoryIdentity(leftPath: string, rightPath: string): Promise<boolean> {
+  const [left, right] = await Promise.all(
+    [leftPath, rightPath].map((directory) => fs.stat(directory).catch(() => null)),
+  );
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
+}
+
 /** Local package evidence remains available when the Gateway cannot answer a probe. */
 export async function inspectGatewayServiceInstallationDrift(
   layout: Pick<GatewayServiceLayoutSummary, "packageRootReal" | "packageVersion"> | undefined,
@@ -87,16 +89,8 @@ export async function inspectGatewayServiceInstallationDrift(
   if (!serviceRoot || !activeRootReal || serviceRoot === activeRootReal) {
     return undefined;
   }
-  const [serviceStat, activeStat] = await Promise.all(
-    [serviceRoot, activeRootReal].map((root) => fs.stat(root).catch(() => undefined)),
-  );
   // A deployment can expose the same package through two bind mounts.
-  if (
-    serviceStat &&
-    activeStat &&
-    serviceStat.dev === activeStat.dev &&
-    serviceStat.ino === activeStat.ino
-  ) {
+  if (await haveSameDirectoryIdentity(serviceRoot, activeRootReal)) {
     return undefined;
   }
   const activeVersion = (await readPackageVersion(activeRootReal)) ?? undefined;
@@ -219,12 +213,8 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
   // Installed dist entrypoints can sit several levels below package root in
   // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
-    const packageJson = path.join(current, "package.json");
-    if (await pathExists(packageJson)) {
-      const name = await readPackageName(current);
-      if (name === "openclaw") {
-        return current;
-      }
+    if ((await readPackageName(current)) === "openclaw") {
+      return current;
     }
     const next = path.dirname(current);
     if (next === current) {
@@ -291,10 +281,7 @@ export async function gatewayServiceCommandOverlapsPhysicalInstallation(
   if (isPathInside(destination, serving) || isPathInside(serving, destination)) {
     return true;
   }
-  const [left, right] = await Promise.all(
-    [destination, serving].map((directory) => fs.stat(directory).catch(() => null)),
-  );
-  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
+  return haveSameDirectoryIdentity(destination, serving);
 }
 
 /** Compare an already inspected launcher with one installation; no service discovery or effects. */

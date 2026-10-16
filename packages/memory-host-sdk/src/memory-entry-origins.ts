@@ -3,7 +3,9 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "./host/openclaw-runtime-kysely.js";
+import { createSqliteSchemaEnsurer } from "./host/openclaw-runtime-sqlite.js";
 
 export type MemoryEntryOrigin = {
   entryKey: string;
@@ -25,8 +27,8 @@ type MemoryEntryOriginRow = {
 
 type MemoryOriginDatabase = { memory_entry_origins: MemoryEntryOriginRow };
 
-export function ensureMemoryEntryOriginsSchema(db: DatabaseSync): void {
-  db.exec(`CREATE TABLE IF NOT EXISTS memory_entry_origins (
+export const ensureMemoryEntryOriginsSchema = createSqliteSchemaEnsurer(
+  () => `CREATE TABLE IF NOT EXISTS memory_entry_origins (
     entry_key TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -34,8 +36,9 @@ export function ensureMemoryEntryOriginsSchema(db: DatabaseSync): void {
     origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (entry_key, agent_id, session_id)
-  ) STRICT`);
-}
+  ) STRICT`,
+  { tables: ["memory_entry_origins"] },
+);
 
 function readOrigin(row: MemoryEntryOriginRow): MemoryEntryOrigin {
   return {
@@ -58,10 +61,10 @@ export function readMemoryEntryOriginsInDatabase(
     .selectAll()
     .where("agent_id", "=", params.agentId);
   if (params.sessionIds) {
-    query = query.where("session_id", "in", params.sessionIds);
+    query = query.where("session_id", "in", sqliteStringSet(params.sessionIds));
   }
   if (params.entryKeys) {
-    query = query.where("entry_key", "in", params.entryKeys);
+    query = query.where("entry_key", "in", sqliteStringSet(params.entryKeys));
   }
   return executeSqliteQuerySync(
     db,

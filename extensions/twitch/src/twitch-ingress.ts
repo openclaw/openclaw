@@ -6,7 +6,7 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchChatMessage } from "./types.js";
@@ -21,12 +21,6 @@ type TwitchIngressPayload = {
 };
 
 type TwitchIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "onAdoptionFinalizing">;
-
-type TwitchIngress = {
-  accept: (message: TwitchChatMessage) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
 
 const TwitchIngressPermanentError = createChannelIngressError("TwitchIngressPermanentError");
 
@@ -74,15 +68,13 @@ function normalizeClaimedTwitchMessage(event: unknown, claimedId: string): Twitc
 }
 
 function isTwitchAuthenticationFailure(error: unknown): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 8 && current && typeof current === "object"; depth += 1) {
+  for (const candidate of collectErrorGraphCandidates(error, (current) => [current.cause])) {
     if (
-      current instanceof HttpStatusCodeError &&
-      (current.statusCode === 401 || current.statusCode === 403)
+      candidate instanceof HttpStatusCodeError &&
+      (candidate.statusCode === 401 || candidate.statusCode === 403)
     ) {
       return true;
     }
-    current = (current as { cause?: unknown }).cause;
   }
   return false;
 }
@@ -97,7 +89,7 @@ export function createTwitchIngress(options: {
   deliver: (message: TwitchChatMessage, lifecycle: TwitchIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<TwitchIngressPayload>;
   pollIntervalMs?: number;
-}): TwitchIngress {
+}) {
   const queue =
     options.queue ??
     getTwitchRuntime().state.openChannelIngressQueue<TwitchIngressPayload>({
@@ -181,7 +173,7 @@ export function createTwitchIngress(options: {
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: (message) => {
+    accept: (message: TwitchChatMessage) => {
       if (stopped) {
         return Promise.reject(stoppedError());
       }

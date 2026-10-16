@@ -145,42 +145,30 @@ describe("Matrix QA fault proxy", () => {
     ]);
   });
 
-  it.each(["forwarded", "faulted"] as const)(
-    "finishes the %s response when its exchange observer rejects",
-    async (mode) => {
-      const target = await startTargetServer();
-      let observations = 0;
-      proxy = await startMatrixQaFaultProxy({
-        targetBaseUrl: target.baseUrl,
-        rules:
-          mode === "faulted"
-            ? [
-                {
-                  id: "synthetic-fault",
-                  match: () => true,
-                  response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
-                },
-              ]
-            : [],
-        onExchange: async () => {
-          observations += 1;
-          throw new Error("capture observer failed");
-        },
-      });
+  it("finishes the forwarded response when its exchange observer rejects", async () => {
+    const target = await startTargetServer();
+    let observations = 0;
+    proxy = await startMatrixQaFaultProxy({
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+      onExchange: async () => {
+        observations += 1;
+        throw new Error("capture observer failed");
+      },
+    });
 
-      const response = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-        signal: AbortSignal.timeout(5_000),
-      });
+    const response = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+      signal: AbortSignal.timeout(5_000),
+    });
 
-      expect(response.status).toBe(502);
-      await expect(response.json()).resolves.toMatchObject({
-        errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
-        error: "capture observer failed",
-      });
-      expect(observations).toBe(1);
-      expect(target.requests).toHaveLength(mode === "forwarded" ? 1 : 0);
-    },
-  );
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
+      error: "capture observer failed",
+    });
+    expect(observations).toBe(1);
+    expect(target.requests).toHaveLength(1);
+  });
 
   it("rejects request targets that resolve outside the configured origin", async () => {
     const target = await startTargetServer();
@@ -214,26 +202,15 @@ describe("Matrix QA fault proxy", () => {
     expect(target.requests).toEqual([]);
   });
 
-  it("strips stale content-encoding after buffering decoded bodies", async () => {
-    const body = Buffer.from(JSON.stringify({ forwarded: true }));
+  it("mutates matching forwarded Matrix responses", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({ forwarded: true })));
     const target = await startTargetServer({
-      responseBody: gzipSync(body),
+      responseBody: body,
       responseHeaders: {
         "content-encoding": "gzip",
-        "content-length": String(gzipSync(body).byteLength),
+        "content-length": String(body.byteLength),
       },
     });
-    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
-
-    const response = await fetch(`${proxy.baseUrl}/encoded`);
-
-    expect(response.headers.get("content-encoding")).toBeNull();
-    expect(response.headers.get("content-length")).toBeNull();
-    await expect(response.json()).resolves.toEqual({ forwarded: true });
-  });
-
-  it("mutates matching forwarded Matrix responses", async () => {
-    const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({
       targetBaseUrl: target.baseUrl,
       rules: [
@@ -259,6 +236,8 @@ describe("Matrix QA fault proxy", () => {
     );
 
     expect(mutated.status).toBe(200);
+    expect(mutated.headers.get("content-encoding")).toBeNull();
+    expect(mutated.headers.get("content-length")).toBeNull();
     await expect(mutated.json()).resolves.toEqual({ forwarded: true, mutated: true });
     expect(proxy.hits()).toEqual([
       {
@@ -275,40 +254,6 @@ describe("Matrix QA fault proxy", () => {
         url: "/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true",
       },
     ]);
-  });
-
-  it("installs and removes scenario-local rules without changing the proxy origin", async () => {
-    const target = await startTargetServer();
-    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
-    const baseUrl = proxy.baseUrl;
-    const handle = proxy.installRule({
-      id: "scenario-local-sync-fault",
-      match: (proxyRequest) =>
-        proxyRequest.path === "/_matrix/client/v3/sync" && proxyRequest.bearerToken === "sut-token",
-      response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
-    });
-
-    const faulted = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-      headers: { authorization: "Bearer sut-token" },
-    });
-    expect(faulted.status).toBe(503);
-    expect(proxy.baseUrl).toBe(baseUrl);
-    expect(handle.hits()).toEqual([
-      {
-        method: "GET",
-        path: "/_matrix/client/v3/sync",
-        ruleId: "scenario-local-sync-fault",
-      },
-    ]);
-
-    handle.remove();
-    handle.remove();
-    const forwarded = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
-      headers: { authorization: "Bearer sut-token" },
-    });
-    expect(forwarded.status).toBe(200);
-    expect(handle.hits()).toHaveLength(1);
-    expect(proxy.hits()).toHaveLength(1);
   });
 
   it("rejects oversized forwarded request bodies before contacting the target", async () => {

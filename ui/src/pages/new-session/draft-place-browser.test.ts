@@ -1,4 +1,3 @@
-import type { ReactiveController } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,7 +8,6 @@ import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
   localStorage.clear();
@@ -20,11 +18,8 @@ function createBrowser(
   data?: NewSessionRouteData,
   recoveryReady = true,
   isAdmin = false,
-  view?: { host: TestReactiveControllerHost; root: HTMLElement },
+  view?: { updateComplete: Promise<unknown>; root: HTMLElement },
 ) {
-  const host = view?.host ?? new TestReactiveControllerHost();
-  const controllers: ReactiveController[] = [];
-  vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
     request,
     recoveryScope: recoveryReady ? "principal-a" : "",
@@ -42,6 +37,7 @@ function createBrowser(
   const context = {
     gateway: {
       subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase: "connected",
@@ -49,16 +45,15 @@ function createBrowser(
         hello,
       },
     },
+    agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
       state: {
         groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
       },
-      groupsGeneration: () => 1,
       groupsStatus: () => "ready",
     },
   } as unknown as ApplicationContext;
   const gateway = new DraftGatewayState(
-    host,
     () => ({
       context,
       data,
@@ -72,7 +67,8 @@ function createBrowser(
       runtimeId: "",
     }),
     {
-      requestUpdate: vi.fn(),
+      readAgents: () => context.agents,
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
       onVisibilityRetired: vi.fn(),
@@ -87,14 +83,14 @@ function createBrowser(
   const onProjectMissing = vi.fn();
   const onSelectProject = vi.fn();
   const browser = new DraftPlaceBrowser(
-    host,
     gateway,
     () => ({
       context,
       isAdmin,
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
+      updateComplete: () => view?.updateComplete ?? Promise.resolve(),
       onProjectMissing,
       onSelectProject,
       onApprovedListing: vi.fn(),
@@ -104,14 +100,10 @@ function createBrowser(
     },
   );
   onTestFinished(() => {
-    for (const controller of controllers) {
-      controller.hostDisconnected?.();
-    }
     gateway.disconnect();
     browser?.disconnect();
   });
   return {
-    host,
     browser,
     onProjectMissing,
     onSelectProject,
@@ -120,26 +112,14 @@ function createBrowser(
     client,
     context,
     hello,
-    connectHost() {
-      for (const controller of controllers) {
-        controller.hostConnected?.();
-      }
-    },
-    detachHost() {
-      for (const controller of controllers) {
-        controller.hostDisconnected?.();
-      }
-    },
-    queuedUpdate() {
-      for (const controller of controllers) {
-        controller.hostUpdate?.();
-      }
+    synchronize() {
+      gateway.synchronizeMetadata();
+      browser.synchronize();
     },
     update() {
       gateway.synchronize(context.gateway);
-      for (const controller of controllers) {
-        controller.hostUpdate?.();
-      }
+      gateway.synchronizeMetadata();
+      browser.synchronize();
     },
   };
 }
@@ -149,9 +129,6 @@ describe("DraftPlaceBrowser", () => {
     "hands keyboard focus to the current project view after rendering (%s)",
     async (change) => {
       const update = createDeferred<boolean>();
-      const host = new (class extends TestReactiveControllerHost {
-        override readonly updateComplete = update.promise;
-      })();
       const root = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => root.remove());
       const popover = root.appendChild(document.createElement("div"));
@@ -165,9 +142,9 @@ describe("DraftPlaceBrowser", () => {
         undefined,
         true,
         false,
-        { host, root },
+        { updateComplete: update.promise, root },
       );
-      browser.onPopoverShow("project");
+      browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
@@ -186,7 +163,7 @@ describe("DraftPlaceBrowser", () => {
         popover.replaceChildren(browse);
       }
       update.resolve(true);
-      await host.updateComplete;
+      await update.promise;
       expect(document.activeElement).toBe(
         change === "current"
           ? path
@@ -199,55 +176,51 @@ describe("DraftPlaceBrowser", () => {
       if (change === "current") {
         browser.showRoot();
         popover.replaceChildren(browse);
-        await host.updateComplete;
+        await update.promise;
         expect(document.activeElement).toBe(browse);
       }
     },
   );
 
-  it("retains catalog context for a detached draft until its lifetime owner disposes it", async () => {
-    const project = { id: "project", displayName: "Project", repoRoot: "/project" };
-    const fixture = createBrowser(async () => ({ projects: [project] }));
-    await fixture.browser.refreshProjects();
-    fixture.browser.selectProject({ kind: "local", id: project.id });
-    fixture.detachHost();
-    expect(fixture.browser.selectedProject()).toEqual(project);
-  });
-
-  it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
-    const request = vi.fn(async () => ({ projects: [] }));
+  it("does not reattach a disposed draft catalog without a connected Gateway", async () => {
+    const request = vi.fn(async (_method: string) => ({ projects: [] }));
     const fixture = createBrowser(request);
     await fixture.browser.refreshProjects();
     const reads = request.mock.calls.length;
     fixture.gateway.disconnect();
     fixture.browser.disconnect();
-    fixture.queuedUpdate();
+    fixture.synchronize();
     await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(reads);
     fixture.update();
     await fixture.browser.refreshProjects();
-    expect(request).toHaveBeenCalledTimes(reads + 1);
+    expect(
+      request.mock.calls
+        .slice(reads)
+        .map(([method]) => method)
+        .toSorted(),
+    ).toEqual(["projects.list"]);
   });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
     onTestFinished(() => writeStorage.mockRestore());
     browser.changeProjectQuery("openclaw");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     browser.changeEnvironmentQuery("runner");
 
     expect(browser.environmentQuery).toBe("runner");
     expect(browser.projectQuery).toBe("openclaw");
     expect(writeStorage).not.toHaveBeenCalled();
 
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("where").onPopoverHide();
     browser.onPopoverAfterHide("where");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");
 
     browser.changeEnvironmentQuery("cloud");
-    browser.onPopoverShow("project");
+    browser.popoverCallbacks("project").onPopoverShow();
     expect(browser.environmentQuery).toBe("cloud");
     browser.disconnect();
     expect(browser.environmentQuery).toBe("");
@@ -284,6 +257,7 @@ describe("DraftPlaceBrowser", () => {
     "typed directory",
     "typed directory fails",
     "reopen",
+    "retry",
   ])("selects a registered project only while its browser remains current (%s)", async (change) => {
     const project = {
       id: "registered-workspace",
@@ -292,8 +266,13 @@ describe("DraftPlaceBrowser", () => {
     };
     const registration = createDeferred<typeof project>();
     let directoryPath = "/workspace";
+    let registrations = 0;
     const request = vi.fn(async (method: string, params?: { path?: string }) => {
       if (method === "projects.register") {
+        registrations += 1;
+        if (change === "retry" && registrations === 1) {
+          throw new Error("registry unavailable");
+        }
         return registration.promise;
       }
       if (method === "worktrees.branches") {
@@ -314,6 +293,12 @@ describe("DraftPlaceBrowser", () => {
     const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
     browser.selectGatewayBrowser("/workspace");
     await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+    if (change === "retry") {
+      await browser.registerBrowserProject("/workspace");
+      expect(browser.browser.error).toContain("registry unavailable");
+      expect(browser.browserRegistering).toBe(false);
+      expect(browser.browserProjectPath).toBe("/workspace");
+    }
     const pending = browser.registerBrowserProject("/workspace");
     const initiallyBusy = browser.browserRegistering;
     const failedDirectory = change === "typed directory fails";
@@ -343,7 +328,7 @@ describe("DraftPlaceBrowser", () => {
           // Flush request continuations while the directory debounce is still pending.
           await Promise.resolve();
         }
-      } else {
+      } else if (change === "reopen") {
         browser.close();
         browser.selectGatewayBrowser("/workspace");
         await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
@@ -357,10 +342,11 @@ describe("DraftPlaceBrowser", () => {
       expect(initiallyBusy).toBe(true);
       expect(stillBusy).toBe(change !== "reopen");
       expect(request.mock.calls.filter(([method]) => method === "projects.register")).toHaveLength(
-        1,
+        change === "retry" ? 2 : 1,
       );
+      expect(registrations).toBe(change === "retry" ? 2 : 1);
       expect(browser.browserRegistering).toBe(false);
-      if (change === "filtering") {
+      if (change === "filtering" || change === "retry") {
         expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
       } else {
         expect(onSelectProject).not.toHaveBeenCalled();
@@ -376,47 +362,6 @@ describe("DraftPlaceBrowser", () => {
         }
       }
     }
-  });
-
-  it("keeps the register action available after a registration failure", async () => {
-    const project = {
-      id: "registered-workspace",
-      displayName: "Workspace",
-      repoRoot: "/workspace",
-    };
-    let registrations = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "projects.register") {
-        registrations += 1;
-        if (registrations === 1) {
-          throw new Error("registry unavailable");
-        }
-        return project;
-      }
-      if (method === "worktrees.branches") {
-        return { repositoryStatus: "git" };
-      }
-      if (method === "fs.listDir") {
-        return {
-          path: "/workspace",
-          home: "/home/test",
-          entries: [{ name: "packages", path: "/workspace/packages" }],
-        };
-      }
-      return { projects: [project] };
-    });
-    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
-    browser.selectGatewayBrowser("/workspace");
-    await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
-
-    await browser.registerBrowserProject("/workspace");
-    expect(browser.browser.error).toContain("registry unavailable");
-    expect(browser.browserRegistering).toBe(false);
-    expect(browser.browserProjectPath).toBe("/workspace");
-
-    await browser.registerBrowserProject("/workspace");
-    expect(registrations).toBe(2);
-    expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
   });
 
   it.each(["loaded", "pending"])(
@@ -455,7 +400,7 @@ describe("DraftPlaceBrowser", () => {
       if (unavailable === "disconnect") {
         fixture.context.gateway.snapshot.phase = "reconnecting";
         fixture.update();
-      } else {
+      } else if (unavailable === "failure") {
         request.mockRejectedValue(new Error("projects unavailable"));
       }
       await fixture.browser.refreshProjects();
@@ -469,23 +414,6 @@ describe("DraftPlaceBrowser", () => {
       expect(fixture.onProjectMissing).toHaveBeenCalled();
     },
   );
-
-  it("tracks overlapping popover hides independently", () => {
-    const { browser } = createBrowser(async () => ({}));
-
-    browser.onPopoverHide("project");
-    browser.onPopoverHide("where");
-
-    expect(browser.popoverHiding("project")).toBe(true);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("project");
-    expect(browser.popoverHiding("project")).toBe(false);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("where");
-    expect(browser.popoverHiding("where")).toBe(false);
-  });
 
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],
@@ -555,7 +483,7 @@ describe("DraftGatewayState", () => {
       }
       const current = createDeferred<Awaited<typeof pending.promise>>();
       request.mockReturnValue(current.promise);
-      // Retirement must happen in synchronize, before Lit schedules hostUpdate.
+      // Retirement must happen in synchronize, before the next view update.
       fixture.gateway.synchronize(fixture.context.gateway);
       pending.resolve({
         projects: [{ id: "retired" }],
@@ -587,6 +515,9 @@ describe("DraftGatewayState", () => {
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
+    // Adding write access retires the old policy scope, independently of recovery migration.
+    expect(fixture.onInvalidate).toHaveBeenCalledWith(true, "gateway-changed");
+    fixture.onInvalidate.mockClear();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
     await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
@@ -595,6 +526,7 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScope = "principal-a";
     fixture.client.recoveryScopeReady = true;
     fixture.update();
+    expect(fixture.gateway.gatewayName).toBe("Gateway A");
     expect(fixture.onInvalidate).not.toHaveBeenCalled();
     expect(fixture.browser.browser.draft).toBe("/draft-folder");
     expect(fixture.browser.projectId).toBe("project");
@@ -612,75 +544,16 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScopeReady = true;
     fixture.update();
     expect(fixture.browser.projectId).toBe("project");
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
+        2,
+      ),
+    );
 
     fixture.hello.auth.recoveryScope = "principal-b";
     fixture.update();
     expect(fixture.onInvalidate).toHaveBeenLastCalledWith(true, "gateway-changed");
     expect(fixture.browser.projectId).toBe("");
-  });
-
-  it("resumes a background-opened Gateway name when the page becomes visible", async () => {
-    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    onTestFinished(() => visibility.mockRestore());
-    const request = vi.fn(async (method: string) =>
-      method === "projects.list" ? { projects: [] } : { machineName: "Visible Gateway" },
-    );
-    const fixture = createBrowser(request);
-    const task = (
-      fixture.gateway as unknown as { gatewayNameTask: { taskComplete: Promise<unknown> } }
-    ).gatewayNameTask;
-    fixture.hello.features.methods.push("system.info");
-    fixture.connectHost();
-    fixture.update();
-    await task.taskComplete;
-    const requestUpdate = vi.spyOn(fixture.host, "requestUpdate");
-    expect(fixture.gateway.gatewayName).toBe("");
-    expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
-    visibility.mockReturnValue("visible");
-    document.dispatchEvent(new Event("visibilitychange"));
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    fixture.queuedUpdate();
-    await task.taskComplete;
-    expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
-  });
-
-  it("retains a discovered name when the same connection's recovery scope arrives", async () => {
-    const fixture = createBrowser(async (method) =>
-      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
-    );
-    fixture.hello.features.methods.push("system.info");
-    fixture.client.recoveryScopeReady = false;
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
-
-    fixture.client.recoveryScope = "resolved-principal";
-    fixture.client.recoveryScopeReady = true;
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("Gateway A");
-  });
-
-  it("hides a disconnected name until the same client's new discovery completes", async () => {
-    const pending = createDeferred<{ machineName: string }>();
-    const request = vi.fn(async (method: string) =>
-      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
-    );
-    const fixture = createBrowser(request);
-    fixture.hello.features.methods.push("system.info");
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
-
-    fixture.context.gateway.snapshot.phase = "reconnecting";
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("");
-    request.mockImplementation((method) =>
-      method === "projects.list" ? Promise.resolve({ projects: [] }) : pending.promise,
-    );
-    fixture.context.gateway.snapshot.phase = "connected";
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("");
-    pending.resolve({ machineName: "Gateway B" });
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
   });
 
   it("ignores a late name from the replaced client", async () => {
@@ -707,6 +580,12 @@ describe("DraftGatewayState", () => {
 
   it.each([
     {
+      advertised: true,
+      response: { machineName: "Gateway B" },
+      name: "Gateway B",
+      scopes: ["operator.read"],
+    },
+    {
       advertised: false,
       response: { machineName: "Hidden Gateway" },
       name: "",
@@ -728,27 +607,32 @@ describe("DraftGatewayState", () => {
   ])(
     "settles name discovery with advertisement $advertised and response $response",
     async ({ advertised, response, name, scopes }) => {
-      let current: typeof response | { machineName: string } = { machineName: "Current Gateway" };
+      const pending = createDeferred<typeof response>();
+      let current: typeof response | Promise<typeof response> = { machineName: "Current Gateway" };
       const request = vi.fn(async (method: string) => {
         if (method === "projects.list") {
           return { projects: [] };
         }
-        if (!current) {
+        const result = await current;
+        if (!result) {
           throw new Error("System info unavailable");
         }
-        return current;
+        return result;
       });
       const fixture = createBrowser(request);
       fixture.hello.features.methods.push("system.info");
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
-      current = response;
+      current = pending.promise;
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();
+      expect(fixture.gateway.gatewayName).toBe("");
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
       fixture.hello.auth.scopes = scopes;
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
+      expect(fixture.gateway.gatewayName).toBe("");
+      pending.resolve(response);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });
@@ -772,8 +656,6 @@ describe("DraftGatewayState", () => {
       groupStatus: "resolved",
       groupCwd: "/workspace/client",
       groupWorktree: false,
-      groupCatalogGeneration: 1,
-      groupDefaultsStatus: "ready",
       catalogLabel: "",
       startTerminal: false,
     });

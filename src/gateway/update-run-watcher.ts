@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import type { UpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
+import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   getUpdateRunAsync,
@@ -9,11 +10,12 @@ import {
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
+import { reconcileOpenClawStateSchemaPublicationAsync } from "../state/openclaw-state-schema-publication.async.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
 const UPDATE_RUN_POLL_MS = 2_000;
+const TERMINAL_SENTINEL_WAIT_MS = 30 * 60_000;
 let wakeCurrentWatcher: (() => void) | undefined;
 
 /** Wake the Gateway-owned watcher when this process admits an update. */
@@ -31,33 +33,37 @@ export function startUpdateRunWatcher(params: {
   const scheduler = params.lifecycle.scheduler.scope();
   let timer: GatewayScheduledJob | undefined;
   let publicationTimer: GatewayScheduledJob | undefined;
-  let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
+  let watched:
+    | { runId: string; revision?: number; phase?: UpdateRunPhase; sentinelDeadline?: number }
+    | undefined;
   let notices = Promise.resolve();
   let reconciled: UpdateRunRecord[] = [];
-  let polling: { runId?: string; terminalRevision?: number } | undefined;
+  let polling = false;
   let pollAgain = false;
   let scanning: Promise<void> | undefined;
   let scanRequested = false;
   let reconcileAllRequested = false;
 
-  const schedulePublication = () => {
+  const schedulePublication = async () => {
     publicationTimer?.cancel();
     publicationTimer = undefined;
     if (work.isClosing) {
       return;
     }
     try {
-      const blocker = reconcileOpenClawStateSchemaPublication();
-      if (blocker?.publishAfterMs != null) {
+      const blocker = await reconcileOpenClawStateSchemaPublicationAsync({ signal: work.signal });
+      if (!work.isClosing && blocker?.publishAfterMs != null) {
         // Deadline belongs to the ledger row, so process restarts never restart the grace.
         publicationTimer = scheduler.schedule({
           id: "update.schema-publication",
           atMs: blocker.publishAfterMs,
-          run: schedulePublication,
+          run: () => work.track(schedulePublication),
         });
       }
     } catch (error) {
-      params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      if (!work.isClosing) {
+        params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      }
     }
   };
 
@@ -76,28 +82,61 @@ export function startUpdateRunWatcher(params: {
         return;
       }
       reconciled.push(...abandoned.filter((run) => run.runId !== watched?.runId));
-      schedulePublication();
-      const observed = watched
-        ? await getUpdateRunAsync(watched.runId)
-        : (reconciled.shift() ?? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]);
+      await schedulePublication();
       if (work.isClosing) {
         return;
       }
-      if (!observed) {
+      const nextActive = watched?.sentinelDeadline
+        ? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]
+        : undefined;
+      const run =
+        nextActive ??
+        (watched
+          ? await getUpdateRunAsync(watched.runId)
+          : (reconciled.shift() ?? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]));
+      if (work.isClosing) {
+        return;
+      }
+      if (!run) {
         watched = undefined;
         return;
       }
-      // A settlement may arrive while the active-run lookup is awaiting its snapshot.
-      const run = reconciled.reduce(
-        (latest, entry) =>
-          entry.runId === latest.runId && entry.updatedAtMs > latest.updatedAtMs ? entry : latest,
-        observed,
-      );
       reconciled = reconciled.filter((entry) => entry.runId !== run.runId);
-      watched ??= { runId: run.runId };
+      if (watched?.runId !== run.runId) {
+        watched = { runId: run.runId };
+      }
       const terminal = run.status !== "running";
       params.lifecycle.campaign?.reconcileRun(run);
+      let awaitingSentinel = false;
       if (watched.revision !== run.updatedAtMs || terminal) {
+        const { refreshLatestUpdateRestartSentinel, getLatestUpdateRestartSentinel } =
+          await import("./server-update-sentinel.js");
+        let sentinelFailed = false;
+        const sentinel = await refreshLatestUpdateRestartSentinel(
+          undefined,
+          () => !work.isClosing && params.lifecycle.isCurrent(),
+        ).catch((error: unknown) => {
+          sentinelFailed = true;
+          params.log.warn(`update sentinel refresh failed: ${formatErrorMessage(error)}`);
+          return getLatestUpdateRestartSentinel();
+        });
+        if (work.isClosing || !params.lifecycle.isCurrent()) {
+          return;
+        }
+        // Older detached updaters may commit terminal history before their notification.
+        // Keep that handoff with this watcher, never with reconnecting status clients.
+        if (
+          terminal &&
+          (sentinelFailed ||
+            (sentinel?.stats?.runId === run.runId &&
+              isPendingControlPlaneUpdateRestartSentinel(sentinel)))
+        ) {
+          watched.sentinelDeadline ??= scheduler.now() + TERMINAL_SENTINEL_WAIT_MS;
+          awaitingSentinel = scheduler.now() < watched.sentinelDeadline;
+          if (!awaitingSentinel) {
+            params.log.warn(`update run ${run.runId} terminal notification remained pending`);
+          }
+        }
         params.broadcast(GATEWAY_EVENT_UPDATE_RUN_CHANGED, {
           runId: run.runId,
           phase: run.phase,
@@ -105,9 +144,6 @@ export function startUpdateRunWatcher(params: {
           updatedAtMs: run.updatedAtMs,
         });
         watched.revision = run.updatedAtMs;
-        if (terminal && polling?.runId === run.runId) {
-          polling.terminalRevision = Math.max(polling.terminalRevision ?? 0, run.updatedAtMs);
-        }
       }
       if (watched.phase !== run.phase) {
         watched.phase = run.phase;
@@ -134,7 +170,7 @@ export function startUpdateRunWatcher(params: {
           );
         }
       }
-      if (terminal) {
+      if (terminal && !awaitingSentinel) {
         watched = undefined;
         void scan(reconcileAll);
         return;
@@ -189,26 +225,16 @@ export function startUpdateRunWatcher(params: {
       pollAgain = true;
       return;
     }
-    polling = {};
-    const cycle = polling;
+    polling = true;
     void work
       .track(async () => {
-        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal }, (runId) => {
-          cycle.runId = runId;
-        });
+        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });
         if (work.isClosing) {
           return;
         }
-        // A timer scan can publish this cycle's commit before its worker reply arrives.
-        reconciled.push(
-          ...settled.filter(
-            (run) =>
-              run.runId !== watched?.runId &&
-              (run.runId !== cycle.runId ||
-                cycle.terminalRevision === undefined ||
-                run.updatedAtMs > cycle.terminalRevision),
-          ),
-        );
+        // A delayed worker reply may repeat a terminal broadcast; notice delivery
+        // deduplicates at its durable effect boundary.
+        reconciled.push(...settled.filter((run) => run.runId !== watched?.runId));
         // The first history read may still be pending when verification settles.
         await scan();
       })
@@ -219,7 +245,7 @@ export function startUpdateRunWatcher(params: {
         }
       })
       .finally(() => {
-        polling = undefined;
+        polling = false;
         if (pollAgain) {
           pollAgain = false;
           if (!timer) {

@@ -57,7 +57,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   );
   const config: OpenClawConfig = {
     agents: {
-      list: [{ id, default: true, workspace: state.workspaceDir }],
+      entries: { [id]: { workspace: state.workspaceDir } },
       defaults: { model: `${id}/local` },
     },
     models: {
@@ -160,7 +160,7 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
           assert.ok((await instance.dispose()).errors.some((error) => hasCause(error, failure)));
           assert.throws(() => service.id, /retir|reload|disabled/);
           const healthy: OpenClawConfig = {
-            agents: { list: [{ id: "healthy", default: true, workspace: state.workspaceDir }] },
+            agents: { entries: { healthy: { workspace: state.workspaceDir } } },
             plugins: { enabled: false, slots: { memory: "none" } },
           };
           await refreshPreparedModelRuntimeSnapshots(healthy, {

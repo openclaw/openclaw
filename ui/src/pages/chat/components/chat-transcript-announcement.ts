@@ -2,11 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { chatItemGroups, type coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import { isInterSessionGroup } from "../chat-turn-boundary.ts";
+import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
 registerChatMessageMetadataEnglish();
@@ -40,23 +39,6 @@ function assistantMessageAnnouncementText(message: unknown): string | null {
   const text = extractTextCached(message)?.trim();
   const failureText = assistantMessageAttachmentFailureText(message);
   return [failureText, text].filter(Boolean).join(" ") || null;
-}
-
-function assistantGroupAnnouncementSource(
-  group: MessageGroup,
-  messageText: (message: unknown) => string | null = assistantMessageAnnouncementText,
-): { key: string; text: string } | null {
-  if (group.role.toLowerCase() !== "assistant") {
-    return null;
-  }
-  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-    const source = group.messages[index];
-    const text = messageText(source?.message);
-    if (text) {
-      return { key: source?.key ?? group.key, text };
-    }
-  }
-  return null;
 }
 
 export function latestTranscriptAnnouncement(
@@ -98,32 +80,36 @@ export function latestTranscriptAnnouncement(
         continue;
       }
       for (const group of chatItemGroups(part).toReversed()) {
-        if (isInterSessionGroup(group)) {
+        if (isSessionActivityGroup(group)) {
           const count = group.messages.reduce(
             (total, entry) => total + (entry.duplicateCount ?? 1),
             0,
           );
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
-          const label = source
-            ? t(
-                count === 1
-                  ? "chat.messages.interSessionUpdateFrom"
-                  : "chat.messages.interSessionUpdatesFrom",
-                { count: String(count) },
-              ) +
-              " " +
-              source
-            : t(
-                count === 1
-                  ? "chat.messages.interSessionUpdate"
-                  : "chat.messages.interSessionUpdates",
-                { count: String(count) },
-              );
-          return announcement(group.messages.at(-1)?.key ?? group.key, label);
+          const label = t(
+            source
+              ? count === 1
+                ? "chat.messages.interSessionUpdateFrom"
+                : "chat.messages.interSessionUpdatesFrom"
+              : count === 1
+                ? "chat.messages.interSessionUpdate"
+                : "chat.messages.interSessionUpdates",
+            { count: String(count) },
+          );
+          return announcement(
+            group.messages.at(-1)?.key ?? group.key,
+            source ? `${label} ${source}` : label,
+          );
         }
-        const source = assistantGroupAnnouncementSource(group, messageText);
-        if (source) {
-          return announcement(source.key, source.text);
+        if (group.role.toLowerCase() !== "assistant") {
+          continue;
+        }
+        for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+          const source = group.messages[index];
+          const text = messageText(source?.message);
+          if (text) {
+            return announcement(source?.key ?? group.key, text);
+          }
         }
       }
     }

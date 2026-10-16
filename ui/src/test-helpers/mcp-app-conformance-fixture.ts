@@ -268,6 +268,8 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
+import { applicationContext } from "/src/app/context.ts";
+window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
 import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
@@ -280,7 +282,7 @@ window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");
   const view = window.mcpConformanceView;
   if (!mount || !view) return;
-  const frame = view.shadowRoot?.querySelector("iframe");
+  const frame = view.querySelector("iframe");
   await view.teardown();
   if (frame?.isConnected) throw new Error("MCP App frame remained mounted");
   console.info("mcp-conformance-frame-detached");
@@ -339,10 +341,11 @@ window.mcpConformanceUnmount = async () => {
         }
       };
       setTheme("dark");
-      Reflect.set(view, "context", {
+      const context = {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
+          subscribe: () => () => {},
         },
         theme: {
           subscribe(listener: () => void) {
@@ -350,6 +353,15 @@ window.mcpConformanceUnmount = async () => {
             return () => themeListeners.delete(listener);
           },
         },
+      };
+      document.getElementById("mount")?.addEventListener("context-request", (event) => {
+        if (
+          Reflect.get(event, "context") !== Reflect.get(window, "mcpConformanceApplicationContext")
+        ) {
+          return;
+        }
+        event.stopPropagation();
+        Reflect.get(event, "callback")(context);
       });
       view.sessionKey = params.sessionKey;
       view.viewId = params.viewId;
@@ -661,8 +673,8 @@ export async function findAppFrame(page: Page): Promise<Frame> {
       const view = document.querySelector("mcp-app-view");
       return {
         exists: Boolean(view),
-        error: view?.shadowRoot?.querySelector(".error")?.textContent ?? null,
-        shadow: view?.shadowRoot?.textContent ?? null,
+        error: view?.querySelector(".error")?.textContent ?? null,
+        content: view?.textContent ?? null,
       };
     });
     throw new Error(

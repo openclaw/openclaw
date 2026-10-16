@@ -118,8 +118,24 @@ it.each([
         );
         expect(captures).toHaveLength(selectedAtStartup ? 1 : 0);
         const startupCapture = captures[0];
-        const prepared = await withPluginRuntimeRegistryScope(root, () =>
-          prepareWorkspacePluginRegistries(
+        const prepared = await withPluginRuntimeRegistryScope(root, async () => {
+          if (purpose === "model-catalog") {
+            let primaryRegistry: PluginRegistry | undefined;
+            const runtimePluginRegistry = await resources.load(
+              {
+                ...input,
+                metadataSnapshot: metadata,
+                preferBuiltPluginArtifacts: true,
+                basePluginIds: [],
+                purpose,
+              },
+              (registry) => {
+                primaryRegistry = registry;
+              },
+            );
+            return { runtimePluginRegistry, primaryRegistry, inboundPluginRegistry: undefined };
+          }
+          return prepareWorkspacePluginRegistries(
             input,
             metadata,
             (registry) => resources.retainRegistry(registry),
@@ -129,9 +145,8 @@ it.each([
             () => [],
             undefined,
             inspection ? resources.load.bind(resources) : undefined,
-            purpose,
-          ),
-        );
+          );
+        });
         selected = prepared.runtimePluginRegistry;
         expect(prepared.inboundPluginRegistry === root).toBe(purpose === "agent");
         expect(captures).toHaveLength(1);
@@ -179,7 +194,7 @@ it.each([
 );
 
 it.each(["inbound", "selected", "inspection"] as const)(
-  "borrows hooks only from the admitting Gateway through %s preparation",
+  "borrows hooks from the current Gateway through %s preparation",
   async (producer) => {
     useNoBundledPlugins();
     const workspaceDir = tempDirs.make("openclaw-prepared-owner-workspace-");
@@ -200,16 +215,15 @@ it.each(["inbound", "selected", "inspection"] as const)(
           return { prependContext: owner };
         });`,
     });
-    const configFor = (model: string): OpenClawConfig => ({
-      agents: { defaults: { model } },
+    const config: OpenClawConfig = {
+      agents: { defaults: { model: "selected/gateway" } },
       plugins: {
         allow: [plugin.id],
         load: { paths: [plugin.file] },
         entries: { [plugin.id]: { enabled: true, hooks: { allowConversationAccess: true } } },
         slots: { memory: "none" },
       },
-    });
-    const config = configFor("selected/updated");
+    };
     const input = {
       config,
       workspaceDir,
@@ -219,38 +233,23 @@ it.each(["inbound", "selected", "inspection"] as const)(
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
       const metadata = loadPluginMetadataSnapshot({ config, workspaceDir });
-      const loadGateway = async (model: string) => {
-        const gatewayConfig = configFor(model);
-        const registry = await loadAndActivateRootPluginRegistry({
-          config: gatewayConfig,
-          workspaceDir,
-          manifestRegistry: metadata.manifestRegistry,
-          discovery: metadata.discovery,
-          onlyPluginIds: [plugin.id],
-          channelPluginLoadIntent: "full",
-          runtimeOptions: { allowGatewaySubagentBinding: true },
-          cache: false,
-          throwOnLoadError: true,
-        });
-        prepareOwnedPluginLoadContext(
-          { ...input, config: gatewayConfig },
-          process.env,
-          registry,
-          metadata,
-          true,
-        );
-        return createPluginRegistryOwner(registry, workspaceDir);
-      };
-      const a = await loadGateway("selected/gateway-a");
-      const b = await loadGateway("selected/gateway-b");
-      const ambiguous = createEmptyPluginRegistry();
-      ambiguous.plugins.push(...a.registry.plugins);
-      bindPluginRegistryGatewayOwner(ambiguous, getPluginRegistryGatewayOwner(a.registry)!);
-      bindPluginRegistryGatewayOwner(ambiguous, getPluginRegistryGatewayOwner(b.registry)!);
+      const gatewayRegistry = await loadAndActivateRootPluginRegistry({
+        config,
+        workspaceDir,
+        manifestRegistry: metadata.manifestRegistry,
+        discovery: metadata.discovery,
+        onlyPluginIds: [plugin.id],
+        channelPluginLoadIntent: "full",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+        cache: false,
+        throwOnLoadError: true,
+      });
+      prepareOwnedPluginLoadContext(input, process.env, gatewayRegistry, metadata, true);
+      const gateway = createPluginRegistryOwner(gatewayRegistry, workspaceDir);
       const closing = createEmptyPluginRegistry();
-      closing.plugins.push(...a.registry.plugins);
+      closing.plugins.push(...gateway.registry.plugins);
       bindPluginRegistryGatewayOwner(closing, { current: () => undefined });
-      const run = async (request: PluginRegistry | undefined, expected: string) => {
+      const run = async (request: PluginRegistry | undefined, borrowed: boolean) => {
         await using resources = new PreparedModelRuntimeBuildResources(
           retainPreparedPluginRegistry,
         );
@@ -280,22 +279,17 @@ it.each(["inbound", "selected", "inspection"] as const)(
         const result = await createHookRunner(registry, {
           catchErrors: false,
         }).runBeforePromptBuild({ prompt: "probe", messages: [] }, {});
-        expect.soft(result?.prependContext).toBe(expected);
-        expect.soft(calls.splice(0)).toEqual([expected]);
-        expect
-          .soft(registry.plugins[0] === a.registry.plugins[0])
-          .toBe(expected === "selected/gateway-a");
-        expect.soft(registry.plugins[0]).not.toBe(b.registry.plugins[0]);
+        expect.soft(result?.prependContext).toBe("selected/gateway");
+        expect.soft(calls.splice(0)).toEqual(["selected/gateway"]);
+        expect.soft(registry.plugins[0] === gateway.registry.plugins[0]).toBe(borrowed);
       };
       try {
-        expect(getActivePluginRegistry()).toBe(b.registry);
-        await run(a.registry, "selected/gateway-a");
-        await run(undefined, "selected/updated");
-        await run(ambiguous, "selected/updated");
-        await run(closing, "selected/updated");
+        expect(getActivePluginRegistry()).toBe(gateway.registry);
+        await run(gateway.registry, true);
+        await run(undefined, false);
+        await run(closing, false);
       } finally {
-        await b.close();
-        await a.close();
+        await gateway.close();
       }
     });
   },

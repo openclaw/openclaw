@@ -85,21 +85,16 @@ function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
 ): string | undefined {
-  try {
-    const entry = new URL(rawEntryUrl, "http://localhost");
-    if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
-        return undefined;
-      }
-      return entry.toString();
-    }
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return undefined;
-    }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
-  } catch {
+  const entry = URL.parse(rawEntryUrl, "http://localhost");
+  if (!entry) {
     return undefined;
   }
+  if (entry.origin !== "http://localhost") {
+    return allowExternalEmbedUrls && isHttpUrl(entry) ? entry.toString() : undefined;
+  }
+  return isCanvasHttpPath(entry.pathname)
+    ? `${entry.pathname}${entry.search}${entry.hash}`
+    : undefined;
 }
 
 /**
@@ -153,18 +148,10 @@ export function resolveEmbedSandbox(
   mode: EmbedSandboxMode | null | undefined,
   ceiling?: "strict" | "scripts",
 ): string {
-  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+  if (ceiling === "strict" || mode === "strict") {
     return "";
   }
-  if (ceiling === "scripts") {
-    return "allow-scripts";
-  }
-  switch (mode) {
-    case "strict":
-      return "";
-    case "trusted":
-      return "allow-scripts allow-same-origin";
-    default:
-      return "allow-scripts";
-  }
+  return mode === "trusted" && ceiling !== "scripts"
+    ? "allow-scripts allow-same-origin"
+    : "allow-scripts";
 }

@@ -21,10 +21,7 @@ const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 
 export function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.agentText;
-  if (!message) {
-    return false;
-  }
-  return /\bhttps?:\/\/\S+/i.test(message);
+  return Boolean(message && /\bhttps?:\/\/\S+/i.test(message));
 }
 
 export async function applyMediaUnderstandingIfNeeded(params: {
@@ -44,7 +41,6 @@ export async function applyMediaUnderstandingIfNeeded(params: {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     return await applyMediaUnderstanding(params);
   } catch (err) {
-    mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
@@ -73,7 +69,6 @@ export async function applyLinkUnderstandingIfNeeded(params: {
     if (isAbortError(err)) {
       throw err;
     }
-    linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );

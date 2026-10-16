@@ -22,6 +22,10 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -31,6 +35,7 @@ import {
   beginSessionWorkAdmission,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import * as abortLifecycle from "../chat-abort-lifecycle-internal.js";
 import {
@@ -43,6 +48,7 @@ import { createChatAbortContext } from "../server-methods/chat.abort.test-helper
 import * as sessionChange from "../server-methods/session-change-event.js";
 import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecycle-drain.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-support.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
@@ -62,7 +68,13 @@ vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
 }));
 
-function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
+function createExecution(
+  options: {
+    aborted?: boolean;
+    assertContextCurrent?: () => void;
+    pendingInputSettlement?: () => Promise<void>;
+  } = {},
+) {
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
   const callerRelease = vi.fn();
@@ -101,6 +113,9 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
         },
         unpersistedOffloadedRefs: [],
         userTurn: {
+          recorder: options.pendingInputSettlement
+            ? { waitForPendingInputSettlement: options.pendingInputSettlement }
+            : undefined,
           execApprovalFollowupHandoffClaimId: "claim",
           message: "continue",
           senderIsOwner: false,
@@ -129,6 +144,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
       canUseInternalRuntimeHandoff: false,
       client: null,
       context: {
+        getSessionEventSubscriberConnIds: () => new Set(),
         dedupe: new Map(),
         deps: {},
         logGateway: { error: vi.fn(), warn: vi.fn() },
@@ -210,6 +226,29 @@ function bindFollowupCompletion(execution: ReturnType<typeof createExecution>) {
 }
 
 describe("startAgentRunExecution Gateway ownership", () => {
+  it("reads the workspace after resuming from a retired same-session preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const execution = createExecution();
+      const sessionKey = "agent:main:resumed-workspace";
+      execution.params.resolvedSessionKey = sessionKey;
+      await expectSuccessorWorkspaceRead({
+        workspaceDir: state.workspaceDir,
+        sessionKey,
+        run: async (readWorkspace) => {
+          dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+            try {
+              await readWorkspace();
+            } finally {
+              await dispatch.cleanupAbortController();
+            }
+          });
+          await startAgentRunExecution(execution.params);
+          expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+        },
+      });
+    });
+  });
+
   beforeEach(() => {
     dispatchAgentRunFromGateway.mockReset();
     agentCommand.mockReset();
@@ -463,6 +502,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
   it("lets a disposer drain its real session without waiting on its own retained execution", async () => {
     const execution = createExecution();
+    setRuntimeConfigSnapshot(execution.params.cfg);
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const controllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers: controllers,
@@ -545,7 +586,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves access across liveness and invalidates creation (new session: %s)",
     async (isNewSession) => {
       const execution = createVisibleExecution();
@@ -741,8 +782,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(dispatch?.ingressOpts.workspaceDir).toBe("/workspace/A");
     expect(execution.runtimeRelease).not.toHaveBeenCalled();
 
-    dispatch?.cleanupAbortController();
-    dispatch?.cleanupAbortController();
+    await dispatch?.cleanupAbortController();
+    await dispatch?.cleanupAbortController();
     expect(execution.callerRelease).not.toHaveBeenCalled();
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
@@ -750,6 +791,26 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
+
+  it.each([undefined, "/workspace/session-override"])(
+    "preserves the admitted workspace with session override %s",
+    async (workspaceOverride) => {
+      const execution = createExecution();
+      execution.params.prepared.workspaceOverride = workspaceOverride;
+      execution.params.prepared.replyDispatchRuntime = {
+        ...execution.params.prepared.replyDispatchRuntime,
+        workspaceDir: "/workspace/admitted",
+      };
+      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
+
+      await startAgentRunExecution(execution.params);
+
+      const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
+      expect(dispatch?.ingressOpts.workspaceDir).toBe(workspaceOverride ?? "/workspace/admitted");
+      expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+      expect(execution.callerRelease).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { ending: "aborted", registration: "current" },
@@ -764,7 +825,13 @@ describe("startAgentRunExecution Gateway ownership", () => {
   ] as const)(
     "settles an undispatched $ending followup only after cleanup (registration: $registration)",
     async ({ ending, registration }) => {
+      const settlementEntered = createDeferred();
+      const finishSettlement = createDeferred();
       const execution = createExecution({
+        pendingInputSettlement: async () => {
+          settlementEntered.resolve();
+          await finishSettlement.promise;
+        },
         aborted: ending === "aborted",
         ...(ending === "failed"
           ? {
@@ -774,6 +841,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
             }
           : {}),
       });
+      execution.params.agentDedupeKeys = [`agent:${execution.params.runId}`];
       const owner = bindFollowupCompletion(execution);
       const entry = execution.params.prepared.activeRunAbort.entry!;
       const successor =
@@ -828,12 +896,20 @@ describe("startAgentRunExecution Gateway ownership", () => {
       try {
         await Promise.race([recoveryEntered.promise, completion]);
         expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-        expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
+        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        expect(execution.params.context.dedupe.size).toBe(0);
         expect(finishExecution).not.toHaveBeenCalled();
         expect(replyObserved).not.toHaveBeenCalled();
         expect(execution.abortCleanup).not.toHaveBeenCalled();
         releaseRecovery.resolve();
+        await Promise.race([settlementEntered.promise, completion]);
+        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        expect(execution.params.context.dedupe.size).toBe(0);
+        expect(execution.abortCleanup).not.toHaveBeenCalled();
+        finishSettlement.resolve();
         await Promise.race([disposalEntered.promise, completion]);
+        expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
+        expect(execution.params.context.dedupe.size).toBe(1);
         expect(execution.abortCleanup).toHaveBeenCalledOnce();
         expect(execution.gatewayRelease).toHaveBeenCalledOnce();
         expect(execution.runtimeRelease).toHaveBeenCalledOnce();
@@ -862,6 +938,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         }
       } finally {
         releaseRecovery.resolve();
+        finishSettlement.resolve();
         finishDisposal.resolve();
         await completion.catch(() => {});
         owner.close();

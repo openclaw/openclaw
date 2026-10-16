@@ -1,7 +1,7 @@
 // Idle-timeout breaker tests cover the outer run-loop guard that stops
 // repeated silent provider attempts from spinning forever.
 import { describe, expect, it } from "vitest";
-import { createIdleTimeoutBreakerState, stepIdleTimeoutBreaker } from "./idle-timeout-breaker.js";
+import { stepIdleTimeoutBreaker } from "./idle-timeout-breaker.js";
 
 // Issue #76293. The wedge: a stalled provider returns from each LLM call
 // with idleTimedOut=true and no completed model progress. Without this
@@ -19,16 +19,14 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
     inputs: Array<{
       idleTimedOut: boolean;
       completedModelProgress: boolean;
-      outputTokens?: number;
     }>,
-    options?: { cap?: number },
   ) {
     // Drive one persistent breaker state across attempts, matching the run
     // loop scope where profile rotation and retry sessions would otherwise reset.
-    const state = createIdleTimeoutBreakerState();
+    const state = { consecutiveIdleTimeoutsBeforeOutput: 0 };
     const steps: Array<{ consecutive: number; tripped: boolean }> = [];
     for (const input of inputs) {
-      steps.push(stepIdleTimeoutBreaker(state, input, options));
+      steps.push(stepIdleTimeoutBreaker(state, input));
     }
     return steps;
   }
@@ -45,35 +43,6 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
     expect(steps.at(-1)?.consecutive).toBe(5);
   });
 
-  it("respects an explicit smaller cap", () => {
-    const steps = drive(
-      [
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-      ],
-      { cap: 3 },
-    );
-    expect(steps.map((s) => s.tripped)).toEqual([false, false, true]);
-  });
-
-  it("disables the breaker entirely when cap is 0 (escape hatch)", () => {
-    const steps = drive(
-      [
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-        { idleTimedOut: true, completedModelProgress: false },
-      ],
-      { cap: 0 },
-    );
-    expect(steps.some((step) => step.tripped)).toBe(false);
-    expect(steps.at(-1)?.consecutive).toBe(7);
-  });
-
   it("does not trip when the model completed progress, even on a timeout (slow but alive)", () => {
     // 8 attempts that each timed out but each completed text or tool-call
     // progress. The model is slow at the tail of its turn, not wedged. The
@@ -82,7 +51,6 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
       Array.from({ length: 8 }, () => ({
         idleTimedOut: true,
         completedModelProgress: true,
-        outputTokens: 220,
       })),
     );
     expect(steps.some((step) => step.tripped)).toBe(false);
@@ -98,7 +66,7 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
       { idleTimedOut: true, completedModelProgress: false },
       { idleTimedOut: true, completedModelProgress: false },
       { idleTimedOut: true, completedModelProgress: false },
-      { idleTimedOut: false, completedModelProgress: true, outputTokens: 320 },
+      { idleTimedOut: false, completedModelProgress: true },
       { idleTimedOut: true, completedModelProgress: false },
       { idleTimedOut: true, completedModelProgress: false },
       { idleTimedOut: true, completedModelProgress: false },
@@ -135,21 +103,6 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
       { idleTimedOut: true, completedModelProgress: false },
     ]);
     expect(steps.map((s) => s.consecutive)).toEqual([1, 2, 3, 3, 3, 4, 5]);
-    expect(steps.at(-1)?.tripped).toBe(true);
-  });
-
-  it("does not reset for partial tool-argument tokens without completed progress", () => {
-    const steps = drive([
-      { idleTimedOut: true, completedModelProgress: false, outputTokens: 12 },
-      { idleTimedOut: true, completedModelProgress: false, outputTokens: 18 },
-      { idleTimedOut: true, completedModelProgress: false, outputTokens: 24 },
-      { idleTimedOut: true, completedModelProgress: false, outputTokens: 30 },
-      { idleTimedOut: true, completedModelProgress: false, outputTokens: 36 },
-    ]);
-    // Raw provider output tokens can come from partial tool-call argument
-    // deltas before the provider stalls. They are billed, but they are not
-    // completed progress, so they must not reset the breaker.
-    expect(steps.map((s) => s.consecutive)).toEqual([1, 2, 3, 4, 5]);
     expect(steps.at(-1)?.tripped).toBe(true);
   });
 });

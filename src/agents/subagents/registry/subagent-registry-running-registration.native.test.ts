@@ -10,11 +10,13 @@ import { callGateway } from "../../../gateway/call.js";
 import * as workerCpu from "../../../infra/worker-cpu.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
 const fixture = useSubagentPersistenceFixture();
 
@@ -22,6 +24,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   await fixture.allocateStateDir();
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
   const database = openOpenClawStateDatabase();
+  const db = requireNativeSqliteDatabase(database.db);
   const context = captureOpenClawStateWorkerContext();
   expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
   const runId = "contended-registration";
@@ -57,7 +60,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
         ],
         workerData: {
           ...options?.workerData,
-          testRegistrationPath: context.admission.databasePath,
+          testRegistrationPath: db.location(),
           testRegistrationBegin: nativeBegin.buffer,
         },
       }),
@@ -68,12 +71,13 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   let registrationSettled = false;
   const failures: unknown[] = [];
   try {
-    // Warm the real worker before the independent holder starts its existing release deadline.
+    // Warm the real workers before the independent holder starts its existing release deadline.
     await mutateSubagentRuns(
       ["registration-worker-warmup"],
       () => ({ value: undefined, postimages: new Map([["registration-worker-warmup", null]]) }),
       { context },
     );
+    await prepareSubagentRegistrationRows(childSessionKey, [runId], context);
     holder = holdStateDatabaseWriteTransaction(context.admission.databasePath, 1_000);
     await holder.ready;
     Atomics.store(nativeBegin, 0, 1);
@@ -82,6 +86,8 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
       registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: "main",
+        sessionEntry: { sessionId: "contended-registration-session" },
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: "Register while a foreign SQLite writer holds its transaction",

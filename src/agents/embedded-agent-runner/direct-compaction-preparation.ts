@@ -24,12 +24,13 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import { resolveSandboxContext } from "../sandbox.js";
+import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
 } from "./compact-reasons.js";
-import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
+import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
@@ -45,8 +46,7 @@ import type {
 } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
-export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
+export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
@@ -111,9 +111,12 @@ export async function prepareDirectCompactionAttempt(
     workspaceDir: resolvedWorkspace,
     pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
-  const attemptedThinking = new Set<ThinkLevel>();
-  const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
-    const failureReason = classifyCompactionReason(reason);
+  const fail = (
+    reason: string,
+    err?: unknown,
+    explicitReasonClass?: "compaction_model_unresolved",
+  ): EmbeddedAgentCompactResult => {
+    const failureReason = explicitReasonClass ?? classifyCompactionReason(reason);
     const failure = err ? describeFailoverError(err) : undefined;
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
@@ -153,7 +156,10 @@ export async function prepareDirectCompactionAttempt(
   const { model, error, authStorage, modelRegistry } = modelResolution;
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
-    return { ok: false as const, result: fail(reason) };
+    return {
+      ok: false as const,
+      result: fail(reason, undefined, "compaction_model_unresolved"),
+    };
   }
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
@@ -241,11 +247,7 @@ export async function prepareDirectCompactionAttempt(
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
   try {
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-    } else {
+    if (apiKeyInfo.apiKey) {
       const runtimeAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
         config: params.config,
@@ -279,10 +281,11 @@ export async function prepareDirectCompactionAttempt(
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
       authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+    } else if (apiKeyInfo.mode !== "aws-sdk") {
+      throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
   } catch (err) {
-    const reason = formatErrorMessage(err);
-    return { ok: false as const, result: fail(reason, err) };
+    return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
   const thinkingCompat = projectModelThinkingCompat(runtimeModel.compat);
   const thinkingCatalogEntry = {
@@ -311,68 +314,85 @@ export async function prepareDirectCompactionAttempt(
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const sandboxAgentId =
     params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
+  const assertCurrent = () => params.abortSignal?.throwIfAborted();
   const sandbox =
     params.sandbox === undefined
-      ? await resolveSandboxContext({
-          config: params.config,
-          agentId: sandboxAgentId,
-          execOverrides: params.execOverrides,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: resolvedWorkspace,
-        })
+      ? await withSandboxRuntimeStatusInWorker(
+          { cfg: params.config, agentId: sandboxAgentId, sessionKey: sandboxSessionKey },
+          { env: process.env, cwd: process.cwd(), assertCurrent },
+          async (preparedRuntimeStatus) =>
+            resolveSandboxContext({
+              config: params.config,
+              agentId: sandboxAgentId,
+              execOverrides: params.execOverrides,
+              sessionKey: sandboxSessionKey,
+              workspaceDir: resolvedWorkspace,
+              assertCurrent,
+              preparedRuntimeStatus,
+            }),
+        )
       : params.sandbox;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
-    throw new Error("sandbox workspace is not read-write; collection review skipped");
-  }
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
-    );
-  }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  return {
-    ok: true as const,
-    value: {
-      params,
-      diagId,
-      trigger,
-      attempt,
-      maxAttempts,
-      runId,
-      compactionModelCallTrace,
-      diagnosticCompactionRunId,
-      nextDiagnosticModelCallId: () =>
-        `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
-      agentDir,
-      provider,
-      contextConfigProvider,
-      modelId,
-      preparedHarnessRuntime,
-      thinkLevel,
-      attemptedThinking,
-      fail,
-      authStorage,
-      modelRegistry,
-      runtimeModel,
-      apiKeyInfo,
-      resolvedRuntimeAuthPlan,
-      hasRuntimeAuthExchange,
-      resolvedWorkspace,
-      sandboxSessionKey,
-      sandboxAgentId,
-      sandbox,
-      effectiveWorkspace,
-      effectiveCwd,
-      sessionAgentId,
-    },
+  const releaseSandbox = () => {
+    if (params.sandbox === undefined) {
+      sandbox?.[Symbol.dispose]?.();
+    }
   };
+  try {
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+        ? sandbox.workspaceDir
+        : resolvedWorkspace;
+    const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+    if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+      throw new Error(
+        "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
+      );
+    }
+    const effectiveCwd = sandbox?.enabled
+      ? effectiveWorkspace
+      : (requestedCwd ?? effectiveWorkspace);
+    await fs.mkdir(effectiveWorkspace, { recursive: true });
+    return {
+      ok: true as const,
+      value: {
+        params,
+        diagId,
+        trigger,
+        attempt,
+        maxAttempts,
+        runId,
+        compactionModelCallTrace,
+        diagnosticCompactionRunId,
+        nextDiagnosticModelCallId: () =>
+          `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
+        agentDir,
+        provider,
+        contextConfigProvider,
+        modelId,
+        preparedHarnessRuntime,
+        thinkLevel,
+        attemptedThinking: new Set<ThinkLevel>(),
+        fail,
+        authStorage,
+        modelRegistry,
+        runtimeModel,
+        apiKeyInfo,
+        resolvedRuntimeAuthPlan,
+        hasRuntimeAuthExchange,
+        resolvedWorkspace,
+        sandboxSessionKey,
+        sandboxAgentId,
+        sandbox,
+        effectiveWorkspace,
+        effectiveCwd,
+        sessionAgentId,
+        releaseSandbox,
+      },
+    };
+  } catch (preparationError) {
+    releaseSandbox();
+    throw preparationError;
+  }
 }
 
 export type DirectCompactionPreparation = Extract<

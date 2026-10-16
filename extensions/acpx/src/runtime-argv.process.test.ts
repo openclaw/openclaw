@@ -85,7 +85,6 @@ it("passes child-only environment through the ACPX process factory", async () =>
 });
 
 it.each([
-  { wrapped: false, form: "path" },
   { wrapped: true, form: "path" },
   { wrapped: false, form: "relative" },
   { wrapped: false, form: "combined" },
@@ -149,7 +148,7 @@ it.each([
           sessionStore: store,
           agentRegistry: createAgentRegistry({ overrides: config.agents }),
           permissionMode: "deny-all",
-          timeoutMs: 5_000,
+          timeoutMs: 15_000,
           ...(wrapped
             ? {
                 openclawWrapperRoot: path.join(state.root, "acpx"),

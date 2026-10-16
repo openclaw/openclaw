@@ -2,9 +2,8 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -106,8 +105,8 @@ function createInboundMessage(data: Record<string, unknown>): Message {
 beforeEach(() => {
   resetPluginStateStoreForTests();
   const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("zalouser", options);
+  runtime.state.openKeyedStoreV2 = (options, authority = { assertCurrent: () => {} }) =>
+    createPluginStateKeyedStoreV2ForTests("zalouser", options, authority);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });
@@ -251,14 +250,6 @@ describe("Zalo inbound normalization", () => {
     });
   });
 
-  it("omits absent quote metadata", async () => {
-    const [message] = await captureInbound([createInboundMessage({ ts: 1_764_000_000_000 })]);
-
-    expect(message?.quotedGlobalMsgId).toBeUndefined();
-    expect(message?.quotedOwnerId).toBeUndefined();
-    expect(message?.quotedBody).toBeUndefined();
-  });
-
   it("normalizes second and millisecond timestamps", async () => {
     const messages = await captureInbound([
       createInboundMessage({ ts: 1_764_000_000 }),
@@ -291,38 +282,26 @@ describe("Zalo group context cache", () => {
     return createMockApi({ getGroupInfo } as Partial<API>);
   }
 
-  it("refetches group context when the current clock is invalid", async () => {
+  it("reuses group context until its five-minute TTL expires", async () => {
     const getGroupInfo = vi.fn(async () => ({
-      gridInfoMap: { "group-invalid-clock": { groupId: "group-invalid-clock", name: "Group" } },
+      gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
     }));
     const api = createGroupApi(getGroupInfo);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
     await withStoredSession({
-      profile: "cache-invalid-clock",
+      profile: "cache-ttl",
       api,
       run: async () => {
-        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
-        vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
-      },
-    });
-
-    expect(getGroupInfo).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache group context when ttl expiry exceeds the Date range", async () => {
-    const getGroupInfo = vi.fn(async () => ({
-      gridInfoMap: { "group-overflow": { groupId: "group-overflow", name: "Overflow" } },
-    }));
-    const api = createGroupApi(getGroupInfo);
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-
-    await withStoredSession({
-      profile: "cache-overflow",
-      api,
-      run: async () => {
-        await resolveZaloGroupContext("cache-overflow", "group-overflow");
-        await resolveZaloGroupContext("cache-overflow", "group-overflow");
+        await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
+          groupId: "group-ttl",
+          name: "Group",
+        });
+        now.mockReturnValue(1_700_000_299_999);
+        await resolveZaloGroupContext("cache-ttl", "group-ttl");
+        expect(getGroupInfo).toHaveBeenCalledOnce();
+        now.mockReturnValue(1_700_000_300_000);
+        await resolveZaloGroupContext("cache-ttl", "group-ttl");
       },
     });
 

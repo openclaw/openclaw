@@ -77,164 +77,198 @@ it.each([
   },
 );
 
-it("retires the accepted placement name when its view is disposed during composer retirement", async () => {
-  const prefs = identityPreferences();
-  const first = await readyPreferenceDraft(prefs);
-  selectCloudWorktree(first);
-  const start = vi.fn(() => {
-    queueMicrotask(() => {
-      first.flow.invalidate();
-      disposeWorktreeDraft(first);
+it.each(["composer retirement", "preference clear"] as const)(
+  "placement cannot publish after disposal during %s",
+  async (phase) => {
+    const prefs = identityPreferences();
+    const first = await readyPreferenceDraft(prefs);
+    selectCloudWorktree(first);
+    const start = vi.fn(() => {
+      if (phase === "composer retirement") {
+        queueMicrotask(() => {
+          first.flow.invalidate();
+          disposeWorktreeDraft(first);
+        });
+      }
     });
-  });
-  first.context.placementStartup.start = start;
-  vi.mocked(first.context.sessions.createResult).mockImplementation(async (params) => ({
-    key: params!.key!,
-    initialRun: { status: "idle" },
-  }));
-  first.flow.setMessage("first task");
-  await first.flow.submit(undefined, true);
-  expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(start).toHaveBeenCalledOnce();
-  expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-  expect(first.request.mock.calls.some(([method]) => method === "agent.wait")).toBe(false);
-  await readyPreferenceDraft(prefs, first.context.gateway);
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-  expect(prefs.stored()).toMatchObject({ worktreeName: "" });
-});
+    first.context.placementStartup.start = start;
+    vi.mocked(first.context.sessions.createResult).mockImplementation(async (params) => ({
+      key: params!.key!,
+      initialRun: { status: "idle" },
+    }));
+    const clearStarted = createDeferred();
+    const clear = createDeferred();
+    if (phase === "preference clear") {
+      prefs.beforeSave.mockImplementation(async ({ entries }) => {
+        const entry = entries["new-session.v1:main"];
+        if (
+          entry &&
+          typeof entry === "object" &&
+          "worktreeName" in entry &&
+          entry.worktreeName === ""
+        ) {
+          clearStarted.resolve();
+          await clear.promise;
+        }
+      });
+    }
+    first.flow.setMessage("first task");
+    expect(first.flow.submitDisabledReason()).toBeUndefined();
+    const submitting = first.flow.submit(undefined, phase === "composer retirement");
+    if (phase === "preference clear") {
+      await clearStarted.promise;
+      expect(start).toHaveBeenCalledOnce();
+      first.flow.invalidate();
+      first.gateway.disconnect();
+      clear.resolve();
+    }
+    await submitting;
+    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(first.context.navigateAndWait).not.toHaveBeenCalled();
+    expect(first.request.mock.calls.some(([method]) => method === "agent.wait")).toBe(false);
+    if (phase === "composer retirement") {
+      await readyPreferenceDraft(prefs, first.context.gateway);
+      expect(
+        loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName,
+      ).toBeUndefined();
+      expect(prefs.stored()).toMatchObject({ worktreeName: "" });
+    }
+  },
+);
 
-it("commits identified-user name consumption before navigation disposes the draft", async () => {
+it("opens an accepted worktree while its saved name cleanup is pending", async () => {
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
-  expect(first.place.worktreeName).toBe("first-task");
-  const clear = createDeferred();
-  prefs.beforeSave.mockImplementation(async () => clear.promise);
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+  const admission = createDeferred<typeof acceptedWorktreeSession>();
+  const clearing = createDeferred();
+  const clearStarted = createDeferred();
+  const navigated = createDeferred();
+  prefs.beforeSave.mockImplementation(async () => {
+    clearStarted.resolve();
+    await clearing.promise;
+  });
+  vi.mocked(first.context.sessions.createResult).mockReturnValue(admission.promise);
   vi.mocked(first.context.navigateAndWait).mockImplementation(async () => {
     disposeWorktreeDraft(first);
+    navigated.resolve();
     queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
   });
   first.flow.setMessage("first task");
-  const submitting = first.flow.submit();
-  await vi.waitFor(() =>
-    expect(
-      prefs.beforeSave.mock.calls.length +
-        vi.mocked(first.context.navigateAndWait).mock.calls.length,
-    ).toBeGreaterThan(0),
-  );
-  const navigatedBeforeSave = vi.mocked(first.context.navigateAndWait).mock.calls.length;
-  clear.resolve();
-  await submitting;
-  expect(navigatedBeforeSave).toBe(0);
-  expect(first.context.navigateAndWait).toHaveBeenCalledOnce();
-  const next = await readyPreferenceDraft(prefs, first.context.gateway);
-  expect(next.place.worktreeName).toBe("");
-  expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
-});
-
-it.each([false, true])(
-  "late acceptance from a disposed draft preserves another draft's name with identity=%s",
-  async (identified) => {
-    const prefs = identityPreferences(identified);
-    const first = await readyPreferenceDraft(prefs);
-    const { admitted, submitting } = await submitPendingWorktree(first);
-    disposeWorktreeDraft(first);
-    const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    next.place.setWorktreeName("next-task");
-    await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" }));
-    admitted.resolve(acceptedWorktreeSession);
-    await submitting;
-    expect(next.place.worktreeName).toBe("next-task");
-    expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" });
-  },
-);
-
-it.each([false, true])(
-  "retires accepted name after source disposal without newer edits, identity=%s",
-  async (identified) => {
-    const prefs = identityPreferences(identified);
-    const first = await readyPreferenceDraft(prefs);
-    const { admitted, submitting } = await submitPendingWorktree(first);
-    first.flow.invalidate("gateway-changed");
-    first.place.invalidateGatewayDiscovery(true);
-    disposeWorktreeDraft(first);
-    const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    expect(next.place.worktreeName).toBe("first-task");
-    admitted.resolve(acceptedWorktreeSession);
-    await submitting;
-    expect(next.place.worktreeName).toBe("");
-    expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["hello", "client"])(
-  "does not retire the former principal's name when %s identity changes first",
-  async (changed) => {
-    const prefs = identityPreferences();
-    const first = await readyPreferenceDraft(prefs);
-    const { admitted, submitting } = await submitPendingWorktree(first);
-    Object.assign(
-      changed === "hello"
-        ? first.context.gateway.snapshot.hello!.auth!
-        : first.context.gateway.snapshot.client!,
-      { recoveryScope: "principal-b" },
-    );
-    admitted.resolve(acceptedWorktreeSession);
-    await submitting;
-    expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
-  },
-);
-
-it("placement clear cannot navigate or notify a newer route", async () => {
-  const prefs = identityPreferences();
-  const first = await readyPreferenceDraft(prefs);
-  selectCloudWorktree(first);
-  const start = vi.fn();
-  first.context.placementStartup.start = start;
-  vi.mocked(first.context.sessions.createResult).mockImplementation(async (params) => ({
-    key: params!.key!,
-    initialRun: { status: "idle" },
-  }));
-  const clearStarted = createDeferred();
-  const clear = createDeferred();
-  prefs.beforeSave.mockImplementation(async (params) => {
-    const entry = params.entries["new-session.v1:main"];
-    if (
-      entry &&
-      typeof entry === "object" &&
-      "worktreeName" in entry &&
-      entry.worktreeName === ""
-    ) {
-      clearStarted.resolve();
-      await clear.promise;
+  vi.useFakeTimers();
+  try {
+    const submitting = first.flow.submit();
+    let settled = false;
+    void submitting.then(() => {
+      settled = true;
+    });
+    // Worktree preparation finishes after several seconds, then the run is accepted.
+    await vi.advanceTimersByTimeAsync(5_000);
+    admission.resolve(acceptedWorktreeSession);
+    await clearStarted.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.context.navigateAndWait).toHaveBeenCalledOnce();
+      await navigated.promise;
+      expect(first.context.gateway.snapshot.sessionKey).toBe(acceptedWorktreeSession.key);
+      expect(
+        first.context.chatSubmissions.readInitial(
+          acceptedWorktreeSession.key,
+          first.context.gateway.snapshot.client!,
+        )?.pendingRunId,
+      ).toBe("first-run");
+      expect(settled).toBe(false);
+    } finally {
+      clearing.resolve();
+      await submitting;
     }
-  });
-  first.flow.setMessage("first task");
-  expect(first.flow.submitDisabledReason()).toBeUndefined();
-  const submitting = first.flow.submit();
-  await clearStarted.promise;
-  expect(start).toHaveBeenCalledOnce();
-  first.flow.invalidate();
-  first.gateway.disconnect();
-  clear.resolve();
-  await submitting;
-  expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-  expect(first.request.mock.calls.some(([method]) => method === "agent.wait")).toBe(false);
+    vi.useRealTimers();
+    const next = await readyPreferenceDraft(prefs, first.context.gateway);
+    expect(next.place.worktreeName).toBe("");
+    expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
+    expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
-it.each([{ worktreeName: "hydrated-task" }, { folder: "/other-repo" }, { baseRef: "next-base" }])(
-  "late acceptance preserves a newer hydrated repository preference: %j",
-  async (patch) => {
-    const prefs = identityPreferences();
+it.each([
+  { identified: false, change: "renamed" },
+  { identified: true, change: "renamed" },
+  { identified: false, change: "reconnected" },
+  { identified: true, change: "reconnected" },
+  { identified: true, change: "hello" },
+  { identified: true, change: "client" },
+  { identified: true, change: "hydrated name" },
+  { identified: true, change: "hydrated folder" },
+  { identified: true, change: "hydrated base" },
+  { identified: true, change: "agent" },
+] as const)(
+  "late acceptance respects $change intent (identity=$identified)",
+  async ({ identified, change }) => {
+    const prefs = identityPreferences(identified);
     const first = await readyPreferenceDraft(prefs);
     const { admitted, submitting } = await submitPendingWorktree(first);
-    await prefs.publish(first, patch);
-    const next = await readyPreferenceDraft(prefs, first.context.gateway);
-    const before = structuredClone(prefs.stored());
+    let next = first;
+    let retained: unknown;
+    const patch =
+      change === "hydrated name"
+        ? { worktreeName: "hydrated-task" }
+        : change === "hydrated folder"
+          ? { folder: "/other-repo" }
+          : { baseRef: "next-base" };
+    const hydrated = change.startsWith("hydrated");
+    if (change === "renamed" || change === "reconnected") {
+      if (change === "reconnected") {
+        first.flow.invalidate("gateway-changed");
+        first.place.invalidateGatewayDiscovery(true);
+      }
+      disposeWorktreeDraft(first);
+      next = await readyPreferenceDraft(prefs, first.context.gateway);
+      if (change === "renamed") {
+        next.place.setWorktreeName("next-task");
+        await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" }));
+      } else {
+        expect(next.place.worktreeName).toBe("first-task");
+      }
+    } else if (change === "hello" || change === "client") {
+      Object.assign(
+        change === "hello"
+          ? first.context.gateway.snapshot.hello!.auth!
+          : first.context.gateway.snapshot.client!,
+        { recoveryScope: "principal-b" },
+      );
+    } else if (hydrated) {
+      await prefs.publish(first, patch);
+      next = await readyPreferenceDraft(prefs, first.context.gateway);
+      retained = structuredClone(prefs.stored());
+    } else {
+      first.flow.invalidate();
+      first.flow.resetDraft();
+      first.place.selectAgentId("work");
+      expect(first.place.worktreeName).toBe("work-task");
+      retained = structuredClone(prefs.stored("work"));
+    }
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
-    expect(prefs.stored()).toEqual(before);
-    expect(next.place.worktreeName).toBe(patch.worktreeName ?? "first-task");
+    if (change === "renamed") {
+      expect(next.place.worktreeName).toBe("next-task");
+      expect(prefs.stored()).toMatchObject({ worktreeName: "next-task" });
+    } else if (change === "reconnected") {
+      expect(next.place.worktreeName).toBe("");
+      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
+    } else if (change === "hello" || change === "client") {
+      expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
+    } else if (hydrated) {
+      expect(prefs.stored()).toEqual(retained);
+      expect(next.place.worktreeName).toBe(patch.worktreeName ?? "first-task");
+    } else {
+      expect(prefs.stored()).toMatchObject({ worktreeName: "" });
+      expect(prefs.stored("work")).toEqual(retained);
+      expect(first.place.agentId).toBe("work");
+      expect(first.place.worktreeName).toBe("work-task");
+      expect(first.context.navigateAndWait).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -360,24 +394,6 @@ it.each([false, true])(
   },
 );
 
-it("retires the submitted agent preference while the same view has selected another agent", async () => {
-  const prefs = identityPreferences();
-  const first = await readyPreferenceDraft(prefs);
-  const { admitted, submitting } = await submitPendingWorktree(first);
-  first.flow.invalidate();
-  first.flow.resetDraft();
-  first.place.selectAgentId("work");
-  expect(first.place.worktreeName).toBe("work-task");
-  const workPreference = structuredClone(prefs.stored("work"));
-  admitted.resolve(acceptedWorktreeSession);
-  await submitting;
-  expect(prefs.stored()).toMatchObject({ worktreeName: "" });
-  expect(prefs.stored("work")).toEqual(workPreference);
-  expect(first.place.agentId).toBe("work");
-  expect(first.place.worktreeName).toBe("work-task");
-  expect(first.context.navigateAndWait).not.toHaveBeenCalled();
-});
-
 it("does not let a replacement draft's pending preference load restore a consumed name", async () => {
   const prefs = identityPreferences();
   const first = await readyPreferenceDraft(prefs);
@@ -413,28 +429,39 @@ it("does not let a replacement draft's pending preference load restore a consume
   );
 });
 
-it.each(["read", "save", "transport"] as const)(
-  "warns without reversing an accepted session when preference %s fails",
+it.each(["read", "save", "transport", "browser"] as const)(
+  "warns without reversing accepted creation when preference %s fails",
   async (failure) => {
-    const prefs = identityPreferences();
+    const prefs = identityPreferences(failure !== "browser");
     const fixture = await readyPreferenceDraft(prefs);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     vi.mocked(fixture.context.navigateAndWait).mockImplementation(async () => {
       queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
     });
-    const original = fixture.request.getMockImplementation()!;
-    fixture.request.mockImplementation(async (method, params) => {
-      if (method === (failure === "read" ? "users.prefs.get" : "users.prefs.set")) {
-        if (failure === "transport") {
-          throw new Error("Synthetic preference write unavailable");
+    const write = localStorage.setItem.bind(localStorage);
+    const rejectedWrite =
+      failure === "browser"
+        ? vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+            if (key.includes("new-session")) {
+              throw new Error("Synthetic browser quota exceeded");
+            }
+            return write(key, value);
+          })
+        : undefined;
+    if (failure !== "browser") {
+      const original = fixture.request.getMockImplementation()!;
+      fixture.request.mockImplementation(async (method, params) => {
+        if (method === (failure === "read" ? "users.prefs.get" : "users.prefs.set")) {
+          if (failure === "transport") {
+            throw new Error("Synthetic preference write unavailable");
+          }
+          return { status: "no_durable_identity" };
         }
-        return { status: "no_durable_identity" };
-      }
-      return original(method, params);
-    });
-    // Start from a fresh authoritative read, as the writer does after preceding edits.
-    const { invalidateUserPreferences } = await import("../../app/user-prefs-cache.ts");
-    invalidateUserPreferences(fixture.context.gateway.snapshot.client!);
+        return original(method, params);
+      });
+      const { invalidateUserPreferences } = await import("../../app/user-prefs-cache.ts");
+      invalidateUserPreferences(fixture.context.gateway.snapshot.client!);
+    }
     vi.mocked(fixture.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     fixture.flow.setMessage("first task");
     await fixture.flow.submit();
@@ -446,42 +473,18 @@ it.each(["read", "save", "transport"] as const)(
         "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
     });
     expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
-    expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
-      worktreeName: "first-task",
-    });
+    if (rejectedWrite) {
+      expect(rejectedWrite).toHaveBeenCalledWith(
+        expect.stringContaining("new-session.preferences"),
+        expect.any(String),
+      );
+    } else {
+      expect(loadNewSessionPreference("ws://gateway.example", "main")).toMatchObject({
+        worktreeName: "first-task",
+      });
+    }
   },
 );
-
-it("warns without reversing accepted creation when local preference storage rejects the clear", async () => {
-  const prefs = identityPreferences(false);
-  const fixture = await readyPreferenceDraft(prefs);
-  const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
-  vi.mocked(fixture.context.navigateAndWait).mockImplementation(async () => {
-    queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-  });
-  const write = localStorage.setItem.bind(localStorage);
-  const rejectedWrite = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
-    if (key.includes("new-session")) {
-      throw new Error("Synthetic browser quota exceeded");
-    }
-    return write(key, value);
-  });
-  vi.mocked(fixture.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
-  fixture.flow.setMessage("first task");
-  await fixture.flow.submit();
-  expect(fixture.context.sessions.createResult).toHaveBeenCalledOnce();
-  expect(fixture.context.navigateAndWait).toHaveBeenCalledOnce();
-  expect(fixture.flow.error).toBeNull();
-  expect(rejectedWrite).toHaveBeenCalledWith(
-    expect.stringContaining("new-session.preferences"),
-    expect.any(String),
-  );
-  expect(warning).toHaveBeenCalledExactlyOnceWith({
-    message:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
-  });
-  expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
-});
 
 it("retires the restored placement's agent preference even when the picker hydrates the default agent", async () => {
   const prefs = identityPreferences();

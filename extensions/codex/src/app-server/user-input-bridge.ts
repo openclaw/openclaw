@@ -160,17 +160,15 @@ export function createCodexUserInputBridge(params: {
         return undefined;
       }
       const mode = readOwnDataString(request.params, "mode");
-      const requestSnapshot = structuredInput.snapshot(request.params, {
+      const snapshot = structuredInput.snapshot(request.params, {
         richForm: mode === "openaiForm" || mode === "openai/form",
       });
-      if (
-        structuredInput.isRecord(requestSnapshot) &&
-        readOwnDataString(requestSnapshot, "threadId") !== params.threadId
-      ) {
+      const requestSnapshot = structuredInput.isRecord(snapshot) ? snapshot : undefined;
+      if (requestSnapshot && readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
         return undefined;
       }
       const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
-      const compiled = structuredInput.isRecord(requestSnapshot)
+      const compiled = requestSnapshot
         ? compileCodexOrdinaryElicitation({ snapshot: requestSnapshot, turnId: params.turnId })
         : {
             kind: "compiled" as const,
@@ -190,9 +188,7 @@ export function createCodexUserInputBridge(params: {
           failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
           run: async (signal) => {
             const resource =
-              params.prepareResourceContext &&
-              structuredInput.isRecord(requestSnapshot) &&
-              hasResourceInput(requestSnapshot)
+              params.prepareResourceContext && requestSnapshot && hasResourceInput(requestSnapshot)
                 ? await params.prepareResourceContext({
                     requestId: request.id,
                     snapshot: requestSnapshot,
@@ -202,7 +198,7 @@ export function createCodexUserInputBridge(params: {
             try {
               signal.throwIfAborted();
               const withResources =
-                resource && structuredInput.isRecord(requestSnapshot)
+                resource && requestSnapshot
                   ? compileCodexOrdinaryElicitation({
                       snapshot: requestSnapshot,
                       turnId: params.turnId,
@@ -255,8 +251,14 @@ function readUserInputParams(value: JsonValue | undefined):
   const threadId = readBoundedUserInputText(snapshot, "threadId", MAX_USER_INPUT_ID);
   const turnId = readBoundedUserInputText(snapshot, "turnId", MAX_USER_INPUT_ID);
   const itemId = readBoundedUserInputText(snapshot, "itemId", MAX_USER_INPUT_ID);
-  const questions = readArray(snapshot, "questions", MAX_USER_INPUT_QUESTIONS);
-  if (!threadId || !turnId || !itemId || !questions) {
+  const questions = readValue(snapshot, "questions");
+  if (
+    !threadId ||
+    !turnId ||
+    !itemId ||
+    !Array.isArray(questions) ||
+    questions.length > MAX_USER_INPUT_QUESTIONS
+  ) {
     return undefined;
   }
   const parsed: AgentHarnessUserInputQuestion[] = [];
@@ -314,7 +316,7 @@ function readOptions(value: unknown): AgentHarnessUserInputOption[] | null | und
       return undefined;
     }
     const label = readBoundedUserInputText(entry, "label", MAX_USER_INPUT_ID);
-    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT, true);
+    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT);
     if (!label) {
       return undefined;
     }
@@ -331,21 +333,11 @@ function readBoundedUserInputText(
   record: Record<string, unknown>,
   key: string,
   maximum: number,
-  allowEmpty = false,
 ): string | undefined {
   const value = readValue(record, key);
-  return typeof value === "string" && value.length <= maximum && (allowEmpty || value.length > 0)
+  return typeof value === "string" && value.length <= maximum && value.length > 0
     ? value
     : undefined;
-}
-
-function readArray(
-  record: Record<string, unknown>,
-  key: string,
-  maximum: number,
-): unknown[] | undefined {
-  const value = readValue(record, key);
-  return Array.isArray(value) && value.length <= maximum ? value : undefined;
 }
 
 function readOwnDataString(value: unknown, key: string): string | undefined {

@@ -1,29 +1,35 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { nothing } from "lit";
 import { expect, vi } from "vitest";
+import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
+import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { UsageDetailsController } from "./detail-controller.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { page as usageRoute } from "./route.ts";
-import type { UsageSessionEntry } from "./types.ts";
-import type { UsageRouteData } from "./usage-page.ts";
-import "./usage-page.ts";
+import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
+import { createUsagePage } from "./usage-page-state.ts";
 
-export type TestUsagePage = HTMLElement & {
+export type TestUsagePage = Pick<
+  HTMLElement,
+  "querySelector" | "querySelectorAll" | "textContent" | "isConnected" | "remove"
+> & {
+  readonly element: HTMLElement;
   context: ApplicationContext;
-  routeData: UsageRouteData;
+  routeData: UsageRouteData | undefined;
   usageError: string | null;
+  readonly usageResult: SessionsUsageResult | null;
+  readonly usageLoading: boolean;
   usageSelectedSessions: string[];
-  details: UsageDetailsController;
   providerUsageStalled: boolean;
-  providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
   providerUsageUnavailable: boolean;
-  loadUsage: () => Promise<void>;
-  requestUpdate: () => void;
-  render: () => unknown;
+  read: ReturnType<typeof createUsagePage>["read"];
+  refresh: () => Promise<void>;
   readonly updateComplete: Promise<boolean>;
 };
+
+const pageCleanups = new Set<() => void>();
 
 type UsagePublicationFixture = {
   agentId?: string;
@@ -115,14 +121,153 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
 export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
-  context: ApplicationContext = contextWithClient(client),
+  initialContext: ApplicationContext = contextWithClient(client),
 ): Promise<TestUsagePage> {
-  const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-  page.context = context;
-  if (!renderView) {
-    page.render = () => nothing;
-  }
-  document.body.append(page);
+  let context = initialContext;
+  // Legacy test fixtures describe canonical rows; expose the same server projection
+  // as the real RPC so page tests exercise request ownership and presentation.
+  const originalRequest = client.request.bind(client);
+  client.request = (async (method, params, options) => {
+    const result = await originalRequest(method, params, options);
+    if (
+      method !== "sessions.usage" ||
+      !result ||
+      typeof result !== "object" ||
+      !("sessions" in result) ||
+      !("totals" in result)
+    ) {
+      return result;
+    }
+    const usage = result as SessionsUsageResult;
+    const requestParams = (params ?? {}) as Record<string, unknown>;
+    if (usage.overview || requestParams.key) {
+      return result;
+    }
+    const filters = params as UsageOverviewOptions | undefined;
+    const projected = buildUsageOverview({
+      rows: usage.sessions,
+      options: filters ?? {},
+      dayBucket:
+        requestParams.mode === "specific" && typeof requestParams.timeZone === "string"
+          ? { mode: "time-zone", timeZone: requestParams.timeZone }
+          : { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    const hasFilters = Boolean(
+      filters?.query ||
+      filters?.selectedDays?.length ||
+      filters?.selectedHours?.length ||
+      filters?.selectedSessions?.length,
+    );
+    return {
+      ...usage,
+      ...projected,
+      ...(!hasFilters ? { totals: usage.totals, aggregates: usage.aggregates } : {}),
+      ...(requestParams.projection === "overview"
+        ? {}
+        : {
+            sessions: usage.sessions.filter((session) =>
+              projected.sessions.some((row) => row.key === session.key),
+            ),
+          }),
+    };
+  }) as GatewayBrowserClient["request"];
+  const content = renderView ? (await import("./usage-page.tsx")).UsagePageContent : undefined;
+  const container = document.createElement("div");
+  let model: ReturnType<typeof createUsagePage>;
+  let routeData: UsageRouteData | undefined;
+  let disposeView: () => void;
+  let disposed = false;
+  const mount = () => {
+    disposeView = mountSolid(
+      () => {
+        model = createUsagePage(context);
+        return content?.({
+          get state() {
+            return model.read();
+          },
+          context,
+          get result() {
+            return model.result();
+          },
+        });
+      },
+      { container },
+    ).unmount;
+  };
+  const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    disposeView();
+    pageCleanups.delete(cleanup);
+  };
+  const page: TestUsagePage = {
+    element: container,
+    querySelector: container.querySelector.bind(container),
+    querySelectorAll: container.querySelectorAll.bind(container),
+    get textContent() {
+      return container.textContent;
+    },
+    get isConnected() {
+      return container.isConnected;
+    },
+    get context() {
+      return context;
+    },
+    set context(next: ApplicationContext) {
+      disposeView();
+      context = next;
+      disposed = false;
+      pageCleanups.add(cleanup);
+      mount();
+      if (routeData) {
+        model.setRouteData(routeData);
+      }
+    },
+    get routeData() {
+      return routeData;
+    },
+    set routeData(data: UsageRouteData | undefined) {
+      routeData = data;
+      model.setRouteData(data);
+    },
+    get usageError() {
+      return model.read().data.error;
+    },
+    get usageResult() {
+      return model.result();
+    },
+    get usageLoading() {
+      return model.read().data.loading;
+    },
+    get usageSelectedSessions() {
+      return model.read().filters.selectedSessions;
+    },
+    get providerUsageStalled() {
+      return model.read().data.providerUsageStalled;
+    },
+    get providerUsageUnavailable() {
+      return model.read().data.providerUsageUnavailable;
+    },
+    read: () => model.read(),
+    refresh: async () => {
+      await model.read().callbacks.filters.onRefresh();
+    },
+    get updateComplete() {
+      return Promise.resolve().then(() => {
+        flush();
+        return true;
+      });
+    },
+    remove() {
+      cleanup();
+      container.remove();
+    },
+  };
+  document.body.append(container);
+  pageCleanups.add(cleanup);
+  mount();
   await page.updateComplete;
   return page;
 }
@@ -155,6 +300,9 @@ export function createPendingUsageRouteData(
 }
 
 export function cleanupUsagePageTest(): void {
+  for (const cleanup of pageCleanups) {
+    cleanup();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();

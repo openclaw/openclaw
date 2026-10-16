@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import { hasPluginLifecycleLeaseDemand } from "../plugins/plugin-lifecycle-lease.js";
@@ -110,10 +111,7 @@ export function createGatewayActiveWorkTracker(options: {
         if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
           return true;
         }
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
-          timer.unref?.();
-        });
+        await sleepWithAbort(CHANNEL_RELOAD_DEFERRAL_POLL_MS, undefined, { ref: false });
         if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
           return true;
         }

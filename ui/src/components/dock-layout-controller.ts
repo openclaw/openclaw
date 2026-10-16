@@ -1,14 +1,11 @@
-import {
-  html,
-  nothing,
-  type ReactiveController,
-  type ReactiveControllerHost,
-  type TemplateResult,
-} from "lit";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
-import "./resizable-divider.ts";
 
-type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
+type DockLayoutHost = Pick<SolidControllerHost, "addController" | "requestUpdate"> & {
+  readonly isConnected: boolean;
+  readonly embedded?: boolean;
+  hasAttribute?(name: string): boolean;
+};
 
 type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
@@ -16,11 +13,10 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
   maxWidth?: () => number;
-  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
-export class DockLayoutController<TDock extends DockPanelPlacement> implements ReactiveController {
+export class DockLayoutController<TDock extends DockPanelPlacement> implements SolidController {
   open = false;
   dock: TDock;
   height: number;
@@ -146,7 +142,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 
-  private resize(event: CustomEvent<{ splitRatio: number }>): void {
+  resize(event: CustomEvent<{ splitRatio: number }>): void {
     const horizontal = this.dock === "bottom";
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
@@ -165,27 +161,23 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
   }
 
-  renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
+  get resizer() {
     if (this.isFullscreen() || this.dock === "main") {
-      return nothing;
+      return null;
     }
     const horizontal = this.dock === "bottom";
     const size = this.size();
     const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
     const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
     const current = horizontal ? this.height : this.width;
-    return html`<resizable-divider
-      class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      .orientation=${horizontal ? "horizontal" : "vertical"}
-      .label=${label}
-      .splitRatio=${1 - current / size}
-      .minRatio=${1 - maximum / size}
-      .maxRatio=${1 - minimum / size}
-      .measureRatio=${() => 1 - (horizontal ? this.height : this.width) / this.size()}
-      .measureSize=${() => this.size()}
-      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
-      @resize-end=${() => this.persist()}
-    ></resizable-divider>`;
+    return {
+      orientation: horizontal ? ("horizontal" as const) : ("vertical" as const),
+      splitRatio: 1 - current / size,
+      minRatio: 1 - maximum / size,
+      maxRatio: 1 - minimum / size,
+      measureRatio: () => 1 - (horizontal ? this.height : this.width) / this.size(),
+      measureSize: () => this.size(),
+    };
   }
 
   private clearReservation(): void {
@@ -201,11 +193,8 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   // and inline hosts are laid out by their parent, and the standalone dock of the same
   // panel can be open at the same time, so they neither reserve nor clear its properties.
   private reservesViewport(): boolean {
-    return (
-      this.options.reserveViewport !== false &&
-      !this.isFullscreen() &&
-      !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
-    );
+    const embedded = this.host.embedded ?? this.host.hasAttribute?.("embedded") ?? false;
+    return !this.isFullscreen() && !embedded;
   }
 
   private isFullscreen(): boolean {

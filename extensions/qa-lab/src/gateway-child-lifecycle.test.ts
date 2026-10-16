@@ -120,7 +120,10 @@ if (previous.length && failReplacement !== "false") {
   }
   process.exit(17);
 }
-http.createServer((_request, response) => response.end("ok")).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+http.createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/readyz" ? { ready: true, agentDatabases: [] } : { ok: true }));
+}).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
 }
 `,
   );
@@ -317,9 +320,11 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     async (phase) => {
       const { params, pids } = await fixture(phase === "replacement");
       const failure = new Error("fixture listening failed");
+      let listeningLogs: (() => string) | undefined;
       const owner = own({
         ...params,
-        onListening: () => {
+        onListening: ({ logs }) => {
+          listeningLogs = logs;
           pids();
           if (phase === "startup") {
             throw failure;
@@ -336,6 +341,9 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
           "exitCode=17",
         );
       }
+      expect(listeningLogs?.()).toContain("QA_GATEWAY_ATTEMPT_1");
+      expect(listeningLogs?.()).toContain("apiKey=<redacted>");
+      expect(listeningLogs?.()).not.toContain("synthetic-fixture-secret");
       const artifactRoot = path.join(process.cwd(), ".artifacts/qa-e2e/startup-lease-fix");
       await fs.mkdir(artifactRoot, { recursive: true });
       const preserveToDir = await fs.mkdtemp(path.join(artifactRoot, "preserved-log-"));

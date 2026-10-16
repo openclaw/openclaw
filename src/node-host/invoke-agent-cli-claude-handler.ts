@@ -134,8 +134,6 @@ export async function handleClaudeCliNodeInvoke(params: {
       timeoutMs: request.timeoutMs,
     },
     skillBins: params.skillBins,
-    execHostEnforced: false,
-    execHostFallbackAllowed: true,
     runCommand: async (approvalArgv, cwd, env, timeoutMs, _signal, assertCurrent) => {
       const childEnv = { ...env };
       for (const key of request.clearEnv ?? []) {

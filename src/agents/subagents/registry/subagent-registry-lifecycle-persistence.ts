@@ -7,11 +7,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  bindSubagentRunRuntimeKey,
-  getSubagentRunRuntimeKey,
-  isSameSubagentRunOwner,
-} from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export async function commitSubagentLifecycleMutation(
   context: SubagentLifecycleCommonContext,
@@ -51,8 +47,7 @@ export async function commitSubagentLifecycleMutation(
         throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
       }
       args.assertCurrent(current);
-      const draft = structuredClone(current);
-      bindSubagentRunRuntimeKey(draft, getSubagentRunRuntimeKey(current));
+      const draft = copySubagentRunRuntimeOwner(current, structuredClone(current));
       if (args.mutate(draft, current) === false) {
         return { value: current };
       }

@@ -1,37 +1,39 @@
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import type { UsageContract } from "./translator.js";
 
+function projectUsage(usage: NonNullable<PluginHookReplyUsageState["usage"]>) {
+  const promptTotal = (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0) + (usage.input ?? 0);
+  return {
+    promptTotal,
+    tokens: {
+      input_tokens: usage.input,
+      output_tokens: usage.output,
+      cache_read_tokens: usage.cacheRead,
+      cache_write_tokens: usage.cacheWrite,
+      total_tokens: usage.total,
+      cache_hit_pct:
+        promptTotal > 0 ? Math.round(((usage.cacheRead ?? 0) / promptTotal) * 100) : undefined,
+    },
+  };
+}
+
 export function buildUsageContract(
   state: PluginHookReplyUsageState,
   surface?: string,
 ): UsageContract {
   const usage = state.usage ?? {};
-  const input = usage.input;
-  const output = usage.output;
-  const cacheRead = usage.cacheRead;
-  const cacheWrite = usage.cacheWrite;
-  const total = usage.total;
+  const { input, output, cacheRead, cacheWrite, total } = usage;
   const hasSplitTokens = input !== undefined || output !== undefined;
   const hasTotalOnlyTokens = !hasSplitTokens && total !== undefined;
   const hasTokens =
     hasSplitTokens || cacheRead !== undefined || cacheWrite !== undefined || total !== undefined;
 
-  const promptTotal = (cacheRead ?? 0) + (cacheWrite ?? 0) + (input ?? 0);
-  const cacheHitPct =
-    promptTotal > 0 ? Math.round(((cacheRead ?? 0) / promptTotal) * 100) : undefined;
-
+  const { promptTotal, tokens } = projectUsage(usage);
   const last = state.lastUsage;
-  const lastPromptTotal = last
-    ? (last.cacheRead ?? 0) + (last.cacheWrite ?? 0) + (last.input ?? 0)
-    : 0;
-  const lastCacheHitPct =
-    last && lastPromptTotal > 0
-      ? Math.round(((last.cacheRead ?? 0) / lastPromptTotal) * 100)
-      : undefined;
 
   const maxTokens = state.contextTokenBudget;
   const usedTokens =
-    typeof state.contextUsedTokens === "number" && state.contextUsedTokens > 0
+    state.contextUsedTokens !== undefined && state.contextUsedTokens > 0
       ? state.contextUsedTokens
       : promptTotal > 0
         ? promptTotal
@@ -41,7 +43,7 @@ export function buildUsageContract(
 
   const overrideSource = state.overrideSource ?? null;
   const isOverride =
-    typeof state.overrideSource === "string" &&
+    state.overrideSource !== undefined &&
     state.overrideSource !== "" &&
     state.overrideSource !== "auto";
 
@@ -64,29 +66,15 @@ export function buildUsageContract(
       auth_mode: state.authMode ?? null,
     },
     state: {
-      fast_mode: typeof state.fastMode === "boolean" ? state.fastMode : null,
-      compactions: typeof state.compactionCount === "number" ? state.compactionCount : null,
+      fast_mode: state.fastMode ?? null,
+      compactions: state.compactionCount ?? null,
     },
     usage: {
-      input_tokens: input,
-      output_tokens: output,
-      cache_read_tokens: cacheRead,
-      cache_write_tokens: cacheWrite,
-      total_tokens: total,
-      cache_hit_pct: cacheHitPct,
+      ...tokens,
       has_tokens: hasTokens,
       has_split_tokens: hasSplitTokens,
       has_total_only_tokens: hasTotalOnlyTokens,
-      last: last
-        ? {
-            input_tokens: last.input,
-            output_tokens: last.output,
-            cache_read_tokens: last.cacheRead,
-            cache_write_tokens: last.cacheWrite,
-            total_tokens: last.total,
-            cache_hit_pct: lastCacheHitPct,
-          }
-        : undefined,
+      last: last ? projectUsage(last).tokens : undefined,
     },
     context: {
       used_tokens: usedTokens,
@@ -94,11 +82,11 @@ export function buildUsageContract(
       pct_used: pctUsed,
     },
     cost: {
-      turn_usd: typeof state.turnUsd === "number" ? state.turnUsd : null,
-      available: typeof state.turnUsd === "number",
+      turn_usd: state.turnUsd ?? null,
+      available: state.turnUsd !== undefined,
     },
     timing: {
-      duration_ms: typeof state.durationMs === "number" ? state.durationMs : null,
+      duration_ms: state.durationMs ?? null,
     },
     identity: {
       name: state.identity?.name ?? null,

@@ -143,7 +143,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -427,7 +427,7 @@ jobs:
 
       - name: Download full release validation manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
           path: full-release-validation
@@ -556,9 +556,16 @@ jobs:
             timeout --signal=TERM --kill-after=10s 120s git -C trusted-workflow fetch \
               --no-tags --depth=1 origin "$preflight_head_sha"
           fi
-          if [[ "$extended_stable_preflight" != "true" ]] && ! git -C trusted-workflow merge-base --is-ancestor "$preflight_head_sha" "$WORKFLOW_SHA"; then
-            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
-            exit 1
+          if [[ "$extended_stable_preflight" != "true" ]]; then
+            lineage_args=(--verify-publication-lineage)
+            if [[ "$full_release_preflight" == "true" ]]; then
+              lineage_args+=(--full-release-manifest "$full_manifest")
+            fi
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              "${lineage_args[@]}" \
+              --repository "$GITHUB_REPOSITORY" --source-sha "$EXPECTED_RELEASE_SHA" \
+              --workflow-sha "$preflight_head_sha" --publisher-sha "$WORKFLOW_SHA" \
+              --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           fi
           echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
           echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
@@ -568,7 +575,7 @@ jobs:
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ inputs.focused_release_evidence_run_attempt }}
           path: authorized-beta-focused-evidence
@@ -917,11 +924,6 @@ jobs:
           NPM_WORKFLOW_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || github.ref }}
         run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
-      - name: Capture previous extended-stable selector
-        id: previous_extended_stable
-        if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
-
       - name: Wait for the release parent's npm authorization
         if: needs.validate_publish_request.outputs.parent_approval == 'receipt'
         env:
@@ -933,12 +935,23 @@ jobs:
 
       - name: Publish
         id: publish
+        # The shared release parent owns registry convergence, artifact verification,
+        # and publication reporting for every npm channel. Direct recovery uses
+        # the same postpublish verifier before closeout.
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
+          PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_run.outputs.head_branch }}
+          PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_run.outputs.workflow_path }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_run.outputs.run_id }}
+          PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
           RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
@@ -949,19 +962,6 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          verify_release_tooling_identity() {
-            node trusted-workflow/scripts/release-tooling-identity.mjs verify \
-              --repository "$GITHUB_REPOSITORY" \
-              --workflow-ref "$WORKFLOW_REF" \
-              --workflow-full-ref "$WORKFLOW_FULL_REF" \
-              --workflow-sha "$WORKFLOW_SHA" \
-              --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
-              --release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT" \
-              --release-publish-ref "$RELEASE_PUBLISH_REF" \
-              --release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF" \
-              --release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY" \
-              --allow-prevalidated-ref
-          }
           publish_target="${PUBLISH_TARBALL_PATH}"
           if [[ -n "${publish_target}" ]]; then
             publish_target="./${publish_target}"
@@ -979,62 +979,9 @@ jobs:
               echo "${package_name}@${package_version} is already published; reusing it."
               return 0
             fi
-            verify_release_tooling_identity
-            bash scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
+            bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
           }
           while IFS=$'\t' read -r package_name tarball_name; do
             publish_if_missing "$package_name" "preflight-tarball/$tarball_name"
           done < <(jq -r '(.corePackageTarballs // [])[] | [.packageName, .tarballName] | @tsv' preflight-tarball/preflight-manifest.json)
-          verify_release_tooling_identity
-          bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
-
-      - name: Verify extended-stable registry readback
-        id: extended_stable_readback
-        if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
-        env:
-          EXPECTED_VERSION: ${{ inputs.tag }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs verify-readback
-
-      - name: Summarize extended-stable npm publication
-        if: ${{ always() && inputs.npm_dist_tag == 'extended-stable' }}
-        env:
-          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
-          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          TARBALL_NAME: ${{ steps.preflight_provenance.outputs.tarball_name }}
-          TARBALL_SHA256: ${{ steps.preflight_provenance.outputs.tarball_sha256 }}
-          SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_extended_stable.outcome }}
-          PREVIOUS_EXTENDED_STABLE: ${{ steps.previous_extended_stable.outputs.previous }}
-          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
-          EXACT_READBACK: ${{ steps.extended_stable_readback.outputs.exact_version }}
-          SELECTOR_READBACK: ${{ steps.extended_stable_readback.outputs.extended_stable_selector }}
-          READBACK_OUTCOME: ${{ steps.extended_stable_readback.outcome }}
-        run: |
-          set -euo pipefail
-          release_version="${RELEASE_TAG#v}"
-          release_sha="$(git rev-parse HEAD)"
-          {
-            echo "## npm extended-stable publication"
-            echo "- Package: openclaw@${release_version}"
-            echo "- Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}"
-            echo "- Extended-stable branch: ${EXTENDED_STABLE_BRANCH}"
-            echo "- Release tag: ${RELEASE_TAG}"
-            echo "- Release SHA: ${release_sha}"
-            echo "- npm preflight run: ${PREFLIGHT_RUN_ID}"
-            echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
-            echo "- Tarball: ${TARBALL_NAME:-unavailable}"
-            echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
-            echo "- Previous openclaw@extended-stable: ${PREVIOUS_EXTENDED_STABLE:-unavailable}"
-            echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
-            echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
-            echo "- Extended-stable selector readback: ${SELECTOR_READBACK:-unavailable}"
-            echo "- Registry readback outcome: ${READBACK_OUTCOME}"
-            if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
-              echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
-            else
-              repair_command="$(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
-              echo "- Repair command: \`${repair_command}\`"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"

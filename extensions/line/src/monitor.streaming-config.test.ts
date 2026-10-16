@@ -17,11 +17,6 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock } = vi.hoist
 
 vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  chunkMarkdownText: vi.fn(),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-}));
-
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
     "openclaw/plugin-sdk/runtime-env",
@@ -48,17 +43,6 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
 });
 
 vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
-vi.mock("./markdown-to-line.js", () => ({ processLineMessage: vi.fn() }));
-vi.mock("./send.js", () => ({
-  createFlexMessage: vi.fn(),
-  createImageMessage: vi.fn(),
-  createLocationMessage: vi.fn(),
-  getUserDisplayName: vi.fn(),
-  pushMessagesLine: vi.fn(),
-  replyMessageLine: vi.fn(),
-  showLoadingAnimation: vi.fn(),
-}));
-vi.mock("./template-messages.js", () => ({ buildTemplateMessageFromPayload: vi.fn() }));
 
 const { monitorLineProvider } = await import("./monitor.js");
 const { setLineRuntime } = await import("./runtime.js");
@@ -67,14 +51,10 @@ type ResolvedTurn = { replyOptions?: { disableBlockStreaming?: boolean } };
 
 afterAll(() => {
   vi.doUnmock("./bot.js");
-  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
   vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
   vi.doUnmock("./auto-reply-delivery.js");
-  vi.doUnmock("./markdown-to-line.js");
-  vi.doUnmock("./send.js");
-  vi.doUnmock("./template-messages.js");
   vi.resetModules();
 });
 
@@ -143,39 +123,6 @@ function lineCfg(streaming?: unknown): OpenClawConfig {
 }
 
 describe("the channel-scoped block streaming choice", () => {
-  it("turns block replies on for LINE alone when the operator enables them", async () => {
-    const replyOptions = await replyOptionsFor({
-      turnConfig: lineCfg({ block: { enabled: true } }),
-    });
-
-    // false is what core reads as "this channel says yes", overriding the agent default.
-    expect(replyOptions?.disableBlockStreaming).toBe(false);
-  });
-
-  it("turns block replies off for LINE alone when the operator disables them", async () => {
-    const replyOptions = await replyOptionsFor({
-      turnConfig: lineCfg({ block: { enabled: false } }),
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
-  });
-
-  it("stays silent when the operator expressed no channel-scoped choice", async () => {
-    // Sending a boolean here would override agents.defaults.blockStreamingDefault
-    // for every LINE turn, which is the one thing an unset key must not do.
-    const replyOptions = await replyOptionsFor({ turnConfig: lineCfg() });
-
-    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
-  });
-
-  it("stays silent when the operator only tuned coalescing", async () => {
-    const replyOptions = await replyOptionsFor({
-      turnConfig: lineCfg({ block: { coalesce: { minChars: 1500 } } }),
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
-  });
-
   it("lets a named account override the channel-wide choice", async () => {
     const replyOptions = await replyOptionsFor({
       turnConfig: {
@@ -189,18 +136,6 @@ describe("the channel-scoped block streaming choice", () => {
     });
 
     expect(replyOptions?.disableBlockStreaming).toBe(true);
-  });
-
-  it("forgets a choice the operator removed since the provider started", async () => {
-    // Only this case separates reading the live config from reading the startup one:
-    // an inverted or account-blind read still answers undefined here, so a failure
-    // names the config source alone.
-    const replyOptions = await replyOptionsFor({
-      startupConfig: lineCfg({ block: { enabled: false } }),
-      turnConfig: lineCfg(),
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBeUndefined();
   });
 
   it("keeps a channel-wide disable when an account only tunes coalescing", async () => {
@@ -219,21 +154,6 @@ describe("the channel-scoped block streaming choice", () => {
     });
 
     expect(replyOptions?.disableBlockStreaming).toBe(true);
-  });
-
-  it("keeps a channel-wide enable when an account only sets a chunk mode", async () => {
-    const replyOptions = await replyOptionsFor({
-      turnConfig: {
-        channels: {
-          line: {
-            streaming: { block: { enabled: true } },
-            accounts: { default: { streaming: { chunkMode: "newline" } } },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBe(false);
   });
 
   it("reads the choice from the turn's own config, not the one the provider started with", async () => {

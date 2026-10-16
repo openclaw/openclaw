@@ -19,6 +19,7 @@ import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import type { WhatsAppSelfIdentity } from "./identity.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -39,6 +40,11 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
+type WhatsAppStatusSnapshot = ChannelAccountSnapshot & {
+  self: WhatsAppSelfIdentity | null;
+  authAgeMs: number | null;
+};
+
 function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
   return {
     connected: runtime?.connected ?? false,
@@ -50,7 +56,7 @@ function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
     lastEventAt: runtime?.lastEventAt ?? null,
     busy: runtime?.busy ?? false,
     lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
-    healthState: runtime?.healthState ?? undefined,
+    healthState: runtime?.healthState,
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
   };
 }
@@ -267,10 +273,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
-          const { e164, jid } = (await loadWhatsAppChannelRuntime()).readWebSelfId(account.authDir);
+          const channelRuntime = await loadWhatsAppChannelRuntime();
+          const auth = await channelRuntime.readWebAuthSnapshot(account.authDir);
+          ctx.abortSignal.throwIfAborted();
+          const { e164, jid } = auth.selfId;
           const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
           ctx.log?.info(`[${account.accountId}] starting provider (${identity})`);
-          return (await loadWhatsAppChannelRuntime()).monitorWebChannel(
+          return channelRuntime.monitorWebChannel(
             getWhatsAppRuntime().logging.shouldLogVerbose(),
             undefined,
             true,
@@ -278,22 +287,28 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             ctx.runtime,
             ctx.abortSignal,
             {
-              statusSink: (next: WebChannelStatus) =>
-                ctx.setStatus({ accountId: ctx.accountId, ...next }),
+              statusSink: (next: WebChannelStatus) => {
+                const hasIdentity = next.running && next.healthState !== "logged-out";
+                const snapshot: WhatsAppStatusSnapshot = {
+                  accountId: ctx.accountId,
+                  ...next,
+                  self: hasIdentity ? auth.selfId : null,
+                  authAgeMs: hasIdentity
+                    ? next.authAgeMs === undefined
+                      ? auth.authAgeMs
+                      : next.authAgeMs
+                    : null,
+                  ...(next.healthState === "logged-out" ? { linked: false } : {}),
+                };
+                ctx.setStatus(snapshot);
+              },
               accountId: account.accountId,
               channelRuntime: ctx.channelRuntime,
             },
           );
         },
-        loginWithQrStart: async ({ accountId, force, timeoutMs, verbose }) =>
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).startWebLoginWithQr({
-            accountId,
-            force,
-            timeoutMs,
-            verbose,
-          }),
+        loginWithQrStart: async (params) =>
+          await (await loadWhatsAppChannelRuntime()).startWebLoginWithQr(params),
         loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
           await (
             await loadWhatsAppChannelRuntime()

@@ -17,6 +17,8 @@ full behavior and rationale of each numbered check, follow the links under
     - Optional pre-flight update for git installs (interactive only).
     - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
     - Health check + restart prompt.
+    - Native filesystem (`fs-safe`) and process (`proc-safe`) helper status. Missing helpers report the library's diagnostic reason and repair guidance; explicitly disabled native mode is informational.
+    - Windows AppContainer child-pipe support. With libuv older than 1.53.0, child commands fail promptly instead of hanging. Run OpenClaw outside the AppContainer or use a Node build with libuv 1.53.0 or newer.
     - Problem-only skill and plugin notes; healthy inventory stays in `openclaw skills check` and `openclaw plugins list`.
     - Runtime tool schema checks report failing MCP servers and continue with the remaining checks. If subprocess cleanup cannot be confirmed, Doctor retains the server findings and adds a cleanup diagnostic; inspect or stop the affected MCP processes before rerunning Doctor.
     - During updates, Doctor defers MCP connections and records each enabled server with a follow-up command. Core tool schemas are still checked. Run `openclaw doctor --lint --only core/doctor/runtime-tool-schemas` after the update to inspect MCP tools.
@@ -50,6 +52,7 @@ full behavior and rationale of each numbered check, follow the links under
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
+    - Claude CLI discovery uses the Anthropic plugin's executable resolver, including native installations in `~/.local/bin`. During updates, a Doctor child can inherit the Gateway service's narrower `PATH`; Doctor reports the discovered binary's location when it is outside that path. A missing binary still produces installation guidance.
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -57,7 +60,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Legacy service migration and extra gateway detection.
     - Matrix channel legacy state migration (in `--fix` / `--repair` mode).
     - Gateway runtime checks (service installed but not running; cached launchd label).
-    - Channel status warnings (probed from the running gateway).
+    - Channel status warnings (checked from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness reports Gateway pressure and detected local TUI clients without attributing the pressure to those clients. Inspect [Gateway diagnostics](/gateway/diagnostics) before deciding whether to close clients; Doctor does not stop them.
     - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session runtime pins, and lets the repaired effective route determine whether Codex is compatible.

@@ -1,21 +1,43 @@
+import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../../config/config-paths.js";
 import type { ConfigWriteOptions } from "../../../config/io.js";
+import { projectWebhookMigrationIncludeWrite } from "../../../config/io.meta.js";
 import { resolveConfigIncludeWriteBoundary } from "../../../config/mutate.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
 
-/** Split only a root roster repair followed by one include-owned plugin recovery. */
-export function prepareCanonicalRosterBeforePluginInclude(params: {
+/** Plan one guarded owner write and retain the exact paths still awaiting publication. */
+export function prepareDoctorConfigWriteStage(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   persistCanonicalAgentRoster?: boolean;
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   explicitSetPaths?: ConfigWriteOptions["explicitSetPaths"];
-}): OpenClawConfig | undefined {
+}):
+  | { config: OpenClawConfig; remainingPaths: string[][]; persistCanonicalAgentRoster: boolean }
+  | undefined {
+  const webhook = projectWebhookMigrationIncludeWrite(
+    params.snapshot.sourceConfig,
+    params.nextConfig,
+  );
+  const remainingPaths = webhook?.paths ?? [];
+  if (webhook) {
+    const markerPath = ["meta", "migrations", "webhookListeners"];
+    const previous = params.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
+    if (previous === undefined) {
+      unsetConfigValueAtPath(webhook.config, markerPath, params.snapshot.sourceConfig);
+    } else {
+      setConfigValueAtPath(webhook.config, markerPath, previous);
+    }
+    remainingPaths.push(markerPath);
+    if (resolveConfigIncludeWriteBoundary({ ...params, nextConfig: webhook.config })) {
+      return { config: webhook.config, remainingPaths, persistCanonicalAgentRoster: false };
+    }
+  }
   if (!params.persistCanonicalAgentRoster || !params.installedPluginIdRecovery?.size) {
     return undefined;
   }
-  const includeCandidate = cloneConfigWithResolutionFacts(params.nextConfig);
+  const includeCandidate = cloneConfigWithResolutionFacts(webhook?.config ?? params.nextConfig);
   includeCandidate.agents = params.snapshot.sourceConfig.agents;
   const boundary = resolveConfigIncludeWriteBoundary({
     snapshot: params.snapshot,
@@ -27,7 +49,11 @@ export function prepareCanonicalRosterBeforePluginInclude(params: {
   }
   const rosterCandidate = cloneConfigWithResolutionFacts(params.snapshot.sourceConfig);
   rosterCandidate.agents = params.nextConfig.agents;
-  return rosterCandidate;
+  return {
+    config: rosterCandidate,
+    remainingPaths: [["plugins"], ...remainingPaths],
+    persistCanonicalAgentRoster: true,
+  };
 }
 
 /** Preview the same physical-owner sequence that the guarded Doctor writer uses. */
@@ -39,7 +65,7 @@ export function canWriteDoctorInclude(
 ): boolean {
   return Boolean(
     resolveConfigIncludeWriteBoundary({ snapshot, nextConfig, ...options }) ||
-    prepareCanonicalRosterBeforePluginInclude({
+    prepareDoctorConfigWriteStage({
       snapshot,
       nextConfig,
       ...options,

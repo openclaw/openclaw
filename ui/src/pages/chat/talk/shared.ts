@@ -10,7 +10,10 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
 } from "../../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../../src/talk/agent-run-control-shared.js";
-import type { RealtimeVoiceBrowserSession } from "../../../../../src/talk/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceCloseOptions,
+} from "../../../../../src/talk/provider-types.js";
 import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -81,7 +84,7 @@ export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
 export type RealtimeTalkTransport = {
   start(): Promise<RealtimeTalkTransportStartResult>;
   activate?: () => void;
-  stop(options?: { emitClosed?: boolean }): void | Promise<void>;
+  stop(options?: RealtimeVoiceCloseOptions & { emitClosed?: boolean }): void | Promise<void>;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
   switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
@@ -232,16 +235,16 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
     result.providerStarted === true;
-  if (hasTerminalTimeoutMetadata) {
-    return new Error(message || "OpenClaw tool call timed out");
-  }
-  return undefined;
+  return hasTerminalTimeoutMetadata
+    ? new Error(message || "OpenClaw tool call timed out")
+    : undefined;
 }
 
-function waitForChatResult(params: {
+export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;
+  timeoutMessage?: string;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -251,31 +254,32 @@ function waitForChatResult(params: {
       return;
     }
     const timer = window.setTimeout(() => {
-      settleReject(new Error("OpenClaw tool call timed out"));
+      settle(new Error(params.timeoutMessage ?? "OpenClaw tool call timed out"));
     }, params.timeoutMs);
     let settled = false;
     let emptyFinalWaitStarted = false;
     let emptyFinalFallbackTimer: number | undefined;
     const onAbort = () => {
-      settleReject(new DOMException("OpenClaw tool call aborted", "AbortError"));
+      settle(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
-    const settleResolve = (value: string) => {
+    const settle = (result: string | Error | DOMException) => {
       if (settled) {
         return;
       }
       settled = true;
-      cleanup();
-      resolve(value);
-    };
-    const settleReject = (error: Error | DOMException) => {
-      if (settled) {
-        return;
+      window.clearTimeout(timer);
+      if (emptyFinalFallbackTimer !== undefined) {
+        window.clearTimeout(emptyFinalFallbackTimer);
       }
-      settled = true;
-      cleanup();
-      reject(error);
+      params.signal?.removeEventListener("abort", onAbort);
+      unsubscribe();
+      if (typeof result === "string") {
+        resolve(result);
+      } else {
+        reject(result);
+      }
     };
     const waitForEmptyFinalFallback = () => {
       if (emptyFinalWaitStarted) {
@@ -293,18 +297,18 @@ function waitForChatResult(params: {
           }
           const waitError = getTerminalAgentWaitError(result);
           if (waitError) {
-            settleReject(waitError);
+            settle(waitError);
             return;
           }
           if (result?.status === "timeout") {
             return;
           }
           emptyFinalFallbackTimer = window.setTimeout(() => {
-            settleResolve("OpenClaw finished with no text.");
+            settle("OpenClaw finished with no text.");
           }, EMPTY_FINAL_FALLBACK_GRACE_MS);
         })
         .catch((error: unknown) => {
-          settleReject(error instanceof Error ? error : new Error(String(error)));
+          settle(error instanceof Error ? error : new Error(String(error)));
         });
     };
     unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
@@ -319,26 +323,18 @@ function waitForChatResult(params: {
       if (payload.state === "final") {
         const finalText = extractTextFromMessage(payload.message);
         if (finalText) {
-          settleResolve(finalText);
+          settle(finalText);
           return;
         }
         waitForEmptyFinalFallback();
       } else if (payload.state === "aborted") {
-        settleReject(
+        settle(
           new DOMException(payload.errorMessage ?? "OpenClaw tool call aborted", "AbortError"),
         );
       } else if (payload.state === "error") {
-        settleReject(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
+        settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
-    function cleanup() {
-      window.clearTimeout(timer);
-      if (emptyFinalFallbackTimer !== undefined) {
-        window.clearTimeout(emptyFinalFallbackTimer);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      unsubscribe();
-    }
   });
 }
 
@@ -530,7 +526,8 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const abortRun = () => {
     aborted = true;
-    if (run) {
+    // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
+    if (run && !params.relaySessionId) {
       void ctx.client.request("chat.abort", {
         sessionKey: run.agentSessionKey,
         agentId: run.agentId,
@@ -552,7 +549,7 @@ export async function submitRealtimeTalkConsult(params: {
       return;
     }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
-    // Once the run id arrives, abortRun() can cancel the exact started consult.
+    // Once the run id arrives, direct transports can cancel the exact started consult.
     run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
       sessionKey: ctx.sessionKey,
       ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),

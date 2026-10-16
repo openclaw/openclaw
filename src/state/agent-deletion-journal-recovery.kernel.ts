@@ -59,9 +59,18 @@ export function assertAgentDeletionRecoveryHoldPredicate(
   database: RecoveryDatabase,
   predicate?: AgentDeletionRecoveryHoldPredicate,
 ): void {
+  if (predicate?.applies) {
+    assertAgentDeletionRecoveryHoldsMatch(readAgentDeletionRecoveryHolds(database), predicate);
+  }
+}
+
+export function assertAgentDeletionRecoveryHoldsMatch(
+  held: readonly HeldAgentDatabase[],
+  predicate: AgentDeletionRecoveryHoldPredicate,
+): void {
   if (
-    predicate?.applies &&
-    readAgentDeletionRecoveryHolds(database).some(
+    predicate.applies &&
+    held.some(
       (entry) =>
         entry.agentId === predicate.agentId &&
         !predicate.held.some(

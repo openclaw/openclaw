@@ -3,11 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+} from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CanonicalSubagentRunRecord = SubagentRunRecord &
@@ -24,7 +24,7 @@ function hasStateStatus(
   return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
 }
 
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+export function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
   return (
     isRecord(value) &&
     hasStateStatus(value.execution, EXECUTION_STATUSES) &&
@@ -37,14 +37,6 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
       "handoffInjectedAt" in value.delivery
     )
   );
-}
-
-function assertCanonicalSubagentRunRecord(
-  entry: SubagentRunRecord,
-): asserts entry is CanonicalSubagentRunRecord {
-  if (!isCanonicalSubagentRunRecord(entry)) {
-    throw new Error("subagent run is missing canonical nested state");
-  }
 }
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
@@ -82,18 +74,15 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
     return null;
   }
-  rememberSubagentRunVersion(record, subagentRunRowVersion(row)!);
   return record;
 }
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
 export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  return bindMutableSubagentRunRecord(structuredClone(entry));
-}
-
-function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
-  const normalized = normalizeSubagentRunState(entry);
-  assertCanonicalSubagentRunRecord(normalized);
+  const normalized = normalizeSubagentRunState(structuredClone(entry));
+  if (!isCanonicalSubagentRunRecord(normalized)) {
+    throw new Error("subagent run is missing canonical nested state");
+  }
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
@@ -111,18 +100,6 @@ function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqli
   };
 }
 
-const recordVersions = new WeakMap<SubagentRunRecord, string>();
-
-export function rememberSubagentRunVersion(entry: SubagentRunRecord, version: string): void {
-  recordVersions.set(entry, version);
-}
-
-export function subagentRunRecordVersion(entry: SubagentRunRecord | undefined): string | null {
-  return entry
-    ? (recordVersions.get(entry) ?? subagentRunRowVersion(bindSubagentRunRecord(entry)))
-    : null;
-}
-
 export function parseSubagentRegistryWriteReceipt(
   value: unknown,
   write: SubagentRegistryWrite,
@@ -130,25 +107,8 @@ export function parseSubagentRegistryWriteReceipt(
   if (!isRecord(value) || value.writeId !== write.writeId) {
     throw new Error("Registry acknowledgement identifies another write");
   }
-  if (
-    Array.isArray(value.conflictRunIds) &&
-    value.conflictRunIds.every((id) => typeof id === "string")
-  ) {
-    return { writeId: write.writeId, conflictRunIds: value.conflictRunIds };
-  }
-  if (!(value.versions instanceof Map) || !Array.isArray(value.notices)) {
+  if (!Array.isArray(value.notices)) {
     throw new Error("Registry acknowledgement is missing commit facts");
-  }
-  const versions = new Map<string, string | null>();
-  for (const [id, version] of value.versions) {
-    if (typeof id !== "string" || (version !== null && typeof version !== "string")) {
-      throw new Error("Registry acknowledgement has an invalid row version");
-    }
-    versions.set(id, version);
-  }
-  const ids = [...write.values.map((row) => row.run_id), ...write.deleteRunIds];
-  if (versions.size !== ids.length || ids.some((id) => !versions.has(id))) {
-    throw new Error("Registry acknowledgement does not cover its written rows");
   }
   const notices = value.notices.map((notice): SessionStateNotice => {
     if (
@@ -169,5 +129,5 @@ export function parseSubagentRegistryWriteReceipt(
       queueOnly: notice.queueOnly,
     };
   });
-  return { writeId: write.writeId, versions, notices };
+  return { writeId: write.writeId, notices };
 }

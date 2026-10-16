@@ -77,18 +77,22 @@ export function captureWorkspaceStateFilesystemGuard(
         currentWorkspacePath: current,
       });
     }
-    // Concurrent first-time provisioning can create the same empty directory.
-    // Existing roots remain pinned; new content still invalidates the observation.
+    // Admit first directory creation through an unchanged alias, then pin that
+    // inode too. New content still invalidates a content observation.
     const currentRoot = [statFact(dir, false, false), statFact(dir, true, false)];
     if (
-      (root.some((fact) => fact !== undefined) && !isDeepStrictEqual(root, currentRoot)) ||
-      (!root.some((fact) => fact !== undefined) &&
-        fs.statSync(dir, { throwIfNoEntry: false })?.isFile()) ||
+      root.some((fact, index) => fact !== undefined && fact !== currentRoot[index]) ||
+      (root[1] === undefined &&
+        currentRoot[1] !== undefined &&
+        !fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) ||
       !isDeepStrictEqual(observe(), initial)
     ) {
       throw new Error(
         `Workspace filesystem changed while preparing state for ${dir}; retry workspace setup.`,
       );
+    }
+    for (let index = 0; index < root.length; index++) {
+      root[index] ??= currentRoot[index];
     }
   };
 }

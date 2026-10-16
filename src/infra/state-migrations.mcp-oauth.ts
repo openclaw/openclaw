@@ -60,11 +60,6 @@ function exactLegacyBaseNames(entries: Iterable<{ name: string }>): string[] {
   return Array.from(baseNames).toSorted();
 }
 
-function listLegacySourcePaths(sourceDir: string): string[] {
-  const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
-  return exactLegacyBaseNames(entries).map((baseName) => path.join(sourceDir, baseName));
-}
-
 async function listLegacySourcePathsFromRoot(params: {
   stateRoot: Root;
   stateDir: string;
@@ -89,15 +84,13 @@ export function detectLegacyMcpOAuthStores(params: {
     return { sourceDir, sourcePaths: [], hasLegacy: false };
   }
   try {
-    const sourcePaths = listLegacySourcePaths(sourceDir);
+    const sourcePaths = exactLegacyBaseNames(
+      fs.readdirSync(sourceDir, { withFileTypes: true }),
+    ).map((baseName) => path.join(sourceDir, baseName));
     return { sourceDir, sourcePaths, hasLegacy: sourcePaths.length > 0 };
   } catch {
     return { sourceDir, sourcePaths: [], hasLegacy: pathMayExistSync(sourceDir) };
   }
-}
-
-function relativeLegacyPath(stateDir: string, filePath: string): string {
-  return resolveLegacyMigrationRelativePath(stateDir, filePath, "MCP OAuth", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -280,56 +273,6 @@ async function migrateOneStore(params: {
   return { changes, warnings, notices };
 }
 
-async function migrateWithExclusiveStateOwnership(params: {
-  stateRoot: Root;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  beforeLegacyLock?: (sourcePath: string) => void;
-  beforeClaim?: (sourcePath: string) => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<MigrationMessages> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  let sourcePaths: string[];
-  try {
-    sourcePaths = await listLegacySourcePathsFromRoot(params);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "not-found") {
-      return { changes, warnings };
-    }
-    return { changes, warnings: [`Failed reading legacy MCP OAuth directory: ${String(error)}`] };
-  }
-  const context = captureOpenClawStateWorkerContext({ env: params.env });
-  for (const sourcePath of sourcePaths) {
-    try {
-      // Retired releases serialize complete refresh/login flows on this exact
-      // path. Hold their lock while claiming bytes so an old CLI cannot race Doctor.
-      params.beforeLegacyLock?.(sourcePath);
-      const result = await withRootBoundedLegacyFileLock(
-        {
-          stateRoot: params.stateRoot,
-          targetRelativePath: relativeLegacyPath(params.stateDir, sourcePath),
-        },
-        async () => await migrateOneStore({ ...params, sourcePath, context }),
-      );
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    } catch (error) {
-      const staleGuidance =
-        (error as { code?: unknown }).code === "file_lock_stale"
-          ? " Verify no older OpenClaw process is running, remove the retired .lock sidecar, and rerun Doctor."
-          : "";
-      warnings.push(
-        `Failed locking legacy MCP OAuth store ${path.basename(sourcePath)}: ${String(error)}.${staleGuidance}`,
-      );
-    }
-  }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
-}
-
 /** Import retired MCP OAuth stores while excluding old Gateways that can recreate them. */
 export async function migrateLegacyMcpOAuthStores(params: {
   detected: LegacyMcpOAuthDetection;
@@ -354,7 +297,54 @@ export async function migrateLegacyMcpOAuthStores(params: {
         maxBytes: MAX_LEGACY_STORE_BYTES,
         symlinks: "reject",
       });
-      return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      let sourcePaths: string[];
+      try {
+        sourcePaths = await listLegacySourcePathsFromRoot({ stateRoot, stateDir: params.stateDir });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "not-found") {
+          return { changes, warnings };
+        }
+        return {
+          changes,
+          warnings: [`Failed reading legacy MCP OAuth directory: ${String(error)}`],
+        };
+      }
+      const context = captureOpenClawStateWorkerContext({ env });
+      for (const sourcePath of sourcePaths) {
+        try {
+          // Retired releases serialize complete refresh/login flows on this exact
+          // path. Hold their lock while claiming bytes so an old CLI cannot race Doctor.
+          params.beforeLegacyLock?.(sourcePath);
+          const result = await withRootBoundedLegacyFileLock(
+            {
+              stateRoot,
+              targetRelativePath: resolveLegacyMigrationRelativePath(
+                params.stateDir,
+                sourcePath,
+                "MCP OAuth",
+                false,
+              ),
+            },
+            async () => await migrateOneStore({ ...params, stateRoot, sourcePath, context }),
+          );
+          changes.push(...result.changes);
+          warnings.push(...result.warnings);
+          notices.push(...(result.notices ?? []));
+        } catch (error) {
+          const staleGuidance =
+            (error as { code?: unknown }).code === "file_lock_stale"
+              ? " Verify no older OpenClaw process is running, remove the retired .lock sidecar, and rerun Doctor."
+              : "";
+          warnings.push(
+            `Failed locking legacy MCP OAuth store ${path.basename(sourcePath)}: ${String(error)}.${staleGuidance}`,
+          );
+        }
+      }
+      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
     },
   });
 }

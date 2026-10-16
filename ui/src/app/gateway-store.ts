@@ -11,6 +11,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
@@ -113,7 +114,7 @@ export function createApplicationGateway(
     lastError: null,
     lastErrorCode: null,
     lastErrorAuthReason: null,
-    selfUser: null,
+    selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
   const selfProfile = createGatewaySelfProfile({
@@ -134,6 +135,11 @@ export function createApplicationGateway(
   // Snapshot observers can synchronously stop or replace their publishing client.
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
+  const isCurrentHello = (
+    expectedClient: GatewayBrowserClient | null,
+    hello: GatewayHelloOk | null,
+  ) =>
+    isCurrentClient(expectedClient) && snapshot.hello === hello && snapshot.phase === "connected";
   const availability = createAvailabilityIndicators({
     isStopped: () => stopped,
     getSnapshot: () => snapshot,
@@ -184,15 +190,21 @@ export function createApplicationGateway(
       notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
     }
   };
+  const setConnectionSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    setSnapshot({
+      hello: null,
+      canvasPluginSurfaceUrl: null,
+      selfUser: undefined,
+      lastError: null,
+      lastErrorCode: null,
+      lastErrorAuthReason: null,
+      ...patch,
+    });
   const refreshSelfProfile = () => {
     const requestClient = client;
     const hello = snapshot.hello;
     void selfProfile.load().catch((error: unknown) => {
-      if (
-        isCurrentClient(requestClient) &&
-        snapshot.hello === hello &&
-        snapshot.phase === "connected"
-      ) {
+      if (isCurrentHello(requestClient, hello)) {
         setSnapshot({ lastError: formatUiError(error) });
       }
     });
@@ -213,12 +225,7 @@ export function createApplicationGateway(
     ) {
       // Capability updates keep hello identity; reconnects replace it.
       const eventHello = snapshot.hello;
-      const readCurrent = () =>
-        isCurrentClient(eventClient) &&
-        snapshot.hello === eventHello &&
-        snapshot.phase === "connected"
-          ? snapshot
-          : null;
+      const readCurrent = () => (isCurrentHello(eventClient, eventHello) ? snapshot : null);
       void import("./plugin-capabilities.runtime.ts")
         .then(({ refreshPluginCapabilities }) =>
           refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
@@ -287,8 +294,8 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
-    const requestedGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
-    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(requestedGatewayUrl)) {
+    const nextGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
+    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(nextGatewayUrl)) {
       gateway.stop();
       setSnapshot({
         phase: "offline",
@@ -300,7 +307,6 @@ export function createApplicationGateway(
     setUnavailableDeadline("suspensionPhase");
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
-    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
     const logicalGatewayChanged =
       gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
     const scopedCredentials = resolveGatewayCredentialsForUrlEdit(
@@ -325,12 +331,9 @@ export function createApplicationGateway(
         ? { bootstrapProfile: undefined }
         : {}),
     };
-    const credentialsChanged =
-      nextConnection.gatewayUrl !== connection.gatewayUrl ||
-      nextConnection.token !== connection.token ||
-      nextConnection.password !== connection.password ||
-      nextConnection.bootstrapToken !== connection.bootstrapToken ||
-      nextConnection.bootstrapProfile !== connection.bootstrapProfile;
+    const credentialsChanged = (
+      ["gatewayUrl", "token", "password", "bootstrapToken", "bootstrapProfile"] as const
+    ).some((key) => nextConnection[key] !== connection[key]);
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
@@ -388,6 +391,15 @@ export function createApplicationGateway(
     canvasSurface.stop();
     client?.stop();
 
+    const scheduleReload = (buildId: string) => {
+      void scheduleStaleChunkReload({
+        buildId,
+        ...createGatewayControlUiReloadOptions(
+          gateway,
+          () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+        ),
+      });
+    };
     const nextClient = createClient({
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
@@ -440,25 +452,14 @@ export function createApplicationGateway(
         if (!controlUiBuildFresh) {
           // Keep every connected-only drain fenced. The stale document may
           // render the shell and refresh action, but it must not mutate state.
-          setSnapshot({
+          setConnectionSnapshot({
             client: nextClient,
             phase: "reconnecting",
             hello,
-            canvasPluginSurfaceUrl: null,
-            selfUser: null,
-            lastError: null,
-            lastErrorCode: null,
-            lastErrorAuthReason: null,
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
-            void scheduleStaleChunkReload({
-              buildId: targetBuildId,
-              ...createGatewayControlUiReloadOptions(
-                gateway,
-                () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
-              ),
-            });
+            scheduleReload(targetBuildId);
           }
           return;
         }
@@ -482,7 +483,7 @@ export function createApplicationGateway(
         const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
         const canvasLeaseGeneration = canvasSurface.begin(nextClient, hello.auth);
         setUnavailableDeadline("restartPending");
-        setSnapshot({
+        setConnectionSnapshot({
           client: nextClient,
           phase: "connected",
           restartPending: false,
@@ -493,13 +494,11 @@ export function createApplicationGateway(
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
           assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
           sessionKey,
-          lastError: null,
-          lastErrorCode: null,
-          lastErrorAuthReason: null,
-          selfUser: resolveSelfPresenceUser(
-            readPresenceEntries(hello.snapshot) ?? [],
-            nextClient.instanceId,
-          ),
+          selfUser:
+            resolveSelfPresenceUser(
+              readPresenceEntries(hello.snapshot) ?? [],
+              nextClient.instanceId,
+            ) ?? undefined,
         });
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
@@ -530,13 +529,7 @@ export function createApplicationGateway(
         }
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
-          void scheduleStaleChunkReload({
-            buildId: mismatchedBuildId,
-            ...createGatewayControlUiReloadOptions(
-              gateway,
-              () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
-            ),
-          });
+          scheduleReload(mismatchedBuildId);
         }
         const startupPending =
           mismatchedBuildId === null &&
@@ -562,7 +555,7 @@ export function createApplicationGateway(
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
         const closeReason = formatUiExternalText(reason);
-        setSnapshot({
+        setConnectionSnapshot({
           client: nextClient,
           phase:
             mismatchedBuildId !== null
@@ -576,9 +569,18 @@ export function createApplicationGateway(
                   : willRetry
                     ? "connecting"
                     : "stopped",
-          hello: null,
-          canvasPluginSurfaceUrl: null,
-          selfUser: null,
+          // Retain only established profileless display identity through transport loss.
+          // Rejected admission and unresolved/replaced identities must stay fail-closed.
+          selfUser:
+            everConnected &&
+            (!error ||
+              restartPending ||
+              suspensionPhase ||
+              isRetryableGatewayStartupUnavailableError(error)) &&
+            !nextClient.offlineRecoveryRetired &&
+            snapshot.selfUser === null
+              ? null
+              : undefined,
           restartPending: restartPending || snapshot.restartPending === true,
           suspensionPhase,
           lastError: startupPending
@@ -616,20 +618,21 @@ export function createApplicationGateway(
       }),
     });
     client = nextClient;
-    setSnapshot({
+    setConnectionSnapshot({
       client: nextClient,
       // Keep the shell mounted while a fresh client attempts event-gap
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       reconnectAt: undefined,
-      hello: null,
-      canvasPluginSurfaceUrl: null,
+      selfUser:
+        !credentialsChanged &&
+        everConnected &&
+        !snapshot.client?.offlineRecoveryRetired &&
+        snapshot.selfUser === null
+          ? null
+          : undefined,
       assistantAgentId: null,
-      selfUser: null,
       sessionKey: nextSessionKey,
-      lastError: null,
-      lastErrorCode: null,
-      lastErrorAuthReason: null,
     });
     if (retiredEventLog) {
       publishEventLogRetirement(retiredEventLog);
@@ -677,24 +680,15 @@ export function createApplicationGateway(
       client?.stop();
       client = null;
       everConnected = false;
-      setSnapshot({
+      setConnectionSnapshot({
         client: null,
         phase: "stopped",
         offlineStable: false,
         restartPending: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
         assistantAgentId: null,
-        selfUser: null,
-        lastError: null,
-        lastErrorCode: null,
-        lastErrorAuthReason: null,
       });
     },
-    subscribe: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     subscribeEventLog: (listener) => {
       eventLogListeners.add(listener);
       return () => {
@@ -704,10 +698,7 @@ export function createApplicationGateway(
         }
       };
     },
-    subscribeEvents: (listener) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribeEvents: (listener) => registerListener(eventListeners, listener),
     loadSelfProfile: selfProfile.load,
     updateSelfUser: (patch) => {
       if (!snapshot.selfUser) {

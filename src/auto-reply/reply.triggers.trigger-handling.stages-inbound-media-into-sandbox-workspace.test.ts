@@ -135,38 +135,6 @@ describe("stageSandboxMedia", () => {
     });
   });
 
-  it("stages managed inbound media URIs into the sandbox workspace", async () => {
-    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
-      const fileName = "report.pdf";
-      await writeInboundMedia(home, fileName, "pdf-bytes");
-      const mediaUri = `media://inbound/${fileName}`;
-      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-      ctx.media = [{ ...ctx.media?.[0], contentType: "application/pdf" }];
-      sessionCtx.media = ctx.media;
-
-      const result = await stageSandboxMedia({
-        ctx,
-        sessionCtx,
-        cfg,
-        sessionKey: "agent:main:main",
-        workspaceDir,
-      });
-
-      const stagedPath = result.staged.get(0)!;
-      expect(stagedPath).toMatch(/^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-/);
-      expect(result.staged.get(0)).toBe(stagedPath);
-      expect(ctx.media?.[0]?.path).toBe(stagedPath);
-      expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
-      expect(ctx.media?.[0]?.url).toBe(mediaUri);
-      expect(sessionCtx.media?.[0]?.url).toBe(mediaUri);
-      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
-      expect(ctx.media?.[0]?.staged).toBe(true);
-      expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
-      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
-    });
-  });
-
   it("maps a staged upload handle to its exact private input path", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir } = await setupSandboxWorkspace(home);

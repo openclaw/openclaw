@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -34,7 +34,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
@@ -55,12 +55,14 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
@@ -91,7 +93,9 @@ export async function updateFinalizeCommand(
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
-  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
@@ -134,6 +138,11 @@ export async function updateFinalizeCommand(
                 });
                 if (resolvedInstallKind === "host") {
                   reportHostOwnedUpdate(await readInstallOwner(resolvedRoot), opts);
+                }
+                if (resolvedInstallKind === "immutable") {
+                  throw new Error(
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
+                  );
                 }
                 lifecycle.recordInstallKind(
                   resolvedInstallKind,
@@ -187,14 +196,16 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
+                const nextAction = `Stop the Gateway through its service owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
-                  `Doctor and plugin maintenance remain pending. Resolve the maintenance refusal, then run ${formatCliCommand("openclaw update repair")}. ${error.message}`,
+                  `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
                 ]);
                 lifecycle.recordWarnings(warnings);
                 defaultRuntime.error(warnings[0]);
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
+                    nextAction,
                     mode: "finalize",
                     root,
                     restart: false,
@@ -202,9 +213,15 @@ export async function updateFinalizeCommand(
                     postUpdate: { doctor: { status: "warning", warnings } },
                   });
                 } else {
-                  defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+                  defaultRuntime.log(
+                    theme.warn(`Doctor maintenance remains pending. ${nextAction}`),
+                  );
                 }
-                lifecycle.complete(0);
+                lifecycle.complete(0, nextAction);
+                // Keep the pending receipt; an older driver still owns its update's exit status.
+                if (recoveryRunIds !== undefined && lifecycle.ownsUpdateRun) {
+                  exitCode = 2;
+                }
                 return;
               }
               if (!lifecycle.completed) {
@@ -251,7 +268,7 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  const configSnapshot = await readConfigFileSnapshot({
+  const configSnapshot = await readUpdateConfigFileSnapshot({
     skipPluginValidation: true,
     observe: false,
   });
@@ -282,7 +299,10 @@ async function prepareUpdateFinalization(
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     await withPluginLifecycleLease(phase, async () => {
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      const snapshot = await readUpdateConfigFileSnapshot({
+        skipPluginValidation: true,
+        observe: false,
+      });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
         requestedChannel,
@@ -295,8 +315,6 @@ async function prepareUpdateFinalization(
     installKind,
     preFinalizeConfig,
     requestedChannel,
-    storedChannel,
-    effectiveChannel,
     channel,
   };
 }
@@ -309,27 +327,22 @@ async function updateFinalizeCommandInternal(
   invokingRunId: string,
   ownsMaintenance: boolean,
 ): Promise<() => Promise<void>> {
-  const {
+  const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
+  let doctorWarnings: string[] = [];
+  const onDoctorWarnings = (warnings: string[]) => {
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
+    lifecycle.recordWarnings(doctorWarnings);
+  };
+
+  const doctorParams = {
     root,
     nodeRunner,
-    preFinalizeConfig,
-    requestedChannel,
-    storedChannel,
-    effectiveChannel,
-    channel,
-  } = prepared;
-  let doctorWarnings: string[] = [];
-  const doctorWarningTimes = new Map<string, number>();
-  const onDoctorWarnings = (warnings: string[]) => {
-    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...new Set([...doctorWarnings, ...warnings]),
-    ]);
-    for (const warning of doctorWarnings) {
-      if (!doctorWarningTimes.has(warning)) {
-        doctorWarningTimes.set(warning, Date.now());
-      }
-    }
-    lifecycle.recordWarnings(doctorWarnings);
+    runId: invokingRunId,
+    yes: opts.yes === true,
+    json: opts.json === true,
+    onWarnings: onDoctorWarnings,
+    onDoctorStep: (step: Parameters<typeof lifecycle.recordDoctorStep>[0]) =>
+      lifecycle.recordDoctorStep(step),
   };
 
   let maintenance: Awaited<
@@ -346,11 +359,7 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await withPluginLifecycleLease({}, async (lease) => {
-        await withCommandProcessScope(() =>
-          completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins"), lease }),
-        );
-      });
+      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
@@ -359,15 +368,9 @@ async function updateFinalizeCommandInternal(
         () =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
-            root,
-            nodeRunner,
-            runId: invokingRunId,
-            yes: opts.yes === true,
-            json: opts.json === true,
+            ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
-            onWarnings: onDoctorWarnings,
-            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -402,12 +405,7 @@ async function updateFinalizeCommandInternal(
               const postDoctorStoredChannel = configSnapshot.valid
                 ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
                 : null;
-              const postDoctorChannel =
-                requestedChannel ??
-                postDoctorStoredChannel ??
-                storedChannel ??
-                effectiveChannel ??
-                DEFAULT_PACKAGE_CHANNEL;
+              const postDoctorChannel = requestedChannel ?? postDoctorStoredChannel ?? channel;
               const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
               return await updatePluginsAfterCoreUpdate({
                 root,
@@ -431,26 +429,23 @@ async function updateFinalizeCommandInternal(
       "targetConfigConvergence",
       async (phase) => {
         const result = await completePostCorePluginUpdate({
-          root,
-          nodeRunner,
-          runId: invokingRunId,
+          ...doctorParams,
           pluginUpdate: initialPluginUpdate,
-          freshDoctorRequired: initialPluginUpdate.changed,
-          yes: opts.yes === true,
-          json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
-          onWarnings: onDoctorWarnings,
-          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
-        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        // Post-plugin convergence rereads the ledger and reports each still-pending
+        // migration as a plugin warning; that final report supersedes Doctor's.
+        const finallyReportedPluginIds = new Set(
+          (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
+            warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+          ),
+        );
+        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
+          doctorWarnings,
+          finallyReportedPluginIds,
+        );
         phase.assertCurrent();
-        doctorWarnings = doctorWarnings.filter((warning) => {
-          const completedAtMs = resolvedWarnings.get(warning);
-          return (
-            completedAtMs === undefined ||
-            completedAtMs < (doctorWarningTimes.get(warning) ?? Infinity)
-          );
-        });
+        lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

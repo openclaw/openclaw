@@ -7,7 +7,6 @@ import type {
 } from "../../daemon/service-types.js";
 import type {
   PackageDirectoryIdentity,
-  PackageIntegrityFingerprint,
   PackageLauncherFingerprint,
 } from "../../infra/package-update-integrity.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
@@ -34,7 +33,14 @@ export type ManagedGatewayUpdateVerdict =
   | { kind: "unresolved"; root: string; fingerprint: string }
   | { kind: "unavailable"; message: string; inspectionReason?: ServiceInspectionReason };
 
-export type PreManagedServiceStop = {
+export type ManagedGatewayServiceObservation = {
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  serviceEnv?: NodeJS.ProcessEnv;
+  /** Original account observed from the pinned native user-manager connection. */
+  serviceManagerUid?: number;
+};
+
+export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
   stoppedAtMs?: number;
   stopped: boolean;
   inspected: boolean;
@@ -48,22 +54,19 @@ export type PreManagedServiceStop = {
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;
-  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   blockMessage?: string;
   blockFailureFacts?: UpdateFailureFact[];
-  serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
   servicePort?: number;
   /** Original service generation, which can differ from the invoking CLI package. */
   serviceIdentity?: { version: string; buildId?: string };
-  /** Original account observed from the pinned native user-manager connection. */
-  serviceManagerUid?: number;
   serviceSystemdIdentity?: SystemdServiceIdentity;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
 export type UpdateRestartParams = {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   result: UpdateRunResult;
   root: string;
   preManagedServiceStop?: PreManagedServiceStop;
@@ -87,12 +90,10 @@ export type OriginalManagedServiceRuntime = {
     fingerprint: string;
     rebound?: string;
     reboundRuntimePin?: string;
-    runtimePin: DaemonRuntimePinSnapshot;
+    runtimePin: DaemonRuntimePinSnapshot | undefined;
   };
-  service: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  service: ManagedGatewayServiceObservation;
   packageIdentity: PackageDirectoryIdentity;
-  packageFingerprint?: PackageIntegrityFingerprint;
-  packageFingerprintWarning?: string;
   launcher: {
     path: string;
     realPath: string;

@@ -5,6 +5,7 @@ import {
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { AttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import type { attachEventBridge, SessionLike } from "./event-bridge.js";
@@ -179,21 +180,12 @@ async function waitForPersistenceReceipt(
     requestedTimeoutMs > 0
       ? requestedTimeoutMs
       : DEFAULT_STEERING_DELIVERY_TIMEOUT_MS;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      receipt,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Copilot steering transcript receipt timed out")),
-          timeoutMs,
-        );
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(
+    receipt,
+    timeoutMs,
+    () => {
+      throw new Error("Copilot steering transcript receipt timed out");
+    },
+    { ref: false },
+  );
 }

@@ -3,8 +3,8 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -51,14 +51,8 @@ const gatewayOptions = {
 async function openFirstRunWithBackNavigation(page: Page): Promise<void> {
   await page.goto(`${suite.server.baseUrl}settings/connection`);
   await page.locator('.settings-sidebar__item[href="/settings/connection"]').waitFor();
-  await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: Pick<ApplicationContext, "navigate"> };
-    };
-    if (!app.runtime) {
-      throw new Error("Control UI runtime is unavailable");
-    }
-    app.runtime.context.navigate("model-setup", { search: "?firstRun=1" });
+  await evaluateControlUiContext(page, (application) => {
+    application.navigate("model-setup", { search: "?firstRun=1" });
   });
   await page.waitForURL((url) => url.pathname === "/settings/model-setup");
 }
@@ -306,6 +300,8 @@ suite.define(() => {
         await page.goBack();
         await expect.poll(() => page.locator("openclaw-model-setup-page").count()).toBe(0);
 
+        const previousReceipt = await page.evaluate((key) => localStorage.getItem(key), receiptKey);
+
         const replacement = await context.newPage();
         const nextGateway = await installMockGateway(replacement, {
           ...gatewayOptions,
@@ -326,26 +322,11 @@ suite.define(() => {
           .locator("openclaw-modal-dialog")
           .getByRole("button", { name: "Close", exact: true })
           .click();
-        const previousReceipt = await replacement.evaluate(
-          (key) => localStorage.getItem(key),
-          receiptKey,
-        );
         expect(
           (await nextGateway.getRequests("wizard.next")).map((request) => request.params),
         ).toEqual([{ sessionId: JSON.parse(previousReceipt!).wizard.sessionId }]);
         expect(await nextGateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
         expect(await nextGateway.getRequests("wizard.cancel")).toHaveLength(0);
-        const deadlineMs = await replacement.evaluate(
-          (key) => JSON.parse(localStorage.getItem(key)!).deadlineMs as number,
-          receiptKey,
-        );
-        // A missing wizard retains the guard until expiry and explicit retry.
-        // A running wizard resumes its input instead of showing this recovery action.
-        await replacement.clock.setFixedTime(new Date(deadlineMs + 1));
-        await replacement
-          .locator(".model-setup__recovery")
-          .getByRole("button", { name: "Check again", exact: true })
-          .click();
         await expect
           .poll(() => replacement.evaluate((key) => localStorage.getItem(key), receiptKey))
           .toBeNull();

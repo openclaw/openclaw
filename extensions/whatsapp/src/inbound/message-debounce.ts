@@ -1,7 +1,6 @@
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getPrimaryIdentityId } from "../identity.js";
-import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import type { AdmittedWebInboundCallbackMessage } from "./types.js";
@@ -35,11 +34,11 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     }
   };
   const buildKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     return `${admission.accountId}:${admission.conversation.id}`;
   };
   const resolveSenderKey = (msg: WhatsAppQueuedInboundMessage): string => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     const sender = msg.platform.sender;
     return admission.conversation.kind === "group"
       ? (getPrimaryIdentityId(sender ?? null) ??
@@ -92,49 +91,40 @@ export function createWhatsAppInboundMessageDebouncer(options: {
             return;
           }
           try {
-            if (orderedEntries.length === 1) {
-              await options.onMessage(attachWhatsAppIngressLifecycle(last, admissionLifecycle));
-              await settle();
-              await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
-              return;
-            }
-            const mentioned = new Set<string>();
-            for (const entry of orderedEntries) {
-              for (const jid of entry.group?.mentions?.jids ?? []) {
-                mentioned.add(jid);
+            let message: WhatsAppQueuedInboundMessage = last;
+            if (orderedEntries.length > 1) {
+              const mentioned = new Set<string>();
+              for (const entry of orderedEntries) {
+                for (const jid of entry.group?.mentions?.jids ?? []) {
+                  mentioned.add(jid);
+                }
               }
-            }
-            const combinedBody = orderedEntries
-              .map((entry) => entry.payload.body)
-              .filter(Boolean)
-              .join("\n");
-            const combinedCommandBody = orderedEntries
-              .map((entry) => entry.payload.commandBody ?? entry.payload.body)
-              .filter(Boolean)
-              .join("\n");
-            const combinedMentions =
-              mentioned.size > 0
-                ? { ...last.group?.mentions, jids: Array.from(mentioned) }
-                : last.group?.mentions;
-            const combinedGroup =
-              last.group || combinedMentions
-                ? { ...last.group, mentions: combinedMentions }
-                : undefined;
-            const combinedMessage: WhatsAppQueuedInboundMessage = attachWhatsAppIngressLifecycle(
-              {
+              const combinedMentions =
+                mentioned.size > 0
+                  ? { ...last.group?.mentions, jids: Array.from(mentioned) }
+                  : last.group?.mentions;
+              message = {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
                 payload: {
                   ...last.payload,
-                  body: combinedBody,
-                  commandBody: combinedCommandBody,
+                  body: orderedEntries
+                    .map((entry) => entry.payload.body)
+                    .filter(Boolean)
+                    .join("\n"),
+                  commandBody: orderedEntries
+                    .map((entry) => entry.payload.commandBody ?? entry.payload.body)
+                    .filter(Boolean)
+                    .join("\n"),
                 },
-                group: combinedGroup,
+                group:
+                  last.group || combinedMentions
+                    ? { ...last.group, mentions: combinedMentions }
+                    : undefined,
                 event: { ...last.event, isBatched: true },
-              },
-              admissionLifecycle,
-            );
-            await options.onMessage(combinedMessage);
+              };
+            }
+            await options.onMessage(attachWhatsAppIngressLifecycle(message, admissionLifecycle));
             await settle();
             await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
           } catch (error) {

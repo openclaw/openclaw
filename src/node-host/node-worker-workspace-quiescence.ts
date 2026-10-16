@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
@@ -72,10 +73,6 @@ export class NodeWorkerWorkspaceQuiescence {
     };
     assertCurrent();
     const operation = context.input.quiescence!;
-    // Windows already uses a shared-host SQLite lease without freezing or a detached child.
-    if (process.platform === "win32") {
-      return this.runScript(context, operation, signal);
-    }
     const key = JSON.stringify([
       context.input.gatewayNamespace,
       context.input.environmentId,
@@ -222,13 +219,17 @@ export class NodeWorkerWorkspaceQuiescence {
     const releaseWorkspace = context.retainWorkspace();
     let child: ChildProcess;
     try {
-      // Keep the recovery helper outside command and environment process scopes.
+      // An idle helper must not hold a Windows directory lock on its released workspace.
       child =
         idle?.child ??
         spawn(
           process.execPath,
           workspaceQuiescenceArgv(context.workspaceDir, operation, "shared-host", "owned").slice(1),
-          { cwd: context.workspaceDir, env: context.env, stdio: ["ignore", "pipe", "pipe", "ipc"] },
+          {
+            cwd: path.dirname(process.execPath),
+            env: context.env,
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+          },
         );
     } catch (error) {
       releaseWorkspace();
@@ -365,7 +366,6 @@ export class NodeWorkerWorkspaceQuiescence {
   private async runScript(
     context: LeaseContext,
     operation: NodeWorkerWorkspaceQuiescenceInput,
-    signal?: AbortSignal,
   ): Promise<string> {
     const runId = randomUUID();
     const scopeKey = "workspace-quiescence-control:" + runId;
@@ -388,10 +388,7 @@ export class NodeWorkerWorkspaceQuiescence {
         throw error;
       }
     };
-    const abort = () => this.supervisor.cancel(runId);
-    signal?.addEventListener("abort", abort, { once: true });
     try {
-      signal?.throwIfAborted();
       releaseWorkspace = context.retainWorkspace();
       const run = await this.supervisor.spawn({
         mode: "child",
@@ -409,18 +406,13 @@ export class NodeWorkerWorkspaceQuiescence {
         stdinMode: "pipe-closed",
         timeoutMs: context.input.timeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS,
         maxCapturedOutputChars: 16_384,
-        assertCurrent: () => signal?.throwIfAborted(),
       });
-      if (signal?.aborted) {
-        abort();
-      }
       const result = await run.wait();
       if (result.exitCode !== 0 || result.exitSignal !== null) {
         throw new Error(result.stderr || "workspace quiescence operation failed");
       }
       return result.stdout;
     } finally {
-      signal?.removeEventListener("abort", abort);
       await finishControl();
     }
   }

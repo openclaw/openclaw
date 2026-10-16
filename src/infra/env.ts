@@ -1,17 +1,8 @@
 // Normalizes env flag values and logs env warnings lazily.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
-const loadLog = createLazyPromise(
-  () =>
-    import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-      createSubsystemLogger("env"),
-    ),
-  { cacheRejections: true },
-);
 const loggedEnv = new Set<string>();
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
 
@@ -20,17 +11,6 @@ type AcceptedEnvOption = {
   description: string;
   redact?: boolean;
 };
-
-function formatEnvValue(value: string, redact?: boolean): string {
-  if (redact) {
-    return "<redacted>";
-  }
-  const singleLine = value.replace(/\s+/g, " ").trim();
-  if (singleLine.length <= 160) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, 160)}…`;
-}
 
 /** Logs an accepted env option once, with optional redaction for sensitive values. */
 export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
@@ -45,11 +25,9 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  void loadLog()
-    .then((logger) => {
-      logger.info(
-        `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
-      );
+  void import("./env-log.runtime.js")
+    .then(({ logAcceptedEnvValue }) => {
+      logAcceptedEnvValue(option.key, rawValue, option.description, option.redact);
     })
     .catch(() => {
       // Best-effort diagnostics only.

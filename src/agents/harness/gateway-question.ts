@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { withQuestionInputAssertion } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,13 +20,19 @@ import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
   QuestionDispatchUnsupportedError,
+  refuseQuestionDispatch,
+  prepareQuestionDispatchAuthority,
   resolveAgentQuestionGatewayCall,
+  withQuestionDispatchAuthority,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   captureAgentQuestionAnswerAuthority,
+  prepareQuestionCallerAuthority,
+  type QuestionInputAuthority,
+  bindQuestionDispatchGuard,
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
   type PreparedQuestionAnswerAuthority,
@@ -53,7 +60,6 @@ type PendingAgentGatewayQuestion = {
   rejectRegistration: (error: unknown) => void;
   attachRegistration: (promise: Promise<unknown>) => void;
   answer?: Promise<QuestionWaitAnswerResult>;
-  resolution?: Promise<void>;
   cancelRequested: boolean;
   onCancel?: (resolvedBy: string) => void;
   resolving: boolean;
@@ -84,25 +90,23 @@ const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
   },
 );
 
-type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
-
-/** One reservation owns both dispatch refusal and the prompt's release notification. */
+/** One reservation owns dispatch refusal while input is being resolved. */
 function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
   let refused = false;
+  const refuse = (error: unknown): never => {
+    refused = true;
+    return refuseQuestionDispatch(error);
+  };
   const assertCurrent = () => {
     try {
-      authority?.assertCurrent();
+      withQuestionInputAssertion(() => authority?.assertCurrent());
       state.answerAuthority?.assertActive();
       if (pendingAgentQuestions.get(state.sessionKey) !== state) {
         throw new Error("pending question is no longer current");
       }
     } catch (error) {
       // A known pre-dispatch refusal cannot be recovered as someone else's answer.
-      refused = true;
-      throw new QuestionDispatchRefusedError(
-        error instanceof Error ? error.message : "question dispatch authority refused",
-        { cause: error },
-      );
+      refuse(error);
     }
   };
   assertCurrent();
@@ -116,34 +120,27 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
     );
   }
   state.resolving = true;
-  let finish: (() => void) | undefined;
-  if (state.kind === "gateway") {
-    state.resolution = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-  }
+  const prepareCurrent = bindQuestionDispatchGuard(assertCurrent, authority, refuse);
   return {
     assertCurrent,
+    prepareCurrent,
     wasRefused: () => refused,
     extra:
-      state.kind === "gateway" && state.supportsSourceBound
+      state.kind === "gateway"
         ? {
             dispatchAuthority: {
               version: 2 as const,
               kind: authority?.kind ?? ("run" as const),
               assertCurrent,
+              prepareCurrent,
             },
           }
         : undefined,
     finish: (consumed: boolean) => {
       state.resolving = consumed;
-      if (state.kind === "gateway") {
-        if (!consumed) {
-          state.cancelRequested = false;
-        }
-        state.resolution = undefined;
+      if (state.kind === "gateway" && !consumed) {
+        state.cancelRequested = false;
       }
-      finish?.();
     },
   };
 }
@@ -160,9 +157,7 @@ export function registerPendingAgentQuestion(params: {
 }): {
   attachRegistration: (promise: Promise<unknown>) => void;
   setAnswer: (answer: Promise<QuestionWaitAnswerResult>) => void;
-  waitForResolution: () => Promise<boolean>;
   isCancellationRequested: () => boolean;
-  isResolving: () => boolean;
   dispose: () => void;
 } {
   const sessionKey = params.sessionKey.trim();
@@ -177,7 +172,6 @@ export function registerPendingAgentQuestion(params: {
     reject: rejectRegistration,
   } = createDeferredCore<unknown>();
   void registration.catch(() => undefined);
-  let registrationAttached = false;
   const state: PendingAgentQuestion = {
     kind: "gateway",
     ...params,
@@ -188,10 +182,6 @@ export function registerPendingAgentQuestion(params: {
     registration,
     rejectRegistration,
     attachRegistration: (promise) => {
-      if (registrationAttached) {
-        throw new Error("gateway question registration already attached");
-      }
-      registrationAttached = true;
       promise.then(resolveRegistration, rejectRegistration);
     },
     cancelRequested: false,
@@ -204,23 +194,11 @@ export function registerPendingAgentQuestion(params: {
     setAnswer: (answer) => {
       state.answer = answer;
     },
-    waitForResolution: async () => {
-      // A refused claim can hand off while waiters wake. Only report consumption
-      // after that reservation settles; callers recheck for later handoffs.
-      while (state.resolution) {
-        await state.resolution;
-      }
-      return state.cancelRequested || state.resolving;
-    },
     isCancellationRequested: () => state.cancelRequested,
-    isResolving: () => state.cancelRequested || state.resolving,
     dispose: () => {
       releaseFormResources();
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
-      }
-      if (!registrationAttached) {
-        rejectRegistration(new Error("gateway question registration disposed before attachment"));
       }
     },
   };
@@ -237,35 +215,31 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   onAnswerProcessed?: () => void;
 }): Promise<boolean> {
   const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
+  if (!state || state.resolving) {
+    return false;
+  }
+  const assertActive = () => {
+    params.assertSourceCurrent();
+    state.answerAuthority?.assertActive();
+    if (!state.answerAuthority) {
+      throw new QuestionDispatchRefusedError("pending question has no prepared creator authority");
+    }
+    if (pendingAgentQuestions.get(state.sessionKey) !== state) {
+      throw new QuestionDispatchRefusedError("pending question is no longer current");
+    }
+  };
+  const authority = await prepareQuestionCallerAuthority(
+    state.answerAuthority!,
+    params.caller,
+    assertActive,
+  ).catch(refuseQuestionDispatch);
   return claimQuestionAnswer(
     {
       sessionKey: params.sessionKey,
       text: params.text,
       persist: params.persist,
       sourceRecorder: params.sourceRecorder,
-      authority: {
-        kind: "source-bound",
-        assertCurrent: () => {
-          try {
-            params.assertSourceCurrent();
-            if (state) {
-              if (!state.answerAuthority) {
-                throw new Error("pending question has no prepared creator authority");
-              }
-              state.answerAuthority.assertCaller(params.caller);
-              if (pendingAgentQuestions.get(state.sessionKey) !== state) {
-                throw new Error("pending question is no longer current");
-              }
-            }
-            params.assertSourceCurrent();
-          } catch (error) {
-            throw new QuestionDispatchRefusedError(
-              error instanceof Error ? error.message : "question answer authority refused",
-              { cause: error },
-            );
-          }
-        },
-      },
+      authority,
     },
     params.onAnswerProcessed,
   );
@@ -300,10 +274,21 @@ async function claimQuestionAnswer(
   if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
     return false;
   }
-  params.authority?.assertCurrent();
+  let authority = params.authority;
+  if (authority?.toolAuthorityPreparation || authority?.prepareCurrent) {
+    authority = await prepareQuestionDispatchAuthority(authority);
+  }
+  if (
+    pendingAgentQuestions.get(sessionKey!) !== state ||
+    state.resolving ||
+    (state.kind === "gateway" && state.cancelRequested)
+  ) {
+    return false;
+  }
+  withQuestionInputAssertion(() => authority?.assertCurrent());
   const sourceRecorder = params.sourceRecorder;
   const stagedSource = sourceRecorder?.getPendingInputMessage?.() !== undefined;
-  const reservation = reserveQuestionInput(state, params.authority);
+  const reservation = reserveQuestionInput(state, authority);
   let consumed = false;
   let retainReservation = false;
   try {
@@ -318,6 +303,9 @@ async function claimQuestionAnswer(
       if (pendingAgentQuestions.get(state.sessionKey) !== state) {
         return false;
       }
+    }
+    if (reservation.prepareCurrent) {
+      await reservation.prepareCurrent();
     }
     reservation.assertCurrent();
     // Secret answers never create transcript custody. Only commit source bytes
@@ -348,11 +336,10 @@ async function claimQuestionAnswer(
       } catch (error) {
         throw new PreparedQuestionAnswerRefusedError(error);
       }
-    } else {
-      reservation.assertCurrent();
     }
+    reservation.assertCurrent();
     if (state.kind === "secret") {
-      consumed = state.settle(params.text);
+      consumed = await withQuestionDispatchAuthority(reservation, () => state.settle(params.text));
       return consumed;
     }
     state.answerAuthority?.admitTranscriptAnswer?.(sourceRecorder);
@@ -415,24 +402,29 @@ export async function cancelPendingAgentQuestionForSession(params: {
   resolvedBy: string;
   authority?: QuestionInputAuthority;
 }): Promise<boolean> {
-  params.authority?.assertCurrent();
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
   if (!state || state.resolving) {
     return false;
   }
-  if (state.kind === "secret") {
-    state.answerAuthority?.assertActive();
-    state.resolving = true;
-    return state.settle();
+  let authority = params.authority;
+  if (authority?.toolAuthorityPreparation || authority?.prepareCurrent) {
+    authority = await prepareQuestionDispatchAuthority(authority);
   }
-  const reservation = reserveQuestionInput(state, params.authority);
+  if (pendingAgentQuestions.get(state.sessionKey) !== state || state.resolving) {
+    return false;
+  }
+  const reservation = reserveQuestionInput(state, authority);
   const sourceBound = params.authority?.kind === "source-bound";
   let consumed = false;
-  // Shipped ordinary early cancellation is replayed by the registration owner.
-  // Source-bound cancellation instead waits here, retaining its exact assertion.
-  state.cancelRequested = !sourceBound;
   try {
+    if (state.kind === "secret") {
+      consumed = await withQuestionDispatchAuthority(reservation, () => state.settle());
+      return consumed;
+    }
+    // Shipped ordinary early cancellation is replayed by the registration owner.
+    // Source-bound cancellation instead waits here, retaining its exact assertion.
+    state.cancelRequested = !sourceBound;
     if (sourceBound && !state.answer) {
       try {
         await state.registration;
@@ -440,6 +432,9 @@ export async function cancelPendingAgentQuestionForSession(params: {
         // Registration failed before cancellation dispatch; leave the input unclaimed.
         return false;
       }
+    }
+    if (reservation.prepareCurrent) {
+      await reservation.prepareCurrent();
     }
     reservation.assertCurrent();
     try {
@@ -476,12 +471,10 @@ function runAgentHarnessSecretInput(
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
   return new Promise((resolve) => {
-    let settled = false;
     const finish = (text?: string): boolean => {
-      if (settled || pendingAgentQuestions.get(sessionKey) !== state) {
+      if (pendingAgentQuestions.get(sessionKey) !== state) {
         return false;
       }
-      settled = true;
       pendingAgentQuestions.delete(sessionKey);
       clearTimeout(timeout);
       params.signal?.removeEventListener("abort", onAbort);
@@ -643,10 +636,7 @@ async function runScopedAgentHarnessQuestion(
       params.signal ? { signal: params.signal } : undefined,
     ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
     claim.setAnswer(answer);
-    const answerOutcome = answer.then(
-      (result) => ({ kind: "answer" as const, result }),
-      (error: unknown) => ({ kind: "answer-error" as const, error }),
-    );
+    const answerOutcome = answer.then((result) => ({ kind: "answer" as const, result }));
     const finishAnswer = async (result: QuestionWaitAnswerResult) => {
       const terminal =
         result.status === "pending"
@@ -657,30 +647,7 @@ async function runScopedAgentHarnessQuestion(
         ? { status: terminal.status, answers: terminal.answers }
         : terminal;
     };
-    const beforeDelivery = await Promise.race([
-      answerOutcome,
-      new Promise<{ kind: "delivery-ready" }>((resolve) => {
-        setTimeout(() => resolve({ kind: "delivery-ready" }), 0);
-      }),
-    ]);
-    if (beforeDelivery.kind === "answer") {
-      return await finishAnswer(beforeDelivery.result);
-    }
-    if (beforeDelivery.kind === "answer-error") {
-      throw beforeDelivery.error;
-    }
-    let consumed: boolean;
-    do {
-      consumed = await Promise.race([claim.waitForResolution(), answerOutcome.then(() => true)]);
-    } while (!consumed && claim.isResolving());
-    if (consumed) {
-      // A completed registration-time claim must not expose a stale prompt.
-      const outcome = await answerOutcome;
-      if (outcome.kind === "answer-error") {
-        throw outcome.error;
-      }
-      return await finishAnswer(outcome.result);
-    }
+    // A registration-time answer may briefly race the prompt; its terminal signal closes delivery.
     const delivery = deliverAgentHarnessQuestionPrompt(
       params.delivery,
       questionId,
@@ -696,9 +663,6 @@ async function runScopedAgentHarnessQuestion(
     if (first.kind === "answer") {
       return await finishAnswer(first.result);
     }
-    if (first.kind === "answer-error") {
-      throw first.error;
-    }
     if (first.kind === "delivery-error") {
       const terminal = await cancel("prompt-delivery-failed");
       if (terminal?.status === "answered") {
@@ -706,11 +670,7 @@ async function runScopedAgentHarnessQuestion(
       }
       throw new Error("harness question prompt delivery failed", { cause: first.error });
     }
-    const terminal = await answerOutcome;
-    if (terminal.kind === "answer-error") {
-      throw terminal.error;
-    }
-    return await finishAnswer(terminal.result);
+    return await finishAnswer(await answer);
   } catch (error) {
     try {
       const terminal = await cancel(params.signal?.aborted ? "run-abort" : "harness-error");

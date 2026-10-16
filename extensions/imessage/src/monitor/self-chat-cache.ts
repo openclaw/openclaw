@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -16,6 +15,7 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
 };
 
 type SelfChatCacheEntry = {
+  key: string;
   createdAt: number;
   createdAtSkewToleranceMs: number;
   rememberedAt: number;
@@ -56,10 +56,8 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
 }
 
 class DefaultSelfChatCache implements SelfChatCache {
-  private cache = new Map<string, Map<number, SelfChatCacheEntry>>();
-  private insertionOrder = new Map<number, string>();
+  private entries: SelfChatCacheEntry[] = [];
   private lastCleanupAt = 0;
-  private nextEntryId = 1;
 
   private buildBucketKey(lookup: SelfChatLookup): string | null {
     const text = normalizeText(lookup.text);
@@ -74,16 +72,12 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return;
     }
-    const entries = this.cache.get(key) ?? new Map<number, SelfChatCacheEntry>();
-    const entry = {
+    this.entries.push({
+      key,
       createdAt: lookup.createdAt,
       createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
-    };
-    const id = this.nextEntryId++;
-    entries.set(id, entry);
-    this.cache.set(key, entries);
-    this.insertionOrder.set(id, key);
+    });
     this.maybeCleanup();
   }
 
@@ -93,15 +87,12 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return false;
     }
-    const entries = this.cache.get(key);
-    if (!entries) {
-      return false;
-    }
     const now = Date.now();
     const createdAt = lookup.createdAt;
-    return [...entries.values()].some((entry) => {
+    return this.entries.some((entry) => {
       const createdAtDelta = Math.abs(entry.createdAt - createdAt);
       return (
+        entry.key === key &&
         now - entry.rememberedAt <= SELF_CHAT_TTL_MS &&
         (createdAtDelta === 0 || createdAtDelta < entry.createdAtSkewToleranceMs)
       );
@@ -114,32 +105,9 @@ class DefaultSelfChatCache implements SelfChatCache {
       return;
     }
     this.lastCleanupAt = now;
-    for (const [key, entries] of this.cache.entries()) {
-      for (const [id, entry] of entries.entries()) {
-        if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
-          entries.delete(id);
-          this.insertionOrder.delete(id);
-        }
-      }
-      if (entries.size === 0) {
-        this.cache.delete(key);
-      }
-    }
-    while (this.insertionOrder.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
-      const [id, key] = expectDefined(
-        this.insertionOrder.entries().next().value,
-        "oldest iMessage self-chat cache entry",
-      );
-      this.insertionOrder.delete(id);
-      const entries = this.cache.get(key);
-      if (!entries) {
-        continue;
-      }
-      entries.delete(id);
-      if (entries.size === 0) {
-        this.cache.delete(key);
-      }
-    }
+    this.entries = this.entries
+      .filter((entry) => now - entry.rememberedAt <= SELF_CHAT_TTL_MS)
+      .slice(-MAX_SELF_CHAT_CACHE_ENTRIES);
   }
 }
 

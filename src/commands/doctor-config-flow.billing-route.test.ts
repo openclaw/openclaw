@@ -106,26 +106,28 @@ describe("Doctor model billing route migration", () => {
               }
             : { main: {} },
         });
-        const ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
-          prepareDoctorContext(configPath),
-        );
-        await observeDoctorConfigStep("write-config-health", () =>
-          runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
-        );
-        const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
-        expect(ctx.updateWarnings).toEqual([
-          expect.stringContaining(
-            `Billing route changed for agents.defaults.heartbeat.model (agent main): ${expectedRoute}`,
-          ),
-          expect.stringContaining(
-            `Billing route changed for agents.defaults.subagents.model (agent main): ${expectedRoute}`,
-          ),
-        ]);
-        await observeDoctorConfigStep("repeat-write-config-health", () =>
-          runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
-        );
-        expect(ctx.updateWarnings).toHaveLength(2);
-        const repeated = await observeDoctorConfigStep(
+        {
+          await using ctx = await observeDoctorConfigStep("prepare-context-outer-unmeasured", () =>
+            prepareDoctorContext(configPath),
+          );
+          await observeDoctorConfigStep("write-config-health", () =>
+            runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+          );
+          const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
+          expect(ctx.updateWarnings).toEqual([
+            expect.stringContaining(
+              `Billing route changed for agents.defaults.heartbeat.model (agent main): ${expectedRoute}`,
+            ),
+            expect.stringContaining(
+              `Billing route changed for agents.defaults.subagents.model (agent main): ${expectedRoute}`,
+            ),
+          ]);
+          await observeDoctorConfigStep("repeat-write-config-health", () =>
+            runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+          );
+          expect(ctx.updateWarnings).toHaveLength(2);
+        }
+        await using repeated = await observeDoctorConfigStep(
           "repeat-prepare-context-outer-unmeasured",
           () => prepareDoctorContext(configPath),
         );
@@ -177,10 +179,12 @@ describe("Doctor deferred model retirement", () => {
             OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
           },
           async () => {
-            const swap = await prepareDoctorContext(f.configPath);
-            await runInitialConfigWriteHealth(swap);
-            expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
-            expect(f.receipt()).toMatchObject({ status: "skipped" });
+            {
+              await using swap = await prepareDoctorContext(f.configPath);
+              await runInitialConfigWriteHealth(swap);
+              expect(swap.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
+              expect(f.receipt()).toMatchObject({ status: "skipped" });
+            }
             for (const [index, detail] of [
               "Heartbeat billing route changed.",
               "Subagent billing route changed.",
@@ -194,36 +198,40 @@ describe("Doctor deferred model retirement", () => {
             }
 
             await withEnvAsync({ OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" }, async () => {
-              const converged = await prepareDoctorContext(f.configPath);
-              expect(converged.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
-              expect(
-                createModelAuthAvailabilityResolver({
-                  cfg: converged.cfg,
-                  authStore: loadAuthProfileStoreForRuntime(f.agentDir),
-                  env: {},
-                }).evaluateModelAuth("openai", {
-                  modelId: "gpt-5.6-luna",
-                  requiredProfileId: "openai:chatgpt-default",
-                }),
-              ).toMatchObject({
-                availability: true,
-                selectedProfileId: "openai:chatgpt-default",
-                selectedRoute: { authRequirement: "subscription" },
-              });
-              expect(f.receipt()).toMatchObject({ status: "skipped" });
-              await runInitialConfigWriteHealth(converged);
-              expect(f.receipt()).toMatchObject({ status: "completed" });
-              expect(await fs.readFile(f.configPath, "utf8")).toContain("openai/gpt-5.6-luna");
-              const completedRun = getUpdateRun(f.runId);
-              if (!completedRun) {
-                throw new Error("Expected the update run after Doctor committed its repair.");
+              {
+                await using converged = await prepareDoctorContext(f.configPath);
+                expect(converged.cfg.agents?.defaults?.heartbeat?.model).toBe(
+                  "openai/gpt-5.6-luna",
+                );
+                expect(
+                  createModelAuthAvailabilityResolver({
+                    cfg: converged.cfg,
+                    authStore: loadAuthProfileStoreForRuntime(f.agentDir),
+                    env: {},
+                  }).evaluateModelAuth("openai", {
+                    modelId: "gpt-5.6-luna",
+                    requiredProfileId: "openai:chatgpt-default",
+                  }),
+                ).toMatchObject({
+                  availability: true,
+                  selectedProfileId: "openai:chatgpt-default",
+                  selectedRoute: { authRequirement: "subscription" },
+                });
+                expect(f.receipt()).toMatchObject({ status: "skipped" });
+                await runInitialConfigWriteHealth(converged);
+                expect(f.receipt()).toMatchObject({ status: "completed" });
+                expect(await fs.readFile(f.configPath, "utf8")).toContain("openai/gpt-5.6-luna");
+                const completedRun = getUpdateRun(f.runId);
+                if (!completedRun) {
+                  throw new Error("Expected the update run after Doctor committed its repair.");
+                }
+                expect(renderUpdateRunReport(completedRun).lines).toContain(
+                  "Warning: Deferred model retirement repair completed after plugin convergence.",
+                );
               }
-              expect(renderUpdateRunReport(completedRun).lines).toContain(
-                "Warning: Deferred model retirement repair completed after plugin convergence.",
-              );
 
               f.defer();
-              const repeated = await prepareDoctorContext(f.configPath);
+              await using repeated = await prepareDoctorContext(f.configPath);
               expect(repeated.configResult.shouldWriteConfig).toBe(false);
               await runInitialConfigWriteHealth(repeated);
               expect(f.receipt()).toMatchObject({ status: "completed" });
@@ -247,7 +255,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           await runInitialConfigWriteHealth(ctx);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.4-mini");
           expect(getUpdateRun(f.runId)).toEqual(before);
@@ -268,7 +276,7 @@ describe("Doctor deferred model retirement", () => {
           OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
         },
         async () => {
-          const ctx = await prepareDoctorContext(f.configPath);
+          await using ctx = await prepareDoctorContext(f.configPath);
           expect(ctx.cfg.agents?.defaults?.heartbeat?.model).toBe("openai/gpt-5.6-luna");
           const before = await fs.readFile(f.configPath, "utf8");
           ctx.cfg.gateway = { ...ctx.cfg.gateway, port: -1 };

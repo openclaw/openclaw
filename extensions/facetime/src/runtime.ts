@@ -39,7 +39,6 @@ import {
   retainOutboundDialHelperPeers,
   readOutboundCallUUID,
   readOutboundProxyIdentifier,
-  retainHelperResultPeers,
 } from "./runtime-helper-results.js";
 import type { ActiveFaceTimeCall, FaceTimeRuntimeStatus } from "./runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "./runtime-status.js";
@@ -78,7 +77,7 @@ export async function createFaceTimeRuntime(params: {
 
   const calls = new FaceTimeCallRegistry<ActiveFaceTimeCall>();
   const pendingDialStore = new PendingFaceTimeDialStore(
-    params.runtime.state.openKeyedStore({
+    params.runtime.state.openKeyedStoreV2({
       namespace: "pending-dial",
       maxEntries: 1,
       overflowPolicy: "reject-new",
@@ -242,8 +241,7 @@ export async function createFaceTimeRuntime(params: {
       .finally(scheduleOutboundReconciliation);
     const helperResults = readHelperResults(result);
     const cancelled = helperResults.some((entry) => entry.cancelled === true);
-    const helpersContacted =
-      typeof result.helpersContacted === "number" ? result.helpersContacted : helperResults.length;
+    const helpersContacted = result.helpersContacted ?? helperResults.length;
     const definitivelyAbsent =
       helperResults.length === helpersContacted &&
       hasDialHelperConfirmation(helperResults) &&
@@ -334,7 +332,6 @@ export async function createFaceTimeRuntime(params: {
     captureBinary,
     isStopping: () => stopping,
     getHelperTopologyVersion: () => helperTopologyVersion,
-    retainHelperResultPeers,
   });
   const { attemptCarrierHangup, stopCall } = callControl;
   const callEvents = createFaceTimeCallEventHandler({
@@ -375,7 +372,6 @@ export async function createFaceTimeRuntime(params: {
       config,
       fullConfig: params.fullConfig,
       runtime: params.runtime,
-      logger: params.logger,
       helperConnected: helper.connectedSockets > 0,
       captureBinary,
     });
@@ -596,7 +592,6 @@ export async function createFaceTimeRuntime(params: {
       driverInstallTask = installFaceTimeDriver({
         pluginRoot: params.pluginRoot,
         runCommandWithTimeout: params.runtime.system.runCommandWithTimeout,
-        callActive: false,
         signal: installAbortController.signal,
       })
         .then((result) => {
@@ -666,7 +661,7 @@ export async function createFaceTimeRuntime(params: {
                   outboundCallPending !== shutdownPending ||
                   shutdownPending.ownerEpoch !== pendingEpoch
                 ) {
-                  throw new Error("pending FaceTime dial changed during fail-closed shutdown");
+                  throw new Error("pending FaceTime dial changed during shutdown");
                 }
               },
             });

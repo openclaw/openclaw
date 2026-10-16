@@ -12,7 +12,8 @@ import {
   setConfigResolutionFacts,
 } from "../../../config/resolution-facts.js";
 import { writeOpenClawConfig } from "../../../config/test-helpers.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
+import type { ConfigFileSnapshot } from "../../../config/types.js";
+import { recordDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -25,7 +26,7 @@ import {
 } from "./automatic-config-repair.js";
 
 function invalidSnapshot(params: {
-  config: OpenClawConfig;
+  config: Record<string, unknown>;
   issuePaths: string[];
   includedPaths?: string[];
 }): ConfigFileSnapshot {
@@ -73,7 +74,7 @@ describe("automatic config repair", () => {
         observe: false,
       }).readConfigFileSnapshot();
       expect(snapshot.valid).toBe(false);
-      const plan = planAutomaticConfigRepair(snapshot);
+      const plan = await planAutomaticConfigRepair(snapshot);
       expect(plan?.snapshot.valid).toBe(true);
       expect(plan?.config.agents?.ownership).toBe("explicit");
       expect(plan?.config.bindings).toContainEqual({
@@ -123,7 +124,7 @@ describe("automatic config repair", () => {
           "QUOTED_REPAIR_KEY",
         );
 
-        const repaired = resolveLegacyConfigSnapshotForBackup(snapshot);
+        const repaired = await resolveLegacyConfigSnapshotForBackup(snapshot);
         expect(repaired?.valid).toBe(true);
         expect(repaired?.sourceConfig.session?.reset?.idleMinutes).toBe(45);
         expect(collectEnvSecretRefIds(repaired?.sourceConfig)).toEqual(
@@ -137,48 +138,115 @@ describe("automatic config repair", () => {
     },
   );
 
-  it("repairs an independent core alias while retaining a deferred plugin's legacy input", async () => {
+  it.each(["deferred", "unavailable"])(
+    "repairs core aliases while preserving a %s plugin",
+    async (availability) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const configPath =
+          process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw", "openclaw.json");
+        const missingPath = path.join(home, "nonexistent-startup-plugin");
+        const legacyPluginInput = { root: "/srv/pending-plugin-state" };
+        const plugins =
+          availability === "deferred"
+            ? { allow: ["pending-owner"], entries: { "pending-owner": { enabled: true } } }
+            : { load: { paths: [missingPath] } };
+        const source =
+          availability === "deferred"
+            ? {
+                gateway: { mode: "local" },
+                tools: { exec: { timeoutSec: 45 } },
+                plugins,
+                legacyPluginInput,
+              }
+            : { session: { idleMinutes: 45 }, plugins };
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        const raw = `${JSON.stringify(source, null, 2)}\n`;
+        await fs.writeFile(configPath, raw);
+        const pending = {
+          pluginId: "pending-owner",
+          reason: "The configured plugin is not installed.",
+          command: "openclaw update repair",
+          configPaths: [["legacyPluginInput"]],
+          validationExcludedPaths: [["legacyPluginInput"]],
+        };
+        const snapshot = await createConfigIO({
+          configPath,
+          env: process.env,
+          observe: false,
+          ...(availability === "deferred" ? { deferredPluginMigrations: [pending] } : {}),
+        }).readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(false);
+        const plan = await planAutomaticConfigRepair(snapshot);
+        expect(plan).not.toBeNull();
+        expect(plan?.snapshot.valid).toBe(true);
+        if (availability === "deferred") {
+          expect(snapshot.issues.some((issue) => issue.path.startsWith("tools.exec"))).toBe(true);
+          expect(plan?.config.tools?.exec?.timeoutSeconds).toBe(45);
+          expect(plan?.config).not.toHaveProperty("tools.exec.timeoutSec");
+          expect(plan?.config).toHaveProperty("legacyPluginInput", legacyPluginInput);
+          expect(plan?.snapshot.sourceConfig).toHaveProperty(
+            "legacyPluginInput",
+            legacyPluginInput,
+          );
+          expect(plan?.snapshot.runtimeConfig).not.toHaveProperty("legacyPluginInput");
+          expect(snapshot.sourceConfig).toHaveProperty("tools.exec.timeoutSec", 45);
+        } else {
+          expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
+          expect(plan?.config.plugins).toEqual(plugins);
+          expect(plan?.snapshot.warnings).toContainEqual(
+            expect.objectContaining({
+              code: "configured-plugin-path-unavailable",
+              path: "plugins.load.paths",
+              source: missingPath,
+            }),
+          );
+          expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
+        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      });
+    },
+  );
+
+  it("commits core repairs while keeping a deferred plugin's admitted legacy input", async () => {
+    // Published package-manager updaters run this Doctor before plugin convergence.
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath =
         process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw", "openclaw.json");
-      const source = {
-        gateway: { mode: "local" },
-        tools: { exec: { timeoutSec: 45 } },
-        plugins: { allow: ["pending-owner"], entries: { "pending-owner": { enabled: true } } },
-        legacyPluginInput: { root: "/srv/pending-plugin-state" },
-      };
+      const legacyPluginInput = { root: "/srv/pending-plugin-state" };
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const raw = `${JSON.stringify(source, null, 2)}\n`;
-      await fs.writeFile(configPath, raw);
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: { mode: "local" },
+          tools: { exec: { timeoutSec: 45 } },
+          plugins: { allow: ["pending-owner"], entries: { "pending-owner": { enabled: true } } },
+          legacyPluginInput,
+        }),
+      );
       const pending = {
         pluginId: "pending-owner",
-        reason: "The configured plugin is not installed.",
+        reason:
+          "Package convergence must wait until the updating parent releases its install records.",
         command: "openclaw update repair",
         configPaths: [["legacyPluginInput"]],
         validationExcludedPaths: [["legacyPluginInput"]],
       };
+      // Doctor records the deferral before its repair write publishes against that generation.
+      await recordDeferredPluginMigrations({ env: process.env, pending: [pending] });
       const snapshot = await createConfigIO({
         configPath,
         env: process.env,
         observe: false,
         deferredPluginMigrations: [pending],
       }).readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(false);
-      expect(snapshot.issues.some((issue) => issue.path.startsWith("tools.exec"))).toBe(true);
-
-      const plan = planAutomaticConfigRepair(snapshot);
-      expect(plan).not.toBeNull();
-      expect(plan?.config.tools?.exec?.timeoutSeconds).toBe(45);
-      expect(plan?.config).not.toHaveProperty("tools.exec.timeoutSec");
-      expect(plan?.config).toHaveProperty("legacyPluginInput", source.legacyPluginInput);
-      expect(plan?.snapshot.sourceConfig).toHaveProperty(
-        "legacyPluginInput",
-        source.legacyPluginInput,
-      );
-      expect(plan?.snapshot.runtimeConfig).not.toHaveProperty("legacyPluginInput");
-      expect(plan?.snapshot.valid).toBe(true);
-      expect(snapshot.sourceConfig).toHaveProperty("tools.exec.timeoutSec", 45);
-      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      const plan = await planAutomaticConfigRepair(snapshot);
+      if (!plan) {
+        throw new Error("expected a repairable exec config");
+      }
+      await commitAutomaticConfigRepair(plan, snapshot);
+      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+      expect(saved.tools.exec).toEqual({ timeoutSeconds: 45 });
+      expect(saved.legacyPluginInput).toEqual(legacyPluginInput);
     });
   });
 
@@ -196,7 +264,7 @@ describe("automatic config repair", () => {
           const originalBytes = await fs.readFile(configPath, "utf8");
           const snapshot = await readConfigFileSnapshot();
           expect(snapshot.valid).toBe(false);
-          const plan = planAutomaticConfigRepair(snapshot);
+          const plan = await planAutomaticConfigRepair(snapshot);
           if (!plan) {
             throw new Error("expected a repairable session config");
           }
@@ -209,7 +277,7 @@ describe("automatic config repair", () => {
             expect(reloaded.sourceConfig.browser?.executablePath).toBe(
               "/opt/example/browser-current",
             );
-            expect(planAutomaticConfigRepair(reloaded)).toBeNull();
+            expect(await planAutomaticConfigRepair(reloaded)).toBeNull();
           });
           await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
         },
@@ -232,8 +300,8 @@ describe("automatic config repair", () => {
             const originalBytes = await fs.readFile(configPath, "utf8");
             const snapshot = await readConfigFileSnapshot();
             expect(snapshot.valid).toBe(false);
-            expect(resolveLegacyConfigSnapshotForBackup(snapshot)?.valid).toBe(true);
-            const plan = planAutomaticConfigRepair(snapshot);
+            expect((await resolveLegacyConfigSnapshotForBackup(snapshot))?.valid).toBe(true);
+            const plan = await planAutomaticConfigRepair(snapshot);
             if (!plan) {
               throw new Error("expected a repairable memory config");
             }
@@ -252,16 +320,16 @@ describe("automatic config repair", () => {
     },
   );
 
-  it("plans a config whose only migration is plugin-owned after state admission", () => {
+  it("plans a config whose only migration is plugin-owned after state admission", async () => {
     // Doctor's full planner owns plugin contracts; backup projection uses core-only selection.
     const snapshot = invalidSnapshot({
       config: {
         plugins: { entries: { "active-memory": { config: { qmd: { enabled: true } } } } },
-      } as OpenClawConfig,
+      },
       issuePaths: ["plugins.entries.active-memory.config.qmd"],
     });
 
-    const resolved = planAutomaticConfigRepair(snapshot)?.snapshot;
+    const resolved = (await planAutomaticConfigRepair(snapshot))?.snapshot;
 
     expect(resolved?.valid).toBe(true);
     expect(resolved?.sourceConfig.plugins?.entries?.["active-memory"]?.config).toEqual({});
@@ -279,10 +347,10 @@ describe("automatic config repair", () => {
             session: { idleMinutes: 45 },
             meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
             agents: { list: [{ id: "work", name: "Operator" }] },
-          } as OpenClawConfig,
+          },
           issuePaths: ["session.idleMinutes"],
         });
-        const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
+        const resolved = await resolveLegacyConfigSnapshotForBackup(snapshot);
         expect(resolved?.valid).toBe(true);
         expect(resolved?.sourceConfig.session).toEqual({
           reset: { mode: "idle", idleMinutes: 45 },
@@ -295,10 +363,10 @@ describe("automatic config repair", () => {
     }
   });
 
-  it("retires a reference fact whose path the repair moved", () => {
+  it("retires a reference fact whose path the repair moved", async () => {
     // The repair relocates session.idleMinutes, so a fact recorded at the authored path would
     // otherwise keep answering lookups for a value that no longer lives there.
-    const config = { session: { idleMinutes: 45 } } as OpenClawConfig;
+    const config = { session: { idleMinutes: 45 } };
     setConfigResolutionFacts(
       config,
       createConfigResolutionFacts(
@@ -310,43 +378,12 @@ describe("automatic config repair", () => {
     );
     const snapshot = invalidSnapshot({ config, issuePaths: ["session.idleMinutes"] });
 
-    const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
+    const resolved = await resolveLegacyConfigSnapshotForBackup(snapshot);
 
     expect(resolved?.sourceConfig.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
     expect(getResolvedConfigEnvSecretRef(resolved?.sourceConfig, "session.idleMinutes")).toBeNull();
     // The read-only projection preserves the authored snapshot and its reference facts.
     expect(collectEnvSecretRefIds(snapshot.sourceConfig)).toEqual(new Set(["MOVED_KEY"]));
-  });
-
-  it("repairs core aliases while preserving an unavailable plugin and its warning", async () => {
-    // The availability ruling (#150016/#150312) permits repair while preserving uninspected config.
-    await withDoctorConfigPreflightHome(async (home) => {
-      const configPath =
-        process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw", "openclaw.json");
-      const missingPath = path.join(home, "nonexistent-startup-plugin");
-      const plugins = { load: { paths: [missingPath] } };
-      const raw = JSON.stringify({ session: { idleMinutes: 45 }, plugins });
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, raw);
-      const snapshot = await createConfigIO({
-        configPath,
-        observe: false,
-      }).readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(false);
-      const plan = planAutomaticConfigRepair(snapshot);
-      expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
-      expect(plan?.config.plugins).toEqual(plugins);
-      expect(plan?.snapshot.valid).toBe(true);
-      expect(plan?.snapshot.warnings).toContainEqual(
-        expect.objectContaining({
-          code: "configured-plugin-path-unavailable",
-          path: "plugins.load.paths",
-          source: missingPath,
-        }),
-      );
-      expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
-      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-    });
   });
 
   it.each([
@@ -386,16 +423,16 @@ describe("automatic config repair", () => {
       name: "another invalid key at a retired key's schema parent",
       config: { meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z", unrelatedRetiredKey: true } },
     },
-  ])("refuses $name", ({ config, includedPaths }) => {
+  ])("refuses $name", async ({ config, includedPaths }) => {
     const snapshot = invalidSnapshot({
-      config: config as OpenClawConfig,
+      config,
       issuePaths: [],
       includedPaths,
     });
 
-    expect(planAutomaticConfigRepair(snapshot)).toBeNull();
+    expect(await planAutomaticConfigRepair(snapshot)).toBeNull();
     if (config.plugins && "installs" in config.plugins) {
-      expect(resolveLegacyConfigSnapshotForBackup(snapshot)).toBeUndefined();
+      expect(await resolveLegacyConfigSnapshotForBackup(snapshot)).toBeUndefined();
     }
   });
 });

@@ -1,7 +1,9 @@
-// Versioned metadata-only activity audit query payloads.
-import { type Static, type TProperties, type TSchema, Type } from "typebox";
+import { type Static, type TObject, type TProperties, type TSchema, Type } from "typebox";
+import type { SchemaContract } from "../schema-contract.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+// Versioned metadata-only activity audit query payloads.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
@@ -68,11 +70,11 @@ const AuditActivityDirectionV1Schema: TSchema = Type.Union(
   AUDIT_ACTIVITY_DIRECTIONS.map((value) => Type.Literal(value)),
 );
 
-const AuditActivityConversationKindV1Schema = Type.Union([
-  Type.Literal("direct"),
-  Type.Literal("group"),
-  Type.Literal("channel"),
-  Type.Literal("unknown"),
+const AuditActivityConversationKindV1Schema = stringLiteralUnion([
+  "direct",
+  "group",
+  "channel",
+  "unknown",
 ]);
 
 const AuditActivityHmacRefV1Schema = Type.String({
@@ -80,7 +82,7 @@ const AuditActivityHmacRefV1Schema = Type.String({
 });
 
 const AuditActivityAgentActorV1Schema = closedObject({
-  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  type: stringLiteralUnion(["agent", "system"]),
   id: NonEmptyString,
 });
 
@@ -96,7 +98,7 @@ const AuditActivityInboundActorV1Schema = Type.Union([
 ]);
 
 const AuditActivityOutboundActorV1Schema = closedObject({
-  type: Type.Union([Type.Literal("agent"), Type.Literal("system")]),
+  type: stringLiteralUnion(["agent", "system"]),
   id: NonEmptyString,
 });
 
@@ -188,22 +190,17 @@ const agentRunProperties = {
 export const AuditActivityAgentRunV1Schema: TSchema = correlatedObject(
   {
     ...agentRunProperties,
-    action: Type.Union([Type.Literal("agent.run.started"), Type.Literal("agent.run.finished")]),
-    status: Type.Union([
-      Type.Literal("started"),
-      Type.Literal("succeeded"),
-      Type.Literal("failed"),
-      Type.Literal("cancelled"),
-      Type.Literal("timed_out"),
-      Type.Literal("blocked"),
+    action: stringLiteralUnion(["agent.run.started", "agent.run.finished"]),
+    status: stringLiteralUnion([
+      "started",
+      "succeeded",
+      "failed",
+      "cancelled",
+      "timed_out",
+      "blocked",
     ]),
     errorCode: Type.Optional(
-      Type.Union([
-        Type.Literal("run_failed"),
-        Type.Literal("run_cancelled"),
-        Type.Literal("run_timed_out"),
-        Type.Literal("run_blocked"),
-      ]),
+      stringLiteralUnion(["run_failed", "run_cancelled", "run_timed_out", "run_blocked"]),
     ),
   },
   actionTerminalVariants("agent.run", [
@@ -227,15 +224,15 @@ const toolActionProperties = {
 export const AuditActivityToolActionV1Schema: TSchema = correlatedObject(
   {
     ...toolActionProperties,
-    action: Type.Union([Type.Literal("tool.action.started"), Type.Literal("tool.action.finished")]),
+    action: stringLiteralUnion(["tool.action.started", "tool.action.finished"]),
     status: AuditActivityStatusV1Schema,
     errorCode: Type.Optional(
-      Type.Union([
-        Type.Literal("tool_failed"),
-        Type.Literal("tool_cancelled"),
-        Type.Literal("tool_timed_out"),
-        Type.Literal("tool_blocked"),
-        Type.Literal("tool_outcome_unknown"),
+      stringLiteralUnion([
+        "tool_failed",
+        "tool_cancelled",
+        "tool_timed_out",
+        "tool_blocked",
+        "tool_outcome_unknown",
       ]),
     ),
   },
@@ -258,43 +255,35 @@ const inboundMessageProperties = {
   actor: AuditActivityInboundActorV1Schema,
 };
 
-const inboundCompletedReasonSchema = Type.Union([
-  Type.Literal("fast_abort"),
-  Type.Literal("plugin_bound_handled"),
-  Type.Literal("plugin_bound_unavailable"),
-  Type.Literal("plugin_bound_declined"),
-  Type.Literal("before_dispatch_handled"),
-  Type.Literal("acp_dispatch_completed"),
-  Type.Literal("acp_dispatch_empty"),
-  Type.Literal("active_run_injected"),
+const inboundCompletedReasonSchema = stringLiteralUnion([
+  "fast_abort",
+  "plugin_bound_handled",
+  "plugin_bound_unavailable",
+  "plugin_bound_declined",
+  "before_dispatch_handled",
+  "acp_dispatch_completed",
+  "acp_dispatch_empty",
+  "active_run_injected",
 ]);
 
-const inboundSkippedReasonSchema = Type.Union([
-  Type.Literal("duplicate"),
-  Type.Literal("reply_operation_active"),
-  Type.Literal("reply_operation_aborted"),
-  Type.Literal("acp_dispatch_aborted"),
+const inboundSkippedReasonSchema = stringLiteralUnion([
+  "duplicate",
+  "reply_operation_active",
+  "reply_operation_aborted",
+  "acp_dispatch_aborted",
 ]);
 
 /** V1 inbound-message activity record. */
-const inboundFailureReasonSchema = Type.Union([
-  Type.Literal("acp_dispatch_failed"),
-  Type.Literal("plugin_bound_error"),
+const inboundFailureReasonSchema = stringLiteralUnion([
+  "acp_dispatch_failed",
+  "plugin_bound_error",
 ]);
 
 export const AuditActivityInboundMessageV1Schema: TSchema = correlatedObject(
   {
     ...inboundMessageProperties,
-    status: Type.Union([
-      Type.Literal("succeeded"),
-      Type.Literal("blocked"),
-      Type.Literal("failed"),
-    ]),
-    outcome: Type.Union([
-      Type.Literal("completed"),
-      Type.Literal("skipped"),
-      Type.Literal("failed"),
-    ]),
+    status: stringLiteralUnion(["succeeded", "blocked", "failed"]),
+    outcome: stringLiteralUnion(["completed", "skipped", "failed"]),
     errorCode: Type.Optional(Type.Literal("message_processing_failed")),
     reasonCode: Type.Optional(
       Type.Union([
@@ -338,46 +327,30 @@ const outboundMessageProperties = {
   action: Type.Literal("message.outbound.finished"),
   direction: Type.Literal("outbound"),
   actor: AuditActivityOutboundActorV1Schema,
-  deliveryKind: Type.Optional(
-    Type.Union([Type.Literal("text"), Type.Literal("media"), Type.Literal("other")]),
-  ),
+  deliveryKind: Type.Optional(stringLiteralUnion(["text", "media", "other"])),
 };
 
-const outboundSuppressedReasonSchema = Type.Union([
-  Type.Literal("cancelled_by_message_sending_hook"),
-  Type.Literal("cancelled_by_reply_payload_sending_hook"),
-  Type.Literal("empty_after_message_sending_hook"),
-  Type.Literal("empty_after_reply_payload_sending_hook"),
-  Type.Literal("no_visible_payload"),
+const outboundSuppressedReasonSchema = stringLiteralUnion([
+  "cancelled_by_message_sending_hook",
+  "cancelled_by_reply_payload_sending_hook",
+  "empty_after_message_sending_hook",
+  "empty_after_reply_payload_sending_hook",
+  "no_visible_payload",
 ]);
 
-const outboundFailureStageSchema = Type.Union([
-  Type.Literal("platform_send"),
-  Type.Literal("queue"),
-  Type.Literal("unknown"),
-]);
+const outboundFailureStageSchema = stringLiteralUnion(["platform_send", "queue", "unknown"]);
 
 /** V1 outbound-message activity record. */
-const outboundFailureErrorSchema = Type.Union([
-  Type.Literal("message_delivery_failed"),
-  Type.Literal("message_delivery_partial_failure"),
+const outboundFailureErrorSchema = stringLiteralUnion([
+  "message_delivery_failed",
+  "message_delivery_partial_failure",
 ]);
 
 export const AuditActivityOutboundMessageV1Schema: TSchema = correlatedObject(
   {
     ...outboundMessageProperties,
-    status: Type.Union([
-      Type.Literal("succeeded"),
-      Type.Literal("blocked"),
-      Type.Literal("failed"),
-      Type.Literal("unknown"),
-    ]),
-    outcome: Type.Union([
-      Type.Literal("sent"),
-      Type.Literal("suppressed"),
-      Type.Literal("failed"),
-      Type.Literal("unknown"),
-    ]),
+    status: stringLiteralUnion(["succeeded", "blocked", "failed", "unknown"]),
+    outcome: stringLiteralUnion(["sent", "suppressed", "failed", "unknown"]),
     errorCode: Type.Optional(outboundFailureErrorSchema),
     reasonCode: Type.Optional(outboundSuppressedReasonSchema),
     failureStage: Type.Optional(outboundFailureStageSchema),
@@ -451,24 +424,10 @@ export const AuditActivityListResultSchema: TSchema = closedObject({
 });
 
 /** Metadata-only audit query payloads. */
-// These wire types stay explicit because the runtime schemas use JSON Schema
-// `allOf` correlations that TypeBox cannot infer without expanding the public
-// declaration graph far beyond the compact protocol contract.
-type AuditActivityRecordBaseV1 = {
+// Terminal unions preserve JSON Schema `allOf` correlations that TypeBox cannot
+// infer; ordinary fields derive from the same properties as the runtime schemas.
+type AuditActivityRecordBaseV1 = Omit<Static<TObject<typeof commonProperties>>, "schemaVersion"> & {
   schemaVersion: 1;
-  eventId: string;
-  sequence: number;
-  sourceSequence: number;
-  occurredAt: number;
-  redaction: "metadata_only";
-};
-
-type AuditActivityAgentRecordBaseV1 = AuditActivityRecordBaseV1 & {
-  actor: { type: "agent" | "system"; id: string };
-  agentId: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId: string;
 };
 
 type AuditActivityAgentRunV1Terminal =
@@ -478,10 +437,9 @@ type AuditActivityAgentRunV1Terminal =
   | { action: "agent.run.finished"; status: "cancelled"; errorCode: "run_cancelled" }
   | { action: "agent.run.finished"; status: "timed_out"; errorCode: "run_timed_out" }
   | { action: "agent.run.finished"; status: "blocked"; errorCode: "run_blocked" };
-export type AuditActivityAgentRunV1 = AuditActivityAgentRecordBaseV1 & {
-  eventType: "agent_run";
-  kind: "agent_run";
-} & AuditActivityAgentRunV1Terminal;
+export type AuditActivityAgentRunV1 = AuditActivityRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof agentRunProperties>>> &
+  AuditActivityAgentRunV1Terminal;
 
 type AuditActivityToolActionV1Terminal =
   | { action: "tool.action.started"; status: "started"; errorCode?: never }
@@ -495,25 +453,11 @@ type AuditActivityToolActionV1Terminal =
       status: "unknown";
       errorCode: "tool_outcome_unknown";
     };
-export type AuditActivityToolActionV1 = AuditActivityAgentRecordBaseV1 & {
-  eventType: "tool_action";
-  kind: "tool_action";
-  toolCallId?: string;
-  toolName?: string;
-} & AuditActivityToolActionV1Terminal;
+export type AuditActivityToolActionV1 = AuditActivityRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof toolActionProperties>>> &
+  AuditActivityToolActionV1Terminal;
 
 type AuditActivityMessageRecordBaseV1 = AuditActivityRecordBaseV1 & {
-  kind: "message";
-  channel: string;
-  conversationKind: "direct" | "group" | "channel" | "unknown";
-  durationMs?: number;
-  resultCount?: number;
-  agentId?: string;
-  runId?: string;
-  accountRef?: string;
-  conversationRef?: string;
-  messageRef?: string;
-  targetRef?: string;
   sessionKey?: never;
   sessionId?: never;
   toolCallId?: never;
@@ -539,14 +483,11 @@ type AuditActivityInboundMessageV1Terminal =
       errorCode: "message_processing_failed";
       reasonCode?: Static<typeof inboundFailureReasonSchema>;
     };
-export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
-  eventType: "inbound_message";
-  action: "message.inbound.processed";
-  direction: "inbound";
-  actor: { type: "channel_sender"; id: string } | { type: "system"; id: string };
-  deliveryKind?: never;
-  failureStage?: never;
-} & AuditActivityInboundMessageV1Terminal;
+export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof inboundMessageProperties>>> & {
+    deliveryKind?: never;
+    failureStage?: never;
+  } & AuditActivityInboundMessageV1Terminal;
 
 type AuditActivityOutboundMessageV1Terminal =
   | {
@@ -581,12 +522,9 @@ type AuditActivityOutboundMessageV1Terminal =
       failureStage: Static<typeof outboundFailureStageSchema>;
       deliveryKind?: never;
     };
-export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
-  eventType: "outbound_message";
-  action: "message.outbound.finished";
-  direction: "outbound";
-  actor: { type: "agent" | "system"; id: string };
-} & AuditActivityOutboundMessageV1Terminal;
+export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 &
+  SchemaContract<Static<TObject<typeof outboundMessageProperties>>> &
+  AuditActivityOutboundMessageV1Terminal;
 
 export type AuditActivityEventV1 =
   | AuditActivityAgentRunV1

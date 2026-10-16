@@ -6,10 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
@@ -148,9 +149,25 @@ describe("gateway multi-instance e2e", () => {
     "preserves scheduler runtime across a scheduler-disabled Gateway edit",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
+      const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
       const manager = await createOpenClawTestInstance({
         name: "cron-passive-manager",
-        config: { cron: { enabled: false }, plugins: { enabled: false } },
+        config: {
+          cron: { enabled: false },
+          plugins: { enabled: false },
+          agents: {
+            defaults: {
+              model: { primary: model.modelRef },
+              models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+            },
+          },
+        },
         env: { OPENCLAW_SKIP_CRON: "0" },
       });
       let managerClient: GatewayClient | undefined;
@@ -178,8 +195,12 @@ describe("gateway multi-instance e2e", () => {
 
           await managerClient.request("cron.list", { includeDisabled: true });
 
-          // A separate scheduler process advances the row while the passive Gateway
-          // retains its snapshot. Two Gateways must not share a state directory.
+          // Cron custody is exclusive even when scheduling is disabled. Hand the
+          // database to the offline scheduler only after the Gateway has stopped;
+          // stale in-memory service snapshots are covered by shared-store-runtime.test.ts.
+          await managerClient.stopAndWait();
+          managerClient = undefined;
+          await manager.stopGateway();
           const scheduler = spawnSync(
             process.execPath,
             [
@@ -213,16 +234,21 @@ try {
 `,
               canary.id,
             ],
-            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: 60_000 },
+            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: E2E_TIMEOUT_MS },
           );
           expect(scheduler.stderr).toBe("");
-          expect(scheduler.status).toBe(0);
+          expect(
+            scheduler.status,
+            scheduler.error?.message ?? scheduler.signal ?? scheduler.stderr,
+          ).toBe(0);
           const before = JSON.parse(scheduler.stdout) as {
             state: { lastRunAtMs?: number; lastStatus?: string };
           };
           expect(before.state.lastRunAtMs).toEqual(expect.any(Number));
           expect(before.state.lastStatus).toBe("ok");
 
+          await manager.startGateway();
+          managerClient = await connectGatewayStatusClient(manager);
           await managerClient.request("cron.update", {
             id: target.id,
             patch: { description: "updated through passive Gateway" },
@@ -311,7 +337,16 @@ try {
               path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
             }),
           });
-          await approveNodePairingForProof(operator, nodeIdentity.deviceId);
+          const pairing = await operator.request<{
+            pending: Array<{ nodeId: string }>;
+            paired: Array<{ nodeId: string; commands?: string[] }>;
+          }>("node.pair.list", {});
+          expect(
+            pairing.pending.find((entry) => entry.nodeId === nodeIdentity.deviceId),
+          ).toBeUndefined();
+          expect(
+            pairing.paired.find((entry) => entry.nodeId === nodeIdentity.deviceId)?.commands,
+          ).toEqual(["system.notify"]);
           await waitForNodeStatus(instance, nodeIdentity.deviceId);
           const startedAt = performance.now();
           const result = await operator.request<{ payload?: { captured?: boolean } }>(
@@ -374,19 +409,4 @@ async function waitForFile(filePath: string): Promise<void> {
       () => {},
     );
   });
-}
-
-async function approveNodePairingForProof(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const pairing = await operator.request<{
-        pending?: Array<{ nodeId?: string; requestId?: string; commands?: string[] }>;
-      }>("node.pair.list", {});
-      const pending = pairing.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual(["system.notify"]);
-      expect(pending?.requestId).toEqual(expect.any(String));
-      await operator.request("node.pair.approve", { requestId: pending?.requestId });
-    },
-    { timeout: 15_000, interval: 100 },
-  );
 }

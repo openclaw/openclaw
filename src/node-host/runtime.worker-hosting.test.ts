@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -41,9 +42,11 @@ vi.mock("./node-worker-workspace.js", () => ({
     readonly checkAdmission = mocks.checkWorkspaceAdmission;
   },
 }));
-vi.mock("./plugin-node-host.js", () => ({
+vi.mock("./plugin-node-host.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-node-host.js")>()),
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
   hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
+  isRegisteredNodeHostCommandDuplex: vi.fn(() => false),
   notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => undefined),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
@@ -76,24 +79,69 @@ function prepareWorkerRuntime(
   } = {},
 ) {
   const { enabled = true, containerImage, ...runtimeOptions } = options;
+  const workerRuns = { enabled, isolation, containerImage };
   return prepareNodeHostRuntime({
-    config: {
-      nodeHost: { skills: { enabled: false }, workerRuns: { enabled, isolation, containerImage } },
-    },
+    config:
+      !enabled || isolation === "container"
+        ? configThatRejectsModelAccess(workerRuns)
+        : { nodeHost: { skills: { enabled: false }, workerRuns } },
     env: { PATH: "/usr/bin" },
-    enableWorkerRuns: true,
     ...runtimeOptions,
   });
 }
 
-describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareWorkerRuntime(undefined, {
-      enabled: false,
-      forceWorkerRuns: true,
-    });
+function configThatRejectsModelAccess(workerRuns: {
+  enabled: boolean;
+  isolation?: "container";
+  containerImage?: string;
+}): OpenClawConfig {
+  const config: OpenClawConfig = {
+    nodeHost: { skills: { enabled: false }, workerRuns },
+  };
+  Object.defineProperty(config, "models", {
+    get() {
+      throw new Error("native inference inspected models outside its launch boundary");
+    },
+  });
+  return config;
+}
 
-    expect(prepared.workerHostingEnabled).toBe(true);
+describe("node-host worker manifest", () => {
+  it("advertises native inference after unisolated worker hosting is admitted", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: {
+          skills: { enabled: false },
+          workerRuns: { enabled: true, isolation: "none" },
+        },
+        models: {
+          providers: {
+            local: {
+              apiKey: "synthetic-native-key",
+              api: "openai-completions",
+              baseUrl: "https://model.example.test/v1",
+              models: [
+                {
+                  id: "model-1",
+                  name: "Model 1",
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(prepared.nativeInferenceEnabled).toBe(true);
+
+    const runtime = prepared.start({ client });
+    await runtime.close();
   });
 
   it("keeps container hosting opted out without probing an engine or reporting a failure", async () => {
@@ -102,6 +150,7 @@ describe("node-host worker manifest", () => {
     const runtime = prepared.start({ client, onWorkerHostingDisabled });
     try {
       expect(prepared.workerHostingEnabled).toBe(false);
+      expect(prepared.nativeInferenceEnabled).toBe(false);
       expect(prepared.workerHostingDisabledReason).toBeUndefined();
       expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
       expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
@@ -117,6 +166,7 @@ describe("node-host worker manifest", () => {
     mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
     const prepared = await prepareWorkerRuntime("container");
     expect(prepared.workerHostingEnabled).toBe(false);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toBe(reason);
     expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
     const runtime = prepared.start({ client });
@@ -147,6 +197,7 @@ describe("node-host worker manifest", () => {
     });
 
     expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();
@@ -288,3 +339,14 @@ describe("node-host worker manifest", () => {
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
 });
+
+it.each([undefined, [], ["~/projects"]])(
+  "advertises device-folder capability only when node-local consent permits it (%j)",
+  async (folders) => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, folders } } },
+      env: { PATH: "/usr/bin" },
+    });
+    expect(prepared.deviceFoldersEnabled).toBe(folders?.length !== 0 ? true : undefined);
+  },
+);

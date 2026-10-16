@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
@@ -15,7 +15,7 @@ import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
@@ -37,11 +37,7 @@ export class SkillTreeDirectoryError extends SkillLibraryError {
   }
 }
 
-type PreparedSkillBundle = {
-  revision: string;
-  files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
-};
-export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
+export type PreparedSkillLibraryBundle = ReturnType<typeof prepareSkillLibraryBundle>;
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const manifestSchema = Type.Array(
   Type.Object(
@@ -148,7 +144,7 @@ export function decodeSkillLibraryFile(file: SkillLibraryFile): Buffer {
 }
 
 /** Validate exact portable artifacts without imposing publication metadata on loaded skills. */
-export function prepareSkillBundle(files: readonly SkillLibraryFile[]): PreparedSkillBundle {
+export function prepareSkillBundle(files: readonly SkillLibraryFile[]) {
   if (files.length > SKILL_LIBRARY_MAX_FILES) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill bundle exceeds 256 files.");
   }
@@ -201,9 +197,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
   };
 }
 
-export function prepareSkillLibraryBundle(
-  files: readonly SkillLibraryFile[],
-): PreparedSkillLibraryBundle {
+export function prepareSkillLibraryBundle(files: readonly SkillLibraryFile[]) {
   const bundle = prepareSkillBundle(files);
   for (const file of bundle.files) {
     validateSkillLibraryPath(file.path);

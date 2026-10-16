@@ -9,12 +9,13 @@ const log = createSubsystemLogger("session-init");
  */
 export class ReplySessionInitConflictError extends Error {
   constructor(sessionKey: string) {
-    super(`reply session initialization conflicted for ${sessionKey}`);
+    super(`reply session initialization conflicted for ${sessionKey}; please retry your message.`);
     this.name = "ReplySessionInitConflictError";
   }
 }
 
-const SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+const SESSION_INIT_CONFLICT_MESSAGE_RE =
+  /^reply session initialization conflicted for \S+(?:; please retry your message\.)?$/u;
 
 function isReplySessionInitConflictError(error: unknown): boolean {
   return (
@@ -38,18 +39,13 @@ const SESSION_INIT_CONFLICT_BACKOFF_POLICY = {
 export async function runWithSessionInitConflictRetry<T>(
   attempt: () => Promise<T>,
   options?: {
-    maxAttempts?: number;
     retryDelaysMs?: readonly number[];
     signal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<T> {
   const retryDelaysMs = options?.retryDelaysMs;
-  const maxRetries = Math.min(
-    (options?.maxAttempts ??
-      (retryDelaysMs ? retryDelaysMs.length + 1 : SESSION_INIT_CONFLICT_MAX_ATTEMPTS)) - 1,
-    retryDelaysMs?.length ?? Number.POSITIVE_INFINITY,
-  );
+  const maxRetries = retryDelaysMs?.length ?? SESSION_INIT_CONFLICT_MAX_ATTEMPTS - 1;
   const sleep = options?.sleep ?? sleepWithAbort;
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     try {

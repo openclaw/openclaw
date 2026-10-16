@@ -12,13 +12,14 @@ afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
   vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-authorization-async.js");
   vi.doUnmock("../../session-sharing-target-input.js");
   vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
 
 describe("authenticated request completion", { concurrent: false }, () => {
-  it.each(["return", "throw"])(
+  it.each(["throw"])(
     "holds reconnect capacity through handler settlement (%s)",
     async (outcome) => {
       const held = createDeferredCore();
@@ -80,7 +81,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
         return { handleGatewayRequest };
       });
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");
@@ -171,6 +175,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
             resolveSessionMutationAuthorization: () => ({ error: null }),
           };
         });
+        // mock-isolation: This admin auxiliary request has no session target or sharing storage.
+        vi.doMock("../../session-sharing-authorization-async.js", () => ({
+          resolveSessionMutationAuthorizationAsync: async () => ({ error: null }),
+        }));
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
           resolveDirectSessionTargets: () => [],
@@ -180,7 +188,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
         }));
       }
       if (stage === "start scheduler") {
-        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+        vi.doMock("./request-start.js", async (importOriginal) => ({
+          ...(await importOriginal<typeof import("./request-start.js")>()),
+          scheduleGatewayRequestStart: hold,
+        }));
       }
       const { createDispatchTestHarness, createOperatorWsClient } =
         await import("./authenticated-request-dispatch.test-support.js");

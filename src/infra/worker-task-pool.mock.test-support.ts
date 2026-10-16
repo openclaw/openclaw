@@ -1,4 +1,4 @@
-import { createRetainedOperation } from "./retained-operation.js";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import type { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 type Pool<Input, Output> = ReturnType<typeof createOwnedWorkerTaskPool<Input, Output>>;

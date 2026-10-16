@@ -15,6 +15,7 @@ import {
   TSGO_ROOT_TEST_SHARDS,
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
+  orderChangedTsgoCoreTestShards,
   selectChangedCiTsgoGraphs,
   resolveChangedCiTsgoInputs,
   resolveCiTsgoGraphs,
@@ -22,6 +23,7 @@ import {
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
+import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mts";
 import { prepareTsgoCommand, runPreparedTsgoCommand } from "./run-tsgo.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -44,15 +46,19 @@ async function runShard(config: string, env: NodeJS.ProcessEnv, evidenceId: stri
   // One owner joins each native compiler. A second wrapper's escalation deadline
   // can kill the cleanup owner before it releases its artifact claim.
   let verified = false;
+  let timedOut = false;
   const code = command
     ? await runPreparedTsgoCommand(command, {
         evidenceId,
         onEvidence: () => {
           verified = true;
         },
+        onTimeout: () => {
+          timedOut = true;
+        },
       })
     : 0;
-  return { code, verified };
+  return { code, verified, timedOut };
 }
 
 /** Runs selected canonical graphs under the same output and child-process owner. */
@@ -69,6 +75,7 @@ async function runTsgoCoreTestShards(
   const concurrency = hasRootPartitions ? 1 : (options.concurrency ?? 1);
   const env = resolveLocalCheckEnv(options.env ?? process.env);
   const evidenceMode = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" && process.platform !== "win32";
+  const ci = isCiLikeEnv(env);
   const id = randomUUID();
   const leaves: string[] = [];
   // The batch owns outputs once; its existing compiler concurrency stays intact
@@ -87,13 +94,15 @@ async function runTsgoCoreTestShards(
           return;
         }
         const startedAt = performance.now();
-        const { code, verified } = await runShard(shard.config, env, shard.evidenceId).catch(
-          (error: unknown) => {
-            stopped = true;
-            failureCode = 1;
-            throw error;
-          },
-        );
+        const { code, verified, timedOut } = await runShard(
+          shard.config,
+          env,
+          shard.evidenceId,
+        ).catch((error: unknown) => {
+          stopped = true;
+          failureCode = 1;
+          throw error;
+        });
         console.error(
           `[tsgo:${shard.name}] ${code === 0 ? "passed" : `failed (exit ${code})`} in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
         );
@@ -103,8 +112,13 @@ async function runTsgoCoreTestShards(
         if (verified) {
           leaves.push(shard.evidenceId);
         }
-        // Only complete native diagnostics can justify draining a failed graph.
-        if ((isRootPartition(shard) && code !== 0) || (evidenceMode ? !verified : code !== 0)) {
+        // Watchdogs and termination do not admit another compiler graph.
+        if (
+          timedOut ||
+          code >= 128 ||
+          (!ci &&
+            ((isRootPartition(shard) && code !== 0) || (evidenceMode ? !verified : code !== 0)))
+        ) {
           stopped = true;
           failureCode ||= 1;
         }
@@ -159,10 +173,13 @@ export function createChangedCoreTestCheck(
       const selected = stripeConfigs
         ? candidates.filter((shard) => stripeConfigs.has(shard.config))
         : candidates;
+      const ordered = inspected
+        ? orderChangedTsgoCoreTestShards(selected, paths, inspected)
+        : selected;
       console.error(
-        `[check:changed] core test graphs: ${selected.map((shard) => shard.name).join(", ")}`,
+        `[check:changed] core test graphs: ${ordered.map((shard) => shard.name).join(", ")}`,
       );
-      return await runTsgoCoreTestShards(selected, { env, concurrency });
+      return await runTsgoCoreTestShards(ordered, { env, concurrency });
     },
   };
 }
@@ -206,7 +223,7 @@ export async function createChangedCiTypeCheckPlan(
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
   const inspected = await inspectCiTsgoCheckGraphs({ cwd, scope });
   const selected =
-    paths.every((file) => existsSync(path.resolve(cwd, file))) &&
+    compilerPaths.every((file) => existsSync(path.resolve(cwd, file))) &&
     (scope !== "noncore" || physicalExtensionInputs())
       ? selectChangedCiTsgoGraphs(paths, inspected, { scope })
       : undefined;
@@ -275,7 +292,21 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       throw new Error("--changed-paths-json requires a nonempty JSON string array");
     }
     const check = createChangedCoreTestCheck(paths, process.env, stripeShards);
-    process.exitCode = (await check.checkBoundary()) || (await check.checkTypes(concurrency));
+    let boundaryCode: number;
+    try {
+      boundaryCode = await check.checkBoundary();
+    } catch (error) {
+      console.error(error);
+      boundaryCode = 1;
+    }
+    // Termination does not admit another compiler; ordinary boundary failures
+    // still leave the canonical graphs available for independent type diagnostics.
+    if (boundaryCode >= 128) {
+      process.exitCode = boundaryCode;
+    } else {
+      const typesCode = await check.checkTypes(concurrency);
+      process.exitCode = boundaryCode || typesCode;
+    }
   } else {
     // CI stripes split the serial shard sequence across parallel jobs; the
     // stripe union is exactly the full shard list, so coverage is unchanged.

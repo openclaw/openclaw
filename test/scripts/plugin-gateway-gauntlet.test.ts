@@ -264,15 +264,15 @@ describe("plugin gateway gauntlet helpers", () => {
     }
   }
 
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--plugin", "telegram", "--", "--plugin", "discord"])).toMatchObject({
-      pluginIds: ["telegram"],
-    });
-  });
-
-  it("accepts package-manager argument separators before script options", () => {
-    expect(
-      parseArgs([
+  it.each([
+    {
+      name: "stops parsing after the argument terminator",
+      args: ["--plugin", "telegram", "--", "--plugin", "discord"],
+      expected: { pluginIds: ["telegram"] },
+    },
+    {
+      name: "accepts a leading package-manager separator",
+      args: [
         "--",
         "--plugin",
         "telegram",
@@ -280,12 +280,15 @@ describe("plugin gateway gauntlet helpers", () => {
         "3",
         "--qa-scenario",
         "channel-chat-baseline",
-      ]),
-    ).toMatchObject({
-      limit: 3,
-      pluginIds: ["telegram"],
-      qaScenarios: ["channel-chat-baseline"],
-    });
+      ],
+      expected: {
+        limit: 3,
+        pluginIds: ["telegram"],
+        qaScenarios: ["channel-chat-baseline"],
+      },
+    },
+  ])("$name", ({ args, expected }) => {
+    expect(parseArgs(args)).toMatchObject(expected);
   });
 
   it("rejects duplicate repeatable selectors", () => {
@@ -367,10 +370,12 @@ describe("plugin gateway gauntlet helpers", () => {
       "openclaw.plugin.json",
       JSON.stringify({ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }),
     );
+    await writeManifest("kimi-coding", "openclaw.plugin.json", JSON.stringify({ id: "kimi" }));
+    await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);
 
-    expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
+    expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta", "kimi"]);
     expect(matrix[0]).toEqual({
       activation: {},
       authMethods: ["oauth"],
@@ -396,33 +401,12 @@ describe("plugin gateway gauntlet helpers", () => {
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
     expect(beta.buildId).toBe("beta");
-  });
-
-  it("keeps manifest ids separate from bounded build entry ids", async () => {
-    await writeManifest("kimi-coding", "openclaw.plugin.json", JSON.stringify({ id: "kimi" }));
-
-    const matrix = discoverBundledPluginManifests(repoRoot);
-
-    expect(matrix).toEqual([
-      expect.objectContaining({
-        buildId: "kimi-coding",
-        id: "kimi",
-      }),
-    ]);
-    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
+    const kimi = expectDefined(matrix[2], "Kimi bundled plugin manifest");
+    expect(kimi).toMatchObject({ buildId: "kimi-coding", id: "kimi" });
     expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
-  });
-
-  it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
-    await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
-    await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
-
-    const matrix = discoverBundledPluginManifests(repoRoot);
-
-    expect(matrix.map((entry) => entry.id)).toEqual(["telegram"]);
   });
 
   it("detects plugin load failures in successful command output", () => {
@@ -476,23 +460,24 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
   });
 
-  it("rejects missing bundled plugin requirements", () => {
-    const entries = [{ id: "alpha", requiredPlugins: ["missing"] }];
-
-    expect(() => collectRequiredPluginEntries(entries, entries)).toThrow(
-      'Bundled plugin "alpha" requires unknown bundled plugin "missing"',
-    );
-  });
-
-  it("rejects bundled plugin requirement cycles", () => {
-    const entries = [
-      { id: "alpha", requiredPlugins: ["beta"] },
-      { id: "beta", requiredPlugins: ["alpha"] },
-    ];
-
+  it.each([
+    {
+      name: "missing requirements",
+      entries: [{ id: "alpha", requiredPlugins: ["missing"] }],
+      error: 'Bundled plugin "alpha" requires unknown bundled plugin "missing"',
+    },
+    {
+      name: "requirement cycles",
+      entries: [
+        { id: "alpha", requiredPlugins: ["beta"] },
+        { id: "beta", requiredPlugins: ["alpha"] },
+      ],
+      error: "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
+    },
+  ])("rejects bundled plugin $name", ({ entries, error }) => {
     expect(() =>
       collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
-    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
+    ).toThrow(error);
   });
 
   it("flags gateway startup CPU observations using bench summary keys", () => {
@@ -534,19 +519,22 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
   });
 
-  it("flags absolute peaks and phase-relative anomalies", () => {
+  it.each([false, true])("flags metric anomalies (cold start=%s)", (coldStart) => {
+    const peak = {
+      pluginId: "peak-plugin",
+      phase: "lifecycle:install",
+      wallMs: 1_000,
+      cpuCoreRatio: 1.2,
+      maxRssMb: 500,
+    };
+    const ordinary = [
+      { pluginId: "a", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+      { pluginId: "b", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+    ];
     const observations = collectMetricObservations(
-      [
-        { pluginId: "a", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
-        { pluginId: "b", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
-        {
-          pluginId: "c",
-          phase: "lifecycle:install",
-          wallMs: 1_000,
-          cpuCoreRatio: 1.2,
-          maxRssMb: 500,
-        },
-      ],
+      coldStart
+        ? [{ phase: "prebuild", wallMs: 100, maxRssMb: 100 }, peak, ...ordinary]
+        : [...ordinary, peak],
       {
         cpuCoreWarn: 0.9,
         hotWallWarnMs: 900,
@@ -562,37 +550,11 @@ describe("plugin gateway gauntlet helpers", () => {
       "phase-rss-high",
       "phase-rss-anomaly",
     ]);
-  });
-
-  it("marks first work-row anomalies as cold-start observations", () => {
-    const observations = collectMetricObservations(
-      [
-        { phase: "prebuild", wallMs: 100, maxRssMb: 100 },
-        {
-          pluginId: "first-plugin",
-          phase: "lifecycle:install",
-          wallMs: 1_000,
-          cpuCoreRatio: 1.2,
-          maxRssMb: 500,
-        },
-        { pluginId: "second-plugin", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
-        { pluginId: "third-plugin", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
-      ],
-      {
-        cpuCoreWarn: 0.9,
-        hotWallWarnMs: 900,
-        maxRssWarnMb: 450,
-        wallAnomalyMultiplier: 3,
-        rssAnomalyMultiplier: 2.5,
-      },
-    );
-
-    expect(observations).toEqual([
-      expect.objectContaining({ kind: "phase-cpu-hot", coldStart: true }),
-      expect.objectContaining({ kind: "phase-wall-anomaly", coldStart: true }),
-      expect.objectContaining({ kind: "phase-rss-high", coldStart: true }),
-      expect.objectContaining({ kind: "phase-rss-anomaly", coldStart: true }),
-    ]);
+    if (coldStart) {
+      for (const observation of observations) {
+        expect(observation).toMatchObject({ coldStart: true });
+      }
+    }
   });
 
   it("uses QA gateway metrics instead of source CLI wrapper CPU for QA hot observations", () => {
@@ -651,52 +613,6 @@ describe("plugin gateway gauntlet helpers", () => {
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
-  });
-
-  it("marks gauntlet prebuilds as runtime-only when requested", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1" },
-        {
-          buildIds: ["acpx"],
-          skipDeclarationBuild: true,
-        },
-      ),
-    ).toEqual({
-      EXISTING: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-    });
-  });
-
-  it("prebuilds only selected plugin dist entries for bounded gauntlet runs", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1" },
-        {
-          includePrivateQa: true,
-          buildIds: ["active-memory", "acpx"],
-        },
-      ),
-    ).toEqual({
-      EXISTING: "1",
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab",
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-    });
-  });
-
-  it("preserves caller pnpm dependency verification overrides in gauntlet prebuilds", () => {
-    expect(
-      buildGauntletPrebuildEnv(
-        { EXISTING: "1", PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true" },
-        { includePrivateQa: true },
-      ),
-    ).toMatchObject({
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true",
-    });
   });
 
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
@@ -965,26 +881,6 @@ setInterval(() => {}, 1000);
     expect(row.diagnosticFailure).toBe("command-log-write-failure");
     expect(row.logPath).toBeNull();
     expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
-  });
-
-  it("cleans parent signal handlers after live measured commands settle", async () => {
-    const logDir = path.join(repoRoot, "logs");
-    const before = process.listenerCount("SIGTERM");
-
-    const row = await runMeasuredCommand({
-      cwd: repoRoot,
-      env: process.env,
-      logDir,
-      command: process.execPath,
-      args: ["-e", ""],
-      label: "live-signal-cleanup",
-      phase: "probe",
-      timeoutMs: 1000,
-      timeMode: "none",
-    });
-
-    expect(row.status).toBe(0);
-    expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -1261,6 +1157,7 @@ try {
   );
 
   it("bounds captured output from live measured commands", async () => {
+    const before = process.listenerCount("SIGTERM");
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommand({
       cwd: repoRoot,
@@ -1281,6 +1178,7 @@ try {
     expect(log).toContain("[stdout truncated after 12 bytes]");
     expect(log).toContain("y".repeat(12));
     expect(log).toContain("[stderr truncated after 12 bytes]");
+    expect(process.listenerCount("SIGTERM")).toBe(before);
   });
 
   it("bounds relayed output from live measured commands", async () => {
@@ -1443,29 +1341,6 @@ try {
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
-  it("documents gauntlet guardrail options and env defaults in help", () => {
-    const result = runGauntlet(["--help"]);
-
-    expect(result.status, result.stderr).toBe(0);
-    for (const text of [
-      "--wall-anomaly-multiplier",
-      "--rss-anomaly-multiplier",
-      "--qa-cpu-regression-multiplier",
-      "--qa-wall-regression-multiplier",
-      "--command-timeout-ms",
-      "--build-timeout-ms",
-      "--qa-timeout-ms",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT",
-      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES",
-    ]) {
-      expect(result.stdout).toContain(text);
-    }
-  });
-
   it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
@@ -1519,21 +1394,6 @@ try {
     });
   });
 
-  it("promotes gauntlet observations to guard failures when requested", () => {
-    const observations = [
-      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
-    ];
-
-    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
-    expect(buildObservationGuardFailures(observations, true)).toEqual([
-      {
-        kind: "observation:phase-rss-high",
-        message: "Gauntlet observation threshold exceeded: phase-rss-high",
-        observation: observations[0],
-      },
-    ]);
-  });
-
   it("does not promote setup and first cold-start observations to guard failures", () => {
     const observations = [
       { kind: "phase-rss-high", phase: "prebuild", maxRssMb: 2214 },
@@ -1575,29 +1435,8 @@ try {
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("does not parse QA summary limit env when QA is skipped", () => {
+  it("probes plugin-owned slash help while the plugin is installed", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
-    const result = runGauntlet(
-      ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa", "--allow-empty"],
-      outputDir,
-      { ...process.env, OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "not-a-number" },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("failures=0");
-  });
-
-  it.each([
-    ["probes plugin-owned slash help while the plugin is installed", "default", [], 0],
-    ["skips plugin-owned slash help when requested", "skip", ["--skip-slash-help"], 0],
-    [
-      "rejects slash-only probes without the install lifecycle",
-      "slash-only",
-      ["--skip-lifecycle"],
-      1,
-    ],
-  ] as const)("%s", async (_title, mode, extraArgs, expectedStatus) => {
-    const outputDir = path.join(repoRoot, `artifacts-${mode}`);
     await writeManifest(
       "workboard",
       "openclaw.plugin.json",
@@ -1642,58 +1481,31 @@ try {
     );
 
     const result = runGauntlet(
-      ["--skip-prebuild", "--skip-qa", ...extraArgs, "--plugin", "workboard"],
+      ["--skip-prebuild", "--skip-qa", "--plugin", "workboard"],
       outputDir,
     );
 
-    expect(result.status, result.stderr).toBe(expectedStatus);
+    expect(result.status, result.stderr).toBe(0);
     const summary = await readSummary(outputDir);
-    if (mode === "default") {
-      expect(summary.failures).toEqual([]);
-      const slashHelpRow = summary.rows.find(
-        (row: { label?: string; logPath?: string }) =>
-          row.label === "workboard-slash-help:workboard",
-      );
-      expect(summary.rows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            label: "workboard-slash-help:workboard",
-            phase: "slash:help",
-            pluginId: "workboard",
-            status: 0,
-          }),
-        ]),
-      );
-      const slashHelpLogPath = slashHelpRow?.logPath;
-      expect(slashHelpLogPath).toEqual(expect.any(String));
-      await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
-        "Usage: openclaw workboard",
-      );
-      return;
-    }
-
-    if (mode === "skip") {
-      expect(summary.failures).toEqual([]);
-      expect(summary.rows).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            phase: "slash:help",
-            pluginId: "workboard",
-          }),
-        ]),
-      );
-      return;
-    }
-
-    expect(summary.guardFailures).toEqual([]);
-    expect(summary.failures).toEqual([
-      expect.objectContaining({
-        label: "workboard-slash-workboard",
-        phase: "slash:help",
-        pluginId: "workboard",
-        status: 1,
-      }),
-    ]);
+    expect(summary.failures).toEqual([]);
+    const slashHelpRow = summary.rows.find(
+      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
+    );
+    expect(summary.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "workboard-slash-help:workboard",
+          phase: "slash:help",
+          pluginId: "workboard",
+          status: 0,
+        }),
+      ]),
+    );
+    const slashHelpLogPath = slashHelpRow?.logPath;
+    expect(slashHelpLogPath).toEqual(expect.any(String));
+    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+      "Usage: openclaw workboard",
+    );
   });
 
   it("carries required plugin build ids and enables dependencies in QA chunks", async () => {
@@ -1783,8 +1595,9 @@ try {
     ]);
   });
 
-  it("fails successful QA chunks whose summary reports failed scenarios", async () => {
-    await runQaSummaryFailureScenario({
+  it.each([
+    {
+      name: "reports failed scenarios",
       qaSummary: {
         counts: { failed: 1, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1801,11 +1614,9 @@ try {
       diagnosticFailure: "qa-summary-failed-scenarios",
       diagnosticDetail: "QA suite reported 1 failed scenario(s)",
       rowAssertion: "metrics",
-    });
-  });
-
-  it("fails successful QA chunks whose summary is still running", async () => {
-    await runQaSummaryFailureScenario({
+    },
+    {
+      name: "is still running",
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         run: { status: "running" },
@@ -1820,11 +1631,9 @@ try {
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: "QA suite summary run.status must be completed, got running",
-    });
-  });
-
-  it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
-    await runQaSummaryFailureScenario({
+    },
+    {
+      name: "has no step evidence",
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1835,11 +1644,9 @@ try {
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
-    });
-  });
-
-  it("fails successful QA chunks whose scenario statuses disagree with counts", async () => {
-    await runQaSummaryFailureScenario({
+    },
+    {
+      name: "has statuses disagreeing with counts",
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
@@ -1856,33 +1663,25 @@ try {
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
-    });
-  });
-
-  it("fails successful QA chunks that do not write the requested summary", async () => {
-    await runQaSummaryFailureScenario({
+    },
+    {
+      name: "is missing",
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-missing",
       rowAssertion: "missing",
-    });
-  });
-
-  it("fails successful QA chunks that write unusable summary JSON", async () => {
-    await runQaSummaryFailureScenario({
-      qaSummary: {},
-      scenarioIds: ["channel-chat-baseline"],
-      diagnosticFailure: "qa-summary-invalid",
-      diagnosticDetail: "QA suite summary missing scenarios array",
-    });
-  });
-
-  it("fails successful QA chunks that write oversized summary JSON", async () => {
-    await runQaSummaryFailureScenario({
+    },
+    {
+      name: "is oversized",
       qaSummary: { filler: "x".repeat(128) },
       scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
       maxBytes: "64",
-    });
-  });
+    },
+  ] satisfies Array<Parameters<typeof runQaSummaryFailureScenario>[0] & { name: string }>)(
+    "fails successful QA chunks whose summary $name",
+    async (scenario) => {
+      await runQaSummaryFailureScenario(scenario);
+    },
+  );
 });

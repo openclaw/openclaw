@@ -11,7 +11,11 @@ import type {
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayInstanceAgentDispatchOptions = {
+  /** Exact source custody to re-admit; the instance reads its private durable record itself. */
+  restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
+  /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -34,8 +38,14 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
+  /** @deprecated Use publishRequestedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
+  publishRequestedAsync?: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
+};
+
+type GatewayApprovalEventPublisherV2 = GatewayApprovalEventPublisher & {
+  publishRequestedAsync: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
 };
 
 export type GatewayRecoverySessionMethod = "chat.history" | "chat.abort" | "sessions.delete";
@@ -51,6 +61,8 @@ export type GatewayRecoveryTypingParams = {
 };
 
 export type GatewayRecoveryRuntime = {
+  /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
+  prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
   dispatchSessionMethod: <T = unknown>(
     method: GatewayRecoverySessionMethod,
     params: unknown,
@@ -95,7 +107,7 @@ export type GatewayRecoveryRuntime = {
 
 export type GatewayInstanceRuntime = {
   createAgentTurnFacade: InternalAgentTurnFacadeFactory;
-  approvalEvents: GatewayApprovalEventPublisher;
+  approvalEvents: GatewayApprovalEventPublisherV2;
   nativeApprovals: GatewayNativeApprovalRuntime;
   recovery: GatewayRecoveryRuntime;
   isAvailable: () => boolean;

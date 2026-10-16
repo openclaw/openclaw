@@ -1,7 +1,7 @@
 // Prepared provider-usage discovery and credential ownership for Gateway status RPCs.
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   externalCliDiscoveryForConfigStatus,
   getRuntimeAuthProfileStoreSnapshotRevision,
   resolveAuthProfileOrder,
@@ -17,10 +17,7 @@ import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
-import {
-  listProviderUsagePluginDescriptors,
-  type ProviderUsagePluginDescriptor,
-} from "../../plugins/provider-runtime.js";
+import { listProviderUsagePluginDescriptors } from "../../plugins/provider-runtime.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 type ResolvedDirectApiKey = { apiKey: string; source: string };
@@ -30,8 +27,6 @@ type ProviderUsageRuntimeSnapshot = {
   agentId: string;
   configRef: OpenClawConfig;
   credentialKey: string;
-  descriptors: ProviderUsagePluginDescriptor[];
-  directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
   providerIds: UsageProviderId[];
   store: AuthProfileStore;
 };
@@ -102,12 +97,12 @@ export function clearProviderUsageRuntimeSnapshot(): void {
   current = undefined;
 }
 
-export function getProviderUsageRuntimeSnapshot(params: {
+export async function getProviderUsageRuntimeSnapshot(params: {
   config: OpenClawConfig;
   agentDir?: string;
   agentId?: string;
   store?: AuthProfileStore;
-}): ProviderUsageRuntimeSnapshot {
+}): Promise<ProviderUsageRuntimeSnapshot> {
   const agentId = params.agentId ?? resolveLegacyInheritedAuthAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   // Config publication replaces the object, so identity is the exact mutation signal.
@@ -130,9 +125,9 @@ export function getProviderUsageRuntimeSnapshot(params: {
 
   const store =
     params.store ??
-    ensureAuthProfileStore(agentDir, {
+    (await ensureAuthProfileStoreAsync(agentDir, {
       externalCli: externalCliDiscoveryForConfigStatus({ cfg: configRef }),
-    });
+    }));
   const descriptors = listProviderUsagePluginDescriptors({ config: configRef, env: process.env });
   const providerIds = descriptors.map((descriptor) => descriptor.provider);
   const directApiKeys = resolveDirectApiKeys(configRef, providerIds);
@@ -146,8 +141,6 @@ export function getProviderUsageRuntimeSnapshot(params: {
       providerIds,
       store,
     }),
-    descriptors,
-    directApiKeys,
     providerIds,
     store,
     // Building can publish an external-auth overlay, so bind the finished snapshot to its result.

@@ -15,13 +15,12 @@ import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   type BackoffPolicy,
@@ -39,7 +38,10 @@ import {
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
-import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
+import {
+  addSignalApprovalReactionHintToStructuredPayload,
+  registerSignalApprovalReactionTargetForDeliveredPayload,
+} from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
 import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
@@ -50,10 +52,9 @@ import {
   waitForSignalDaemonReady,
 } from "./daemon.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
-import type { SignalAttachment, SignalNativeReplyContext } from "./monitor/event-handler.types.js";
+import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 import { createSignalNativeReplyIdPlan } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
-import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
 import {
@@ -123,15 +124,11 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
   return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
 }
 
-async function fetchAttachment(params: {
-  baseUrl: string;
-  account?: string;
-  transportKind?: SignalTransportKind;
-  attachment: SignalAttachment;
-  sender?: string;
-  groupId?: string;
-  maxBytes: number;
-}): Promise<{ path: string; contentType?: string } | null> {
+async function fetchAttachment(
+  params: Parameters<SignalEventHandlerDeps["fetchAttachment"]>[0] & {
+    transportKind?: SignalTransportKind;
+  },
+) {
   const { attachment } = params;
   if (!attachment?.id) {
     return null;
@@ -187,21 +184,11 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-export async function deliverReplies(params: {
-  cfg: OpenClawConfig;
-  replies: ReplyPayload[];
-  target: string;
-  baseUrl: string;
-  account?: string;
-  accountUuid?: string;
-  accountId?: string;
-  runtime: RuntimeEnv;
-  maxBytes: number;
-  textLimit: number;
-  chunkMode: "length" | "newline";
-  replyContext?: SignalNativeReplyContext;
-  chatType?: "direct" | "group";
-}) {
+export async function deliverReplies(
+  params: Parameters<SignalEventHandlerDeps["deliverReplies"]>[0] & {
+    chunkMode: "length" | "newline";
+  },
+) {
   const {
     replies,
     target,
@@ -262,10 +249,7 @@ export async function deliverReplies(params: {
       });
       // Failed blocks must leave the shared first-reply slot available to the final reply.
       replyPlan.markSent();
-      const messageId =
-        typeof result?.messageId === "string" && result.messageId.trim()
-          ? result.messageId.trim()
-          : null;
+      const messageId = result.messageId.trim();
       if (messageId) {
         deliveryResults.push({
           channel: "signal",
@@ -282,7 +266,7 @@ export async function deliverReplies(params: {
       sendMedia: ({ mediaUrl, caption }) => send(caption ?? "", mediaUrl),
     });
     if (delivered !== "empty") {
-      await registerSignalReactionTargetsForDeliveredPayload({
+      await registerSignalApprovalReactionTargetForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",
@@ -301,7 +285,7 @@ export async function deliverReplies(params: {
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -435,8 +419,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         baseUrl,
         abortSignal: daemonLifecycle.abortSignal,
         startupDeadlineMs: startupDeadline,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
         runtime,
         waitForTransportReadyFn,
       });

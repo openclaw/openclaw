@@ -9,15 +9,6 @@ import { parseVaultSecretId } from "../vault-secret-id.js";
 
 const VAULT_PROVIDER_ALIAS = "vault";
 
-function normalizeVaultSecretId(label: string, value: string): string {
-  try {
-    parseVaultSecretId(value);
-    return value;
-  } catch {
-    throw new Error(`Invalid ${label} Vault secret id: ${value}`);
-  }
-}
-
 const vaultSecretRefSetupCli = createPluginSecretRefSetupCli({
   productName: "Vault",
   secretIdLabel: "Vault secret id",
@@ -27,7 +18,10 @@ const vaultSecretRefSetupCli = createPluginSecretRefSetupCli({
     pluginId: "vault",
     integrationId: "vault",
   },
-  normalizeSecretId: normalizeVaultSecretId,
+  normalizeSecretId: (_label, value) => {
+    parseVaultSecretId(value);
+    return value;
+  },
   defaultPlanPath: () =>
     path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`),
 });
@@ -48,16 +42,13 @@ function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
-async function resolveResolverScriptPath(
-  baseUrl = import.meta.url,
-  exists: (filePath: string) => Promise<boolean> = pathExists,
-): Promise<string> {
+async function resolveResolverScriptPath(): Promise<string> {
   const candidates = [
-    fileURLToPath(new URL("../vault-secret-ref-resolver.js", baseUrl)),
-    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", baseUrl)),
+    fileURLToPath(new URL("../vault-secret-ref-resolver.js", import.meta.url)),
+    fileURLToPath(new URL("./extensions/vault/vault-secret-ref-resolver.js", import.meta.url)),
   ] as const;
   for (const candidate of candidates) {
-    if (await exists(candidate)) {
+    if (await pathExists(candidate)) {
       return candidate;
     }
   }

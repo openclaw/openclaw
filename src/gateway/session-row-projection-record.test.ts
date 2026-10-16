@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { expect, it } from "vitest";
+import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -10,7 +11,7 @@ import {
 } from "./session-row-projection-record.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
-const cfg = { agents: { list: [{ id: "main", default: true }] } };
+const cfg = { agents: { entries: { main: {} } } };
 const noop = () => {};
 const archive = { demote: (row: Row) => row, forget: noop };
 
@@ -24,7 +25,6 @@ function entry(index = 0): SessionEntry {
     visibility: "shared",
     modelProvider: "unit-test",
     model: "model",
-    status: "running",
     inputTokens: index * 100,
     outputTokens: index * 10,
     totalTokens: index * 110,
@@ -94,9 +94,30 @@ it("preserves deep change detection for entry metadata and unordered parent memb
           });
           expect(marked).toEqual(changed ? [row, next] : []);
           expect(next?.storedEntry).toBe(storedEntry);
+          expect(next?.entry).toBe(
+            isDeepStrictEqual(previous, storedEntry) ? previous : storedEntry,
+          );
           expect(next?.parents).toEqual(parents);
         }
       }
     }
   });
+});
+
+it("shares unchanged lineage and copies only changed global aliases without mutating storage", () => {
+  const stored = Object.freeze({
+    ...entry(),
+    parentSessionKey: "agent:main:parent",
+    spawnedBy: "agent:main:requester",
+  });
+  expect(projectGatewaySessionEntry(cfg, stored)).toBe(stored);
+  const global = { ...cfg, session: { scope: "global" as const } };
+  expect(projectGatewaySessionEntry(global, stored, (key) => key)).toBe(stored);
+  expect(projectGatewaySessionEntry(global, stored, () => "global")).toEqual({
+    ...stored,
+    parentSessionKey: "global",
+    spawnedBy: "global",
+  });
+  expect(stored.parentSessionKey).toBe("agent:main:parent");
+  expect(stored.spawnedBy).toBe("agent:main:requester");
 });

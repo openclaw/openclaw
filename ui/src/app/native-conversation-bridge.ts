@@ -11,14 +11,13 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { LitElement } from "lit";
 import { z } from "zod";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -31,7 +30,8 @@ import {
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPageHost } from "../pages/chat/chat-page-types.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
@@ -291,7 +291,7 @@ export function createNativeConversationBridge(
         ),
       );
       const pane = [
-        ...document.querySelectorAll<ChatPaneBase>("openclaw-chat-page openclaw-chat-pane"),
+        ...document.querySelectorAll<ChatPaneElement>("openclaw-chat-page openclaw-chat-pane"),
       ].find((candidate) => areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey));
       const activity = pane?.runActivity;
       const paneActive =
@@ -301,7 +301,7 @@ export function createNativeConversationBridge(
       conversation = {
         context: { agentId, sessionKey },
         title: resolveSessionDisplayName(sessionKey, row),
-        run: { active: paneActive || (row ? isSessionRunActive(row) : false) },
+        run: { active: paneActive || (row ? context.sessions.isRunVisuallyActive(row) : false) },
       };
     }
     // Keep the last settled owner through pending loaders so web navigation
@@ -416,9 +416,9 @@ export function createNativeConversationBridge(
           return "navigate-rejected";
         }
         if (openActions) {
-          const page = document.querySelector<LitElement>("openclaw-chat-page");
+          const page = document.querySelector<ChatPageHost>("openclaw-chat-page");
           await page?.updateComplete;
-          const pane = page?.querySelector<ChatPaneBase>(".chat-pane-cache__pane--active");
+          const pane = page?.querySelector<ChatPaneElement>(".chat-pane-cache__pane--active");
           await pane?.updateComplete;
           if (!active() || !targetSelected() || !pane) {
             return "unavailable";
@@ -547,19 +547,16 @@ export function createNativeConversationBridge(
   });
   document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
   document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-  const stopGateway = context.gateway.subscribe(refreshConversation);
-  const stopRouter = context.router.subscribe(refreshConversation);
-  const stopSessions = context.sessions.subscribe(refreshConversation);
+  const stopStores = (["gateway", "router", "sessions"] as const).map((key) =>
+    context[key].subscribe(refreshConversation),
+  );
   refreshConversation();
   return {
     supportsSessionActions: features.includes("session-actions-v1"),
     get presentation() {
       return presentation;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     interceptNavigation,
     publishSessionFacts,
     dispose() {
@@ -567,9 +564,7 @@ export function createNativeConversationBridge(
       pending.forEach((expire) => expire());
       document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
       document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-      stopGateway();
-      stopRouter();
-      stopSessions();
+      stopStores.forEach((stop) => stop());
       listeners.clear();
       window.removeEventListener(COMMAND_EVENT, onCommand);
       document.removeEventListener("click", onClick);

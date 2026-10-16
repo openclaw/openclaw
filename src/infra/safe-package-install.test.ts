@@ -45,11 +45,9 @@ describe("safe npm install helpers", () => {
   it("builds script-free npm install args", () => {
     expect(
       createSafeNpmInstallArgs({
-        omitDev: true,
         omitPeer: true,
         legacyPeerDeps: true,
         ignoreWorkspaces: true,
-        loglevel: "error",
         noAudit: true,
         noFund: true,
       }),
@@ -66,77 +64,105 @@ describe("safe npm install helpers", () => {
     ]);
   });
 
-  it("forces project-local script-free npm install env", () => {
-    const env = createSafeNpmInstallEnv(
-      {
+  it.each([
+    {
+      label: "forces project-local script-free npm install env",
+      create: () =>
+        createSafeNpmInstallEnv(
+          {
+            PATH: "/usr/bin:/bin",
+            NPM_CONFIG_ALLOW_GIT: "none",
+            NPM_CONFIG_ALLOW_REMOTE: "none",
+            NPM_CONFIG_IGNORE_SCRIPTS: "false",
+            NPM_CONFIG_LEGACY_PEER_DEPS: "false",
+            NPM_CONFIG_STRICT_PEER_DEPS: "true",
+            npm_config_global: "true",
+            npm_config_include_workspace_root: "true",
+            npm_config_ignore_scripts: "false",
+            npm_config_location: "global",
+            npm_config_package_lock: "true",
+            npm_config_workspace: "extensions/telegram",
+            npm_config_workspaces: "true",
+          },
+          {
+            cacheDir: "/tmp/openclaw-npm-cache",
+            ignoreWorkspaces: true,
+            legacyPeerDeps: true,
+            packageLock: false,
+            quiet: true,
+          },
+        ),
+      expected: {
         PATH: "/usr/bin:/bin",
         NPM_CONFIG_ALLOW_GIT: "none",
         NPM_CONFIG_ALLOW_REMOTE: "none",
-        NPM_CONFIG_IGNORE_SCRIPTS: "false",
-        NPM_CONFIG_LEGACY_PEER_DEPS: "false",
-        NPM_CONFIG_STRICT_PEER_DEPS: "true",
-        npm_config_global: "true",
-        npm_config_include_workspace_root: "true",
-        npm_config_ignore_scripts: "false",
-        npm_config_location: "global",
+        NPM_CONFIG_BEFORE: "",
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+        npm_config_audit: "false",
+        npm_config_before: "",
+        npm_config_cache: "/tmp/openclaw-npm-cache",
+        npm_config_dry_run: "false",
+        npm_config_fetch_retries: "5",
+        npm_config_fetch_retry_maxtimeout: "120000",
+        npm_config_fetch_retry_mintimeout: "10000",
+        npm_config_fetch_timeout: "300000",
+        npm_config_fund: "false",
+        npm_config_global: "false",
+        npm_config_ignore_scripts: "true",
+        npm_config_legacy_peer_deps: "true",
+        npm_config_location: "project",
+        npm_config_loglevel: "error",
+        npm_config_package_lock: "false",
+        npm_config_progress: "false",
+        npm_config_save: "false",
+        npm_config_strict_peer_deps: "false",
+        npm_config_workspaces: "false",
+        npm_config_yes: "true",
+        "npm_config_min-release-age": "",
+        npm_config_min_release_age: "0",
+        npm_config_allow_git: undefined,
+        npm_config_allow_remote: undefined,
+        npm_config_include_workspace_root: undefined,
+        npm_config_workspace: undefined,
+      },
+    },
+    {
+      label: "does not inherit host legacy peer dependency mode by default",
+      create: () =>
+        createSafeNpmInstallEnv({
+          PATH: "/usr/bin:/bin",
+          npm_config_legacy_peer_deps: "true",
+          npm_config_strict_peer_deps: "true",
+        }),
+      expected: {
+        PATH: "/usr/bin:/bin",
+        npm_config_legacy_peer_deps: "false",
+        npm_config_strict_peer_deps: "false",
+      },
+    },
+    {
+      label: "allows package-lock-enabled installs to write lockfiles",
+      create: () =>
+        createSafeNpmInstallEnv(
+          {
+            PATH: "/usr/bin:/bin",
+            npm_config_save: "false",
+          },
+          {
+            packageLock: true,
+          },
+        ),
+      expected: {
         npm_config_package_lock: "true",
-        npm_config_workspace: "extensions/telegram",
-        npm_config_workspaces: "true",
+        npm_config_save: "true",
       },
-      {
-        cacheDir: "/tmp/openclaw-npm-cache",
-        ignoreWorkspaces: true,
-        legacyPeerDeps: true,
-        packageLock: false,
-        quiet: true,
-      },
-    );
-
-    expect(env.PATH).toBe("/usr/bin:/bin");
-    expect(env.NPM_CONFIG_ALLOW_GIT).toBe("none");
-    expect(env.NPM_CONFIG_ALLOW_REMOTE).toBe("none");
-    expect(env.NPM_CONFIG_BEFORE).toBe("");
-    expect(env.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
-    expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
-    expect(env.npm_config_audit).toBe("false");
-    expect(env.npm_config_allow_git).toBeUndefined();
-    expect(env.npm_config_allow_remote).toBeUndefined();
-    expect(env.npm_config_before).toBe("");
-    expect(env.npm_config_cache).toBe("/tmp/openclaw-npm-cache");
-    expect(env.npm_config_dry_run).toBe("false");
-    expect(env.npm_config_fetch_retries).toBe("5");
-    expect(env.npm_config_fetch_retry_maxtimeout).toBe("120000");
-    expect(env.npm_config_fetch_retry_mintimeout).toBe("10000");
-    expect(env.npm_config_fetch_timeout).toBe("300000");
-    expect(env.npm_config_fund).toBe("false");
-    expect(env.npm_config_global).toBe("false");
-    expect(env.npm_config_ignore_scripts).toBe("true");
-    expect(env.npm_config_legacy_peer_deps).toBe("true");
-    expect(env.npm_config_location).toBe("project");
-    expect(env.npm_config_loglevel).toBe("error");
-    expect(env.npm_config_package_lock).toBe("false");
-    expect(env.npm_config_progress).toBe("false");
-    expect(env.npm_config_save).toBe("false");
-    expect(env.npm_config_strict_peer_deps).toBe("false");
-    expect(env.npm_config_workspaces).toBe("false");
-    expect(env.npm_config_yes).toBe("true");
-    expect(env.npm_config_include_workspace_root).toBeUndefined();
-    expect(env.npm_config_workspace).toBeUndefined();
-    expect(env["npm_config_min-release-age"]).toBe("");
-    expect(env.npm_config_min_release_age).toBe("0");
-    expect(env.npm_config_before).toBe("");
-  });
-
-  it("does not inherit host legacy peer dependency mode by default", () => {
-    const env = createSafeNpmInstallEnv({
-      PATH: "/usr/bin:/bin",
-      npm_config_legacy_peer_deps: "true",
-      npm_config_strict_peer_deps: "true",
-    });
-
-    expect(env.PATH).toBe("/usr/bin:/bin");
-    expect(env.npm_config_legacy_peer_deps).toBe("false");
-    expect(env.npm_config_strict_peer_deps).toBe("false");
+    },
+  ])("$label", ({ create, expected }) => {
+    const env = create();
+    for (const [key, value] of Object.entries(expected)) {
+      expect(env[key]).toBe(value);
+    }
   });
 
   it("preserves npm 11 dependency-source defaults when no policy is configured", async () => {
@@ -162,12 +188,6 @@ describe("safe npm install helpers", () => {
   });
 
   it.each([
-    {
-      name: "unset",
-      npmrc: "",
-      expectedGit: "all",
-      expectedRemote: "all",
-    },
     {
       name: "explicit Git",
       npmrc: '"allow-git"=none\n',
@@ -210,46 +230,41 @@ describe("safe npm install helpers", () => {
     },
   );
 
-  it("preserves quoted dependency-source restrictions from npmrc", async () => {
-    await withTempDir("openclaw-npm-source-policy-", async (dir) => {
-      const home = path.join(dir, "home");
-      const userconfig = path.join(dir, "user.npmrc");
-      const globalconfig = path.join(dir, "global.npmrc");
-      fsSync.mkdirSync(home, { recursive: true });
-      fsSync.writeFileSync(userconfig, '"allow-git"=none\n', "utf-8");
-      fsSync.writeFileSync(globalconfig, "'allow-remote'=root\n", "utf-8");
-
-      const env = createSafeNpmInstallEnv(
-        {
-          HOME: home,
-          NPM_CONFIG_GLOBALCONFIG: globalconfig,
-          NPM_CONFIG_USERCONFIG: userconfig,
-          npm_config_json: "true",
-        },
-        { npmConfigCwd: dir },
-      );
-
-      expect(env.npm_config_allow_git).toBeUndefined();
-      expect(env.npm_config_allow_remote).toBeUndefined();
-    });
-  });
-
-  it("preserves dependency-source restrictions from redirected npmrc files", async () => {
-    await withTempDir("openclaw-npm-source-policy-", async (dir) => {
-      const home = path.join(dir, "home");
-      const userconfig = path.join(dir, "redirected-user.npmrc");
-      const globalconfig = path.join(dir, "redirected-global.npmrc");
-      fsSync.mkdirSync(home, { recursive: true });
-      fsSync.writeFileSync(path.join(dir, ".npmrc"), `userconfig=${userconfig}\n`, "utf-8");
-      fsSync.writeFileSync(userconfig, `"allow-git"=none\nglobalconfig=${globalconfig}\n`, "utf-8");
-      fsSync.writeFileSync(globalconfig, "'allow-remote'=root\n", "utf-8");
-
-      const env = createSafeNpmInstallEnv({ HOME: home }, { npmConfigCwd: dir });
-
-      expect(env.npm_config_allow_git).toBeUndefined();
-      expect(env.npm_config_allow_remote).toBeUndefined();
-    });
-  });
+  it.each([false, true])(
+    "preserves quoted dependency-source restrictions (redirected=%s)",
+    async (redirected) => {
+      await withTempDir("openclaw-npm-source-policy-", async (dir) => {
+        const home = path.join(dir, "home");
+        const userconfig = path.join(dir, "user.npmrc");
+        const globalconfig = path.join(dir, "global.npmrc");
+        fsSync.mkdirSync(home, { recursive: true });
+        if (redirected) {
+          fsSync.writeFileSync(path.join(dir, ".npmrc"), `userconfig=${userconfig}\n`, "utf-8");
+        }
+        fsSync.writeFileSync(
+          userconfig,
+          `"allow-git"=none\n${redirected ? `globalconfig=${globalconfig}\n` : ""}`,
+          "utf-8",
+        );
+        fsSync.writeFileSync(globalconfig, "'allow-remote'=root\n", "utf-8");
+        const env = createSafeNpmInstallEnv(
+          {
+            HOME: home,
+            ...(redirected
+              ? {}
+              : {
+                  NPM_CONFIG_GLOBALCONFIG: globalconfig,
+                  NPM_CONFIG_USERCONFIG: userconfig,
+                  npm_config_json: "true",
+                }),
+          },
+          { npmConfigCwd: dir },
+        );
+        expect(env.npm_config_allow_git).toBeUndefined();
+        expect(env.npm_config_allow_remote).toBeUndefined();
+      });
+    },
+  );
 
   it("uses only effective section and prefix source policies", async () => {
     await withTempDir("openclaw-npm-source-policy-", async (dir) => {
@@ -291,20 +306,5 @@ describe("safe npm install helpers", () => {
       expect(env.npm_config_allow_git).toBe("all");
       expect(env.npm_config_allow_remote).toBeUndefined();
     });
-  });
-
-  it("allows package-lock-enabled installs to write lockfiles", () => {
-    const env = createSafeNpmInstallEnv(
-      {
-        PATH: "/usr/bin:/bin",
-        npm_config_save: "false",
-      },
-      {
-        packageLock: true,
-      },
-    );
-
-    expect(env.npm_config_package_lock).toBe("true");
-    expect(env.npm_config_save).toBe("true");
   });
 });

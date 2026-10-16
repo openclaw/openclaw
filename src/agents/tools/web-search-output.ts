@@ -129,15 +129,12 @@ function toHttpUrl(value: string): string | undefined {
   if (value.length > 2_048) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.href.length <= 2_048
-      ? parsed.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.href.length <= 2_048
+    ? parsed.href
+    : undefined;
 }
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
@@ -169,11 +166,11 @@ function externalContentStamp(provider: string): WebSearchExternalContent {
 function normalizeCitations(
   value: unknown,
   budget: WebSearchOutputBudget,
-): Array<{ url: string; title?: string }> | undefined {
+): Array<Static<typeof WebSearchCitationSchema>> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const citations: Array<{ url: string; title?: string }> = [];
+  const citations: Array<Static<typeof WebSearchCitationSchema>> = [];
   let scanned = 0;
   // A citation url must actually parse as http(s); free text in a url slot
   // would bypass the untrusted-content envelope.

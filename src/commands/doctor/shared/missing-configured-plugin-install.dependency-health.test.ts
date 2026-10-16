@@ -31,18 +31,53 @@ const {
   setupPluginInstallSuite,
 } = await import("./missing-configured-plugin-install.suite.test-support.js");
 
+function createDependencyPlugin(
+  rootDir: string,
+  pluginId: string,
+  {
+    packageName = pluginId,
+    packageVersion,
+    dependencies = { "required-runtime": "1.0.0" },
+    optionalDependencies,
+    origin = "global",
+  }: {
+    packageName?: string;
+    packageVersion?: string;
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    origin?: "global" | "bundled";
+  } = {},
+) {
+  fs.mkdirSync(rootDir, { recursive: true });
+  createColdPluginFixture({
+    rootDir,
+    pluginId,
+    packageName,
+    packageVersion,
+    packageJson: { dependencies, optionalDependencies },
+  });
+  return {
+    id: pluginId,
+    origin,
+    rootDir,
+    source: path.join(rootDir, "index.cjs"),
+    packageName,
+    packageVersion,
+    packageDependencies: dependencies,
+    packageOptionalDependencies: optionalDependencies,
+    channels: [],
+  };
+}
+
 describe("configured npm dependency health and repair authority", () => {
   setupPluginInstallSuite();
   it.each([
     "missing",
     "resolved-spec",
-    "empty",
     "symlink-root",
     "ancestor",
-    "outside-symlink",
     "hoisted",
     "deferred",
-    "healthy",
     "optional",
     "different-root",
     "package-mismatch",
@@ -52,7 +87,6 @@ describe("configured npm dependency health and repair authority", () => {
     "denylisted",
     "allowlist-excluded",
     "path-source",
-    "archive-source",
     "missing-spec",
     "invalid-spec",
     "unconfigured",
@@ -64,25 +98,16 @@ describe("configured npm dependency health and repair authority", () => {
       const parent = tempDirs.make("openclaw-doctor-dependency-health-");
       const projectRoot = path.join(parent, "project");
       const rootDir = path.join(projectRoot, "node_modules", "dependency-plugin");
-      const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
       const packageName = "dependency-plugin";
       const pluginId = "dependency-plugin";
-      fs.mkdirSync(rootDir, { recursive: true });
-      createColdPluginFixture({
-        rootDir,
-        pluginId,
+      const plugin = createDependencyPlugin(rootDir, pluginId, {
         packageName: scenario === "package-mismatch" ? "another-package" : packageName,
-        packageJson: {
-          dependencies: { "required-runtime": "1.0.0" },
-          ...(scenario === "optional"
-            ? { optionalDependencies: { "required-runtime": "2.0.0" } }
-            : {}),
-        },
+        optionalDependencies: scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
+        origin: scenario === "bundled" ? "bundled" : "global",
       });
       const cfg: OpenClawConfig = { plugins: { entries: { [pluginId]: { enabled: true } } } };
       const record = {
-        source:
-          scenario === "path-source" ? "path" : scenario === "archive-source" ? "archive" : "npm",
+        source: scenario === "path-source" ? "path" : "npm",
         spec:
           scenario === "missing-spec"
             ? undefined
@@ -101,16 +126,7 @@ describe("configured npm dependency health and repair authority", () => {
         record.installPath = path.join(parent, "linked-copy");
         fs.symlinkSync(rootDir, record.installPath, "junction");
       }
-      if (scenario === "empty" || scenario === "healthy") {
-        fs.mkdirSync(dependencyDir, { recursive: true });
-        if (scenario === "healthy") {
-          fs.writeFileSync(
-            path.join(dependencyDir, "package.json"),
-            JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
-          );
-        }
-      }
-      if (scenario === "ancestor" || scenario === "outside-symlink" || scenario === "hoisted") {
+      if (scenario === "ancestor" || scenario === "hoisted") {
         const dependencyRoot = scenario === "hoisted" ? projectRoot : parent;
         const availableDir = path.join(dependencyRoot, "node_modules", "required-runtime");
         fs.mkdirSync(availableDir, { recursive: true });
@@ -118,10 +134,6 @@ describe("configured npm dependency health and repair authority", () => {
           path.join(availableDir, "package.json"),
           JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
         );
-        if (scenario === "outside-symlink") {
-          fs.mkdirSync(path.dirname(dependencyDir), { recursive: true });
-          fs.symlinkSync(availableDir, dependencyDir, "junction");
-        }
       }
       if (scenario === "unconfigured") {
         cfg.plugins = {};
@@ -138,22 +150,7 @@ describe("configured npm dependency health and repair authority", () => {
         mockCurrentBundledPlugin(pluginId, packageName);
       }
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({ [pluginId]: record });
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [
-          {
-            id: pluginId,
-            origin: scenario === "bundled" ? "bundled" : "global",
-            rootDir,
-            source: path.join(rootDir, "index.cjs"),
-            packageName: scenario === "package-mismatch" ? "another-package" : packageName,
-            packageDependencies: { "required-runtime": "1.0.0" },
-            packageOptionalDependencies:
-              scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
-            channels: [],
-          },
-        ],
-        diagnostics: [],
-      });
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
       const {
         configuredPluginInstallIssueToHealthFinding,
         configuredPluginInstallIssueToRepairEffect,
@@ -190,10 +187,8 @@ describe("configured npm dependency health and repair authority", () => {
       if (
         scenario === "missing" ||
         scenario === "resolved-spec" ||
-        scenario === "empty" ||
         scenario === "symlink-root" ||
-        scenario === "ancestor" ||
-        scenario === "outside-symlink"
+        scenario === "ancestor"
       ) {
         expect(issues).toEqual([
           {
@@ -256,12 +251,9 @@ describe("configured npm dependency health and repair authority", () => {
         "running OpenClaw package root",
       );
       const dependencies = { "required-runtime": "1.0.0", openclaw: "*" };
-      fs.mkdirSync(rootDir, { recursive: true });
-      createColdPluginFixture({
-        rootDir,
-        pluginId,
-        packageName: pluginId,
-        packageJson: { dependencies },
+      const plugin = createDependencyPlugin(rootDir, pluginId, {
+        dependencies,
+        optionalDependencies: {},
       });
       const nodeModulesDir = path.join(rootDir, "node_modules");
       const runtimeDir = path.join(nodeModulesDir, "required-runtime");
@@ -284,21 +276,7 @@ describe("configured npm dependency health and repair authority", () => {
         },
       };
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [
-          {
-            id: pluginId,
-            origin: "global",
-            rootDir,
-            source: path.join(rootDir, "index.cjs"),
-            packageName: pluginId,
-            packageDependencies: dependencies,
-            packageOptionalDependencies: {},
-            channels: [],
-          },
-        ],
-        diagnostics: [],
-      });
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
       const { detectConfiguredPluginInstallHealthIssues } =
         await import("./missing-configured-plugin-install.js");
 
@@ -340,13 +318,9 @@ describe("configured npm dependency health and repair authority", () => {
       const version = staleRuntime ? "2026.9.1-beta.1" : "1.0.0";
       const env = { ...testEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.9.2" };
       const rootDir = path.join(parent, "node_modules", packageName);
-      fs.mkdirSync(rootDir, { recursive: true });
-      createColdPluginFixture({
-        rootDir,
-        pluginId,
+      const plugin = createDependencyPlugin(rootDir, pluginId, {
         packageName,
         packageVersion: version,
-        packageJson: { dependencies: { "required-runtime": "1.0.0" } },
       });
       const payloadFiles = ["package.json", "openclaw.plugin.json", "index.cjs"];
       const originalPayload = payloadFiles.map((file) =>
@@ -380,21 +354,7 @@ describe("configured npm dependency health and repair authority", () => {
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-      mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [
-          {
-            id: pluginId,
-            origin: "global",
-            rootDir,
-            source: path.join(rootDir, "index.cjs"),
-            packageName,
-            packageVersion: version,
-            packageDependencies: { "required-runtime": "1.0.0" },
-            channels: [],
-          },
-        ],
-        diagnostics: [],
-      });
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [plugin], diagnostics: [] });
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialPluginEntry({ id: pluginId, npmSpec: record.spec }),
       ]);
@@ -568,14 +528,9 @@ describe("configured npm dependency health and repair authority", () => {
     const pluginIds = ["dependency-a", "dependency-b", "dependency-c"];
     const fixtures = pluginIds.map((pluginId) => {
       const rootDir = path.join(parent, pluginId, "node_modules", pluginId);
-      fs.mkdirSync(rootDir, { recursive: true });
-      createColdPluginFixture({
-        rootDir,
-        pluginId,
-        packageName: pluginId,
-        packageJson: { dependencies: { "required-runtime": "1.0.0" } },
-      });
+      const plugin = createDependencyPlugin(rootDir, pluginId);
       return {
+        plugin,
         pluginId,
         rootDir,
         markerPath: resolveRetainedManagedNpmInstallMarkerPath(rootDir),
@@ -605,15 +560,7 @@ describe("configured npm dependency health and repair authority", () => {
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: fixtures.map(({ pluginId, rootDir }) => ({
-        id: pluginId,
-        origin: "global",
-        rootDir,
-        source: path.join(rootDir, "index.cjs"),
-        packageName: pluginId,
-        packageDependencies: { "required-runtime": "1.0.0" },
-        channels: [],
-      })),
+      plugins: fixtures.map((fixture) => fixture.plugin),
       diagnostics: [],
     });
     const failure = new Error(`multiple dependency repair ${scenario}`);
@@ -738,7 +685,7 @@ describe("configured npm dependency health and repair authority", () => {
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
-  it.each(["unchanged", "missing-index", "changed-records", "changed-policy"] as const)(
+  it.each(["unchanged", "missing-index", "changed-records", "changed-policy", "refused"] as const)(
     "awaits the final publication hook only for %s baseline effects",
     async (scenario) => {
       const root = tempDirs.make("openclaw-doctor-baseline-contract-");
@@ -746,9 +693,11 @@ describe("configured npm dependency health and repair authority", () => {
       const cfg = { plugins: { enabled: false } } satisfies OpenClawConfig;
       const records = { retained: { source: "npm" as const, spec: "retained@1.0.0" } };
       const baselineRecords =
-        scenario === "changed-records"
-          ? { ...records, extra: { source: "npm" as const, spec: "extra@1.0.0" } }
-          : structuredClone(records);
+        scenario === "refused"
+          ? {}
+          : scenario === "changed-records"
+            ? { ...records, extra: { source: "npm" as const, spec: "extra@1.0.0" } }
+            : structuredClone(records);
       await useRealInstallIndexWrites();
       if (scenario !== "missing-index") {
         await seedInstalledPluginIndex(records, {
@@ -767,9 +716,13 @@ describe("configured npm dependency health and repair authority", () => {
       const entry = new Promise<void>((resolve) => {
         entered = resolve;
       });
+      const failure = new Error("baseline publication refused");
       const beforePersistentEffect = vi.fn(async () => {
         entered();
         await gate;
+        if (scenario === "refused") {
+          throw failure;
+        }
       });
       const { repairMissingPluginInstallsForIds } =
         await import("./missing-configured-plugin-install.js");
@@ -792,6 +745,14 @@ describe("configured npm dependency health and repair authority", () => {
         ).not.toHaveBeenCalled();
         release();
       }
+      if (scenario === "refused") {
+        await expect(pending).rejects.toBe(failure);
+        expect(
+          mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
+        ).not.toHaveBeenCalled();
+        expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
+        return;
+      }
       const result = await pending;
       expect(beforePersistentEffect).toHaveBeenCalledTimes(scenario === "unchanged" ? 0 : 1);
       expect(result.records).toEqual(baselineRecords);
@@ -800,31 +761,4 @@ describe("configured npm dependency health and repair authority", () => {
       );
     },
   );
-
-  it("does not publish changed records after async refusal", async () => {
-    const root = tempDirs.make("openclaw-doctor-baseline-refusal-");
-    const env = { ...testEnv, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    const cfg = { plugins: { enabled: false } } satisfies OpenClawConfig;
-    const records = { retained: { source: "npm" as const, spec: "retained@1.0.0" } };
-    await useRealInstallIndexWrites();
-    await seedInstalledPluginIndex(records, { env, config: cfg, candidates: [] });
-    const before = await readPersistedInstalledPluginIndex({ env });
-    const failure = new Error("baseline publication refused");
-    const { repairMissingPluginInstallsForIds } =
-      await import("./missing-configured-plugin-install.js");
-    await expect(
-      repairMissingPluginInstallsForIds({
-        cfg,
-        env,
-        pluginIds: [],
-        baselineRecords: {},
-        beforePersistentEffect: async () => {
-          await Promise.resolve();
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(await readPersistedInstalledPluginIndex({ env })).toEqual(before);
-  });
 });

@@ -1,6 +1,7 @@
+import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { RetainedOperation } from "./retained-operation.js";
-import { joinOwnedWorkerTasks } from "./worker-task-pool-owned.js";
+import { assertOpenClawAgentWriterReleased } from "../state/openclaw-agent-write-admission-state.js";
 
 type ResourceOwningPool = { startCloseResources(key?: string): RetainedOperation<void> };
 
@@ -25,8 +26,7 @@ export const liveWorkerTaskPools = {
   },
 };
 
-/** Ask every live pool's workers to close the retained resources this key names. */
-export async function closeWorkerTaskPoolResources(key: string): Promise<void> {
+async function closeResources(key: string): Promise<void> {
   const results = await Promise.allSettled(
     [...livePools].map((pool) => pool.startCloseResources(key).result),
   );
@@ -38,3 +38,12 @@ export async function closeWorkerTaskPoolResources(key: string): Promise<void> {
     throw new AggregateError(errors, "Worker resource cleanup failed");
   }
 }
+
+/** Ask every live pool's workers to close the retained resources this key names. */
+export const closeWorkerTaskPoolResources =
+  process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development"
+    ? (key: string) => {
+        assertOpenClawAgentWriterReleased("close process-wide reader resources");
+        return closeResources(key);
+      }
+    : closeResources;

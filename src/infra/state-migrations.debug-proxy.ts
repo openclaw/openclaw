@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
@@ -21,38 +22,22 @@ type LegacyDebugProxyCaptureDetection = {
   hasLegacy: boolean;
 };
 
-type LegacyCaptureSessionRow = {
-  id: string;
+type LegacyCaptureSessionRow = Pick<
+  DB["capture_sessions"],
+  "id" | "mode" | "source_scope" | "source_process" | "proxy_url"
+> & {
   started_at: number | bigint;
   ended_at: number | bigint | null;
-  mode: string;
-  source_scope: string;
-  source_process: string;
-  proxy_url: string | null;
   blob_dir: string;
 };
 
-type LegacyCaptureEventRow = {
-  session_id: string;
+type LegacyCaptureEventRow = Omit<
+  Pick<DB["capture_events"], (typeof CAPTURE_EVENT_COLUMNS)[number]>,
+  "ts" | "status" | "close_code"
+> & {
   ts: number | bigint;
-  source_scope: string;
-  source_process: string;
-  protocol: string;
-  direction: string;
-  kind: string;
-  flow_id: string;
-  method: string | null;
-  host: string | null;
-  path: string | null;
   status: number | bigint | null;
   close_code: number | bigint | null;
-  content_type: string | null;
-  headers_json: string | null;
-  data_text: string | null;
-  data_blob_id: string | null;
-  data_sha256: string | null;
-  error_text: string | null;
-  meta_json: string | null;
 };
 
 const CAPTURE_EVENT_COLUMNS = [
@@ -76,27 +61,23 @@ const CAPTURE_EVENT_COLUMNS = [
   "data_sha256",
   "error_text",
   "meta_json",
-] as const satisfies readonly (keyof LegacyCaptureEventRow)[];
+] as const satisfies readonly (keyof DB["capture_events"])[];
 
 type LegacyCaptureBlobRow = {
   blobId: string;
   contentType: string | null;
-  encoding: "gzip";
   sizeBytes: number;
   sha256: string;
   data: Buffer;
   createdAt: number;
 };
 
-class LegacyDebugProxyBlobConflictError extends Error {
-  constructor(readonly blobId: string) {
-    super(`legacy debug proxy blob conflicts with shared state: ${blobId}`);
-  }
-}
-
-class LegacyDebugProxySessionConflictError extends Error {
-  constructor(readonly sessionId: string) {
-    super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
+class LegacyDebugProxyConflictError extends Error {
+  constructor(
+    readonly kind: "blob" | "session",
+    readonly id: string,
+  ) {
+    super(`legacy debug proxy ${kind} conflicts with shared state: ${id}`);
   }
 }
 
@@ -251,7 +232,6 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       blobs.push({
         blobId,
         contentType: referencingEvents.find((event) => event.content_type)?.content_type ?? null,
-        encoding: "gzip",
         sizeBytes: raw.byteLength,
         sha256,
         data,
@@ -406,20 +386,20 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
             | undefined;
           if (existing) {
             if (
-              existing.encoding !== blob.encoding ||
+              existing.encoding !== "gzip" ||
               Number(existing.sizeBytes) !== blob.sizeBytes ||
               existing.sha256 !== blob.sha256 ||
               !existing.data ||
               !Buffer.from(existing.data).equals(blob.data)
             ) {
-              throw new LegacyDebugProxyBlobConflictError(blob.blobId);
+              throw new LegacyDebugProxyConflictError("blob", blob.blobId);
             }
             continue;
           }
           insertBlob.run(
             blob.blobId,
             blob.contentType,
-            blob.encoding,
+            "gzip",
             blob.sizeBytes,
             blob.sha256,
             blob.data,
@@ -464,7 +444,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
               proxyUrl: values[6],
             };
             if (JSON.stringify(existing) !== JSON.stringify(expected)) {
-              throw new LegacyDebugProxySessionConflictError(session.id);
+              throw new LegacyDebugProxyConflictError("session", session.id);
             }
             continue;
           }
@@ -506,11 +486,9 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
     );
   } catch (err) {
     const detail =
-      err instanceof LegacyDebugProxyBlobConflictError
-        ? `blob ${err.blobId} already exists with different data`
-        : err instanceof LegacyDebugProxySessionConflictError
-          ? `session ${err.sessionId} already exists with different data`
-          : String(err);
+      err instanceof LegacyDebugProxyConflictError
+        ? `${err.kind} ${err.id} already exists with different data`
+        : String(err);
     return {
       changes,
       warnings: [`Failed migrating debug proxy capture sidecar ${detected.sourcePath}: ${detail}`],

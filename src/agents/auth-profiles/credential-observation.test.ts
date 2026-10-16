@@ -77,7 +77,12 @@ describe("canonical auth credential observation", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        selected: { type: "api_key", provider: "fixture", key: "canonical" },
+        selected: {
+          type: "api_key",
+          provider: "fixture",
+          key: "canonical",
+          keyRef: { source: "env", provider: "default", id: "FIXTURE_KEY" },
+        },
       },
     };
     observeCanonicalAuthProfileCredentials("/canonical.sqlite", store.profiles);
@@ -92,6 +97,13 @@ describe("canonical auth credential observation", () => {
         const changed = cloneAuthProfileStore(store);
         Object.assign(changed.profiles.selected!, { key: "runtime-only" });
         observeCachedCanonicalAuthProfileCredentials(cloneAuthProfileStore(changed).profiles);
+        const nested = cloneAuthProfileStore(store);
+        const credential = nested.profiles.selected;
+        if (credential?.type !== "api_key" || !credential.keyRef) {
+          throw new Error("Expected canonical SecretRef fixture");
+        }
+        credential.keyRef.id = "DIFFERENT_KEY";
+        observeCachedCanonicalAuthProfileCredentials(cloneAuthProfileStore(nested).profiles);
       },
     );
     expect(observations).toEqual([{ databasePath: "/canonical.sqlite", profiles: store.profiles }]);

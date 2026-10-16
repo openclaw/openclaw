@@ -125,9 +125,7 @@ export function registerSessionOwnershipAvatarTests() {
     const carolChip = sidebar.querySelector(
       '[data-session-key="agent:main:carol"] .session-owner-chip',
     );
-    expect(carolChip?.querySelector("img")?.getAttribute("src")).toBe(
-      "/api/users/profile-carol/avatar",
-    );
+    expect(carolChip?.querySelector("img")).toBeNull();
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 

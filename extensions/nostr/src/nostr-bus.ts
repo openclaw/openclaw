@@ -5,16 +5,11 @@ import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import {
-  createMetrics,
-  createNoopMetrics,
-  type NostrMetrics,
-  type MetricsSnapshot,
-  type MetricEvent,
-} from "./metrics.js";
+import { createMetrics, type NostrMetrics, type MetricEvent } from "./metrics.js";
 import { createNostrCursorStateWriter, createNostrDurableCursor } from "./nostr-cursor.js";
 import { NostrIngressPermanentError } from "./nostr-ingress-state.js";
 import {
@@ -62,6 +57,8 @@ interface NostrBusOptions {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }) => Promise<"allow" | "block" | "pairing">;
+  /** Internal local rejection hint for literal-only allowlist accounts; never grants access. */
+  admissionPubkeys?: readonly string[];
   /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
   guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   onError?: (error: Error, context: string) => void;
@@ -79,19 +76,7 @@ type NostrDmSendOptions = Pick<
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
-export interface NostrBusHandle {
-  close: () => Promise<void>;
-  publicKey: string;
-  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  getMetrics: () => MetricsSnapshot;
-  /** Publish a profile (kind:0) to all relays */
-  publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
-  getProfileState: () => Promise<{
-    lastPublishedAt: number | null;
-    lastPublishedEventId: string | null;
-    lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-  }>;
-}
+export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
 interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
@@ -194,10 +179,6 @@ function createRelayHealthTracker() {
       } // Unknown relay gets neutral score
 
       const total = s.successCount + s.failureCount;
-      if (total === 0) {
-        return 0.5;
-      }
-
       const successRate = s.successCount / total;
 
       // Recency bonus (prefer recently successful relays)
@@ -221,7 +202,7 @@ function createRelayHealthTracker() {
 }
 
 /** Subscribe to NIP-04 encrypted DMs. */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+export async function startNostrBus(options: NostrBusOptions) {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -235,12 +216,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
   const pool = new SimplePool();
+  const admissionPubkeys = options.admissionPubkeys ? new Set(options.admissionPubkeys) : undefined;
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
-  const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
+  const metrics = createMetrics(onMetric);
 
   const circuitBreakers = new Map<string, CircuitBreaker>();
   const healthTracker = createRelayHealthTracker();
@@ -458,6 +440,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       metrics.emit("event.rejected.stale");
       return;
     }
+    // Keep configured peer identities local, never in relay subscription filters.
+    // Matching events still pass durable ingress and current sender authorization.
+    if (admissionPubkeys && !admissionPubkeys.has(event.pubkey)) {
+      return;
+    }
     try {
       const result = await ingress.receive(event);
       if (result === "duplicate") {
@@ -600,6 +587,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     text: string,
     sendOptions?: NostrDmSendOptions & { replyToEventId?: string },
   ): Promise<string> {
+    const effect = captureEffectAuthority();
     const ciphertext = encrypt(sk, toPubkey, text);
     // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
     const tags = [["p", toPubkey]];
@@ -650,8 +638,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         await sendOptions.onPlatformSendDispatch();
         sendOptions.assertDirectAdapterHandoff?.();
       }
+      let initiated = false;
       try {
-        await connection.publish(reply);
+        await effect.initiate(() => {
+          sendOptions?.assertDirectAdapterHandoff?.();
+          initiated = true;
+          return connection.publish(reply);
+        });
         const latency = Date.now() - startTime;
 
         cb?.recordSuccess();
@@ -659,6 +652,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
         return reply.id;
       } catch (err) {
+        if (!initiated) {
+          throw err;
+        }
         recordFailure(err);
       }
     }
@@ -670,7 +666,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close,
     publicKey: pk,
     sendDm: sendEncryptedDm,
-    getMetrics: () => metrics.getSnapshot(),
     publishProfile,
     getProfileState,
   };

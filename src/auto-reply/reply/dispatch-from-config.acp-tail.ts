@@ -13,6 +13,7 @@ export async function handleAcpDispatchTailAfterReset(
   state.ctx.AcpDispatchTailAfterReset = false;
   const tailDispatchResult = await runReplyDispatchHook(state, {
     shouldSendToolSummaries: state.shouldSendToolSummaries,
+    shouldSendToolSummariesAsync: state.shouldSendToolSummariesAsync,
     isTailDispatch: true,
   });
   if (!tailDispatchResult?.handled) {

@@ -6,11 +6,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
-  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
@@ -86,6 +88,55 @@ type ConfigEntries = {
 // Share canonical input metadata; every case still compiles in a fresh fixture tree.
 const configEntries = new Map<string, { production: ConfigEntries; qa: ConfigEntries }>();
 
+// Real source bytes come from the import-closure owners at run time, so new relative
+// imports are copied without a list edit. Owner edits still add no static import edges
+// that would select these suites in product PRs (see "Declaration-fixture owner
+// selection" in .agents/skills/openclaw-ci-limits).
+const fixtureSources = new Map<string, Set<string>>();
+
+function resolveFixtureSources(extraEntrypoints: readonly string[]) {
+  // The generator input owner returns paths under this physical root.
+  const root = fs.realpathSync(sourceRoot);
+  const key = JSON.stringify([root, [...extraEntrypoints].toSorted()]);
+  let sources = fixtureSources.get(key);
+  if (!sources) {
+    const relativeInputs = (inputs: readonly string[]) =>
+      inputs
+        .map((file) => path.relative(root, path.resolve(root, file)))
+        .filter(
+          (file) =>
+            file !== ".." &&
+            !file.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(file) &&
+            !file.split(path.sep).includes("node_modules"),
+        )
+        .map((file) => file.split(path.sep).join("/"))
+        .filter((file) => !["package.json", "tsconfig.json", "pnpm-lock.yaml"].includes(file));
+    const generatorInputs = relativeInputs(
+      ["scripts/write-plugin-sdk-entry-dts.ts", "scripts/write-unified-entry-dts.ts"].flatMap(
+        (writer) => resolveTsdownDeclarationGeneratorInputs(root, writer),
+      ),
+    );
+    sources = new Set([
+      ...generatorInputs,
+      ...relativeInputs(
+        collectRuntimeImportClosure(root, [
+          // Compiler sources are generator bytes the owner does not traverse.
+          ...generatorInputs.filter((file) => /\.[cm]?[jt]s$/.test(file)),
+          // runUnifiedBuild loads these modules from the fixture by URL.
+          "scripts/build-all.mts",
+          "scripts/lib/dist-artifact-ownership.mts",
+          // The Windows job owner selects this worker by URL, without an import edge.
+          "scripts/lib/managed-windows-job-launcher.mts",
+          ...extraEntrypoints,
+        ]),
+      ),
+    ]);
+    fixtureSources.set(key, sources);
+  }
+  return sources;
+}
+
 function readConfigEntries(
   root: string,
   privateQa: boolean,
@@ -130,11 +181,16 @@ export function createDeclarationFixture(
   command: Pick<CommandFixture, "createTempDir">,
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
   root = path.join(fs.realpathSync(command.createTempDir("openclaw-sdk-declarations-")), "Project"),
+  extraEntrypoints: readonly string[] = [],
 ) {
-  return createFixture(groups, root);
+  return createFixture(groups, root, extraEntrypoints);
 }
 
-export function createFixture(groups: readonly string[], root: string) {
+export function createFixture(
+  groups: readonly string[],
+  root: string,
+  extraEntrypoints: readonly string[] = [],
+) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
   // Link the selected graph's real toolchain and runtime packages: each writer
@@ -142,8 +198,8 @@ export function createFixture(groups: readonly string[], root: string) {
   for (const name of [
     ".bin",
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@silvia-odwyer/photon-node",
-    "koffi",
     "playwright-core",
     "web-tree-sitter",
     "tree-sitter-bash",
@@ -159,7 +215,7 @@ export function createFixture(groups: readonly string[], root: string) {
       "junction",
     );
   }
-  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+  materializeDeclarationPackages(root, groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -174,58 +230,14 @@ export function createFixture(groups: readonly string[], root: string) {
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
   write("pnpm-workspace.yaml", "packages: []\n");
-  write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
-  fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+  // tsdown.config.ts passes this path to package declaration builds as compiler configuration, not an import edge.
+  write(
+    "tsconfig.packages.json",
+    fs.readFileSync(path.join(sourceRoot, "tsconfig.packages.json"), "utf8"),
+  );
   fs.mkdirSync(path.join(root, "extensions"));
-  fs.mkdirSync(path.join(root, "scripts/lib"));
-  for (const script of [
-    "build-all.mts",
-    "generate-kysely-types.mts",
-    "tsdown-build.mts",
-    "pnpm-runner.mts",
-    "run-node-watch-paths.mts",
-    "windows-cmd-helpers.mjs",
-    "write-plugin-sdk-entry-dts.ts",
-    "write-unified-entry-dts.ts",
-    "tsx.mjs",
-  ]) {
-    const source = path.join(sourceRoot, "scripts", script);
-    if (fs.existsSync(source)) {
-      fs.copyFileSync(source, path.join(root, "scripts", script));
-    }
-  }
-  // Generator imports must resolve inside the same tree whose bytes are cached.
-  fs.cpSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), {
-    recursive: true,
-  });
-  // Keep the generator's source owners and import.meta.url lookups inside the fixture.
-  const runtimeEntryOwners = new Set([
-    ...Object.values(runtimeProcessDeclarationEntries),
-    "scripts/lib/managed-windows-job-launcher.mts",
-    "src/process/supervisor/service-child-windows-job-native.ts",
-    "src/process/exec-result.ts",
-    "src/infra/update-managed-service-handoff-runtime-assets.ts",
-    "src/infra/update-managed-service-handoff-native-loader.ts",
-    "src/shared/deferred.ts",
-    "src/shared/freebsd-process-identity.ts",
-    "src/shared/freebsd-process-identity-native.ts",
-    "src/shared/pid-alive.ts",
-    "src/shared/worker-bundle-hash.ts",
-    "src/infra/errno.ts",
-    "src/infra/process-env.ts",
-    "src/infra/windows-process-start.ts",
-    "src/infra/format-time/duration-units.ts",
-    "src/infra/format-time/format-duration-exact.ts",
-    "src/infra/format-time/format-duration-internal.ts",
-    "src/infra/node-runtime-executable.ts",
-    "src/infra/runtime-dependency-ownership.ts",
-    "src/shared/non-packaged-plugin-dirs.ts",
-    "src/infra/package-update-activation-runtime-assets.ts",
-    "packages/normalization-core/src/error-coercion.ts",
-    "packages/normalization-core/src/mountinfo-path.ts",
-    "packages/normalization-core/src/record-coerce.ts",
-  ]);
-  for (const source of runtimeEntryOwners) {
+  const sources = resolveFixtureSources(extraEntrypoints);
+  for (const source of sources) {
     write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));
   }
   // The unmodified config reads workspace export metadata before selecting its SDK groups.
@@ -246,14 +258,17 @@ export function createFixture(groups: readonly string[], root: string) {
     "packages/gateway-client/src/websocket.ts",
     "src/gateway/desktop/node-stream-broker.ts",
     "src/gateway/desktop/observe-bridge.ts",
+    "src/gateway/control-ui-public-session-card-render.ts",
     "src/gateway/server-runtime-state.ts",
     "src/realtime-transcription/websocket-session.ts",
   ]) {
-    write(source, "export {};\n");
+    if (!sources.has(source)) {
+      write(source, "export {};\n");
+    }
   }
-  if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
-    // Exercise every real extension partition, even in the small compiler fixture.
-    for (const id of ["fixture-a", "fixture-b", "fixture-c", "fixture-d", "fixture-e"]) {
+  if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
+    // Exercise shared contracts across multiple plugin entries.
+    for (const id of ["fixture-a", "fixture-b"]) {
       write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
       write(
         `extensions/${id}/package.json`,
@@ -279,7 +294,7 @@ export function createFixture(groups: readonly string[], root: string) {
   // Only unselected inputs need placeholders; selected sources receive their final contracts below.
   for (const source of new Set(qa.inputs)) {
     const relative = path.relative(root, path.resolve(root, source)).replaceAll(path.sep, "/");
-    if (!runtimeEntryOwners.has(relative) && !selectedSources.has(relative)) {
+    if (!sources.has(relative) && !selectedSources.has(relative)) {
       write(source, "export {};\n");
     }
   }
@@ -315,10 +330,12 @@ export function createFixture(groups: readonly string[], root: string) {
   write("test/unrelated.test.ts", "export const test = 1;\n");
   write("ui/unrelated.ts", "export const view = 1;\n");
   write(".github/workflows/unrelated.yml", "name: unrelated before\n");
+  // Cache tests edit these bytes; creating the file instead would change the namespace.
+  write("scripts/lib/ci-node-test-plan.mts", "export {};\n");
   write("src/schema.d.ts", 'declare module "*.sql" { const text: string; export default text; }');
   write("src/schema.sql", "CREATE TABLE fixture (value TEXT NOT NULL);");
   for (const source of selectedSources) {
-    if (runtimeEntryOwners.has(source)) {
+    if (sources.has(source)) {
       continue;
     }
     if (groups === TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS && source === "src/plugin-sdk/core.ts") {
@@ -383,7 +400,11 @@ import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFi
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
 await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
-    ["tsdown-unified", "write-unified-entry-dts"].includes(step.label));
+    ["tsdown", "write-unified-entry-dts"].includes(step.label)).map(step =>
+      step.label === "tsdown"
+        // This fixture materializes only the unified source graph.
+        ? { ...step, args: [...step.args, "--config", "tsdown.config.ts", "--filter", ${JSON.stringify(TSDOWN_UNIFIED_CONFIG_GROUP)}] }
+        : step);
   const result = await runBuildAllSteps("full", { steps });
   process.exitCode = result.exitCode;
 });

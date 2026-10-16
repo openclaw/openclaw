@@ -15,6 +15,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
@@ -26,6 +27,8 @@ import {
 } from "./browser-panel-surface.ts";
 
 const INSPECT_THROTTLE_MS = 120;
+const STREAM_WHEEL_INTERVAL_MS = 50;
+const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
 
 type BrowserPanelInputState = {
   mode: "interact" | "annotate" | "inspect";
@@ -41,6 +44,7 @@ type BrowserPanelInputState = {
 };
 
 interface BrowserPanelInputHost extends BrowserPanelInputState {
+  readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly host: {
     readonly renderRoot: HTMLElement | DocumentFragment;
     readonly updateComplete: Promise<boolean>;
@@ -82,6 +86,7 @@ export class BrowserPanelInputController {
   private inputGeneration = 0;
   private pendingText: Promise<boolean | undefined> | null = null;
   private compositionCurrent: (() => boolean) | null = null;
+  private scrollPoint: { x: number; y: number } | null = null;
   private touchScroll: {
     pointerId: number;
     startX: number;
@@ -164,12 +169,16 @@ export class BrowserPanelInputController {
   }
 
   handleWheel(event: WheelEvent): void {
-    if (this.queueScroll(event.deltaX, event.deltaY)) {
+    if (this.queueScroll(event.deltaX, event.deltaY, this.remotePoint(event))) {
       event.preventDefault();
     }
   }
 
-  private queueScroll(horizontal: number, vertical: number): boolean {
+  private queueScroll(
+    horizontal: number,
+    vertical: number,
+    point: { x: number; y: number } | null,
+  ): boolean {
     if (this.host.mode !== "interact" || !this.host.view) {
       return false;
     }
@@ -178,8 +187,14 @@ export class BrowserPanelInputController {
     if (!client || !targetId || this.host.view.targetId !== targetId) {
       return false;
     }
+    // Coalesced deltas scroll whatever sits under the pointer when they flush.
+    this.scrollPoint = point;
     const epoch = this.host.operations.epoch;
-    this.host.pendingInput.queueWheel(horizontal, vertical, 150, (deltaX, deltaY) => {
+    // Match the live stream's frame cadence; screenshot fallback keeps its lower request rate.
+    const interval = this.host.stream.ownsView(targetId)
+      ? STREAM_WHEEL_INTERVAL_MS
+      : SNAPSHOT_WHEEL_INTERVAL_MS;
+    this.host.pendingInput.queueWheel(horizontal, vertical, interval, (deltaX, deltaY) => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
@@ -188,6 +203,7 @@ export class BrowserPanelInputController {
       ) {
         return;
       }
+      const scrollPoint = this.scrollPoint;
       void this.host.runAction(async (actionClient) => {
         if (this.host.evaluateUnavailable) {
           // No page JS allowed: fall back to a coarse keyboard scroll.
@@ -197,7 +213,12 @@ export class BrowserPanelInputController {
           });
           return;
         }
-        await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
+        await scrollBrowserBy(actionClient, {
+          targetId,
+          deltaX,
+          deltaY,
+          ...(scrollPoint ? { point: scrollPoint } : {}),
+        });
       });
     });
     return true;
@@ -227,7 +248,11 @@ export class BrowserPanelInputController {
       return;
     }
     this.suppressStageClick = false;
-    if (event.pointerType !== "touch" || this.host.mode !== "interact") {
+    // Pen contact drags scroll like fingers; mouse drags stay clicks and wheel scrolls.
+    if (
+      (event.pointerType !== "touch" && event.pointerType !== "pen") ||
+      this.host.mode !== "interact"
+    ) {
       return;
     }
     const point = this.remotePoint(event);
@@ -262,7 +287,7 @@ export class BrowserPanelInputController {
     event.preventDefault();
     gesture.scrolling = true;
     this.suppressStageClick = true;
-    this.queueScroll(gesture.point.x - point.x, gesture.point.y - point.y);
+    this.queueScroll(gesture.point.x - point.x, gesture.point.y - point.y, point);
     gesture.point = point;
   }
 

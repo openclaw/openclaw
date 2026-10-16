@@ -377,14 +377,19 @@ function completedResponseEvent(id, output, inputTokens, outputTokens) {
   };
 }
 
-function responseEvents(text, deltas = [text]) {
-  const item = {
+function assistantMessage(text, phase, id = "msg_e2e_1") {
+  return {
     type: "message",
-    id: "msg_e2e_1",
+    id,
     role: "assistant",
     status: "completed",
+    ...(phase ? { phase } : {}),
     content: [{ type: "output_text", text, annotations: [] }],
   };
+}
+
+function responseEvents(text, deltas = [text]) {
+  const item = assistantMessage(text);
   return [...messageEvents(item, text, deltas), completedResponseEvent("resp_e2e", [item], 11, 7)];
 }
 
@@ -457,14 +462,7 @@ function functionCallEvents(call) {
 // transport reads it straight off the item, so an untagged item produces no
 // preamble at all and the scenario silently proves nothing.
 function preambleThenToolCallEvents(preamble, name, args) {
-  const item = {
-    type: "message",
-    id: "msg_e2e_preamble",
-    role: "assistant",
-    status: "completed",
-    phase: "commentary",
-    content: [{ type: "output_text", text: preamble, annotations: [] }],
-  };
+  const item = assistantMessage(preamble, "commentary", "msg_e2e_preamble");
   const call = buildMockFunctionCall(name, args);
   return [
     ...messageEvents(item, preamble, splitResponseText(preamble)),
@@ -476,7 +474,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
 function hasCurrentTurnToolOutput(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "user") {
+    if (readMockUserText(message) !== undefined) {
       return false;
     }
     if (message?.role === "tool" || message?.type === "function_call_output") {
@@ -530,28 +528,37 @@ function writeResponsesEvents(res, stream, events) {
   writeSse(res, events);
 }
 
-function writeChatCompletion(res, stream, text = successMarker) {
-  if (stream) {
-    writeSse(res, [
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
-      },
-      {
-        id: "chatcmpl_e2e",
-        object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      },
-    ]);
-    return;
-  }
+function writeChatCompletionChunks(res, choices) {
+  writeSse(
+    res,
+    choices.map((choice) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, ...choice }],
+    })),
+  );
+}
+
+function writeChatCompletionMessage(res, message, finishReason, promptTokens, completionTokens) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    choices: [{ index: 0, message, finish_reason: finishReason }],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
   });
+}
+
+function writeChatCompletion(res, stream, text = successMarker) {
+  const message = { role: "assistant", content: text };
+  if (stream) {
+    writeChatCompletionChunks(res, [{ delta: message }, { delta: {}, finish_reason: "stop" }]);
+    return;
+  }
+  writeChatCompletionMessage(res, message, "stop", 11, 7);
 }
 
 /** Streams assistant content, then a tool call, in one chat-completions turn. */
@@ -559,56 +566,30 @@ function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) 
   const serialized = JSON.stringify(args);
   const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
   if (!stream) {
-    writeJson(res, 200, {
-      id: "chatcmpl_e2e",
-      object: "chat.completion",
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: preamble,
-            tool_calls: [
-              { id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-          finish_reason: "tool_calls",
-        },
-      ],
-      usage: { prompt_tokens: 24, completion_tokens: 18, total_tokens: 42 },
-    });
+    writeChatCompletionMessage(
+      res,
+      {
+        role: "assistant",
+        content: preamble,
+        tool_calls: [{ id: callId, type: "function", function: { name, arguments: serialized } }],
+      },
+      "tool_calls",
+      24,
+      18,
+    );
     return;
   }
-  writeSse(res, [
+  writeChatCompletionChunks(res, [
+    { delta: { role: "assistant", content: "" } },
+    ...splitResponseText(preamble).map((content) => ({ delta: { content } })),
     {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
+      delta: {
+        tool_calls: [
+          { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+        ],
+      },
     },
-    ...splitResponseText(preamble).map((delta) => ({
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { content: delta } }],
-    })),
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
-            ],
-          },
-        },
-      ],
-    },
-    {
-      id: "chatcmpl_e2e",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-    },
+    { delta: {}, finish_reason: "tool_calls" },
   ]);
 }
 
@@ -679,14 +660,7 @@ function collectText(value) {
 }
 
 function stringifyFunctionCallOutput(output) {
-  if (typeof output === "string") {
-    return output;
-  }
-  try {
-    return JSON.stringify(output);
-  } catch {
-    return "";
-  }
+  return typeof output === "string" ? output : JSON.stringify(output);
 }
 
 function collectFunctionCallOutputText(body) {
@@ -714,10 +688,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
-    const catalogExpression =
-      process.env.OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE === "legacy"
-        ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
-        : "catalog.all().some((tool) => tool.source === 'mcp')";
+    const catalogExpression = "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
       title: "Read the MCP fixture note",
       code: [
@@ -927,15 +898,7 @@ const server = http.createServer((req, res) => {
           id: "resp_e2e",
           object: "response",
           status: "completed",
-          output: [
-            {
-              type: "message",
-              id: "msg_e2e_1",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: responseText, annotations: [] }],
-            },
-          ],
+          output: [assistantMessage(responseText)],
           usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
         });
         return;

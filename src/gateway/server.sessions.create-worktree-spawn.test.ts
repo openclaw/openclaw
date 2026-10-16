@@ -1,15 +1,16 @@
-import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { execFile } from "node:child_process";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -26,10 +27,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -180,8 +178,6 @@ beforeEach(async () => {
   const defaultWorkspace = path.join(state.root, "non-git-workspace");
   await fs.mkdir(defaultWorkspace);
   repository = await createRepository(state.root, "selected-project");
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
   const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -196,28 +192,21 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();
   projectCloneMocks.refreshProjectClone.mockReset();
-  closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   await state?.cleanup();
 });
 
-test.each([
-  { source: "registered", worktree: true },
-  { source: "github", worktree: true },
-  { source: "inherited", worktree: true },
-  { source: "registered", worktree: false },
-] as const)(
-  "required visible spawn selects $source project through the write-scope Gateway (worktree=$worktree)",
-  async ({ source, worktree }) => {
+afterAll(closeStateDatabaseForTest);
+
+test.each(["registered", "github", "inherited"] as const)(
+  "required visible spawn selects %s project through the write-scope Gateway",
+  async (source) => {
     const { entry: parent } = await createManagedProjectParent(true);
-    const projectName = worktree
-      ? "tool-selected-project"
-      : "non-git-workspace/tool-selected-project";
+    const projectName = "tool-selected-project";
     const otherRepository = await createRepository(state.root, projectName);
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
@@ -235,11 +224,11 @@ test.each([
           : source === "github"
             ? { projectGitUrl: "git@github.com:example/selected.git" }
             : {}),
-        ...(worktree
-          ? { worktree: true, worktreeName: "selected-child", worktreeBaseRef: "main" }
-          : {}),
+        worktree: true,
+        worktreeName: "selected-child",
+        worktreeBaseRef: "main",
       });
-      expect(result.details).toMatchObject({ status: "accepted" });
+      expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
       if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
         throw new Error("Missing child session key");
       }
@@ -250,14 +239,7 @@ test.each([
       if (source !== "inherited") {
         expect(child?.projectId).toBe(project.id);
       }
-      if (worktree) {
-        expect(child?.worktree?.repoRoot).toBe(
-          source === "inherited" ? repository : otherRepository,
-        );
-      } else {
-        expect(child?.worktree).toBeUndefined();
-        expect(child?.spawnedCwd).toBe(otherRepository);
-      }
+      expect(child?.worktree?.repoRoot).toBe(source === "inherited" ? repository : otherRepository);
       expect(await fs.readFile(path.join(child!.spawnedCwd!, "README.md"), "utf8")).toBe(
         source === "inherited" ? "selected-project\n" : `${projectName}\n`,
       );
@@ -286,7 +268,7 @@ test.each(["registered", "github"] as const)(
     const project = await registerProjectRegistry({ path: otherRepository });
     projectCloneMocks.materializeProjectClone.mockResolvedValue(project);
     const { context, registerRun, spawn } = await createVisibleSpawnTool();
-    const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
+    const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     const bindChild = vi.spyOn(sessionAccess, "createSessionEntryWithTranscript");
     dispatchInboundMessageMock.mockResolvedValue({
       queuedFinal: false,
@@ -324,7 +306,7 @@ test.each(["registered", "github"] as const)(
       }
       expect(createWorktree).not.toHaveBeenCalled();
       if (childKey) {
-        expect(managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", childKey)).toBeUndefined();
       }
       expect(child?.worktree).toBeUndefined();
       expect(child?.projectId).toBeUndefined();
@@ -370,7 +352,7 @@ test("required project preparation isolates host filters without rejecting the r
   expect(result).toMatchObject({ ok: true });
   const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
   expect(child).toMatchObject({ sandbox: "required", projectId: project.id });
-  expect(child?.worktree?.id).toBe(managedWorktrees.findLiveByOwner("session", key)?.id);
+  expect(child?.worktree?.id).toBe((await managedWorktrees.findLiveByOwner("session", key))?.id);
   expect(child?.spawnedCwd).not.toBe(repository);
   expect(await fs.readFile(path.join(child!.spawnedCwd!, "README.md"), "utf8")).toBe(
     await fs.readFile(path.join(repository, "README.md"), "utf8"),
@@ -418,25 +400,27 @@ test.each(["archive", "unregister"] as const)(
   async (change) => {
     const selectedParent = await createDirectProjectParent();
     let createdPath: string | undefined;
-    const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
-    vi.spyOn(managedWorktrees, "createWithOutcome").mockImplementation(async (params) => {
-      const outcome = await createWorktree(params);
-      createdPath = outcome.record.path;
-      if (change === "unregister") {
-        expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
-      } else {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: selectedParent.key, storePath },
-          { ...selectedParent.entry, archivedAt: Date.now() },
-        );
-      }
-      return outcome;
-    });
+    const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+    vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementation(
+      async function (this: ManagedWorktreeService, params) {
+        const outcome = await createWorktree(this, params);
+        createdPath = outcome.record.path;
+        if (change === "unregister") {
+          expect(await removeProjectRegistry(selectedParent.project)).toBe(true);
+        } else {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: selectedParent.key, storePath },
+            { ...selectedParent.entry, archivedAt: Date.now() },
+          );
+        }
+        return outcome;
+      },
+    );
     const key = `agent:main:dashboard:direct-parent-${change}-child`;
     await expect(createChild({ key }, selectedParent.key)).rejects.toThrow(
       "Spawn parent project changed",
     );
-    expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
     if (!createdPath) {
       throw new Error("Expected the preparation to allocate a checkout");
@@ -459,11 +443,67 @@ test("worktree spawns do not inherit an unregistered parent working directory", 
   });
 });
 
+test("child sessions use an empty .git workspace without Git features", async () => {
+  const workspace = path.join(state.root, "non-git-workspace");
+  const metadata = path.join(workspace, ".git");
+  await fs.mkdir(metadata);
+  const parent = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { key: parentKey, agentId: "main" },
+    adminRequest,
+  );
+  expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+  const child = await createChild({ worktree: false });
+  expect(child.ok, JSON.stringify(child.error)).toBe(true);
+  expect(child.payload?.entry.worktree).toBeUndefined();
+  const stored = loadSessionEntry({ agentId: "main", sessionKey: child.payload!.key, storePath });
+  expect(stored).toMatchObject({ parentSessionKey: parentKey });
+  expect(stored?.pendingWorktree).toBeUndefined();
+  expect(await fs.readdir(metadata)).toEqual([]);
+
+  await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
+    "not a git checkout",
+  );
+  expect(await createChild()).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "agent workspace is not a git checkout" },
+  });
+});
+
+test.each(["missing worktree target", "partial metadata"])(
+  "child worktree sessions preserve a checkout with %s",
+  async (damage) => {
+    const workspace = path.join(state.root, "non-git-workspace");
+    const metadata = path.join(workspace, ".git");
+    const contents = "gitdir: missing-worktree\n";
+    if (damage === "missing worktree target") {
+      await fs.writeFile(metadata, contents);
+    } else {
+      await fs.mkdir(path.join(metadata, "objects"), { recursive: true });
+    }
+    const parent = await directSessionReq<{ key: string }>(
+      "sessions.create",
+      { key: parentKey, agentId: "main" },
+      adminRequest,
+    );
+    expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+    const child = await createChild();
+    expect(child).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: expect.stringContaining("checkout preserved") },
+    });
+    if (damage === "missing worktree target") {
+      expect(await fs.readFile(metadata, "utf8")).toBe(contents);
+    } else {
+      expect(await fs.readdir(metadata)).toEqual(["objects"]);
+    }
+  },
+);
+
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
   const { entry: parent } = await createManagedProjectParent();
   const params = { ...parentCreateParams, cwd: repository };
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   const reused = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
     params,
@@ -472,7 +512,7 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry.sessionId).toBe(parent.sessionId);
   expect(reused.payload?.worktree.id).toBe(parent.worktree?.id);
-  const recorded = managedWorktrees.findLiveByOwner("session", parentKey);
+  const recorded = await managedWorktrees.findLiveByOwner("session", parentKey);
   expect(recorded?.baseRef).toBe("main");
 
   for (const changed of [{ worktreeBaseRef: "HEAD" }, { worktreeName: "other-name" }]) {
@@ -515,17 +555,14 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     ok: false,
     error: { message: "session worktree binding has a different owner" },
   });
-  expect(managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
+  expect(await managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
 });
 
 test("trusted cross-agent worktree spawns select the target agent's workspace", async () => {
   await createManagedProjectParent();
   const otherRepository = await createRepository(state.root, "other-project");
   testState.agentsConfig = {
-    list: [
-      { id: "main", default: true },
-      { id: "other", workspace: otherRepository },
-    ],
+    entries: { main: {}, other: { workspace: otherRepository } },
   };
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();
@@ -564,18 +601,22 @@ test("trusted worktree spawns reject a stale parent registry binding", async () 
 
 test("trusted worktree spawns roll back when the parent changes during preparation", async () => {
   const { entry: parent } = await createManagedProjectParent();
-  const createWorktree = managedWorktrees.createWithOutcome.bind(managedWorktrees);
-  vi.spyOn(managedWorktrees, "createWithOutcome").mockImplementation(async (params) => {
-    const outcome = await createWorktree(params);
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: parentKey, storePath },
-      { ...parent, sessionId: "replaced-parent" },
-    );
-    return outcome;
-  });
+  const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
+  vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome").mockImplementation(
+    async function (this: ManagedWorktreeService, params) {
+      const outcome = await createWorktree(this, params);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: parentKey, storePath },
+        { ...parent, sessionId: "replaced-parent" },
+      );
+      return outcome;
+    },
+  );
   const key = "agent:main:dashboard:retired-parent-child";
-  await expect(createChild({ key })).rejects.toThrow("Spawn parent managed worktree changed");
-  expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  await expect(createChild({ key })).rejects.toThrow(
+    /Spawn parent managed worktree changed|Session access facts are unavailable/,
+  );
+  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });
 
@@ -586,7 +627,7 @@ test("publishes a failed worktree spawn only after its durable session failure",
   const preparation = createDeferredCore<never>();
   const preparationStarted = createDeferredCore();
   const createWorktree = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockImplementationOnce(() => {
       preparationStarted.resolve();
       return preparation.promise;
@@ -726,7 +767,7 @@ test.each(["archive", "stale-child"] as const)(
     const acceptedChild = loadSessionEntry({ agentId: "main", sessionKey: key, storePath })!;
     expect(acceptedChild.pendingWorktree?.workspace).toBe(repository);
     expect(acceptedChild.worktree).toBeUndefined();
-    expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
     initialSend.mockRestore();
     const context = {
       broadcast: vi.fn(),
@@ -766,8 +807,8 @@ test.each(["archive", "stale-child"] as const)(
       queuedFinal: false,
       counts: { block: 0, final: 0, tool: 0 },
     });
-    const resolveRepository = vi.spyOn(managedWorktrees, "resolveRepositoryPaths");
-    const createWorktree = vi.spyOn(managedWorktrees, "createWithOutcome");
+    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
+    const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {
       if (
@@ -827,7 +868,7 @@ test.each(["archive", "stale-child"] as const)(
         expect(child.parentSessionId).toBe(parent.sessionId);
         expect(child.pendingWorktree).toBeUndefined();
         expect(child.worktree?.repoRoot).toBe(repository);
-        const owned = managedWorktrees.findLiveByOwner("session", key)!;
+        const owned = (await managedWorktrees.findLiveByOwner("session", key))!;
         expect(owned.id).toBe(child.worktree?.id);
         expect(await fs.readFile(path.join(owned.path, "README.md"), "utf8")).toBe(
           "selected-project\n",
@@ -859,7 +900,7 @@ test("an existing child row does not replace an unaccepted parent project source
   await expect(createChild({ key }, selectedParent.key)).rejects.toThrow(
     "Spawn parent project changed",
   );
-  expect(managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
     sessionId: child.sessionId,
   });

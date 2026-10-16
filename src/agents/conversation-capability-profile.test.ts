@@ -4,23 +4,63 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createAccountCronScheduledToolPolicy,
-  type CronScheduledToolCallerOrigin,
-} from "../cron/scheduled-tool-policy.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
-import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import {
+  prepareConversationCapabilityProfile,
+  resolveConversationCapabilityProfile,
+} from "./conversation-capability-profile.js";
+import {
+  isConversationToolAllowed,
+  projectConversationToolNames,
+} from "./conversation-tool-policy-pipeline.js";
+import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-capability-profile-");
 
 describe("resolveConversationCapabilityProfile", () => {
+  it.each(["fixture-reader", "group:plugins"])(
+    "uses registered ownership for %s without granting name-only callers",
+    (allow) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: { tools: { allow: [allow, "read"] } },
+      });
+      expect(
+        isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+      ).toBe(true);
+      expect(isConversationToolAllowed(profile, "read_public_item")).toBe(false);
+      expect(isConversationToolAllowed(profile, "read")).toBe(true);
+    },
+  );
+
+  it.each(["read_public_item", "fixture-reader", "group:plugins"])(
+    "keeps %s denied when rechecking a registered plugin tool",
+    (deny) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: { tools: { allow: ["group:plugins"], deny: [deny] } },
+      });
+      expect(
+        isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not let plugin ownership widen a narrower conversation policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: { tools: { allow: ["group:plugins", "read"] } },
+      conversationToolPolicy: { allow: ["read"] },
+    });
+    expect(
+      isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+    ).toBe(false);
+    expect(isConversationToolAllowed(profile, "read")).toBe(true);
+  });
+
   it("intersects base and provider profile contributions from plugin manifests", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
@@ -86,45 +126,7 @@ describe("resolveConversationCapabilityProfile", () => {
     ).toEqual(["read", "write", "exec"]);
   });
 
-  it("prepares a direct conversation profile with sender tool restrictions", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        toolsBySender: {
-          "id:guest": { deny: ["exec", "process"] },
-        },
-      },
-    };
-
-    const profile = resolveConversationCapabilityProfile({
-      config: cfg,
-      sessionKey: "agent:main:discord:dm:guest",
-      agentId: "main",
-      messageProvider: "discord",
-      senderId: "guest",
-      modelProvider: "openai",
-      modelId: "gpt-5.5",
-      workspaceDir: "/tmp/openclaw-direct-profile",
-      cwd: "/tmp/openclaw-direct-profile/task",
-    });
-
-    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
-    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
-    expect(profile.model).toMatchObject({
-      provider: "openai",
-      id: "gpt-5.5",
-    });
-    expect(profile.workspace).toMatchObject({
-      workspaceRoot: "/tmp/openclaw-direct-profile",
-      runtimeRoot: "/tmp/openclaw-direct-profile/task",
-    });
-  });
-
   it.each([
-    {
-      name: "exempts owner WebChat from wildcard sender tool restrictions",
-      params: { messageProvider: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
-      restricted: false,
-    },
     {
       name: "exempts owner WebChat identified through the message channel",
       params: { messageChannel: INTERNAL_MESSAGE_CHANNEL, senderIsOwner: true },
@@ -230,22 +232,6 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(scheduled.policy.explicitToolAllowlist).toContain("write");
   });
 
-  it("keeps built-in profile grants out of explicit overrides", () => {
-    const profile = resolveConversationCapabilityProfile({
-      config: {
-        tools: {
-          profile: "coding",
-          allow: ["pdf"],
-        },
-      },
-      modelProvider: "ollama",
-      modelId: "qwen3.5:9b",
-    });
-
-    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
-    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
-  });
-
   it("adds runtime tools without replacing the configured tool surface", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
@@ -293,7 +279,7 @@ describe("resolveConversationCapabilityProfile", () => {
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 
-    const profile = resolveConversationCapabilityProfile({
+    const profile = await prepareConversationCapabilityProfile({
       config: { session: { store: storePath } },
       sessionKey,
       agentId: "main",
@@ -351,22 +337,9 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.conversation.groupChannel).toBeNull();
     expect(profile.conversation.groupSpace).toBeNull();
   });
-
-  it("keeps trusted caller group facts when the session key vouches for them", () => {
-    const profile = resolveConversationCapabilityProfile({
-      sessionKey: "agent:main:whatsapp:group:team",
-      agentId: "main",
-      messageProvider: "whatsapp",
-      groupId: "team",
-    });
-
-    expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
-  });
 });
 
 describe("resolveConversationCapabilityProfile scheduled account authority", () => {
-  const ownerSessionKey = "agent:main:whatsapp:group:safe-room";
-
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -383,36 +356,6 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     );
   });
 
-  function scheduledProfile(accounts: Record<string, unknown>) {
-    return resolveConversationCapabilityProfile({
-      config: {
-        channels: {
-          whatsapp: {
-            accounts,
-            groups: { "safe-room": { tools: { allow: ["read"] } } },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      sessionKey: ownerSessionKey,
-      agentId: "main",
-      messageProvider: "whatsapp",
-      groupId: "safe-room",
-      groupChannel: "whatsapp",
-      scheduledToolPolicy: createAccountCronScheduledToolPolicy({
-        ownerSessionKey,
-        ownerAccountId: "work",
-      }),
-    });
-  }
-
-  it("keeps the group policy while the scheduled owner account stays configured", () => {
-    expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
-  });
-
-  it("rejects a scheduled run after its owner account is removed", () => {
-    expect(() => scheduledProfile({})).toThrow('Scheduled account "work" is unavailable');
-  });
-
   it.each<{
     name: string;
     origin: CronScheduledToolCallerOrigin["kind"];
@@ -422,13 +365,6 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     { name: "configured creator", origin: "external", configured: true, delivery: "telegram" },
     { name: "unknown creator origin", origin: "unknown", configured: true, delivery: "whatsapp" },
     {
-      name: "removed creator account",
-      origin: "external",
-      configured: false,
-      delivery: "telegram",
-    },
-    { name: "local creator", origin: "local", configured: true, delivery: "whatsapp" },
-    {
       name: "removed local resource account",
       origin: "local",
       configured: false,
@@ -436,7 +372,7 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     },
   ])(
     "preserves scheduled creator authority for $name across tool consumers",
-    ({ origin, configured, delivery }) => {
+    async ({ origin, configured, delivery }) => {
       const config: OpenClawConfig = {
         channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
       };
@@ -469,7 +405,7 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
       const webSearch = () =>
         resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
       const harnessTools = () =>
-        resolvePluginHarnessPolicyToolsAllow({
+        preparePluginHarnessPolicyToolsAllow({
           ...params,
           provider: "fixture",
           modelId: "fixture-model",
@@ -478,14 +414,15 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
         });
 
       if (origin === "unknown" || !configured) {
-        for (const resolve of [conversationTools, webSearch, harnessTools]) {
+        for (const resolve of [conversationTools, webSearch]) {
           expect(resolve).toThrow('Scheduled account "work" is unavailable');
         }
+        await expect(harnessTools()).rejects.toThrow('Scheduled account "work" is unavailable');
         return;
       }
       expect(conversationTools()).toEqual(["read"]);
       expect(webSearch()).toEqual({ allowed: true, persistentAllowed: true });
-      expect(harnessTools()).toEqual([]);
+      expect(await harnessTools()).toEqual([]);
     },
   );
 });

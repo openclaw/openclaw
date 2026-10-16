@@ -27,7 +27,14 @@ After gateway auth succeeds, connecting from a new browser or device usually req
   </Step>
 </Steps>
 
-Keep the page open while approval is pending. It retries automatically and connects on its own once the request is approved; **Check now** lets you retry immediately.
+Keep the page open while approval is pending. It waits for the decision and connects on its own once the request is approved; **Check now** lets you retry immediately.
+
+If the operator rejects this browser's request from the CLI or **Devices**, the
+waiting page shows **Access request declined** and stops automatic retries.
+Choose **Request again** to file another request. An unanswered request shows
+**Access request expired**, not declined. These outcomes belong to the live
+connection, not stored denial history: reloading the page may request approval
+again. Rejecting one browser does not affect another browser's pending request.
 
 If the login screen says **Pairing link is no longer valid**, the one-time dashboard
 link may have expired or already been used. Run `openclaw dashboard` on the Gateway
@@ -75,7 +82,7 @@ An already paired administrator can create the iOS/Android connection QR without
   </Step>
 </Steps>
 
-Creating a setup code requires `operator.admin`; the button is disabled for sessions without it. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+Creating a setup code requires `operator.admin`; **Pair device** is disabled in the sidebar identity menu and settings for sessions without it. Operators with `operator.pairing` can still review and approve eligible operator-device requests from **Devices**. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
 
 ## Runtime config endpoint
 
@@ -110,7 +117,7 @@ Override the VAPID keypair through env vars on the Gateway process when you want
 - `OPENCLAW_VAPID_PRIVATE_KEY`
 - `OPENCLAW_VAPID_SUBJECT` (defaults to `https://openclaw.ai`)
 
-One service-worker registration scope has one browser push subscription and therefore one application-server key. If one installed PWA switches among multiple logical Gateways, configure the same public/private VAPID pair on every Gateway and set each Gateway's `gateway.publicOrigin`; otherwise registration fails closed with a VAPID-identity mismatch. Sharing the private VAPID key and browser endpoint creates one push-signing trust domain, so do this only among mutually trusted Gateways. PWAs installed from separate HTTPS origins or base-path scopes have separate registrations and do not need to share keys.
+One service-worker registration scope has one browser push subscription and therefore one application-server key. If one installed PWA switches among multiple logical Gateways, configure the same public/private VAPID pair on every Gateway and set each Gateway's `gateway.publicOrigin`; otherwise registration is rejected with a VAPID-identity mismatch. Sharing the private VAPID key and browser endpoint creates one push-signing trust domain, so do this only among mutually trusted Gateways. PWAs installed from separate HTTPS origins or base-path scopes have separate registrations and do not need to share keys.
 
 The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
 

@@ -23,7 +23,6 @@ import {
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
   resolveDiscordReferencedReplyMessage,
-  resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
 import { withAbortTimeout } from "./timeouts.js";
 
@@ -60,6 +59,10 @@ type DiscordMediaOperation = DiscordMediaResolveOptions & {
   out: DiscordMediaInfo[];
 };
 
+type DiscordMediaSource = Parameters<typeof resolveDiscordMessageStickers>[0] & {
+  attachments?: APIAttachment[] | null;
+};
+
 function createDiscordMediaOperation(
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
@@ -78,19 +81,6 @@ type DiscordStickerAssetCandidate = {
   fileName: string;
 };
 
-function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
-  const ext = getFileExtension(fileName);
-  return Boolean(ext && AUDIO_ATTACHMENT_EXTENSIONS.has(ext));
-}
-
-function isDiscordVoiceWaveform(attachment: APIAttachment): boolean {
-  return typeof attachment.waveform === "string";
-}
-
-function isDiscordVoiceDurationOnly(attachment: APIAttachment): boolean {
-  return typeof attachment.duration_secs === "number" && !isDiscordVoiceWaveform(attachment);
-}
-
 const NON_DEFINITIVE_MEDIA_TYPES = new Set([
   "application/octet-stream",
   "binary/octet-stream",
@@ -103,28 +93,18 @@ function isDefinitiveMediaType(contentType: string | null | undefined): boolean 
   return Boolean(normalized && !NON_DEFINITIVE_MEDIA_TYPES.has(normalized));
 }
 
-function resolveEffectiveMediaType(params: {
-  declaredContentType?: string | null;
-  fetchedContentType?: string | null;
-}): string | undefined {
-  if (isDefinitiveMediaType(params.fetchedContentType)) {
-    return params.fetchedContentType ?? undefined;
-  }
-  if (isDefinitiveMediaType(params.declaredContentType)) {
-    return params.declaredContentType ?? undefined;
-  }
-  return params.fetchedContentType ?? params.declaredContentType ?? undefined;
-}
-
 function resolveDiscordMediaClassification(params: {
   attachment: APIAttachment;
   fetchedContentType?: string | null;
 }): Pick<DiscordMediaInfo, "contentType" | "kind"> {
-  const contentType = resolveEffectiveMediaType({
-    declaredContentType: params.attachment.content_type,
-    fetchedContentType: params.fetchedContentType,
-  });
+  const contentTypes = [params.fetchedContentType, params.attachment.content_type];
+  const contentType =
+    contentTypes.find(isDefinitiveMediaType) ??
+    params.fetchedContentType ??
+    params.attachment.content_type ??
+    undefined;
   const mime = normalizeMimeType(contentType);
+  const definitive = isDefinitiveMediaType(contentType);
   // Discord now sends duration_secs on ordinary video/image attachments, so a
   // bare duration is no longer a voice-note signal. A waveform remains the
   // definitive native voice-note marker and keeps overriding a conflicting
@@ -134,34 +114,30 @@ function resolveDiscordMediaClassification(params: {
     mime?.startsWith("video/") === true || mime?.startsWith("image/") === true;
   const audioKind =
     mime?.startsWith("audio/") ||
-    isDiscordVoiceWaveform(params.attachment) ||
+    typeof params.attachment.waveform === "string" ||
     (!definitiveVisual &&
-      (isDiscordVoiceDurationOnly(params.attachment) ||
-        (isDiscordAudioAttachmentFileName(params.attachment.filename ?? params.attachment.url) &&
-          !isDefinitiveMediaType(contentType))))
+      (typeof params.attachment.duration_secs === "number" ||
+        (AUDIO_ATTACHMENT_EXTENSIONS.has(
+          getFileExtension(params.attachment.filename ?? params.attachment.url) ?? "",
+        ) &&
+          !definitive)))
       ? "audio"
       : undefined;
   const kind =
     audioKind ??
-    (!isDefinitiveMediaType(contentType)
-      ? isImageAttachment(params.attachment)
-        ? "image"
-        : "document"
-      : undefined);
+    (!definitive ? (isImageAttachment(params.attachment) ? "image" : "document") : undefined);
 
   return {
     // Inbound projection prefers MIME over kind. A native voice classification
     // or filename fallback must replace a non-definitive MIME rather than be masked by it.
     contentType:
-      (audioKind && !mime?.startsWith("audio/")) || (kind && !isDefinitiveMediaType(contentType))
-        ? undefined
-        : contentType,
+      (audioKind && !mime?.startsWith("audio/")) || (kind && !definitive) ? undefined : contentType,
     ...(kind ? { kind } : {}),
   };
 }
 
 async function resolveMessageMedia(
-  message: Message,
+  message: DiscordMediaSource,
   operation: DiscordMediaOperation,
   errorPrefix: string,
 ): Promise<DiscordMediaInfo[]> {
@@ -179,7 +155,7 @@ async function resolveMessageMedia(
 }
 
 export async function resolveMediaList(
-  message: Message,
+  message: DiscordMediaSource,
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
@@ -199,16 +175,11 @@ export async function resolveForwardedMediaList(
   const operation = createDiscordMediaOperation(maxBytes, options);
   if (snapshots.length > 0) {
     for (const snapshot of snapshots) {
-      await appendResolvedMediaFromAttachments({
-        ...operation,
-        attachments: snapshot.message?.attachments,
-        errorPrefix: "discord: failed to download forwarded attachment",
-      });
-      await appendResolvedMediaFromStickers({
-        ...operation,
-        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
-        errorPrefix: "discord: failed to download forwarded sticker",
-      });
+      await resolveMessageMedia(
+        snapshot.message ?? {},
+        operation,
+        "discord: failed to download forwarded",
+      );
     }
     return operation.out;
   }
@@ -271,11 +242,7 @@ async function appendResolvedMediaFromAttachments(
     errorPrefix: string;
   },
 ) {
-  const attachments = params.attachments;
-  if (!attachments || attachments.length === 0) {
-    return;
-  }
-  for (const attachment of attachments) {
+  for (const attachment of params.attachments ?? []) {
     const attachmentUrl = normalizeOptionalString(attachment.url);
     if (!attachmentUrl) {
       logVerbose(
@@ -315,27 +282,14 @@ async function appendResolvedMediaFromAttachments(
 
 function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerAssetCandidate[] {
   const baseName = sticker.name?.trim() || `sticker-${sticker.id}`;
-  switch (sticker.format_type) {
-    case StickerFormatType.GIF:
-      return [
-        { url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.gif`, fileName: `${baseName}.gif` },
-      ];
-    case StickerFormatType.Lottie:
-      return [
-        {
-          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png?size=160`,
-          fileName: `${baseName}.png`,
-        },
-        {
-          url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.json`,
-          fileName: `${baseName}.json`,
-        },
-      ];
-    default:
-      return [
-        { url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png`, fileName: `${baseName}.png` },
-      ];
-  }
+  const isLottie = sticker.format_type === StickerFormatType.Lottie;
+  const extensions = isLottie
+    ? ["png", "json"]
+    : [sticker.format_type === StickerFormatType.GIF ? "gif" : "png"];
+  return extensions.map((extension) => ({
+    url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.${extension}${isLottie && extension === "png" ? "?size=160" : ""}`,
+    fileName: `${baseName}.${extension}`,
+  }));
 }
 
 function formatStickerError(err: unknown): string {
@@ -371,11 +325,7 @@ async function appendResolvedMediaFromStickers(
     errorPrefix: string;
   },
 ) {
-  const stickers = params.stickers;
-  if (!stickers || stickers.length === 0) {
-    return;
-  }
-  for (const sticker of stickers) {
+  for (const sticker of params.stickers ?? []) {
     const candidates = resolveStickerAssetCandidates(sticker);
     let lastError: unknown;
     for (const candidate of candidates) {

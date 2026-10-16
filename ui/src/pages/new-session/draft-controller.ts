@@ -1,14 +1,14 @@
-import type { ReactiveControllerHost } from "lit";
+import type { ApplicationContext } from "../../app/context.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import { isTarget as isCatalogTarget } from "./catalog-target.ts";
-import { DraftGatewayState, type DraftPreferenceOptions } from "./draft-gateway-state.ts";
+import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";
+import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type {
@@ -20,13 +20,16 @@ import { isPlaceTopologyEvent, nodePresenceStateSignature } from "./new-session-
 import type { SubmissionOutcomeReason } from "./session-placement-recovery-state.ts";
 
 /** Shared creation owners; route retention and draft restoration stay with each surface. */
-export class NewSessionDraftController {
+export class NewSessionDraft {
   readonly gateway: DraftGatewayState;
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
-  private readonly subscriptions: SubscriptionsController;
+  private stopLifetime: (() => void) | undefined;
+  private boundGateway: ApplicationContext["gateway"] | undefined;
+  private stopGateway: (() => void) | undefined;
+  private readonly changed: () => void;
   private modelDefaultsPolicy: "last-used" | "configured" | null | undefined;
 
   private protectPrivateDraftFromReload() {
@@ -92,7 +95,7 @@ export class NewSessionDraftController {
         if (!discard) {
           return;
         }
-        this.submission.attachmentDraft.reset({ release: true });
+        this.submission.attachmentDraft.reset();
         this.submission.setMessage("", []);
         await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
       } catch {
@@ -126,10 +129,10 @@ export class NewSessionDraftController {
   }
 
   constructor(
-    host: ReactiveControllerHost,
     private readonly read: () => DraftSubmissionSnapshot,
     callbacks: DraftSubmissionCallbacks &
       DraftPreferenceOptions & {
+        updateComplete: () => Promise<unknown>;
         querySelector: (selector: string) => Element | null;
         activeElement: () => Element | null;
         body: () => HTMLElement | null;
@@ -138,14 +141,13 @@ export class NewSessionDraftController {
         pickerIdPrefix?: string;
       },
   ) {
-    const requestUpdate = () => {
+    const changed = (this.changed = () => {
       if (this.privateDraftReview && !this.privateDraftReview.isCurrent()) {
         this.privateDraftReview.controller.abort("draft-changed");
       }
-      callbacks.requestUpdate();
-    };
+      callbacks.changed();
+    });
     this.gateway = new DraftGatewayState(
-      host,
       () => ({
         ...read(),
         isAdmin: this.place?.isAdmin() ?? false,
@@ -163,8 +165,9 @@ export class NewSessionDraftController {
       {
         preferenceScope: callbacks.preferenceScope,
         readPalettePreference: callbacks.readPalettePreference,
-        requestUpdate,
-        updateComplete: () => host.updateComplete,
+        readAgents: () => read().context?.agents,
+        changed,
+        updateComplete: callbacks.updateComplete,
         onInvalidate: (reset, outcome) => {
           this.invalidate(reset, outcome);
           callbacks.onInvalidate();
@@ -182,14 +185,14 @@ export class NewSessionDraftController {
       },
     );
     this.browser = new DraftPlaceBrowser(
-      host,
       this.gateway,
       () => ({
         context: read().context,
         isAdmin: this.place?.isAdmin() ?? false,
       }),
       {
-        requestUpdate,
+        changed,
+        updateComplete: callbacks.updateComplete,
         onProjectMissing: () => this.place.clearProjectSelection(),
         onSelectProject: (projectId) => this.place.selectProjectId(projectId),
         onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
@@ -209,7 +212,7 @@ export class NewSessionDraftController {
         pendingPlacementSessionKey: this.submission?.pendingPlacement.sessionKey ?? "",
       }),
       {
-        requestUpdate,
+        changed,
         onError: (error) =>
           error === null ? this.submission.clearError() : this.submission.setError(error),
         onClearError: (error) => this.submission.clearError(error),
@@ -217,54 +220,83 @@ export class NewSessionDraftController {
     );
     this.submission = new DraftSubmissionFlow(this.gateway, this.place, read, {
       ...callbacks,
-      requestUpdate,
+      changed,
     });
     this.submission.draftPersistence.modelSelection = {
       read: () =>
-        read().context?.config?.current.newSessionModelDefaults === "configured"
+        this.place.modelControl.modelDefaultsPolicy === "configured"
           ? this.place.modelControl.draftSelection(this.place.agentId)
           : undefined,
       restore: (selection) => this.place.modelControl.restoreDraftSelection(selection),
       retire: () => {
-        if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+        if (this.place.modelControl.modelDefaultsPolicy === "configured") {
           this.place.modelControl.retireDraftSelection();
         }
       },
     };
     this.place.modelControl.onDraftSelectionChange = () => {
-      if (read().context?.config?.current.newSessionModelDefaults === "configured") {
+      if (this.place.modelControl.modelDefaultsPolicy === "configured") {
         this.submission.draftPersistence.noteModelSelectionMutation();
       }
     };
-    this.subscriptions = new SubscriptionsController(host)
-      .effect(
-        () => this.read().context,
-        () => this.protectPrivateDraftFromReload(),
-      )
-      .watchStore(
-        () => this.read().context?.gateway,
-        (gateway) => this.gateway.synchronize(gateway),
-      )
-      .effect(
-        () => this.read().context?.gateway,
-        (gateway) => {
-          let presence = nodePresenceStateSignature(
-            readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
-          );
-          return gateway.subscribeEvents((event) => {
-            if (this.read().context?.gateway !== gateway) {
-              return;
-            }
-            const next = event.event === "presence" ? readPresenceEntries(event.payload) : null;
-            const signature = next ? nodePresenceStateSignature(next) : presence;
-            if (isPlaceTopologyEvent(event.event) || signature !== presence) {
-              presence = signature;
-              void this.gateway.refreshCloudProfiles();
-              this.gateway.handleCatalogRetry();
-            }
-          });
-        },
-      );
+  }
+
+  connect() {
+    if (!this.stopLifetime) {
+      const stopReloadGuard = this.protectPrivateDraftFromReload();
+      const wake = () => {
+        this.synchronize();
+        this.changed();
+      };
+      document.addEventListener("visibilitychange", wake);
+      this.stopLifetime = () => {
+        document.removeEventListener("visibilitychange", wake);
+        stopReloadGuard();
+      };
+    }
+    this.synchronize();
+  }
+
+  /** Refresh derived discovery at the owning surface's read boundary. */
+  synchronize() {
+    if (!this.stopLifetime) {
+      return;
+    }
+    const gateway = this.read().context?.gateway;
+    if (gateway !== this.boundGateway) {
+      this.stopGateway?.();
+      this.stopGateway = undefined;
+      this.boundGateway = gateway;
+      if (gateway) {
+        const stopStore = gateway.subscribe(() => {
+          if (this.read().context?.gateway === gateway) {
+            this.gateway.synchronize(gateway);
+          }
+        });
+        let presence = nodePresenceStateSignature(
+          readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
+        );
+        const stopEvents = gateway.subscribeEvents((event) => {
+          if (this.read().context?.gateway !== gateway) {
+            return;
+          }
+          const next = event.event === "presence" ? readPresenceEntries(event.payload) : null;
+          const signature = next ? nodePresenceStateSignature(next) : presence;
+          if (isPlaceTopologyEvent(event.event) || signature !== presence) {
+            presence = signature;
+            void this.gateway.refreshCloudProfiles();
+            this.gateway.handleCatalogRetry();
+          }
+        });
+        this.stopGateway = () => {
+          stopStore();
+          stopEvents();
+        };
+        this.gateway.synchronize(gateway);
+      }
+    }
+    this.gateway.synchronizeMetadata();
+    this.browser.synchronize();
   }
 
   agentsReady(): boolean {
@@ -279,26 +311,29 @@ export class NewSessionDraftController {
   }
 
   synchronizeSelections() {
-    const modelDefaultsPolicy = this.read().context?.config?.current.newSessionModelDefaults;
+    const modelDefaultsPolicy = this.place.requiredPlacement
+      ? "configured"
+      : this.read().context?.config?.current.newSessionModelDefaults;
     if (!this.place.agentsHydrated && this.agentsReady()) {
-      this.place.setAgentsHydrated(true);
+      this.place.agentsHydrated = true;
       this.place.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     } else if (this.place.agentsHydrated && modelDefaultsPolicy !== this.modelDefaultsPolicy) {
       const { context, data } = this.read();
       this.place.modelControl.load(context, this.place.agentId, !isCatalogTarget(data), {
         agent: this.place.selectedAgent(),
         preference: this.gateway.readPreference(this.place.agentId),
+        configuredDefaults: this.place.requiredPlacement,
       });
     }
     if (
-      modelDefaultsPolicy === "configured" &&
+      this.place.modelControl.modelDefaultsPolicy === "configured" &&
       this.modelDefaultsPolicy !== "configured" &&
       !this.submission.submitting &&
       this.place.modelControl.draftSelection(this.place.agentId)
     ) {
       this.submission.draftPersistence.noteModelSelectionMutation();
     }
-    this.modelDefaultsPolicy = modelDefaultsPolicy;
+    this.modelDefaultsPolicy = this.place.modelControl.modelDefaultsPolicy;
     this.place.restorePreferenceSelections();
     this.place.synchronizeTerminalHosts();
   }
@@ -316,7 +351,11 @@ export class NewSessionDraftController {
   }
 
   disconnect() {
-    this.subscriptions.clear();
+    this.stopLifetime?.();
+    this.stopLifetime = undefined;
+    this.stopGateway?.();
+    this.stopGateway = undefined;
+    this.boundGateway = undefined;
     this.gateway.invalidateDiscovery(
       true,
       this.submission.pendingPlacement.sessionKey ? "placement-interrupted" : "gateway-changed",

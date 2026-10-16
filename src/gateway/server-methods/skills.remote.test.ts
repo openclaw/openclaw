@@ -4,13 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
-import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-loader.js";
+import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
@@ -82,7 +83,7 @@ it("reads remote skill status, cards and binary requirements through the workspa
   await fs.writeFile(path.join(remote, "skills", "available", "skill-card.md"), "# Remote card\n");
   const config = {
     plugins: { enabled: false },
-    agents: { list: [{ id: "main", workspace: gateway }] },
+    agents: { entries: { main: { workspace: gateway } } },
   };
   const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
     ...readWorkspaceSkillSources({
@@ -141,8 +142,9 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
       const cfg = {
         plugins: { enabled: false },
         skills: { load: { watch: false } },
-        agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const alice = ensureProfileForEmail("alice@example.test");
       const bob = ensureProfileForEmail("bob@example.test");
       const authority = {
@@ -165,7 +167,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
           updatedAt: 1,
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: alice.id },
-          skillLibrarySelections: seedSkillLibrarySelection(authority),
+          skillLibrarySelections: await seedSkillLibrarySelection(authority),
         },
       );
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });

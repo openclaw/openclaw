@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -37,7 +38,7 @@ function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
   return conversation.rawId;
 }
 
-export function resolveTrustedGroupMetadata(params: {
+function resolveTrustedGroupMetadata(params: {
   sessionKey: string;
   spawnedBy?: string;
   stored: TrustedGroupMetadata;
@@ -55,7 +56,43 @@ export function resolveTrustedGroupMetadata(params: {
   };
 }
 
-export function requestGroupMatchesTrusted(params: {
+export function resolveAgentSessionGroup(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+  requested: TrustedGroupMetadata;
+}): {
+  groupId: string | undefined;
+  groupChannel: string | undefined;
+  groupSpace: string | undefined;
+} {
+  const trusted = resolveTrustedGroupMetadata(params);
+  const validated = trusted.groupId
+    ? resolveTrustedGroupId({
+        groupId: trusted.groupId,
+        sessionKey: params.sessionKey,
+        spawnedBy: params.spawnedBy,
+      })
+    : undefined;
+  const trustSelectors =
+    Boolean(trusted.groupId) &&
+    requestGroupMatchesTrusted({
+      requestGroupId: params.requested.groupId,
+      trustedGroupId: trusted.groupId,
+    });
+  return validated?.dropped
+    ? { groupId: undefined, groupChannel: undefined, groupSpace: undefined }
+    : {
+        groupId: trusted.groupId,
+        groupChannel:
+          trusted.groupChannel ?? (trustSelectors ? params.requested.groupChannel : undefined),
+        groupSpace:
+          trusted.groupSpace ?? (trustSelectors ? params.requested.groupSpace : undefined),
+      };
+}
+
+function requestGroupMatchesTrusted(params: {
   requestGroupId?: string;
   trustedGroupId?: string;
 }): boolean {
@@ -71,7 +108,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   cfg: OpenClawConfig;
   runId: string;
   childSessionKey: string;
-  childAgentId?: string;
+  childAgentId: string;
   task: string;
   requester?: PluginSubagentRequesterContext;
   pluginId?: string;
@@ -81,14 +118,18 @@ export async function registerPluginSubagentRunFromGateway(params: {
   const { childSessionKey } = params;
   const ownerSessionKey = resolveAgentMainSessionKey({
     cfg: params.cfg,
-    agentId: resolveAgentIdFromSessionKey(childSessionKey),
+    agentId: params.childAgentId,
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
-  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
-    await import("../../agents/subagents/registry/subagent-registry.js");
+  const {
+    adoptPausedSubagentRunForFollowUp,
+    adoptPausedSubagentRunIntoSuccessor,
+    registerSubagentRun,
+  } = await import("../../agents/subagents/registry/subagent-registry.js");
   const sessionEntry = params.assertCurrent();
   // Resume a yielded run with its original audience unless the follow-up names
-  // a requester and therefore owns a separate delivery.
+  // a requester and therefore owns a separate delivery. Recheck after sibling
+  // registration in case the pause publishes while admission is in flight.
   if (
     !params.requester &&
     (await adoptPausedSubagentRunForFollowUp({
@@ -121,4 +162,11 @@ export async function registerPluginSubagentRunFromGateway(params: {
     },
     { assertCurrent: params.assertCurrent },
   );
+  if (!params.requester) {
+    await adoptPausedSubagentRunIntoSuccessor({
+      childSessionKey,
+      childAgentId: params.childAgentId,
+      assertCurrent: params.assertCurrent,
+    });
+  }
 }

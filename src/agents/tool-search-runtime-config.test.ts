@@ -9,7 +9,7 @@ function createRuntimeConfigPair(localModelLean = true) {
   const sourceConfig = {
     agents: {
       defaults: { experimental: { localModelLean } },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
     plugins: {
       entries: {
@@ -97,7 +97,7 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
     const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const explicitConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       plugins: {
         entries: {
           "example-plugin": { config: { marker: "explicit" } },
@@ -111,7 +111,7 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
 
   it("uses the input config when no runtime snapshot exists", () => {
     const config = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { toolSearch: false },
     } as OpenClawConfig;
 

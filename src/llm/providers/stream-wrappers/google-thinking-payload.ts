@@ -1,5 +1,4 @@
 import {
-  isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "@openclaw/ai/internal/google-model-family";
@@ -32,7 +31,7 @@ export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
 }
 
 /**
- * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
+ * Maps legacy numeric/semantic thinking input onto Gemini 3 and 4's provider enum.
  * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
  */
 export function resolveGoogleGemini3ThinkingLevel(params: {
@@ -44,7 +43,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     return undefined;
   }
   const isPro = isGoogleGemini3ProModel(params.modelId);
-  if (!isPro && !isGoogleGemini3FlashModel(params.modelId)) {
+  if (!isGoogleGemini3ThinkingLevelModel(params.modelId)) {
     return undefined;
   }
   const minimalLevel =
@@ -156,16 +155,13 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.config,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
-  sanitizeGoogleThinkingConfigContainer({
-    container: payloadObj.generationConfig,
-    modelId: params.modelId,
-    thinkingLevel: params.thinkingLevel,
-  });
+  for (const field of ["config", "generationConfig"]) {
+    sanitizeGoogleThinkingConfigContainer({
+      container: payloadObj[field],
+      modelId: params.modelId,
+      thinkingLevel: params.thinkingLevel,
+    });
+  }
 }
 
 function sanitizeGoogleThinkingConfigContainer(params: {
@@ -228,7 +224,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
     delete thinkingConfigObj.thinkingBudget;
     if (params.thinkingLevel === "adaptive") {
-      // Gemini 3 adaptive mode means omit both controls so the provider chooses.
+      // Gemini 3 and 4 adaptive mode omits both controls so the provider chooses.
       delete thinkingConfigObj.thinkingLevel;
     } else {
       const mappedLevel = resolveGoogleGemini3ThinkingLevel({

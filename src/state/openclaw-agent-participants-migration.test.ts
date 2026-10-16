@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
 import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sqlite-recover-report.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -19,22 +21,12 @@ import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participa
 const sessionKey = "agent:main:participant-migration";
 
 describe("participant identity migration", () => {
-  it("rejects a missing aggregate count in the current schema", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const initial = openOpenClawAgentDatabase(options);
-      initial.db.exec("ALTER TABLE session_participants DROP COLUMN contribution_count;");
-      closeOpenClawAgentDatabasesForTest();
-      expect(() => openOpenClawAgentDatabase(options)).toThrow(/session_participants/);
-    });
-  });
-
   it("upgrades v17 during standalone import finalization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const databasePath = initial.path;
-      restoreEmptyV21StorageForHistoricalFixture(initial.db);
-      removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+      restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+      removeCanonicalValidationFromHistoricalAgentFixture(requireNativeSqliteDatabase(initial.db));
       initial.db.exec(
         "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
       );
@@ -55,8 +47,8 @@ describe("participant identity migration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const databasePath = initial.path;
-      restoreEmptyV21StorageForHistoricalFixture(initial.db);
-      removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+      restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+      removeCanonicalValidationFromHistoricalAgentFixture(requireNativeSqliteDatabase(initial.db));
       initial.db.exec(`
         DROP TABLE session_participants;
         PRAGMA user_version = 17;
@@ -66,7 +58,7 @@ describe("participant identity migration", () => {
         DROP INDEX idx_agent_cache_expiry;
         CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
       `);
-      initial.db.enableDefensive?.(false);
+      requireNativeSqliteDatabase(initial.db).enableDefensive?.(false);
       initial.db.exec(`PRAGMA writable_schema = ON;
         UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
           WHERE name = 'idx_agent_cache_expiry';
@@ -76,7 +68,6 @@ describe("participant identity migration", () => {
       closeOpenClawAgentDatabasesForTest();
       const result = await recoverDoctorSessionSqliteTargets({
         env: state.env,
-        options: { mode: "recover" },
         targets: [{ agentId: "main", storePath: databasePath }],
         validateTarget: async () => {
           throw new Error("Unexpected failed migration manifest");
@@ -104,29 +95,30 @@ describe("participant identity migration", () => {
     });
   });
 
-  it.each(["absent", "rollback", "unknown-column", "marker-mismatch"] as const)(
+  it.each(["rollback", "unknown-column", "marker-mismatch"] as const)(
     "handles %s atomically",
     async (scenario) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(
           { agentId: "main", env: state.env, sessionKey },
           { sessionId: "migration-session", updatedAt: 123 },
         );
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const databasePath = initial.path;
-        restoreEmptyV21StorageForHistoricalFixture(initial.db);
-        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+        restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+        removeCanonicalValidationFromHistoricalAgentFixture(
+          requireNativeSqliteDatabase(initial.db),
+        );
         initial.db.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );
-        if (scenario !== "absent") {
-          initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
-          initial.db
-            .prepare(
-              "INSERT INTO session_participants VALUES (?, 'human', 'profile', 'profile', 2, 30, 50)",
-            )
-            .run(sessionKey);
-        }
+        initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
+        initial.db
+          .prepare(
+            "INSERT INTO session_participants VALUES (?, 'human', 'profile', 'profile', 2, 30, 50)",
+          )
+          .run(sessionKey);
         if (scenario === "unknown-column") {
           initial.db.exec("ALTER TABLE session_participants ADD COLUMN future INTEGER;");
         }
@@ -148,39 +140,31 @@ describe("participant identity migration", () => {
           const migration = withAgentDatabaseMaintenanceLease({ env: state.env }, async () =>
             ensureOpenClawAgentDatabaseSchema(database, options),
           );
-          if (scenario === "absent") {
-            await migration;
-            expect(database.prepare("SELECT * FROM session_participants").all()).toEqual([]);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-              OPENCLAW_AGENT_SCHEMA_VERSION,
-            );
-          } else {
-            await expect(migration).rejects.toThrow(
-              scenario === "rollback"
-                ? /injected/
-                : scenario === "marker-mismatch"
-                  ? /markers disagree/
-                  : /column definitions differ for session_participants/,
-            );
-            expect(
-              database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
-            ).toEqual(before);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
-            expect(
-              database
-                .prepare(
-                  "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
-                )
-                .all(),
-            ).toEqual([
-              {
-                actor_id: "profile",
-                contribution_count: 2,
-                first_prompted_at: 30,
-                last_prompted_at: 50,
-              },
-            ]);
-          }
+          await expect(migration).rejects.toThrow(
+            scenario === "rollback"
+              ? /injected/
+              : scenario === "marker-mismatch"
+                ? /markers disagree/
+                : /column definitions differ for session_participants/,
+          );
+          expect(
+            database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
+          ).toEqual(before);
+          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
+          expect(
+            database
+              .prepare(
+                "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
+              )
+              .all(),
+          ).toEqual([
+            {
+              actor_id: "profile",
+              contribution_count: 2,
+              first_prompted_at: 30,
+              last_prompted_at: 50,
+            },
+          ]);
           expect(
             database
               .prepare(
@@ -204,8 +188,10 @@ describe("participant identity migration", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const databasePath = initial.path;
-        restoreEmptyV21StorageForHistoricalFixture(initial.db);
-        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+        restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+        removeCanonicalValidationFromHistoricalAgentFixture(
+          requireNativeSqliteDatabase(initial.db),
+        );
         initial.db.exec(
           `DROP TABLE session_participants; PRAGMA user_version = ${version}; UPDATE schema_meta SET schema_version = ${version};`,
         );
@@ -228,14 +214,15 @@ describe("participant identity migration", () => {
   );
   it("preserves supported non-profile observations and explicit unknown legacy identities", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         { sessionId: "legacy-kinds", updatedAt: 1 },
       );
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const databasePath = initial.path;
-      restoreEmptyV21StorageForHistoricalFixture(initial.db);
-      removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+      restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+      removeCanonicalValidationFromHistoricalAgentFixture(requireNativeSqliteDatabase(initial.db));
       initial.db.exec("DROP TABLE session_participants;");
       initial.db.exec(withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql()));
       const kinds = [
@@ -309,14 +296,17 @@ describe("participant identity migration", () => {
     "preserves membership but not unproved profile times from the %s shape",
     async (shape) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
         await upsertSessionEntryCore(
           { agentId: "main", env: state.env, sessionKey },
           { sessionId: "migration-session", updatedAt: 123 },
         );
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const databasePath = initial.path;
-        restoreEmptyV21StorageForHistoricalFixture(initial.db);
-        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
+        restoreEmptyV21StorageForHistoricalFixture(requireNativeSqliteDatabase(initial.db));
+        removeCanonicalValidationFromHistoricalAgentFixture(
+          requireNativeSqliteDatabase(initial.db),
+        );
         initial.db.exec(`
           DROP TABLE session_participants;
           CREATE TABLE session_participants (

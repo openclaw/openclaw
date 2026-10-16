@@ -13,10 +13,8 @@ import {
   isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
 } from "./client.js";
-import {
-  isCodexAppServerStartSelectionChangedError,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
@@ -96,6 +94,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
     threadId: string;
     turnId: string;
     timeoutMs?: number;
+    assertCurrent?: () => void;
   },
 ): Promise<boolean> {
   const timeoutMs =
@@ -105,8 +104,12 @@ export async function interruptCodexTurnAndWaitBestEffort(
   const requestParams = { threadId: params.threadId, turnId: params.turnId };
   let cancelWatch: (() => void) | undefined;
   try {
+    params.assertCurrent?.();
     if (!params.turnId) {
-      await client.request("turn/interrupt", requestParams, { timeoutMs });
+      await client.request("turn/interrupt", requestParams, {
+        timeoutMs,
+        assertCurrent: params.assertCurrent,
+      });
       return true;
     }
     const deadline = performance.now() + timeoutMs;
@@ -127,7 +130,9 @@ export async function interruptCodexTurnAndWaitBestEffort(
     }
     const requestInterrupt = async () => {
       try {
+        params.assertCurrent?.();
         await client.request("turn/interrupt", requestParams, {
+          assertCurrent: params.assertCurrent,
           timeoutMs: Math.max(1, deadline - performance.now()),
           // The client floors RPC timeouts at 100ms. The lifecycle signal owns
           // the exact remaining deadline and cancels RPCs when terminal wins.
@@ -219,6 +224,7 @@ export async function unsubscribeCodexThreadBestEffort(
     threadId: string;
     timeoutMs: number;
     assertCurrent?: () => void;
+    withCurrent?: (write: () => void) => Promise<void>;
   },
 ): Promise<boolean> {
   try {
@@ -227,6 +233,7 @@ export async function unsubscribeCodexThreadBestEffort(
       params.threadId,
       params.timeoutMs,
       params.assertCurrent,
+      params.withCurrent,
     );
     return true;
   } catch (error) {
@@ -244,19 +251,19 @@ export function shouldRetireCodexStartupClient(
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
   signal: AbortSignal,
 ): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   if (
     signal.aborted ||
-    isCodexAppServerStartupError(error) ||
-    isCodexAppServerRequestTimeoutError(error)
+    isCodexAppServerStartupError(cause) ||
+    isCodexAppServerRequestTimeoutError(cause)
   ) {
     return true;
   }
   // Model-independent preflights preserve healthy conversations. A handoff with
   // an uncertain native write owns its retirement at the resume boundary.
   return (
-    !isCodexAppServerStartSelectionChangedError(error) &&
-    !isCodexAppServerOverloadError(error) &&
-    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
-    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+    !isCodexAppServerOverloadError(cause) &&
+    !(cause instanceof AgentHarnessPreflightError && cause.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(cause) || !spawnedBy)
   );
 }

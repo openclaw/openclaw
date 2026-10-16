@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -90,11 +94,16 @@ suite.define(() => {
       await gateway.setOnline(true);
       await current.getByText("No active sessions.", { exact: true }).waitFor();
       expect(await current.locator(".activity-current-work__row").count()).toBe(0);
+      await page.clock.install();
+      await pauseVirtualClock(page);
       await gateway.setMethodResponse("sessions.list", {
         __mockError: { code: "UNAVAILABLE", message: "Snapshot unavailable" },
       });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
+      // Cross the full refresh window and deliver its nested mock response timer.
+      await page.clock.runFor(5_001);
       await current.getByText("Could not load active sessions.", { exact: true }).waitFor();
+      await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();
       await current.getByText("No active sessions.", { exact: true }).waitFor();
@@ -166,7 +175,6 @@ suite.define(() => {
       await current.getByText("Loading active sessions…", { exact: true }).waitFor();
       const currentRequests = (await gateway.getRequests("sessions.list", { activeOnly: true }))
         .length;
-      await gateway.deferNext("sessions.list", { activeOnly: true });
       await gateway.emitGatewayEvent("sessions.changed", {
         key: "global",
         agentId: "main",
@@ -177,13 +185,11 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("sessions.list", listing(activeRows));
       await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(5);
-      await gateway.waitForRequest("sessions.list", {
-        after: currentRequests,
-        match: { activeOnly: true },
-      });
-      await expect.poll(() => current.getAttribute("aria-busy")).toBe("true");
-      await gateway.resolveDeferred("sessions.list");
+      // The completion fully reconciles this bounded snapshot; no catch-up RPC is needed.
       await expect.poll(() => current.getAttribute("aria-busy")).toBe("false");
+      expect(await gateway.getRequests("sessions.list", { activeOnly: true })).toHaveLength(
+        currentRequests,
+      );
       const work = current.locator('[data-session-key="global"][data-agent-id="work"]');
       await work.getByText("work global work", { exact: true }).waitFor();
       expect(await work.getAttribute("href")).toBe("/chat/work");

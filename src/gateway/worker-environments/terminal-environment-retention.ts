@@ -1,12 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { WORKER_ENVIRONMENT_TERMINAL_STATES } from "./state.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type {
   WorkerEnvironmentPruneObservation,
   WorkerEnvironmentPruneReadInput,
@@ -25,7 +26,7 @@ function normalizeLimit(value: number): number {
 }
 
 export function readTerminalWorkerEnvironmentPrunePage(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorkerEnvironmentPruneReadInput,
 ) {
   if (!Number.isSafeInteger(params.nowMs) || params.nowMs < 0) {
@@ -73,48 +74,46 @@ export function readTerminalWorkerEnvironmentPrunePage(
   };
 }
 
-export function pruneObservedTerminalWorkerEnvironments(params: {
-  write: <T>(operation: (db: DatabaseSync) => T) => T;
-  observed: readonly WorkerEnvironmentPruneObservation[];
-}): number {
-  if (params.observed.length === 0) {
+export function pruneObservedTerminalWorkerEnvironments(
+  db: EngineConnection,
+  observations: readonly WorkerEnvironmentPruneObservation[],
+): number {
+  if (observations.length === 0) {
     return 0;
   }
-  normalizeLimit(params.observed.length);
-  return params.write((db) => {
-    const currentQuery = getNodeSqliteKysely<RetentionDatabase>(db);
-    let deleted = 0;
-    for (const observed of params.observed) {
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        currentQuery
-          .selectFrom("worker_environments")
-          .selectAll()
-          .where("environment_id", "=", observed.environment_id)
-          .where((eb) =>
-            eb.not(
-              eb.exists(
-                eb
-                  .selectFrom("worker_session_placements")
-                  .select("session_id")
-                  .whereRef("environment_id", "=", "worker_environments.environment_id"),
-              ),
+  normalizeLimit(observations.length);
+  const currentQuery = getNodeSqliteKysely<RetentionDatabase>(db);
+  let deleted = 0;
+  for (const observed of observations) {
+    const current = executeSqliteQueryTakeFirstSync(
+      db,
+      currentQuery
+        .selectFrom("worker_environments")
+        .selectAll()
+        .where("environment_id", "=", observed.environment_id)
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("worker_session_placements")
+                .select("session_id")
+                .whereRef("environment_id", "=", "worker_environments.environment_id"),
             ),
           ),
+        ),
+    );
+    // Policy may have re-entered the store. Revalidate every observed fact,
+    // including the profile, activation and terminal age, under the write lock.
+    // Worker transport drops the SQLite driver's null prototype; all column values stay exact.
+    if (current && isDeepStrictEqual({ ...current }, { ...observed })) {
+      const result = executeWorkerEnvironmentWrite(
+        db,
+        currentQuery
+          .deleteFrom("worker_environments")
+          .where("environment_id", "=", observed.environment_id),
       );
-      // Policy may have re-entered the store. Revalidate every observed fact,
-      // including the profile, activation and terminal age, under the write lock.
-      // Worker transport drops the SQLite driver's null prototype; all column values stay exact.
-      if (current && isDeepStrictEqual({ ...current }, { ...observed })) {
-        const result = executeSqliteQuerySync(
-          db,
-          currentQuery
-            .deleteFrom("worker_environments")
-            .where("environment_id", "=", observed.environment_id),
-        );
-        deleted += Number(result.numAffectedRows ?? 0n);
-      }
+      deleted += Number(result.numAffectedRows ?? 0n);
     }
-    return deleted;
-  });
+  }
+  return deleted;
 }

@@ -146,7 +146,7 @@ describe("host-owned workspace access", () => {
     );
   });
 
-  it("leaves unconfigured workspaces local and declared workspaces unavailable until start", () => {
+  it("leaves unconfigured workspaces local and declared workspaces unavailable until start", async () => {
     const root = workspace();
     expect(getAgentWorkspaceAccess(root)).toBeUndefined();
     declareAgentWorkspaceAccess(root);
@@ -165,6 +165,13 @@ describe("host-owned workspace access", () => {
     expect(() => getAgentWorkspaceAccess(root)).toThrow(WorkspaceAccessUnavailableError);
     expect(getAgentWorkspaceAccess(root, "memoryFiles")).toBeUndefined();
     expect(getAgentWorkspaceAccess(root, "loadSkills")).toBeUndefined();
+    await expect(
+      prepareAgentWorkspaceAttachments({
+        workspaceDir: root,
+        turn: { timeoutMs: 1_000, media: [{ path: "media://inbound/report.pdf" }] },
+        assertCurrent() {},
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects duplicate ownership and revokes retained methods without affecting a replacement", async () => {
@@ -255,37 +262,40 @@ describe("host-owned workspace access", () => {
     expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
   });
 
-  it("does not report exclusive creation success after its host is revoked", async () => {
-    const root = workspace();
-    const host = provider();
-    host.bridge.createFileExclusive = vi.fn(async () => {
+  it.each(["exclusive creation", "source metadata"])(
+    "does not publish %s after its host is revoked",
+    async (operation) => {
+      const root = workspace();
+      const host = provider();
+      const pending = createDeferredCore();
+      if (operation === "exclusive creation") {
+        host.bridge.createFileExclusive = vi.fn(async () => {
+          await pending.promise;
+          return "created" as const;
+        });
+      } else {
+        host.bridge.readFileWithSource = vi.fn(async () => {
+          await pending.promise;
+          return { data: Buffer.from("late result"), canonicalPath: "/remote/AGENTS.md" };
+        });
+      }
+      const release = bindWorkspace(root, host);
+      const bridge = getAgentWorkspaceAccess(root)!.bridge;
+      const result =
+        operation === "exclusive creation"
+          ? bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "new memory" })
+          : bridge.readFileWithSource!({ filePath: "AGENTS.md" });
+      const rejected = expect(result).rejects.toThrow(WorkspaceAccessUnavailableError);
       release();
-      return "created" as const;
-    });
-    const release = bindWorkspace(root, host);
-    await expect(
-      getAgentWorkspaceAccess(root)!.bridge.createFileExclusive!({
-        filePath: "MEMORY.md",
-        data: "new memory",
-      }),
-    ).rejects.toThrow(WorkspaceAccessUnavailableError);
-    expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not return source metadata after access is revoked during a read", async () => {
-    const root = workspace();
-    const host = provider();
-    const pending = createDeferredCore<{ data: Buffer; canonicalPath: string }>();
-    host.bridge.readFileWithSource = vi.fn(() => pending.promise);
-    const release = bindWorkspace(root, host);
-    const read = getAgentWorkspaceAccess(root)!.bridge.readFileWithSource!({
-      filePath: "AGENTS.md",
-    });
-    const rejected = expect(read).rejects.toThrow(WorkspaceAccessUnavailableError);
-    release();
-    pending.resolve({ data: Buffer.from("late result"), canonicalPath: "/remote/AGENTS.md" });
-    await rejected;
-  });
+      pending.resolve();
+      await rejected;
+      expect(
+        operation === "exclusive creation"
+          ? host.bridge.createFileExclusive
+          : host.bridge.readFileWithSource,
+      ).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("workspace attachment preparation", () => {
@@ -413,67 +423,32 @@ describe("workspace attachment preparation", () => {
     },
   );
 
-  it("preserves bridge-only input handling after stop", async () => {
-    const root = workspace();
-    const release = bindWorkspace(root, provider());
-    release();
-    for (const media of [undefined, [], [{ kind: "image" as const }]]) {
+  it.each(["absent", "bridge-only", "empty-note", "blank-note"])(
+    "rejects required attachments with provider state %s",
+    async (host) => {
+      const root = workspace();
+      if (host !== "absent") {
+        bindWorkspace(root, {
+          ...provider(),
+          ...(host === "empty-note" || host === "blank-note"
+            ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
+            : {}),
+        });
+      }
       await expect(
         prepareAgentWorkspaceAttachments({
           workspaceDir: root,
-          turn: { timeoutMs: 1_000, media },
+          turn,
           assertCurrent: () => {},
+          requirePreparation: true,
         }),
-      ).resolves.toBeUndefined();
-    }
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: root,
-        turn,
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    { input: "declared", host: "absent" },
-    { input: "deferred", host: "absent" },
-    { input: "declared", host: "bridge-only" },
-    { input: "declared", host: "empty-note" },
-    { input: "declared", host: "blank-note" },
-  ])("rejects required $input attachments with provider state $host", async ({ input, host }) => {
-    const root = workspace();
-    if (host !== "absent") {
-      bindWorkspace(root, {
-        ...provider(),
-        ...(host === "empty-note" || host === "blank-note"
-          ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
-          : {}),
-      });
-    }
-    const attachmentTurn =
-      input === "deferred"
-        ? {
-            timeoutMs: turn.timeoutMs,
-            userTurnTranscriptRecorder: createDeferredRecorder({
-              text: "Read the attachment",
-              media: turn.media,
-            }),
-          }
-        : turn;
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: root,
-        turn: attachmentTurn,
-        assertCurrent: () => {},
-        requirePreparation: true,
-      }),
-    ).rejects.toThrow(
-      host === "empty-note" || host === "blank-note"
-        ? "Workspace attachment 1 could not be prepared; ensure every attachment is available to the registered attachment provider before retrying"
-        : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
-    );
-  });
+      ).rejects.toThrow(
+        host === "empty-note" || host === "blank-note"
+          ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
+          : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+      );
+    },
+  );
 
   it.each([false, true])(
     "preserves deferred attachment notes with required preparation %s",
@@ -510,17 +485,32 @@ describe("workspace attachment preparation", () => {
     },
   );
 
-  it("allows a text-only recorder when attachment preparation is required without a provider", async () => {
-    const recorder = createDeferredRecorder({ text: "Text-only request" });
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: workspace(),
-        turn: { timeoutMs: turn.timeoutMs, userTurnTranscriptRecorder: recorder },
-        assertCurrent: () => {},
-        requirePreparation: true,
-      }),
-    ).resolves.toBeUndefined();
-  });
+  it.each(["direct", "deferred"])(
+    "needs no attachment provider for %s text-only input",
+    async (input) => {
+      const root = workspace();
+      const prepare = vi.fn(async () => "unused");
+      if (input === "direct") {
+        bindWorkspace(root, { ...provider(), prepareTurnAttachments: prepare });
+      }
+      await expect(
+        prepareAgentWorkspaceAttachments({
+          workspaceDir: root,
+          turn: {
+            timeoutMs: turn.timeoutMs,
+            ...(input === "deferred"
+              ? {
+                  userTurnTranscriptRecorder: createDeferredRecorder({ text: "Text-only request" }),
+                }
+              : {}),
+          },
+          assertCurrent: () => {},
+          requirePreparation: input === "deferred",
+        }),
+      ).resolves.toBeUndefined();
+      expect(prepare).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a replacement workspace while resolving required attachment facts", async () => {
     const root = workspace();
@@ -564,78 +554,53 @@ describe("workspace attachment preparation", () => {
     },
   );
 
-  it("does not call an attachment provider for plain text", async () => {
-    const root = workspace();
-    const prepare = vi.fn(async () => "unused");
-    bindWorkspace(root, {
-      ...provider(),
-      prepareTurnAttachments: prepare,
-    });
-    await prepareAgentWorkspaceAttachments({
-      workspaceDir: root,
-      turn: { timeoutMs: 1_000 },
-      assertCurrent: () => {},
-    });
-    expect(prepare).not.toHaveBeenCalled();
-  });
-
-  it.each(["before", "during"])(
-    "fences attachment preparation revoked %s dispatch",
-    async (when) => {
-      const root = workspace();
-      const host = provider();
-      let assertUploadCurrent!: () => void;
-      host.prepareTurnAttachments = vi.fn<
-        NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>
-      >(async (_turn, assertCurrent) => {
-        assertUploadCurrent = assertCurrent;
-        release();
-        expect(assertCurrent).toThrow("stopped or not ready");
-        return "obsolete note";
-      });
-      const release = bindWorkspace(root, host);
-      const retained = getAgentWorkspaceAccess(root)!.prepareTurnAttachments!;
-      if (when === "before") {
-        release();
-      }
-      await expect(retained(turn, () => {})).rejects.toThrow("stopped or not ready");
-      expect(host.prepareTurnAttachments).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
-      if (when === "during") {
-        expect(assertUploadCurrent).toThrow("stopped or not ready");
-      }
-    },
-  );
-
-  it.each(["caller", "abort"])("fences %s closure during attachment transfer", async (closure) => {
+  it.each([
+    { closure: "binding", when: "before", error: "stopped or not ready" },
+    { closure: "binding", when: "during", error: "stopped or not ready" },
+    { closure: "caller", when: "during", error: "caller closed" },
+    { closure: "abort", when: "during", error: "aborted attachment" },
+  ])("fences $closure closure $when attachment dispatch", async ({ closure, when, error }) => {
     const root = workspace();
     const controller = new AbortController();
     let active = true;
-    const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-      async (_turn, assertCurrent) => {
-        if (closure === "caller") {
-          active = false;
-        } else {
-          controller.abort(new Error("aborted attachment"));
-        }
-        expect(assertCurrent).toThrow();
-        return "obsolete note";
-      },
-    );
-    bindWorkspace(root, {
-      ...provider(),
-      prepareTurnAttachments: prepare,
+    let assertUploadCurrent!: () => void;
+    const host = provider();
+    host.prepareTurnAttachments = vi.fn<
+      NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>
+    >(async (_turn, assertCurrent) => {
+      assertUploadCurrent = assertCurrent;
+      if (closure === "binding") {
+        release();
+      } else if (closure === "caller") {
+        active = false;
+      } else {
+        controller.abort(new Error(error));
+      }
+      expect(assertCurrent).toThrow(error);
+      return "obsolete note";
     });
-    await expect(
-      prepareAgentWorkspaceAttachments({
-        workspaceDir: root,
-        turn: { ...turn, abortSignal: controller.signal },
-        assertCurrent: () => {
-          if (!active) {
-            throw new Error("caller closed");
-          }
-        },
-      }),
-    ).rejects.toThrow(closure === "caller" ? "caller closed" : "aborted attachment");
+    const release = bindWorkspace(root, host);
+    const retained = getAgentWorkspaceAccess(root)!.prepareTurnAttachments!;
+    if (when === "before") {
+      release();
+    }
+    const preparation =
+      closure === "binding"
+        ? retained(turn, () => {})
+        : prepareAgentWorkspaceAttachments({
+            workspaceDir: root,
+            turn: { ...turn, abortSignal: controller.signal },
+            assertCurrent: () => {
+              if (!active) {
+                throw new Error("caller closed");
+              }
+            },
+          });
+    await expect(preparation).rejects.toThrow(error);
+    expect(host.prepareTurnAttachments).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+    if (when === "during") {
+      expect(assertUploadCurrent).toThrow(error);
+    }
   });
 });
 

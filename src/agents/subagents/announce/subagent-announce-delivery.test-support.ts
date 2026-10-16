@@ -69,8 +69,6 @@ export function registerDescendantWakeCurrencyTests({
           return !accepted || currency === "current";
         },
         isChildSessionEffectsAllowed: () => true,
-        hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
-          typeof entry === "object" && entry !== null,
         resolveGatewayContext,
         signal,
         deps: {

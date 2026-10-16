@@ -21,7 +21,6 @@ let pluginFixtures: typeof import("../../../test-utils/channel-plugins.js");
 let config: Record<string, unknown>;
 let bindingService: BindingService;
 let routable = true;
-let resolveTarget: NonNullable<LoadOptions["resolveConversationDeliveryTarget"]>;
 const caller = {
   agentSessionKey: "agent:main:main",
   agentChannel: "matrix",
@@ -55,7 +54,6 @@ describe("spawnSubagentDirect thread binding", () => {
       getRuntimeConfig: () => config,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       getSessionBindingService: () => bindingService,
-      resolveConversationDeliveryTarget: (params) => resolveTarget(params),
     }));
     pluginRuntime = await import("../../../plugins/runtime.js");
     pluginFixtures = await import("../../../test-utils/channel-plugins.js");
@@ -68,7 +66,7 @@ describe("spawnSubagentDirect thread binding", () => {
     installAcceptedSubagentGatewayMock(callGatewayMock);
     installSessionStoreCaptureMock(updateSessionStoreMock);
     config = createSubagentSpawnTestConfig(os.tmpdir(), {
-      agents: { list: [{ id: "main", workspace: "/tmp/workspace-main" }] },
+      agents: { entries: { main: { workspace: "/tmp/workspace-main" } } },
       session: { threadBindings: { defaultSpawnContext: "isolated" } },
     });
     bindingService = makeBindingService(async (request) => ({
@@ -77,9 +75,6 @@ describe("spawnSubagentDirect thread binding", () => {
       status: "active",
       conversation: request.conversation,
     }));
-    resolveTarget = ({ conversationId }) => ({
-      to: conversationId ? `channel:${String(conversationId)}` : undefined,
-    });
     pluginRuntime.setActivePluginRegistry(
       pluginFixtures.createTestRegistry([
         {
@@ -164,16 +159,14 @@ describe("spawnSubagentDirect thread binding", () => {
       bindingService = makeBindingService(bind, () =>
         generic ? [{ status: "active", conversation }] : [],
       );
-      if (generic) {
-        resolveTarget = () => ({ to: "channel:collab_dm_1" });
-      } else {
+      if (!generic) {
         config = createSubagentSpawnTestConfig(os.tmpdir(), {
           agents: {
             defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["bot-alpha"] } },
-            list: [
-              { id: "main", workspace: "/tmp/workspace-main" },
-              { id: "bot-alpha", workspace: "/tmp/workspace-bot-alpha" },
-            ],
+            entries: {
+              main: { workspace: "/tmp/workspace-main" },
+              "bot-alpha": { workspace: "/tmp/workspace-bot-alpha" },
+            },
           },
           bindings: [
             {
@@ -251,5 +244,56 @@ describe("spawnSubagentDirect thread binding", () => {
         }),
       }),
     );
+  });
+
+  it.each([undefined, "t-123"])(
+    "binds a run-bound CLI spawn from the current channel (thread=%s)",
+    async (currentThreadTs) => {
+      const bind = vi.fn<NonNullable<BindingService["bind"]>>(bindingService.bind);
+      bindingService = makeBindingService(bind);
+      const result = await spawnSubagentDirect(
+        { task: "CLI turn", thread: true, mode: "session", context: "isolated" },
+        {
+          agentSessionKey: "agent:main:main",
+          agentChannel: "matrix",
+          agentAccountId: "bot-beta",
+          currentChannelId: "!room:example.org",
+          currentThreadTs,
+          currentConversationOrigin: "run-bound-grant",
+        },
+      );
+      expect(result.status).toBe("accepted");
+      expect(bind).toHaveBeenCalledOnce();
+      expect(bind.mock.calls[0]?.[0].conversation).toMatchObject({
+        channel: "matrix",
+        accountId: "bot-beta",
+        conversationId: currentThreadTs ?? "!room:example.org",
+        ...(currentThreadTs ? { parentConversationId: "!room:example.org" } : {}),
+      });
+      expect(registered()).toMatchObject({
+        requesterOrigin: { to: "!room:example.org" },
+      });
+    },
+  );
+
+  it("rejects caller-token conversation headers before binding or registering a run", async () => {
+    const bind = vi.fn<NonNullable<BindingService["bind"]>>(bindingService.bind);
+    bindingService = makeBindingService(bind);
+    const result = await spawnSubagentDirect(
+      { task: "loopback turn", thread: true, mode: "session", context: "isolated" },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        currentChannelId: "!caller-selected-room",
+        currentThreadTs: "caller-thread",
+        currentConversationOrigin: "caller-token",
+      },
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Could not resolve a matrix conversation"),
+    });
+    expect(bind).not.toHaveBeenCalled();
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
   });
 });

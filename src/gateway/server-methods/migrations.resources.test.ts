@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as loader from "../../plugins/loader.js";
 import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
@@ -25,11 +26,12 @@ describe("memory migration registration resources", () => {
     "replays a terminal %s after native resources close without applying again",
     async (mode) => {
       const fixture = createMigrationResourceFixture();
+      const config: OpenClawConfig = fixture.config;
       const dedupe: GatewayRequestContext["dedupe"] = new Map();
       const logGateway = createSubsystemLogger("migration-native-test");
       const warn = vi.spyOn(logGateway, "warn").mockImplementation(() => {});
       const context = {
-        getRuntimeConfig: () => fixture.config,
+        getRuntimeConfig: () => config,
         dedupe,
         logGateway,
       } as GatewayRequestContext;
@@ -141,8 +143,9 @@ describe("memory migration registration resources", () => {
   it("joins fresh planning before releasing its database when a raw active provider getter rejects", async () => {
     const active = createMigrationResourceFixture();
     const fresh = createMigrationResourceFixture({ pausePlan: true });
+    const config: OpenClawConfig = fresh.config;
     const respond = vi.fn<RespondFn>();
-    const context = { getRuntimeConfig: () => fresh.config } as GatewayRequestContext;
+    const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
     try {
       await withEnvAsync(
         {
@@ -211,10 +214,11 @@ describe("memory migration registration resources", () => {
 
   it("reserves same-key requests before a real cold acquisition resolves", async () => {
     const fixture = createMigrationResourceFixture();
+    const config: OpenClawConfig = fixture.config;
     const acquired = createDeferredCore();
     const releaseAcquisition = createDeferredCore();
     const dedupe: GatewayRequestContext["dedupe"] = new Map();
-    const context = { getRuntimeConfig: () => fixture.config, dedupe } as GatewayRequestContext;
+    const context = { getRuntimeConfig: () => config, dedupe } as GatewayRequestContext;
     const invoke = (method: keyof typeof migrationsHandlers, params: Record<string, unknown>) => {
       const frames: string[] = [];
       const respond = vi.fn<RespondFn>((ok, payload, error, meta) => {

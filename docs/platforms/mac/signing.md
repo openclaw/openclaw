@@ -10,7 +10,7 @@ title: "macOS signing"
 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) builds a staged app, calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh), and verifies the signed runtime before replacing `dist/OpenClaw.app`. macOS ties TCC permissions to the bundle ID and code signature. Keep both stable across rebuilds, and keep the app at a fixed path. macOS then keeps its TCC grants (notifications, accessibility, screen recording, mic, speech).
 
 - Debug bundle identifier defaults to `ai.openclaw.mac.debug` (override with `BUNDLE_ID=...`).
-- Build-time Node: `>=24.16.0 <25` or `>=26.1.0` (repo `package.json` `engines`). The app bundles the pinned OpenClaw Bun fork instead of Node, plus the full OpenClaw package and Control UI (`pnpm ui:build`).
+- Build-time Node: `>=24.16.0 <25` or `>=26.1.0` (repo `package.json` `engines`). The app bundles the pinned OpenClaw Bun fork instead of Node, plus the OpenClaw package and Control UI (`pnpm ui:build`).
 - Requires a real signing identity by default. The codesign script exits with an error if it finds no identity and `ALLOW_ADHOC_SIGNING` is not set. Ad-hoc signing (`SIGN_IDENTITY="-"`) is explicit opt-in and does not persist TCC permissions across rebuilds. See [macOS permissions](/platforms/mac/permissions).
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity. The order is Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
@@ -29,6 +29,26 @@ The signer seals App and Sparkle bundle owners once, after their nested code. A 
 
 Sign a private staged copy that no other process modifies. The signer rejects hardlinked files and special files such as FIFOs before attribute cleanup. Copy or rebuild the bundle if this check fails. Attribute cleanup and signing use macOS `/usr/bin/sandbox-exec`. It restricts filesystem writes to the fixed app and temporary signing directories. Extra inherited file descriptors are closed. Signing fails if this mutation boundary cannot start. There is no unrestricted fallback.
 
+Before signing, release and development builds remove TypeScript declarations,
+declaration maps, and audited dependency source/test/example files through
+`scripts/lib/desktop-runtime-prune.mjs`. All Markdown documentation, licenses,
+package manifests, executable source maps, native addons, and plugin-owned trees
+remain available. Dependency source pruning is version-specific; new versions
+keep their sources until audited. Tauri uses the same pruning owner when staging
+its bundled OpenClaw package, before hashing and encoding resources.
+
+For a [standalone executable](/install/standalone#macos-signing), use the
+mode-specific `macos.entitlements` map in its `manifest.json` instead of applying
+the separate Bun runtime's entitlement list. Sign and verify the complete
+executable-plus-sidecar output, then refresh the executable hash in the manifest.
+
+## Permission evidence
+
+Platform claims require real-device evidence. macOS permission proof requires a
+stable, signed app: keep the bundle ID, signing identity, and app path stable
+across rebuilds. An ad-hoc or changing signature does not qualify TCC permission
+persistence proof.
+
 ## Usage
 
 ```bash
@@ -42,8 +62,9 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh                         
 
 Runtime packaging honors the existing `OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS`,
 `OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS`, and
-`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Each defaults to five
-minutes; set a positive integer in milliseconds when packaging needs more time.
+`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Inventory and
+tarball checks default to five minutes; package creation defaults to fifteen
+minutes. Set a positive integer in milliseconds when packaging needs more time.
 These budgets pass through the runtime's isolated environment without exposing
 operator credentials or state. The tarball-check budget covers the whole check,
 including extraction and validation.

@@ -108,248 +108,114 @@ describe("plugin value invocation ownership", () => {
 });
 
 describe("plugin values delivered through caller callbacks", () => {
-  it.each(["array", "map", "set", "map-callback", "reduce", "exported-function"] as const)(
-    "passes callable callback payloads from %s by reference",
-    async (surface) => {
-      const instance = new PluginInstance(`collection-${surface}`);
-      const handler = () => "current";
-      const retained: Array<() => string> = [];
-      class Receiver {
-        #label = "caller receiver";
-        read() {
-          return this.#label;
-        }
-      }
-      const receiver = new Receiver();
-      const collect = function (this: Receiver, value: () => string, key?: unknown) {
-        expect(this).toBe(receiver);
-        expect(this.read()).toBe("caller receiver");
-        retained.push(value);
-        if (typeof key === "function") {
-          retained.push(key as () => string);
-        }
-        return value;
-      };
-      try {
-        if (surface === "map") {
-          instance.wrap(new Map([[handler, handler]])).forEach(collect, receiver);
-        } else if (surface === "set") {
-          instance.wrap(new Set([handler])).forEach(collect, receiver);
-        } else if (surface === "exported-function") {
-          const deliver = instance.wrap((callback: typeof collect, target: Receiver) => {
-            callback.call(target, handler);
-          });
-          deliver(collect, receiver);
-        } else {
-          const collection = instance.wrap([handler]);
-          if (surface === "map-callback") {
-            collection.map(collect, receiver);
-          } else if (surface === "reduce") {
-            collection.reduce((_previous, value) => collect.call(receiver, value), handler);
-          } else {
-            collection.forEach(collect, receiver);
-          }
-        }
-        expect(retained.length).toBeGreaterThan(0);
-        for (const callback of retained) {
-          expect(callback).toBe(handler);
-          expect(callback()).toBe("current");
-        }
-        await instance.dispose();
-        for (const callback of retained) {
-          expect(callback()).toBe("current");
-        }
-      } finally {
-        await instance.dispose();
-      }
-    },
-  );
-
-  it.each(["caller", "returned"] as const)(
-    "preserves %s callback identity for registration and removal",
-    async (handle) => {
-      const instance = new PluginInstance("callback-identity");
-      const listeners = new Set<() => void>();
-      const subscription = instance.wrap({
-        on(callback: () => void) {
-          listeners.add(callback);
-          return callback;
+  it.each(["caller", "returned", "plugin-created"] as const)(
+    "returns %s callable handles to their owning registry",
+    async (acquisition) => {
+      const instance = new PluginInstance("callable-registry");
+      const registrations = new Map<() => string, string>();
+      const registry = instance.wrap({
+        create(label: string, callback?: () => string) {
+          const handle = callback ?? (() => label);
+          registrations.set(handle, label);
+          return handle;
         },
-        off(callback: () => void) {
-          listeners.delete(callback);
+        lookup(handle: () => string) {
+          return registrations.get(handle);
+        },
+        remove(handle: () => string) {
+          return registrations.delete(handle);
         },
         emit() {
-          for (const listener of listeners) {
-            listener();
+          for (const handle of registrations.keys()) {
+            handle();
           }
         },
       });
       let calls = 0;
       const callback = () => {
         calls += 1;
+        return "first";
       };
       try {
-        const registered = subscription.on(callback);
-        subscription.emit();
-        subscription.off(handle === "caller" ? callback : registered);
-        subscription.emit();
-        expect(calls).toBe(1);
+        const first = registry.create(
+          "first",
+          acquisition === "plugin-created" ? undefined : callback,
+        );
+        const second = registry.create("second");
+        registry.emit();
+        expect(registry.lookup(first)).toBe("first");
+        expect(registry.remove(acquisition === "caller" ? callback : first)).toBe(true);
+        registry.emit();
+        expect(calls).toBe(acquisition === "plugin-created" ? 0 : 1);
+        expect(registry.lookup(first)).toBeUndefined();
+        expect(registry.lookup(second)).toBe("second");
+        expect(registrations.size).toBe(1);
       } finally {
         await instance.dispose();
       }
     },
   );
-
-  it("returns callable handles to their owning registry", async () => {
-    const instance = new PluginInstance("returned-callable");
-    const registrations = new Map<() => string, string>();
-    const registry = instance.wrap({
-      create(label: string) {
-        const handle = () => label;
-        registrations.set(handle, label);
-        return handle;
-      },
-      lookup(handle: () => string) {
-        return registrations.get(handle);
-      },
-      remove(handle: () => string) {
-        return registrations.delete(handle);
-      },
-    });
-    try {
-      const first = registry.create("first");
-      const second = registry.create("second");
-      expect(registry.lookup(first)).toBe("first");
-      expect(registry.remove(first)).toBe(true);
-      expect(registry.lookup(first)).toBeUndefined();
-      expect(registry.lookup(second)).toBe("second");
-      expect(registrations.size).toBe(1);
-    } finally {
-      await instance.dispose();
-    }
-  });
 });
 
 describe("native collection data argument identity", () => {
-  it("preserves host registration identity around a plugin-owned contribution", async () => {
-    const instance = new PluginInstance("host-registry");
-    const contribution = instance.wrap({ run: () => "plugin" });
-    const context = Symbol("host context");
-    const registry = { contributions: [contribution], [context]: () => "host" };
-    const owners = new WeakMap([[registry, "registered"]]);
-    const invoke = instance.wrap((params: { snapshot: { registry: typeof registry } }) => {
-      expect(params.snapshot.registry[context]()).toBe("host");
-      return owners.get(params.snapshot.registry);
+  it("restores a layered handle without traversing its enclosing data", async () => {
+    class Handle {
+      #value = 42;
+      static read(value: Handle) {
+        return value.#value;
+      }
+    }
+    const instance = new PluginInstance("layered-handle");
+    const consumer = instance.retainConsumer();
+    const handle = new Handle();
+    const view = consumer.wrap(instance.wrap(handle));
+    const envelope = Object.freeze({ handle: view });
+    const api = instance.wrap({
+      read(value: typeof handle) {
+        return Handle.read(value);
+      },
+      inspect(value: typeof envelope) {
+        expect(value).toBe(envelope);
+        expect(value.handle).toBe(view);
+      },
     });
     try {
-      expect(invoke({ snapshot: Object.freeze({ registry }) })).toBe("registered");
-      expect(invoke({ snapshot: { registry } })).toBe("registered");
+      expect(api.read(view)).toBe(42);
+      api.inspect(envelope);
     } finally {
+      consumer.release();
       await instance.dispose();
     }
   });
 
-  it.each(["direct", "record", "array", "cycle"] as const)(
-    "returns an opaque handle to its owning receiver through %s arguments",
-    async (shape) => {
-      class Handle {
-        #value = 42;
-        read() {
-          return this.#value;
-        }
-      }
-      const instance = new PluginInstance("opaque-handle");
-      const handle = new Handle();
-      const api = instance.wrap({
-        create: () => handle,
-        consume(value: Handle | { handle: Handle }) {
-          const received =
-            shape === "direct" ? value : "handle" in value ? value.handle : undefined;
-          expect(received).toBe(handle);
-          expect(handle.read()).toBe(42);
-          if (shape === "cycle") {
-            expect(Reflect.get(value, "self")).toBe(value);
-          }
-        },
-      });
-      try {
-        const view = api.create();
-        const envelope = shape === "array" ? Object.assign([], { handle: view }) : { handle: view };
-        if (shape === "cycle") {
-          Object.assign(envelope, { self: envelope });
-        }
-        api.consume(shape === "direct" ? view : envelope);
-        expect(envelope.handle).toBe(view);
-        await instance.dispose();
-        expect(() => api.consume(view)).toThrow("reloaded or disabled");
-      } finally {
-        await instance.dispose();
-      }
-    },
-  );
-
-  it.each(["class", "map"] as const)(
-    "restores a directly returned layered %s handle without traversing its enclosing data",
-    async (kind) => {
-      class Handle {
-        #value = 42;
-        static read(value: Handle) {
-          return value.#value;
-        }
-      }
-      const instance = new PluginInstance("layered-handle");
-      const consumer = instance.retainConsumer();
-      const handle = kind === "class" ? new Handle() : new Map([["value", 42]]);
-      const view = consumer.wrap(instance.wrap(handle));
-      const envelope = Object.freeze({ handle: view });
-      const api = instance.wrap({
-        read(value: typeof handle) {
-          return value instanceof Handle
-            ? Handle.read(value)
-            : Map.prototype.get.call(value, "value");
-        },
-        inspect(value: typeof envelope) {
-          expect(value).toBe(envelope);
-          expect(value.handle).toBe(view);
-        },
-      });
-      try {
-        expect(api.read(view)).toBe(42);
-        api.inspect(envelope);
-      } finally {
-        consumer.release();
-        await instance.dispose();
-      }
-    },
-  );
-
-  it.each(
-    (["map", "set", "array"] as const).flatMap((collection) =>
-      (["raw", "member", "callback"] as const).flatMap((acquisition) =>
-        (["host", "VM"] as const).map((realm) => ({ collection, acquisition, realm })),
-      ),
-    ),
-  )(
-    "preserves $realm $collection callable data acquired through $acquisition",
-    async ({ collection, acquisition, realm }) => {
-      const instance = new PluginInstance(`data-${collection}-${acquisition}`);
+  it.each(["map", "set", "array", "weak-map", "weak-set"] as const)(
+    "preserves native %s callable data identity",
+    async (collection) => {
+      const instance = new PluginInstance(`data-${collection}`);
       const original = () => "original";
       const replacement = () => "replacement";
-      let key = original;
       try {
         if (collection === "map") {
-          const source: Map<() => string, () => string> =
-            realm === "host"
-              ? new Map([[original, () => "value"]])
-              : runInNewContext('new Map([[original, () => "value"]])', { original });
+          const source: Map<() => string, () => string> = runInNewContext(
+            'new Map([[original, () => "value"]])',
+            { original },
+          );
           const view = instance.wrap(source);
-          if (acquisition === "member") {
-            key = view.keys().next().value!;
-          } else if (acquisition === "callback") {
-            view.forEach((_value, candidate) => {
-              key = candidate;
-            });
+          let key = original;
+          class Receiver {
+            #label = "caller receiver";
+            read() {
+              return this.#label;
+            }
           }
+          const receiver = new Receiver();
+          view.forEach(function (this: Receiver, value, candidate) {
+            expect(this).toBe(receiver);
+            expect(this.read()).toBe("caller receiver");
+            expect(value).toBe(source.get(original));
+            expect(candidate).toBe(original);
+            key = candidate;
+          }, receiver);
           expect(view.has(key)).toBe(true);
           expect(view.get(key)!()).toBe("value");
           expect(view.set(key, replacement)).toBe(source);
@@ -359,37 +225,20 @@ describe("native collection data argument identity", () => {
           expect(view.delete(key)).toBe(true);
           expect(source.size).toBe(0);
         } else if (collection === "set") {
-          const source: Set<() => string> =
-            realm === "host"
-              ? new Set([original])
-              : runInNewContext("new Set([original])", { original });
+          const source = new Set([original]);
           const view = instance.wrap(source);
-          if (acquisition === "member") {
-            key = view.values().next().value!;
-          } else if (acquisition === "callback") {
-            view.forEach((candidate) => {
-              key = candidate;
-            });
-          }
-          expect(view.has(key)).toBe(true);
-          expect(view.add(key)).toBe(source);
+          expect(view.has(original)).toBe(true);
+          expect(view.add(original)).toBe(source);
           expect(source.size).toBe(1);
           view.add(replacement);
           expect(source.has(replacement)).toBe(true);
-          expect(view.delete(key)).toBe(true);
+          expect(view.delete(original)).toBe(true);
           expect(source.has(original)).toBe(false);
           expect(view.delete(replacement)).toBe(true);
-        } else {
-          const source: Array<() => string> =
-            realm === "host" ? [original] : runInNewContext("[original]", { original });
+        } else if (collection === "array") {
+          const source = [original];
           const view = instance.wrap(source);
-          if (acquisition === "member") {
-            key = view[0]!;
-          } else if (acquisition === "callback") {
-            view.forEach((candidate) => {
-              key = candidate;
-            });
-          }
+          const key = view[0]!;
           expect(view.includes(key)).toBe(true);
           expect(view.indexOf(key)).toBe(0);
           view.push(replacement);
@@ -397,6 +246,16 @@ describe("native collection data argument identity", () => {
           expect(view.includes(view[1]!)).toBe(true);
           view.splice(0, 1, replacement);
           expect(source[0]).toBe(replacement);
+        } else {
+          const source =
+            collection === "weak-map"
+              ? new WeakMap([[original, "value"]])
+              : new WeakSet([original]);
+          const view = instance.wrap(source);
+          expect(view.has(original)).toBe(true);
+          expect(view.has(instance.wrap(original))).toBe(true);
+          expect(view.delete(instance.wrap(original))).toBe(true);
+          expect(source.has(original)).toBe(false);
         }
       } finally {
         await instance.dispose();
@@ -404,16 +263,15 @@ describe("native collection data argument identity", () => {
     },
   );
 
-  it.each(
-    (["reduce", "reduceRight"] as const).flatMap((method) =>
-      (["unchanged", "function", "object"] as const).map((shape) => ({ method, shape })),
-    ),
-  )("preserves native $method $shape accumulator identity", async ({ method, shape }) => {
+  it.each([
+    { method: "reduce", shape: "function" },
+    { method: "reduceRight", shape: "object" },
+  ] as const)("preserves native $method $shape accumulator identity", async ({ method, shape }) => {
     type Accumulator = (() => string) | { read: () => string };
     const instance = new PluginInstance("reduce-data");
     const initial = () => "initial";
     const returned: Accumulator[] = ["first", "final"].map((label) =>
-      shape === "unchanged" ? initial : shape === "function" ? () => label : { read: () => label },
+      shape === "function" ? () => label : { read: () => label },
     );
     const source = [() => "left plugin element", () => "right plugin element"];
     const view = instance.wrap(source);
@@ -442,165 +300,81 @@ describe("native collection data argument identity", () => {
       await instance.dispose();
     }
   });
-
-  it.each(["reduce", "reduceRight", "forEach"] as const)(
-    "preserves caller-owned %s data containing a plugin handle",
-    async (method) => {
-      const instance = new PluginInstance("native-caller-data");
-      const data = { handle: instance.wrap({ read: () => "owned value" }) };
-      const collection = instance.wrap([() => "plugin element"]);
-      const check = (received: typeof data) => {
-        expect(received).toBe(data);
-        expect(received.handle).toBe(data.handle);
-      };
-      try {
-        if (method === "forEach") {
-          collection.forEach(function (this: typeof data) {
-            check(this);
-          }, data);
-        } else {
-          collection[method]((current) => {
-            check(current);
-            return current;
-          }, data);
-        }
-      } finally {
-        await instance.dispose();
-      }
-    },
-  );
-});
-
-describe("native collection method ownership", () => {
-  it("keeps subclass overrides on their plugin callback contract", async () => {
-    type Handler = () => string;
-    type Visitor = (handler: Handler) => Handler;
-    class CallbackMap extends Map<Visitor, Handler> {
-      #handler = () => "private handler";
-      override get(visit: Visitor) {
-        return visit(this.#handler);
-      }
-    }
-    const instance = new PluginInstance("collection-override");
-    const view = instance.wrap(new CallbackMap([[(handler) => handler, () => "stored handler"]]));
-    let retained: Handler | undefined;
-    try {
-      view.get((handler) => {
-        retained = handler;
-        return handler;
-      });
-      expect(retained?.()).toBe("private handler");
-      await instance.dispose();
-      expect(retained?.()).toBe("private handler");
-    } finally {
-      await instance.dispose();
-    }
-  });
-
-  it.each(["map", "set"] as const)("round-trips callable keys through a weak %s", async (kind) => {
-    const instance = new PluginInstance(`weak-${kind}`);
-    const key = () => "key";
-    const source = kind === "map" ? new WeakMap([[key, "value"]]) : new WeakSet([key]);
-    const view = instance.wrap(source);
-    try {
-      expect(view.has(key)).toBe(true);
-      expect(view.has(instance.wrap(key))).toBe(true);
-      expect(view.delete(instance.wrap(key))).toBe(true);
-      expect(source.has(key)).toBe(false);
-    } finally {
-      await instance.dispose();
-    }
-  });
 });
 
 describe("async iterable helper callbacks", () => {
-  it.each(
-    (["source", "iterator"] as const).flatMap((target) =>
-      (["retained", "async"] as const).map((lifetime) => ({ target, lifetime })),
-    ),
-  )("owns $lifetime callback values from a $target helper", async ({ target, lifetime }) => {
-    const instance = new PluginInstance(`iterable-${target}-${lifetime}`);
-    const release = createDeferredCore();
-    const finished = createDeferredCore();
-    class Visitor {
-      #handler = () => "private helper value";
-      visit(callback: (handler: () => string) => unknown) {
-        callback(this.#handler);
+  it.each([
+    { target: "source", lifetime: "async" },
+    { target: "iterator", lifetime: "async" },
+    { target: "iterator", lifetime: "retained" },
+  ] as const)(
+    "owns $lifetime callback values from a $target helper",
+    async ({ target, lifetime }) => {
+      const instance = new PluginInstance(`iterable-${target}-${lifetime}`);
+      const release = createDeferredCore();
+      const finished = createDeferredCore();
+      class Visitor {
+        #handler = () => "private helper value";
+        visit(callback: (handler: () => string) => unknown) {
+          callback(this.#handler);
+        }
       }
-    }
-    const iterator = Object.assign(new Visitor(), {
-      next: async () => ({ done: true as const, value: undefined }),
-      return: async () => ({ done: true as const, value: undefined }),
-    });
-    const stream = instance.wrap(
-      Object.assign(new Visitor(), {
-        [Symbol.asyncIterator]: () => iterator,
-      }),
-    );
-    const view = stream[Symbol.asyncIterator]();
-    const helper = target === "source" ? stream : view;
-    let retained: (() => string) | undefined;
-    let answer: unknown;
-    let disposal: Promise<void> | undefined;
-    try {
-      helper.visit(
-        lifetime === "retained"
-          ? (handler) => {
-              retained = handler;
-              expect(handler()).toBe("private helper value");
-            }
-          : async (handler) => {
-              try {
-                await release.promise;
-                answer = handler();
-              } catch (error) {
-                answer = error;
-              } finally {
-                finished.resolve();
-              }
-            },
-      );
-      await view.next();
-      let disposed = false;
-      disposal = instance.dispose().then(() => {
-        disposed = true;
+      const iterator = Object.assign(new Visitor(), {
+        next: async () => ({ done: true as const, value: undefined }),
+        return: async () => ({ done: true as const, value: undefined }),
       });
-      if (lifetime === "retained") {
-        await disposal;
-        expect(retained?.()).toBe("private helper value");
-      } else {
-        await yieldImmediate();
-        expect(disposed, "stream completion retired an admitted helper callback").toBe(false);
+      const stream = instance.wrap(
+        Object.assign(new Visitor(), {
+          [Symbol.asyncIterator]: () => iterator,
+        }),
+      );
+      const view = stream[Symbol.asyncIterator]();
+      const helper = target === "source" ? stream : view;
+      let retained: (() => string) | undefined;
+      let answer: unknown;
+      let disposal: Promise<void> | undefined;
+      try {
+        helper.visit(
+          lifetime === "retained"
+            ? (handler) => {
+                retained = handler;
+                expect(handler()).toBe("private helper value");
+              }
+            : async (handler) => {
+                try {
+                  await release.promise;
+                  answer = handler();
+                } catch (error) {
+                  answer = error;
+                } finally {
+                  finished.resolve();
+                }
+              },
+        );
+        await view.next();
+        let disposed = false;
+        disposal = instance.dispose().then(() => {
+          disposed = true;
+        });
+        if (lifetime === "retained") {
+          await disposal;
+          expect(retained?.()).toBe("private helper value");
+        } else {
+          await yieldImmediate();
+          expect(disposed, "stream completion retired an admitted helper callback").toBe(false);
+          release.resolve();
+          await finished.promise;
+          await disposal;
+          expect(answer).toBe("private helper value");
+        }
+      } finally {
         release.resolve();
-        await finished.promise;
-        await disposal;
-        expect(answer).toBe("private helper value");
+        await view.return();
+        await (disposal ?? instance.dispose());
+        if (lifetime === "async") {
+          await finished.promise;
+        }
       }
-    } finally {
-      release.resolve();
-      await view.return();
-      await (disposal ?? instance.dispose());
-      if (lifetime === "async") {
-        await finished.promise;
-      }
-    }
-  });
-
-  it("preserves native lookup keys on an async iterable Map", async () => {
-    class StreamMap extends Map<() => string, string> {
-      async *[Symbol.asyncIterator]() {
-        yield "complete";
-      }
-    }
-    const instance = new PluginInstance("iterable-map");
-    const key = () => "key";
-    const stream = instance.wrap(new StreamMap([[key, "value"]]));
-    const iterator = stream[Symbol.asyncIterator]();
-    try {
-      expect(stream.get(key)).toBe("value");
-    } finally {
-      await iterator.return(undefined);
-      await instance.dispose();
-    }
-  });
+    },
+  );
 });

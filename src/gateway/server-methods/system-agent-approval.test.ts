@@ -42,16 +42,29 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 const transcriptStoreMocks = vi.hoisted(() => ({
-  appendTranscriptReset: vi.fn(),
-  appendTranscriptTurn: vi.fn(),
-  appendTranscriptTurnAsync: vi.fn(),
-  readTranscriptTail: vi.fn(() => []),
+  appendReset: vi.fn(),
+  appendTurn: vi.fn(),
+  readTranscriptTailAsync: vi
+    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
+    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
 }));
-vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
+// mock-isolation: Exercise delegated approval ownership without opening the machine-wide audit store.
+vi.mock("../../system-agent/transcript-store.js", () => ({
+  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
+  createSystemAgentTranscriptStore: () => ({
+    assertCurrent: () => undefined,
+    appendTurn: transcriptStoreMocks.appendTurn,
+    appendReset: transcriptStoreMocks.appendReset,
+    readTail: (limit: number, afterLastReset = false) =>
+      afterLastReset
+        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
+        : transcriptStoreMocks.readTranscriptTailAsync(limit),
+  }),
+}));
 
 afterEach(() => {
   resetAgentRunRegistryForTest();
@@ -443,12 +456,6 @@ describe("Full Access delegated chat", () => {
       const releaseApply = createDeferred();
       const historyStarted = createDeferred();
       const releaseHistory = createDeferred();
-      if (outcome === "allow") {
-        transcriptStoreMocks.appendTranscriptTurnAsync.mockImplementation(async () => {
-          historyStarted.resolve();
-          await releaseHistory.promise;
-        });
-      }
       const execution = await setupInferenceMocks.resolvePersistentApplyInference();
       if (outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
         setupInferenceMocks.resolvePersistentApplyInference.mockImplementationOnce(async () => {
@@ -517,6 +524,11 @@ describe("Full Access delegated chat", () => {
           );
           await runSystemAgentGatewayTask(async () => undefined);
           expect(await manager.listPendingRecords()).toHaveLength(1);
+          // Both proposal observers have released the task queue; gate only terminal persistence.
+          transcriptStoreMocks.appendTurn.mockImplementation(async () => {
+            historyStarted.resolve();
+            await releaseHistory.promise;
+          });
         }
         if (outcome === "expired") {
           await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
@@ -588,6 +600,31 @@ describe("Full Access delegated chat", () => {
                   ? "failed"
                   : "cancelled";
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
+        if (outcome === "expired") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("expired without a decision"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approve it in the Control UI or OpenClaw apps"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("Retrying alone does not approve the change"),
+          });
+        } else if (outcome === "apply-failed" || outcome === "afterDecision-failed") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("application status is unconfirmed"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("before retrying"),
+          });
+        } else if (outcome !== "allow" && outcome !== "deny") {
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("approval request is no longer active"),
+          });
+          expect(result.payload).toMatchObject({
+            reply: expect.stringContaining("No change was made"),
+          });
+        }
         expect.soft(result.payload).not.toHaveProperty("needsApproval");
         expect.soft(result.payload).not.toHaveProperty("proposalId");
         await vi.waitFor(() => expect(engine.getPendingOperatorProposal()).toBeNull());
@@ -596,7 +633,7 @@ describe("Full Access delegated chat", () => {
         );
         if (outcome === "allow" || outcome === "afterDecision-failed") {
           expect(
-            transcriptStoreMocks.appendTranscriptTurnAsync.mock.calls.filter(([turn]) =>
+            transcriptStoreMocks.appendTurn.mock.calls.filter(([turn]) =>
               turn.text.includes(
                 outcome === "allow" ? "[openclaw] done: config.set" : "failed to complete",
               ),
@@ -676,7 +713,7 @@ describe("Full Access delegated chat", () => {
         operation: "config.set",
         summary: "Set config logging.level",
       });
-      expect(transcriptStoreMocks.appendTranscriptTurn).toHaveBeenCalledWith(
+      expect(transcriptStoreMocks.appendTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           role: "assistant",
           text: expect.stringContaining("[openclaw] done: config.set"),

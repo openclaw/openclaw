@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
-  createPluginInstallRecordMap,
+  copyPluginInstallRecordMap,
   parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
@@ -154,6 +155,11 @@ export async function readPostCorePluginInstallRecordsFile(
   if (!filePath) {
     return undefined;
   }
+  const handoffError = (message: string, cause: unknown) =>
+    new Error(
+      `${message}: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause },
+    );
   // Missing handoff is optional (parent may omit the path). Corrupt / unreadable
   // handoff must fail closed: silent undefined previously dropped parent install
   // recovery context when the post-doctor index was still empty.
@@ -164,19 +170,13 @@ export async function readPostCorePluginInstallRecordsFile(
     if (hasErrnoCode(err, "ENOENT")) {
       return undefined;
     }
-    throw new Error(
-      `Unable to read plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Unable to read plugin install records file", err);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(
-      `Malformed JSON in plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Malformed JSON in plugin install records file", err);
   }
   try {
     const records = parsePluginInstallRecordMap(parsed);
@@ -185,10 +185,7 @@ export async function readPostCorePluginInstallRecordsFile(
     }
     return records;
   } catch (err) {
-    throw new Error(
-      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
-      { cause: err },
-    );
+    throw handoffError("Invalid plugin install records in handoff file", err);
   }
 }
 
@@ -236,28 +233,10 @@ async function stopPostCoreUpdateChild(child: ChildProcess): Promise<void> {
       );
       return;
     } catch {
-      child.kill();
-      return;
+      // Fall back to signaling the direct child.
     }
   }
   child.kill();
-}
-
-/**
- * Returns the stdio mode for the post-core-update child process.
- *
- * Windows shells (PowerShell/CMD) wait for all processes that hold inherited console handles to
- * exit before returning the prompt, even after the immediate child has exited.  Using "pipe" on
- * Windows prevents the child (and any grandchildren it spawns) from ever receiving a reference to
- * the parent's console handles, eliminating the terminal hang seen in #78445.
- *
- * @internal exported for testing
- */
-export function resolvePostCoreUpdateChildStdio(
-  platform: NodeJS.Platform = process.platform,
-  jsonMode = false,
-): "inherit" | "pipe" {
-  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
 /** @internal exported for focused handoff contract tests. */
@@ -272,22 +251,20 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   if (runtimeComparison === null || runtimeComparison <= 0) {
     return params.records;
   }
-  let changed = false;
-  const next = createPluginInstallRecordMap<PluginInstallRecord>();
+  let next: Record<string, PluginInstallRecord> | undefined;
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
+    next ??= copyPluginInstallRecordMap(params.records);
     setPluginInstallRecordMapEntry(next, pluginId, rest);
-    changed = true;
   }
-  return changed ? next : params.records;
+  return next ?? params.records;
 }
 
 export async function continuePostCoreUpdateInFreshProcess(params: {
@@ -332,7 +309,13 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (!delegated && params.opts.acceptCapabilities) {
     // Same-version artifacts can expose different CLI options. Keep consent in
     // the current process when the installed target cannot receive it.
-    const { stdout } = await runExec(nodeRunner, [entryPath, "update", "--help"], {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath,
+      execArgv: [],
+      args: ["update", "--help"],
+    });
+    const { stdout } = await runExec(invocation.command, invocation.args, {
       baseEnv,
       logOutput: false,
       timeoutMs: params.timeoutMs,
@@ -406,7 +389,8 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     await writeJson(path.join(resultDir, "handoff.json"), handoff, { dirMode: 0o700 });
     const jsonMode = params.opts.json === true;
-    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
+    // Windows descendants must not retain console handles after the updater exits (#78445).
+    const childStdio = process.platform === "win32" || jsonMode ? "pipe" : "inherit";
     const handoffEnv = buildPostCoreHandoffEnv({
       baseEnv,
       compatHostVersion: postCoreHostVersion,
@@ -530,7 +514,13 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       tentativePluginIndex = undefined;
       return { resumed: true, pluginUpdate: result };
     }
-    const child = spawn(nodeRunner, argv, {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath,
+      execArgv: [],
+      args: argv.slice(1),
+    });
+    const child = spawn(invocation.command, invocation.args, {
       cwd: params.root,
       stdio: childStdio,
       env: childEnv,

@@ -73,7 +73,7 @@ public enum GatewayPluginSurfaceURL {
         guard var parsed = URLComponents(string: trimmed) else { return trimmed }
 
         let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
+        let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopbackHost(parsedHost)
 
         if !parsedHost.isEmpty, !parsedIsLoopback {
             guard let activeGatewayURL else { return trimmed }
@@ -89,7 +89,7 @@ public enum GatewayPluginSurfaceURL {
 
         guard let activeGatewayURL,
               let fallbackHost = activeGatewayURL.host,
-              !LoopbackHost.isLoopback(fallbackHost)
+              !LoopbackHost.isLoopbackHost(fallbackHost)
         else { return trimmed }
         let isTLS = activeGatewayURL.scheme?.lowercased() == "wss"
         parsed.scheme = isTLS ? "https" : "http"

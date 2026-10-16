@@ -1,15 +1,10 @@
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
-import { rowToRef, selectMcpRefs } from "./mcp-records.js";
 import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
@@ -69,37 +64,6 @@ export const clawProvenanceOperations = {
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         assertLease();
         return result;
-      },
-      { database: open(), ...stateOptions() },
-    ),
-  "clawProvenance.reconcileMcp": (
-    input: { agentId: string; digests: Record<string, string>; nowMs?: number },
-    { open, stateOptions },
-  ) =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const refs = executeSqliteQuerySync(
-          db,
-          selectMcpRefs(db).where("agent_id", "=", input.agentId).orderBy("name"),
-        ).rows.map(rowToRef);
-        for (const ref of refs) {
-          if (ref.status !== "pending" || input.digests[ref.name] !== ref.configDigest) {
-            continue;
-          }
-          const updatedAtMs = input.nowMs ?? Date.now();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("claw_mcp_server_refs")
-              .set({ status: "complete", error: null, updated_at_ms: updatedAtMs })
-              .where("agent_id", "=", ref.agentId)
-              .where("name", "=", ref.name),
-          );
-          ref.status = "complete";
-          ref.updatedAtMs = updatedAtMs;
-          delete ref.error;
-        }
-        return refs;
       },
       { database: open(), ...stateOptions() },
     ),

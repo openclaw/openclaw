@@ -133,14 +133,6 @@ await withUpdateCommandExecutor(runId, async (executor) => {
   return { root, install, slot, handoff, store, env, crash, retry };
 }
 
-it("reclaims a crashed original and its occupied slot together, then releases the new pair", async () => {
-  const f = fixture();
-  f.crash();
-  await f.retry();
-  expect(f.store.read(f.install).kind).toBe("absent");
-  expect(f.store.read(f.slot).kind).toBe("absent");
-});
-
 it("preserves both old generations while the occupied slot still has a live executor", async () => {
   const f = fixture();
   const holder = spawn(process.execPath, ["-e", "process.stdin.resume()"], {

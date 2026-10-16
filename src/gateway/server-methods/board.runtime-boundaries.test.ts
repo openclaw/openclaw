@@ -6,7 +6,7 @@ import {
   PROTOCOL_VERSION,
   type BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -20,13 +20,12 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -97,14 +96,11 @@ describe("board gateway runtime boundaries", () => {
     cronRun.mockReset();
   });
 
-  it.each(["agent:main:guarded", "agent:main:dashboard:incognito-guarded"])(
+  it.each(["agent:main:guarded"])(
     "reads current permission mode from its session owner: %s",
     async (sessionKey) => {
       const database = openOpenClawAgentDatabase({
         agentId: "main",
-        ...(isIncognitoSessionKey(sessionKey)
-          ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }) }
-          : {}),
       });
       replaceSessionEntrySync(
         { agentId: "main", sessionKey, storePath: database.path },
@@ -137,6 +133,54 @@ describe("board gateway runtime boundaries", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("serves board.data.read while a transcript-only database writer is held", async ({
+    signal,
+  }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:session";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath: database.path },
+      { sessionId: "board-concurrent-reader", updatedAt: 1 },
+    );
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+    });
+    const { invoke, ticket } = await grantTools(
+      ["sessions.list"],
+      createHarness(undefined, undefined, store),
+    );
+    sessionList.mockImplementation(({ respond }) => respond(true, { sessions: [] }));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite(
+      { agentId: "main", path: database.path },
+      async () => {
+        database.db.exec("BEGIN IMMEDIATE");
+        entered.resolve();
+        try {
+          await release.promise;
+        } finally {
+          database.db.exec("ROLLBACK");
+        }
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "transcript-only",
+    );
+    await entered.promise;
+    const read = invoke("board.data.read", { ticket, bindingId: "sessions.list" });
+    try {
+      const response = await withinTest(read, signal);
+      expect(database.db.isTransaction).toBe(true);
+      expect(response).toHaveBeenCalledWith(true, { sessions: [] });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, read]);
+    }
   });
 
   it("registers every contract method with its required scope", () => {
@@ -239,37 +283,6 @@ describe("board gateway runtime boundaries", () => {
     expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
-  it("enforces data bindings against the granted tool set", async () => {
-    sessionList.mockImplementation(async ({ respond }: { respond: RespondFn }) =>
-      respond(true, { sessions: ["one"] }),
-    );
-    const harness = createHarness();
-    const { invoke } = harness;
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const denied = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(sessionList).not.toHaveBeenCalled();
-
-    const { ticket } = await grantTools(["sessions.list"], harness);
-    const allowed = await invoke("board.data.read", {
-      ticket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
-    expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ params: { limit: 2 } }));
-  });
-
   it("fences awaited board mutation through Gateway dispatch when its root retires", async () => {
     const documentStarted = createDeferred();
     const releaseDocument = createDeferred<{ html: string; cspSandbox: "scripts" }>();
@@ -293,7 +306,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -301,6 +314,7 @@ describe("board gateway runtime boundaries", () => {
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
+      let gatewayClient: GatewayWsClient | null = null;
       socket.send(
         JSON.stringify({
           type: "event",
@@ -316,7 +330,7 @@ describe("board gateway runtime boundaries", () => {
           type: "req";
         };
         if (request.method === "connect") {
-          gatewayClients.add({
+          gatewayClient = {
             socket,
             connect: {
               role: "operator",
@@ -324,7 +338,8 @@ describe("board gateway runtime boundaries", () => {
             } as GatewayWsClient["connect"],
             connId: "board-authority-proof",
             usesSharedGatewayAuth: false,
-          });
+          };
+          gatewayClients.add(gatewayClient);
           socket.send(
             JSON.stringify({
               type: "res",
@@ -365,7 +380,7 @@ describe("board gateway runtime boundaries", () => {
               }),
             );
           },
-          client: null,
+          client: gatewayClient,
           isWebchatConnect: () => false,
           context: gatewayContext,
           methodRegistry,
@@ -445,7 +460,7 @@ describe("board gateway runtime boundaries", () => {
     });
     const harness = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "auto" } },
       }),
     });

@@ -40,17 +40,10 @@ type PresenceTarget = {
   agentId: string;
   participants: Map<string, number>;
   lastActivityAtMs: number;
-  autoEligibleKind: "direct" | "group" | "thread" | "channel";
 };
 
 type SlackPresenceClient = Pick<WebClient["users"], "getPresence">;
 type PresenceSubject = { teamId?: string; userId: string };
-
-type SlackPresenceMonitor = {
-  observe: (prepared: PreparedSlackMessage) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-};
 
 function resolveMode(
   channelConfig: SlackPresenceEventsConfig | undefined,
@@ -74,9 +67,6 @@ export function hasSlackPresenceEventsEnabled(params: {
 function isTargetEligible(target: PresenceTarget): boolean {
   if (target.mode === "on") {
     return true;
-  }
-  if (target.autoEligibleKind === "channel") {
-    return false;
   }
   return target.participants.size <= SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS;
 }
@@ -155,7 +145,6 @@ function resolveObservedTarget(params: {
     isPolicyCurrent: prepared.ctx.isRuntimePolicyCurrent,
     participants: new Map([[userId, params.nowMs]]),
     lastActivityAtMs: params.nowMs,
-    autoEligibleKind,
   };
 }
 
@@ -163,18 +152,13 @@ export function createSlackPresenceMonitor(params: {
   scheduler: PluginServiceSchedulerV1;
   accountId: string;
   accountConfig?: SlackPresenceEventsConfig;
-  client?: SlackPresenceClient;
-  resolveClient?: (teamId?: string) => SlackPresenceClient;
+  resolveClient: (teamId?: string) => SlackPresenceClient;
   cooldownStore: PluginStateKeyedStore<number>;
   log?: (message: string) => void;
   error?: (message: string) => void;
   enqueue?: typeof enqueueRoutedSystemEvent;
   wake?: typeof requestHeartbeat;
-}): SlackPresenceMonitor {
-  const resolveClient = params.resolveClient ?? (() => params.client);
-  if (!params.client && !params.resolveClient) {
-    throw new Error("Slack presence monitor requires a client or client resolver");
-  }
+}) {
   const targets = new Map<string, PresenceTarget>();
   const presenceByUser = new Map<string, PresenceObservation>();
   const nowMs = params.scheduler.now;
@@ -184,6 +168,20 @@ export function createSlackPresenceMonitor(params: {
   const scheduler = params.scheduler.scope();
   let started = false;
   const rateLimitedUntilByWorkspace = new Map<string, number>();
+
+  const collectEligibleSubjects = () => {
+    const subjects = new Map<string, PresenceSubject>();
+    for (const target of targets.values()) {
+      if (!isTargetEligible(target)) {
+        continue;
+      }
+      for (const userId of target.participants.keys()) {
+        const subject = { teamId: target.teamId, userId };
+        subjects.set(presenceSubjectKey(subject), subject);
+      }
+    }
+    return subjects;
+  };
 
   const pruneTargets = (now: number) => {
     for (const [key, target] of targets) {
@@ -195,20 +193,13 @@ export function createSlackPresenceMonitor(params: {
       }
     }
     pruneMapToMaxSize(targets, SLACK_PRESENCE_MAX_TARGETS);
-    const eligibleUsers = new Set(
-      Array.from(targets.values())
-        .filter(isTargetEligible)
-        .flatMap((target) =>
-          Array.from(target.participants.keys()).map((userId) =>
-            presenceSubjectKey({ teamId: target.teamId, userId }),
-          ),
-        ),
-    );
+    const eligibleSubjects = collectEligibleSubjects();
     for (const userId of presenceByUser.keys()) {
-      if (!eligibleUsers.has(userId)) {
+      if (!eligibleSubjects.has(userId)) {
         presenceByUser.delete(userId);
       }
     }
+    return eligibleSubjects;
   };
 
   const observe = (prepared: PreparedSlackMessage) => {
@@ -225,21 +216,14 @@ export function createSlackPresenceMonitor(params: {
     }
     const current = targets.get(observed.key);
     if (current) {
-      current.mode = observed.mode;
-      current.prompt = observed.prompt;
-      current.sessionKey = observed.sessionKey;
-      current.agentId = observed.agentId;
-      current.to = observed.to;
-      current.lastActivityAtMs = now;
       for (const [participant, observedAt] of observed.participants) {
         current.participants.set(participant, observedAt);
       }
-      targets.delete(observed.key);
-      targets.set(observed.key, current);
-    } else {
-      targets.set(observed.key, observed);
+      observed.participants = current.participants;
     }
-    pruneTargets(now);
+    targets.delete(observed.key);
+    targets.set(observed.key, observed);
+    pruneMapToMaxSize(targets, SLACK_PRESENCE_MAX_TARGETS);
   };
 
   const emitTransition = async (
@@ -311,18 +295,7 @@ export function createSlackPresenceMonitor(params: {
 
   const performPoll = async () => {
     const now = nowMs();
-    pruneTargets(now);
-    const candidatesByKey = new Map<string, PresenceSubject>();
-    for (const target of targets.values()) {
-      if (!isTargetEligible(target)) {
-        continue;
-      }
-      for (const userId of target.participants.keys()) {
-        const subject = { teamId: target.teamId, userId };
-        candidatesByKey.set(presenceSubjectKey(subject), subject);
-      }
-    }
-    const candidates = Array.from(candidatesByKey.entries())
+    const candidates = Array.from(pruneTargets(now).entries())
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, subject]) => subject);
     if (candidates.length === 0) {
@@ -346,10 +319,7 @@ export function createSlackPresenceMonitor(params: {
       rateLimitedUntilByWorkspace.delete(workspaceKey);
       let consumed = false;
       try {
-        const client = resolveClient(teamId);
-        if (!client) {
-          throw new Error("Slack presence client is unavailable");
-        }
+        const client = params.resolveClient(teamId);
         const response = await withTimeout(
           client.getPresence({ user: userId }),
           SLACK_PRESENCE_REQUEST_TIMEOUT_MS,

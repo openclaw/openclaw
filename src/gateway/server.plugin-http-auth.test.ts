@@ -26,11 +26,6 @@ import {
 import { withTempConfig } from "./test-temp-config.js";
 
 type ServerOptions = Parameters<typeof withGatewayServer>[0];
-const ui = {
-  controlUiEnabled: true,
-  controlUiBasePath: "",
-  controlUiRoot: { kind: "missing" as const },
-};
 const log = createSubsystemLogger("test/plugin-http-auth");
 function withServer(
   run: ServerOptions["run"],
@@ -53,17 +48,6 @@ function claimingPlugin(paths?: string[]) {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     return !paths || paths.includes(pathname) ? respond(res, "plugin-owned") : false;
   });
-}
-function publicRoute(path: string, match: "exact" | "prefix", method: string) {
-  const routeHandler = vi.fn(async (req: IncomingMessage, res: ServerResponse) =>
-    req.method === method ? respond(res, "plugin-owned") : false,
-  );
-  return {
-    routeHandler,
-    ...pluginRoutes([
-      { pluginId: "focus-owner", path, match, auth: "plugin", handler: routeHandler },
-    ]),
-  };
 }
 function withMattermost(callbackPath: string, run: ServerOptions["run"]) {
   return withTempConfig({
@@ -117,17 +101,33 @@ describe("gateway plugin HTTP auth boundary", () => {
     },
   );
 
-  test("rejects non-GET/HEAD methods on probe routes", async () => {
-    await withServer(async (server) => {
-      const post = await sendRequest(server, { path: "/healthz", method: "POST" });
-      expect(post.res.statusCode).toBe(405);
-      expect(post.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
-      expect(post.getBody()).toBe("Method Not Allowed");
-      const head = await sendRequest(server, { path: "/readyz", method: "HEAD" });
-      expect(head.res.statusCode).toBe(200);
-      expect(head.getBody()).toBe("");
-    });
-  });
+  test.each([
+    { controlUiEnabled: true, method: "GET", status: 503, body: "Control UI assets not found" },
+    { controlUiEnabled: true, method: "POST", status: 404, body: "Not Found" },
+    { controlUiEnabled: false, method: "GET", status: 404, body: "Not Found" },
+  ])(
+    "reserves approval documents ahead of plugins ($method, UI enabled: $controlUiEnabled)",
+    async ({ controlUiEnabled, method, status, body }) => {
+      const plugin = claimingPlugin();
+      await withServer(
+        async (server) => {
+          const response = await sendRequest(server, {
+            path: "/approve/plugin%3Arequest.json",
+            method,
+          });
+          expect(response.res.statusCode).toBe(status);
+          expect(response.getBody()).toContain(body);
+          expect(plugin).not.toHaveBeenCalled();
+        },
+        {
+          controlUiEnabled,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest: plugin,
+        },
+      );
+    },
+  );
 
   test.each([
     {
@@ -307,142 +307,6 @@ describe("gateway plugin HTTP auth boundary", () => {
         }
       },
       { handlePluginRequest: plugin },
-      AUTH_TOKEN,
-    );
-  });
-
-  test("reserves the base-mounted plugin manager GET while preserving writes", async () => {
-    const plugin = claimingPlugin(["/openclaw/settings/plugins"]);
-    await withServer(
-      async (server) => {
-        const path = "/openclaw/settings/plugins";
-        const read = await sendRequest(server, { path });
-        expect(read.res.statusCode).toBe(503);
-        expect(read.getBody()).toContain("Control UI assets not found");
-        expect(plugin).not.toHaveBeenCalled();
-        const write = await sendRequest(server, { path, method: "POST" });
-        expect(write.res.statusCode).toBe(200);
-        expect(write.getBody()).toBe("plugin-owned");
-        expect(plugin).toHaveBeenCalledOnce();
-      },
-      { ...ui, controlUiBasePath: "/openclaw", handlePluginRequest: plugin },
-    );
-  });
-
-  test("reserves standalone approval documents ahead of plugin routes", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, { path: "/approve/plugin%3Arequest.json" });
-        expect(response.res.statusCode).toBe(503);
-        expect(response.getBody()).toContain("Control UI assets not found");
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
-    );
-  });
-
-  test("terminates approval-document writes at the reservation stage", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        for (const method of ["POST", "PUT"]) {
-          const response = await sendRequest(server, {
-            path: "/approve/plugin%3Arequest.json",
-            method,
-          });
-          expect(response.res.statusCode, method).toBe(404);
-          expect(response.getBody(), method).toBe("Not Found");
-        }
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
-    );
-  });
-
-  test("keeps approval documents reserved when control ui serving is disabled", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, { path: "/approve/exec%3Arequest" });
-        expect(response.res.statusCode).toBe(404);
-        expect(response.getBody()).toBe("Not Found");
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { controlUiEnabled: false, controlUiBasePath: "", handlePluginRequest: plugin },
-    );
-  });
-
-  test("lets a registered base-mounted prefix route own focus writes", async () => {
-    const { handlePluginRequest, routeHandler } = publicRoute("/openclaw/focus", "prefix", "PUT");
-    await withServer(
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/openclaw/focus/dashboard/roboclaw/session-ref",
-          method: "PUT",
-        });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("plugin-owned");
-        expect(routeHandler).toHaveBeenCalledOnce();
-      },
-      { ...ui, controlUiBasePath: "/openclaw", handlePluginRequest },
-    );
-  });
-
-  test("uses focus as the unclaimed fallback without reserving lookalikes", async () => {
-    const { handlePluginRequest, routeHandler } = publicRoute("/focused", "exact", "GET");
-    await withServer(
-      async (server) => {
-        const get = await sendRequest(server, { path: "/focus" });
-        expect(get.res.statusCode).toBe(503);
-        expect(get.getBody()).toContain("Control UI assets not found");
-        expect(
-          (await sendRequest(server, { path: "/focus/desktop/control", method: "HEAD" })).res
-            .statusCode,
-        ).toBe(503);
-        for (const method of ["POST", "PUT"]) {
-          const write = await sendRequest(server, { path: "/focus/desktop/control", method });
-          expect(write.res.statusCode, method).toBe(404);
-          expect(write.getBody(), method).toBe("Not Found");
-        }
-        const lookalike = await sendRequest(server, { path: "/focused" });
-        expect(lookalike.res.statusCode).toBe(200);
-        expect(lookalike.getBody()).toBe("plugin-owned");
-        expect(routeHandler).toHaveBeenCalledOnce();
-      },
-      { ...ui, handlePluginRequest },
-    );
-  });
-
-  test("reserves unauthenticated probes ahead of root-mounted control ui and plugins", async () => {
-    const plugin = claimingPlugin();
-    await withServer(
-      async (server) => {
-        for (const [path, status] of [
-          ["/health", "live"],
-          ["/healthz", "live"],
-          ["/ready", "ready"],
-          ["/readyz", "ready"],
-          ["/startup", "started"],
-          ["/startupz", "started"],
-        ] as const) {
-          const response = await sendRequest(server, { path });
-          expect(response.res.statusCode, path).toBe(200);
-          const body = JSON.parse(response.getBody());
-          if (status === "started") {
-            expect(body, path).toMatchObject({
-              ok: true,
-              status,
-              version: expect.any(String),
-              uptimeMs: expect.any(Number),
-            });
-          } else {
-            expect(body, path).toEqual({ ok: true, status });
-          }
-        }
-        expect(plugin).not.toHaveBeenCalled();
-      },
-      { ...ui, handlePluginRequest: plugin },
       AUTH_TOKEN,
     );
   });

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,9 @@ it("packs the complete source runtime without native binaries or test fixtures",
   });
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  const [packed] = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
+  const [packed] = resolveNpmJsonEntries(JSON.parse(result.stdout)) as Array<{
+    files: Array<{ path: string }>;
+  }>;
   const files = packed!.files.map((file) => file.path);
   expect(
     files.filter((file) => /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u.test(file)),
@@ -54,7 +57,9 @@ describe("FaceTime plugin manifest", () => {
     const pluginManifest = JSON.parse(
       readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
     );
-    // Release preparation bumps the package version and host contract together.
+    // Release preparation (scripts/sync-plugin-versions.ts) moves the package version, peer
+    // range, plugin API range, and build version to the host release together. It deliberately
+    // preserves minHostVersion: that floor only changes when this plugin raises it.
     const hostVersion = packageManifest.version;
     expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
@@ -78,7 +83,7 @@ describe("FaceTime plugin manifest", () => {
       clawhubSpec: "clawhub:@openclaw/facetime",
       npmSpec: "@openclaw/facetime",
       defaultChoice: "npm",
-      minHostVersion: ">=2026.9.4",
+      minHostVersion: ">=2026.10.3",
       allowInvalidConfigRecovery: true,
     });
     expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);

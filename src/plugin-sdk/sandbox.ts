@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
- */
 export type {
   CreateSandboxBackendParams,
   CreateReservedSandboxBackendParamsV1,
@@ -29,6 +26,10 @@ export type {
   SshSandboxSettings,
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type {
+  OpenClawPluginToolSandbox,
+  OpenClawPluginToolModelExecution,
+} from "../plugins/tool-types.js";
 export type { DirectoryEntry } from "../infra/directory-entries.js";
 export { prepareSandboxProcessCleanup } from "../agents/sandbox/process-cleanup.js";
 export { resolveReadOnlyWorkspaceSkillMounts } from "../agents/sandbox/workspace-mounts.js";
@@ -38,12 +39,10 @@ export {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildRemoteCommand,
-  buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
-  createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -52,13 +51,11 @@ export {
   prepareSshSandboxExec,
   registerSandboxBackend,
   requireSandboxBackendFactory,
-  resolveSandboxRuntimeStatus,
-  resolveWritableRenameTargets,
-  resolveWritableRenameTargetsForBridge,
+  resolveSandboxRuntimeStatusAsync,
+  resolvePreparedSandboxRuntimeStatus,
   runSshSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
-  uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";
 
 export {
@@ -90,3 +87,5 @@ export {
   type RemoteShellSandboxSession,
   type RemoteShellSessionOptions,
 } from "../agents/sandbox/remote-shell-transport.js";
+
+export { resolveSandboxRuntimeStatusLegacy as resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.legacy.js";

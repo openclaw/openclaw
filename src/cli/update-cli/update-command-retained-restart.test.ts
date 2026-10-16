@@ -259,22 +259,40 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     },
   );
 
-  it.each(["A", "B", "caller", "executor", "abort", "binding", "unavailable", "scope"] as const)(
-    "refuses after the native lock/config await changes %s",
-    async (fault) => {
-      const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
-      const controller = new AbortController();
-      let callerCurrent = true;
-      const onGatewayStartAttempted = vi.fn();
-      let revalidations = 0;
-      if (fault === "unavailable") {
-        vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
-      } else if (fault === "scope") {
-        vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
-          new Error("scope"),
-        );
-      }
-      const work = owned(async (run) => {
+  it.each([
+    "A",
+    "B",
+    "caller",
+    "executor",
+    "abort",
+    "binding",
+    "unavailable",
+    "scope",
+    "A after reset-failed",
+    "B after reset-failed",
+  ] as const)("rechecks retained authority before restart: %s", async (fault) => {
+    const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
+    const afterReset = fault.endsWith("after reset-failed");
+    if (afterReset) {
+      native.mockImplementation(async () => {
+        await Promise.resolve();
+        revoke(fault.startsWith("A") ? a : b);
+        return success;
+      });
+    }
+    const controller = new AbortController();
+    let callerCurrent = true;
+    const onGatewayStartAttempted = vi.fn();
+    let revalidations = 0;
+    if (fault === "unavailable") {
+      vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
+    } else if (fault === "scope") {
+      vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
+        new Error("scope"),
+      );
+    }
+    const work = owned(async (run) => {
+      if (!afterReset) {
         vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockImplementation(async () => {
           await Promise.resolve();
           if (fault === "A" || fault === "B") {
@@ -287,53 +305,35 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
             callerCurrent = false;
           }
         });
-        await commands.restartRetainedUpdateGatewayService({
-          ...request(run),
-          onGatewayStartAttempted,
-          revalidate: async () => {
-            if (++revalidations === 2 && fault === "binding") {
-              throw new Error("changed original service binding");
-            }
-          },
-          signal: controller.signal,
-          assertCurrent() {
-            if (!callerCurrent) {
-              throw new Error("changed original service");
-            }
-          },
-        });
+      }
+      await commands.restartRetainedUpdateGatewayService({
+        ...request(run),
+        onGatewayStartAttempted,
+        revalidate: async () => {
+          if (++revalidations === 2 && fault === "binding") {
+            throw new Error("changed original service binding");
+          }
+        },
+        signal: controller.signal,
+        assertCurrent() {
+          if (!callerCurrent) {
+            throw new Error("changed original service");
+          }
+        },
       });
-      await expect(work).rejects.toThrow(
-        /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
-      );
-      expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
-      expect(native).not.toHaveBeenCalled();
-      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["A", "B"] as const)(
-    "checks %s again after reset-failed and before restart",
-    async (root) => {
-      const onGatewayStartAttempted = vi.fn();
-      const native = vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async () => {
-        await Promise.resolve();
-        revoke(root === "A" ? a : b);
-        return success;
-      });
-      await expect(
-        owned(async (run) => {
-          await commands.restartRetainedUpdateGatewayService({
-            ...request(run),
-            onGatewayStartAttempted,
-          });
-        }),
-      ).rejects.toThrow();
+    });
+    await expect(work).rejects.toThrow(
+      /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
+    );
+    if (afterReset) {
       expect(native).toHaveBeenCalledOnce();
       expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
-      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
-    },
-  );
+    } else {
+      expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
+      expect(native).not.toHaveBeenCalled();
+    }
+    expect(onGatewayStartAttempted).not.toHaveBeenCalled();
+  });
 
   it.each(["same-root", "unretained", "forged"] as const)(
     "rejects a %s recovery before native inspection",

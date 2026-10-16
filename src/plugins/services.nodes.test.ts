@@ -1,5 +1,12 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
+import { NodeRegistry } from "../gateway/node-registry.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runWithOperatorToolGatewayAuthority,
+} from "../gateway/operator-tool-gateway-authority.js";
 import { dispatchGatewayRequestInProcess } from "../gateway/server-in-process-dispatch.js";
 import type {
   GatewayRequestContext,
@@ -11,12 +18,15 @@ import {
   withOperatorToolGatewayAuthority,
 } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import * as nativeModuleRequire from "./native-module-require.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -30,9 +40,13 @@ import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextLifetime,
+  getInProcessGatewayRequestContext,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
@@ -120,6 +134,38 @@ const request = {
 };
 
 describe("service-owned node invocation", () => {
+  it("releases retiring callers while stopped node capabilities remain reachable", async () => {
+    type NodeInvoker = NonNullable<ReturnType<typeof createPluginServiceNodeInvoker>>;
+    class RetiringCaller {
+      stop(invoker: NodeInvoker) {
+        invoker.stop();
+      }
+    }
+    const { registry, record } = await startFixture();
+    const invokers = Array.from({ length: 12 }, () => {
+      const invoker = createPluginServiceNodeInvoker({
+        registry,
+        record,
+        lease: createPluginRuntimeCapabilityLease("retained node capability"),
+        isStopping: () => false,
+      });
+      if (!invoker) {
+        throw new Error("Node invoker was not created");
+      }
+      new RetiringCaller().stop(invoker);
+      return invoker;
+    });
+    // Inspect retention before any error matcher can materialize the lazy stack.
+    expect(queryObjects(RetiringCaller)).toBe(0);
+    for (const invoker of invokers) {
+      const reason: unknown = await invoker.invoke(request).catch((error: unknown) => error);
+      expect(reason).toBeInstanceOf(Error);
+      expect(reason).toMatchObject({ message: "Plugin service node access stopped" });
+      await expect(invoker.invoke(request)).rejects.toBe(reason);
+      await expect(invoker.openDuplex(request)).rejects.toBe(reason);
+    }
+  });
+
   it.each([false, true])(
     "preserves document read access for a profile-backed=%s reader",
     async (profileBacked) => {
@@ -349,6 +395,46 @@ async function openServiceDuplex(
 }
 
 describe("service-owned node duplex", () => {
+  it.each(["listener", "send", "concurrent send"] as const)(
+    "preserves an invocation rejection after readiness for %s setup",
+    async (operation) => {
+      const fixture = await openServiceDuplex();
+      const pairingChanged = {
+        code: "UNAVAILABLE",
+        message: "node pairing changed while invocation was active",
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      };
+      try {
+        if (operation === "concurrent send") {
+          const retired = new NodeRegistry();
+          fixture.sendInvokeInput.mockImplementation((id, frame) => {
+            retired.sendInvokeInput(id, frame);
+          });
+        }
+        fixture.ctx.respond(false, undefined, pairingChanged);
+        if (operation !== "concurrent send") {
+          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+        }
+
+        const setup =
+          operation === "listener"
+            ? Promise.resolve().then(() => fixture.channel.onMessage(vi.fn()))
+            : fixture.channel.send(Uint8Array.of(1));
+        await expect(setup).rejects.toMatchObject(pairingChanged);
+        expect(() => fixture.channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
+        if (operation === "concurrent send") {
+          expect(fixture.sendInvokeInput).toHaveBeenCalledOnce();
+          await expect(fixture.channel.closed).rejects.toMatchObject(pairingChanged);
+        } else {
+          expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+        }
+      } finally {
+        fixture.finish.resolve();
+      }
+    },
+  );
+
   it.each([true, "optional"] as const)(
     "uses %s duplex after canonical preflight",
     async (duplex) => {
@@ -411,4 +497,68 @@ describe("service-owned node duplex", () => {
     }
     expect(fixture.nodeHandler).not.toHaveBeenCalled();
   });
+});
+
+it("starts and reloads background services outside the RPC and tool authority", async () => {
+  const runtime = createPluginRuntime();
+  const context = createGatewayRequestContext(makeContextParams());
+  bindGatewayContextResolver(runtime, () => context);
+  const registry = createEmptyPluginRegistry();
+  bindPluginRegistryRuntime(registry, runtime);
+  const callbacks: Array<() => void> = [];
+  const broadcastPluginEvent = vi.fn();
+  registry.services.push({
+    id: "background",
+    pluginId: "background",
+    origin: "bundled",
+    source: "synthetic",
+    service: {
+      id: "background",
+      start(ctx) {
+        const runBackground = AsyncLocalStorage.snapshot();
+        callbacks.push(() =>
+          runBackground(() => {
+            readOperatorToolGatewayAuthority()?.signal.throwIfAborted();
+            expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
+            expect(getInProcessGatewayRequestContext()).toBe(context);
+            ctx.gatewayEvents?.emit("changed", {}, { scope: "operator.read" });
+          }),
+        );
+      },
+    },
+  });
+  const callerLifetime = new AbortController();
+  const inCaller = <T>(run: () => T) =>
+    runWithOperatorToolGatewayAuthority(
+      {
+        signal: callerLifetime.signal,
+        scopes: ["operator.read"],
+        operatorRoleActor: { kind: "system" },
+      },
+      () =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            context,
+            client: createSyntheticPluginRuntimeClient({ scopes: ["operator.read"] }),
+            signal: callerLifetime.signal,
+            isWebchatConnect: () => false,
+          },
+          run,
+        ),
+    );
+  const handle = await inCaller(() =>
+    startPluginServices({ registry, config: {}, broadcastPluginEvent }),
+  );
+  try {
+    await inCaller(() => handle.reload({}, new Set(["background"])));
+    callerLifetime.abort(new Error("Originating tool settled"));
+    expect(callbacks).toHaveLength(2);
+    expect(() => callbacks[0]?.()).toThrow("no longer active");
+    callbacks[1]?.();
+    expect(broadcastPluginEvent).toHaveBeenCalledTimes(1);
+    await handle.stop();
+    expect(() => callbacks[1]?.()).toThrow("no longer active");
+  } finally {
+    await handle.stop();
+  }
 });

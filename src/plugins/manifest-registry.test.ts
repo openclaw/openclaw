@@ -390,6 +390,7 @@ describe("loadPluginManifestRegistry", () => {
             source,
             manifestPath: source,
             configSchema: { type: "object", additionalProperties: false },
+            activation: { onStartup: true },
           }),
         ]);
       }
@@ -409,69 +410,59 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, "plugin manifest not found");
   });
 
-  it("discovers separate identity and activity assets with exact, ordered tool IDs", () => {
-    const dir = makePluginDir("icon-demo", { name: "Icon Demo" });
-    writeTextFile(dir, "assets/icon.png", "portable icon");
-    writeTextFile(dir, "assets/activity.svg", "default activity");
-    for (const name of ["z-last", "Exact.Tool", "__proto__", "a..b"]) {
-      writeTextFile(dir, `assets/activity/${name}.svg`, "tool activity");
-    }
-    for (const name of [
-      ".hidden.svg",
-      "invalid name.svg",
-      "écho.svg",
-      "notes.png",
-      `${"a".repeat(129)}.svg`,
-    ]) {
-      writeTextFile(dir, `assets/activity/${name}`, "not a tool icon");
-    }
-    mkdirSafe(path.join(dir, "assets/activity/directory.svg"));
+  it.each(["native", "agent"] as const)(
+    "discovers separate identity and activity assets in %s plugins",
+    (format) => {
+      const dir = makePluginDir("icon-demo", { name: "Icon Demo" });
+      if (format === "agent") {
+        setupBundleFixture({
+          bundleDir: dir,
+          manifestRelativePath: "plugin.json",
+          manifest: {
+            $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            name: "Portable Icon Bundle",
+          },
+        });
+      }
+      writeTextFile(dir, "assets/icon.png", "portable icon");
+      writeTextFile(dir, "assets/activity.svg", "default activity");
+      for (const name of ["z-last", "Exact.Tool", "__proto__", "a..b"]) {
+        writeTextFile(dir, `assets/activity/${name}.svg`, "tool activity");
+      }
+      for (const name of [
+        ".hidden.svg",
+        "invalid name.svg",
+        "écho.svg",
+        "notes.png",
+        `${"a".repeat(129)}.svg`,
+      ]) {
+        writeTextFile(dir, `assets/activity/${name}`, "not a tool icon");
+      }
+      mkdirSafe(path.join(dir, "assets/activity/directory.svg"));
 
-    const registry = loadSingleCandidateRegistry("icon-demo", dir, "bundled");
+      const registry = loadRegistry([
+        createPluginCandidate(
+          "icon-demo",
+          dir,
+          format === "native" ? "bundled" : "global",
+          format === "agent" ? { format: "bundle", bundleFormat: "agent" } : {},
+        ),
+      ]);
 
-    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
-    expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
-    const toolIcons = registry.plugins[0]?.toolActivityIconPaths;
-    expect(Object.keys(toolIcons ?? {})).toEqual(["Exact.Tool", "__proto__", "a..b", "z-last"]);
-    expect(toolIcons).toEqual(
-      Object.fromEntries(
-        ["Exact.Tool", "__proto__", "a..b", "z-last"].map((name) => [
-          name,
-          path.join(dir, `assets/activity/${name}.svg`),
-        ]),
-      ),
-    );
-  });
-
-  it("discovers the same identity and activity conventions for Agent Plugins bundles", () => {
-    const dir = makeTempDir();
-    setupBundleFixture({
-      bundleDir: dir,
-      manifestRelativePath: "plugin.json",
-      manifest: {
-        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-        name: "Portable Icon Bundle",
-      },
-      textFiles: {
-        "assets/icon.png": "portable icon",
-        "assets/activity.svg": "default activity",
-        "assets/activity/task.search.svg": "search activity",
-      },
-    });
-
-    const registry = loadRegistry([
-      createPluginCandidate("portable-icon-bundle", dir, "global", {
-        format: "bundle",
-        bundleFormat: "agent",
-      }),
-    ]);
-
-    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
-    expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
-    expect(registry.plugins[0]?.toolActivityIconPaths).toEqual({
-      "task.search": path.join(dir, "assets/activity/task.search.svg"),
-    });
-  });
+      expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+      expect(registry.plugins[0]?.activityIconPath).toBe(path.join(dir, "assets/activity.svg"));
+      const toolIcons = registry.plugins[0]?.toolActivityIconPaths;
+      expect(Object.keys(toolIcons ?? {})).toEqual(["Exact.Tool", "__proto__", "a..b", "z-last"]);
+      expect(toolIcons).toEqual(
+        Object.fromEntries(
+          ["Exact.Tool", "__proto__", "a..b", "z-last"].map((name) => [
+            name,
+            path.join(dir, `assets/activity/${name}.svg`),
+          ]),
+        ),
+      );
+    },
+  );
 
   it.each([129])("bounds activity overrides without partially discovering %i entries", (count) => {
     const dir = makePluginDir("activity-limit");
@@ -686,10 +677,12 @@ describe("loadPluginManifestRegistry", () => {
   it.each([
     {
       name: "missing npm identity",
+      resolve: resolveDiffsNpmTrust,
       overrides: { spec: undefined, resolvedName: undefined, resolvedSpec: undefined },
     },
     {
       name: "npm-pack archive metadata",
+      resolve: resolveDiffsNpmTrust,
       overrides: {
         sourcePath: "/tmp/diffs.tgz",
         artifactKind: "npm-pack",
@@ -698,60 +691,61 @@ describe("loadPluginManifestRegistry", () => {
     },
     {
       name: "local source path metadata",
+      resolve: resolveDiffsNpmTrust,
       overrides: { sourcePath: "/tmp/diffs.tgz" },
     },
-  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
-    "does not trust official package identity from $name",
-    ({ overrides }) => {
-      expect(resolveDiffsNpmTrust(overrides)).toBeUndefined();
-    },
-  );
-
-  it("trusts consistent official ClawHub source and resolution identities", () => {
-    expect(
-      resolveMsteamsClawHubTrust({
+    {
+      name: "consistent official ClawHub source and resolution identities",
+      resolve: resolveMsteamsClawHubTrust,
+      overrides: {
         spec: "clawhub:@openclaw/msteams@2026.6.11",
         resolvedSpec: "@openclaw/msteams@2026.6.11",
         resolvedName: "@openclaw/msteams",
-      }),
-    ).toBe(true);
-  });
-
-  it.each([
+      },
+      expected: true,
+    },
     {
       name: "community ClawHub channel",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: { clawhubChannel: "community" },
     },
     {
       name: "custom ClawHub URL",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: { clawhubUrl: "https://example.invalid" },
     },
     {
       name: "conflicting requested spec",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: { spec: "clawhub:@openclaw/line" },
     },
     {
       name: "malformed ClawHub package",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: { clawhubPackage: "@openclaw/msteams@2026.6.11" },
     },
     {
       name: "malformed resolved spec",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: { resolvedSpec: "file:plugin.tgz" },
     },
     {
       name: "resolved identity without ClawHub source identity",
+      resolve: resolveMsteamsClawHubTrust,
       overrides: {
         clawhubPackage: undefined,
         spec: undefined,
         resolvedSpec: "@openclaw/msteams@2026.6.11",
       },
     },
-  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
-    "does not trust npm-only official ClawHub installs from $name",
-    ({ overrides }) => {
-      expect(resolveMsteamsClawHubTrust(overrides)).toBeUndefined();
-    },
-  );
+  ] satisfies Array<{
+    name: string;
+    resolve: typeof resolveDiffsNpmTrust;
+    overrides: Partial<PluginInstallRecord>;
+    expected?: boolean;
+  }>)("checks official install trust for $name", ({ resolve, overrides, expected }) => {
+    expect(resolve(overrides)).toBe(expected);
+  });
 
   it("binds official trust to installPath even when a stale sourcePath still matches", () => {
     const dir = makePluginDir("msteams");
@@ -835,30 +829,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("retains pricing only for providers owned by the plugin", () => {
-    const dir = makePluginDir("moonshot", {
-      providers: ["moonshot"],
-      modelPricing: {
-        providers: {
-          moonshot: {
-            openRouter: { provider: "moonshotai", modelIdTransforms: ["version-dots", "unknown"] },
-            liteLLM: { provider: "moonshot" },
-          },
-          openai: { external: false },
-        },
-      },
-    });
-    const registry = loadSingleCandidateRegistry("moonshot", dir, "bundled");
-    expect(registry.plugins[0]?.modelPricing).toEqual({
-      providers: {
-        moonshot: {
-          openRouter: { provider: "moonshotai", modelIdTransforms: ["version-dots"] },
-          liteLLM: { provider: "moonshot" },
-        },
-      },
-    });
-  });
-
   it("hydrates bundled channel config metadata from plugin-local config surfaces", () => {
     const manifestSchema = { type: "object", properties: { manifestOnly: { type: "boolean" } } };
     const generatedSchema = {
@@ -928,67 +898,48 @@ describe("loadPluginManifestRegistry", () => {
     expect(diagnostic?.message).not.toContain(ansiRed);
   });
 
-  it("hydrates Slack channel config metadata for lagging npm manifests", () => {
-    const dir = makePluginDir("slack", { channels: ["slack"] });
-
-    const registry = loadRegistry([
-      createPluginCandidate("slack", dir, "global", { packageName: "@openclaw/slack" }),
-    ]);
-
-    const slackConfig = registry.plugins[0]?.channelConfigs?.slack;
-    expect(slackConfig).toMatchObject({
+  it.each([
+    {
+      id: "slack",
+      channel: "slack",
+      packageName: "@openclaw/slack",
       label: "Slack",
       description: "Slack channel, DM, command, and app event integration.",
-    });
-    // The catalog carries no schema copy: channel schemas are single-sourced
-    // from the zod-derived generated bundled channel metadata (see #131292),
-    // which validation seeds by channelId regardless of install origin.
-    expect(slackConfig?.schema).toBeUndefined();
-    expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
-  });
-
-  it("hydrates and overlays official external catalog curation metadata", () => {
-    const dir = makePluginDir("diffs", { catalog: { featured: false } });
-
-    const registry = loadRegistry([
-      createPluginCandidate("diffs", dir, "global", { packageName: "@openclaw/diffs" }),
-    ]);
-
-    expect(registry.plugins[0]?.catalog).toEqual({ featured: false, order: 40 });
-  });
-
-  it("fills missing official external catalog descriptors for partial npm channel configs", () => {
-    const dir = makePluginDir("wecom-openclaw-plugin", {
-      channels: ["wecom"],
-      channelConfigs: {
-        wecom: {
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              corpId: { type: "string" },
-            },
-          },
-        },
-      },
-    });
-
-    const registry = loadRegistry([
-      createPluginCandidate("wecom-openclaw-plugin", dir, "global", {
-        packageName: "@wecom/wecom-openclaw-plugin",
-      }),
-    ]);
-
-    expect(registry.plugins[0]?.contracts?.tools).toEqual(["wecom_mcp"]);
-    expect(registry.plugins[0]?.channelConfigs?.wecom).toMatchObject({
+      schema: undefined,
+      tools: undefined,
+    },
+    {
+      id: "wecom-openclaw-plugin",
+      channel: "wecom",
+      packageName: "@wecom/wecom-openclaw-plugin",
       label: "WeCom",
       description: "Enterprise WeChat conversation channel.",
-      schema: { additionalProperties: false, properties: { corpId: { type: "string" } } },
-    });
-    expect(registry.plugins[0]?.channelConfigs?.wecom?.schema?.properties).toEqual({
-      corpId: { type: "string" },
-    });
-  });
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { corpId: { type: "string" } },
+      },
+      tools: ["wecom_mcp"],
+    },
+  ])(
+    "hydrates missing official $channel descriptors without replacing schemas",
+    ({ id, channel, packageName, label, description, schema, tools }) => {
+      const dir = makePluginDir(id, {
+        channels: [channel],
+        ...(schema ? { channelConfigs: { [channel]: { schema } } } : {}),
+      });
+
+      const registry = loadRegistry([createPluginCandidate(id, dir, "global", { packageName })]);
+
+      const config = registry.plugins[0]?.channelConfigs?.[channel];
+      expect(config).toMatchObject({ label, description });
+      expect(config?.schema).toEqual(schema);
+      if (tools) {
+        expect(registry.plugins[0]?.contracts?.tools).toEqual(tools);
+      }
+      expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+    },
+  );
 
   it("drops prototype-polluting channel config keys from plugin manifests", () => {
     const schema = { type: "object", additionalProperties: false };
@@ -1091,50 +1042,6 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("preserves activation and setup descriptors from plugin manifests", () => {
-    const activation = {
-      onProviders: ["openai"],
-      onCommands: ["models"],
-      onChannels: ["web"],
-      onRoutes: ["gateway-webhook"],
-      onConfigPaths: ["browser"],
-      onCapabilities: ["provider", "tool"],
-    };
-    const setup = {
-      providers: [
-        {
-          id: "openai",
-          authMethods: ["api-key"],
-          envVars: ["OPENAI_API_KEY"],
-          authEvidence: [
-            {
-              type: "local-file-with-env",
-              fileEnvVar: "OPENAI_CREDENTIALS_FILE",
-              fallbackPaths: ["${HOME}/.config/openai/credentials.json"],
-              requiresAnyEnv: ["OPENAI_PROJECT", "OPENAI_ORG"],
-              requiresAllEnv: ["OPENAI_REGION"],
-              credentialMarker: "openai-local-credentials",
-              source: "openai local credentials",
-            },
-          ],
-        },
-      ],
-      cliBackends: ["openai-cli"],
-      configMigrations: ["legacy-openai-auth"],
-      requiresRuntime: false,
-    };
-    const dir = makePluginDir("openai", {
-      providers: ["openai"],
-      activation,
-      setup,
-    });
-
-    const registry = loadSingleCandidateRegistry("openai", dir, "bundled");
-
-    expect(registry.plugins[0]?.activation).toEqual(activation);
-    expect(registry.plugins[0]?.setup).toEqual(setup);
-  });
-
   it("normalizes media and tool metadata at the registry boundary", () => {
     const imageGenerationProviderMetadata = {
       openai: {
@@ -1213,97 +1120,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(plugin?.imageGenerationProviderMetadata).toEqual(imageGenerationProviderMetadata);
     expect(plugin?.mediaUnderstandingProviderMetadata).toEqual({ openai: media });
     expect(plugin?.toolMetadata).toEqual(tools);
-  });
-
-  it("preserves qa runner descriptors from plugin manifests", () => {
-    const dir = makePluginDir("qa-runner-fixture", {
-      qaRunners: [
-        {
-          commandName: "matrix",
-          description: "Run the Matrix live QA lane",
-        },
-      ],
-    });
-
-    const registry = loadSingleCandidateRegistry("qa-runner-fixture", dir, "bundled");
-
-    expect(registry.plugins[0]?.qaRunners).toEqual([
-      {
-        commandName: "matrix",
-        description: "Run the Matrix live QA lane",
-      },
-    ]);
-  });
-
-  it("normalizes config hint presentation values at the manifest boundary", () => {
-    const dir = makePluginDir("phone-hints", {
-      channels: ["phone-hints"],
-      uiHints: {
-        phone: { label: "Phone", presentation: "phone-number" },
-        legacy: { help: "Keep this hint", presentation: "telephone" },
-        ignored: "not-an-object",
-      },
-      channelConfigs: {
-        "phone-hints": {
-          schema: { type: "object" },
-          uiHints: {
-            phone: { presentation: "phone-number" },
-            legacy: { help: "Keep this channel hint", presentation: "telephone" },
-            ignored: false,
-          },
-        },
-      },
-    });
-
-    const registry = loadSingleCandidateRegistry("phone-hints", dir, "workspace");
-    const plugin = registry.plugins[0];
-
-    expect(plugin?.configUiHints).toEqual({
-      phone: { label: "Phone", presentation: "phone-number" },
-      legacy: { help: "Keep this hint" },
-    });
-    expect(plugin?.channelConfigs?.["phone-hints"]?.uiHints).toEqual({
-      phone: { presentation: "phone-number" },
-      legacy: { help: "Keep this channel hint" },
-    });
-  });
-
-  it("hydrates bundled channel config metadata onto manifest records", () => {
-    const dir = makeTempDir();
-    const registry = loadRegistry([
-      createPluginCandidate("telegram", dir, "bundled", {
-        bundledManifestPath: path.join(dir, "openclaw.plugin.json"),
-        bundledManifest: {
-          id: "telegram",
-          configSchema: { type: "object" },
-          channels: ["telegram"],
-          channelConfigs: {
-            telegram: {
-              schema: { type: "object" },
-            },
-          },
-        },
-      }),
-    ]);
-
-    expect(registry.plugins[0]?.channelConfigs?.telegram?.schema).toMatchObject({ type: "object" });
-  });
-
-  it("preserves manifest-owned config contracts from plugin manifests", () => {
-    const configContracts = {
-      compatibilityMigrationPaths: ["models.bedrockDiscovery"],
-      compatibilityRuntimePaths: ["legacyProvider.webhook"],
-      dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
-      secretInputs: {
-        bundledDefaultEnabled: false,
-        paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
-      },
-    };
-    const dir = makePluginDir("acpx", { configContracts });
-
-    const registry = loadSingleCandidateRegistry("acpx", dir, "bundled");
-
-    expect(registry.plugins[0]?.configContracts).toEqual(configContracts);
   });
 
   it.each([

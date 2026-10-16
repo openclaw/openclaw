@@ -8,7 +8,17 @@ import {
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
+import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
+import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
+import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
+import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -25,7 +35,12 @@ import {
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnOwner,
+  bindWorkerTurnCapabilities,
+  getWorkerTurnToolSurface,
+} from "./placement-turn-claim-events.js";
+import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import {
   createWorkerGatewayTools,
   createWorkerSessionToolExecutor,
@@ -134,6 +149,7 @@ vi.mock("../../agents/tools/scoped-session-access.js", () => ({
 }));
 
 vi.mock("../../agents/tools/in-process-gateway.js", () => ({
+  bindAgentToolGatewayRequest: () => (request: unknown) => sharedMocks.gatewayRequest(request),
   callAgentToolGatewayRequest: (request: unknown) => sharedMocks.gatewayRequest(request),
   callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
     sharedMocks.gatewayRequest({ method, params }),
@@ -196,6 +212,8 @@ type WorkerSessionToolTestOptions = {
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
   operatorScopes?: readonly string[];
+  inheritedToolPolicySource?: "sender";
+  delegatedToolPolicyActive?: boolean;
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -217,6 +235,8 @@ async function createWorkerSessionToolTestFixture(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"),
   );
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  const cfg = {};
+  setRuntimeConfigSnapshot(cfg);
   const placements = createWorkerSessionPlacementStore({ database });
   await activate(SOURCE);
   await activate(TARGET);
@@ -250,7 +270,7 @@ async function createWorkerSessionToolTestFixture(
   };
   const scheduledAdmission = options.admissionSource
     ? prepareAgentRunAdmission({
-        cfg: {},
+        cfg,
         admissionSource: options.admissionSource,
         operationalRunInstance: sourceOperationalRun,
         assertSourceCurrent,
@@ -374,6 +394,8 @@ async function createWorkerSessionToolTestFixture(
     },
   );
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
+    inheritedToolPolicySource: options.inheritedToolPolicySource,
+    delegatedToolPolicyActive: options.delegatedToolPolicyActive,
     resolveGatewayContext,
     placements,
     dispatchChild,
@@ -418,7 +440,59 @@ async function createWorkerSessionToolTestFixture(
       },
     } as never,
   };
-  const ownerExecute = createWorkerSessionToolExecutor(executorParams);
+  const toolOptions = { agentSessionKey: SOURCE.sessionKey, workerPlacement: true };
+  const ownerExecute = createWorkerSessionToolExecutor(executorParams, {
+    sessions_spawn: createSessionsSpawnTool(toolOptions),
+    sessions_send: createSessionsSendTool(toolOptions),
+    portal: createAvailablePortalTools({
+      sessionPortalTarget: {
+        agentId: SOURCE.agentId,
+        sessionKey: SOURCE.sessionKey,
+        environmentId: SOURCE.environmentId,
+        assertCurrent: () => {},
+      },
+    })[0]!,
+  });
+  const toolRuntimes: ReturnType<typeof createWorkerGatewayToolRuntime>[] = [];
+  function createToolRuntime(
+    runtimeOptions: Pick<
+      Parameters<typeof createWorkerGatewayTools>[0],
+      "prepareTools" | "skillWorkshop"
+    > & {
+      identity?: WorkerConnectionIdentity;
+      inheritedPublicationToolRef?: { current?: AnyAgentTool };
+    } = {},
+  ) {
+    const workerIdentity = runtimeOptions.identity ?? identity;
+    const claim = workerIdentity.turnClaim;
+    if (!claim) {
+      throw new Error("Expected a claimed worker turn");
+    }
+    const runtime = createWorkerGatewayToolRuntime({
+      signal: new AbortController().signal,
+      assertCurrent: () => {
+        if (getWorkerTurnToolSurface(workerIdentity) !== runtime) {
+          throw new Error("Worker tool surface owner changed");
+        }
+      },
+      prepare: async () => ({
+        policy: prepareCoreToolPolicy({}),
+        presentation: createToolSurfacePresentationForTest(),
+        tools: (
+          await createWorkerGatewayTools({
+            ...executorParams,
+            ...runtimeOptions,
+            identity: workerIdentity,
+          })
+        ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
+        inheritedPublicationTool: runtimeOptions.inheritedPublicationToolRef?.current,
+      }),
+    });
+    bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });
+    toolRuntimes.push(runtime);
+    return runtime;
+  }
+  createToolRuntime();
   const execute = async (request: Parameters<typeof ownerExecute>[0]) => ({
     resultJson: JSON.stringify(await ownerExecute(request)),
   });
@@ -430,21 +504,21 @@ async function createWorkerSessionToolTestFixture(
     sessionKey: string;
   }): Promise<void> {
     let placement = await placements.startDispatch(session);
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: session.environmentId },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: session.sessionId,
       from: "syncing",
       to: "starting",
@@ -459,7 +533,7 @@ async function createWorkerSessionToolTestFixture(
       sessionId: session.sessionId,
       ownerEpoch: session.ownerEpoch,
     });
-    placements.transition({
+    await placements.transition({
       sessionId: session.sessionId,
       from: "starting",
       to: "active",
@@ -502,6 +576,7 @@ async function createWorkerSessionToolTestFixture(
     placements,
     identity,
     execute,
+    createToolRuntime,
     createTools: (
       skillWorkshop?: Parameters<typeof createWorkerGatewayTools>[0]["skillWorkshop"],
     ) => createWorkerGatewayTools({ ...executorParams, identity, skillWorkshop }),
@@ -520,6 +595,7 @@ async function createWorkerSessionToolTestFixture(
     send,
     spawn,
     async dispose() {
+      await Promise.all(toolRuntimes.map((runtime) => runtime.close()));
       if (placements.validateTurnClaim(sourceClaim)) {
         await placements.closeWorkerTurnToolState(sourceClaim);
         await placements.releaseTurn(sourceClaim);
@@ -546,6 +622,7 @@ export function installWorkerSessionToolTestFixture(
   });
   afterEach(async () => {
     await fixture.dispose();
+    clearRuntimeConfigSnapshot();
   });
   return () => fixture;
 }

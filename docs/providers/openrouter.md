@@ -144,7 +144,7 @@ under `agents.defaults.mediaModels.image`:
 }
 ```
 
-OpenClaw sends canonical OpenRouter image requests to the dedicated image API
+OpenClaw sends standard OpenRouter image requests to the dedicated image API
 (`POST /api/v1/images`). Gemini image models additionally receive
 `aspect_ratio` and `resolution` hints, and image edits pass source images as
 `input_references`. Generated images come back as base64 (`b64_json`) with an
@@ -398,6 +398,7 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     aliases (`response_cache`, `response_cache_ttl_seconds`,
     `response_cache_clear`) are accepted, as is `responseCacheTtl` /
     `response_cache_ttl` without the `Seconds` suffix.
+    TTL values are truncated and clamped to 1–86400 seconds; non-finite values are ignored.
 
     This is separate from provider prompt caching and from OpenRouter's
     Anthropic `cache_control` markers. It only applies on verified

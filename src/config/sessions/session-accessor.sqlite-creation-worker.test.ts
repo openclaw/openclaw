@@ -4,7 +4,9 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import {
   ensureSessionGroupCatalog,
   readSessionGroupCatalog,
@@ -23,19 +25,24 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
-import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
 import {
   assertSessionEntryCreationPublication,
+  readPreparedSessionEntryChange,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
+import {
   projectSessionSharingEntry,
   retainPreparedSessionSharingFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
@@ -47,15 +54,86 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
-it("creates with prepared label facts, header and atomic owner without host data SQL, then registers under the captured environment", async () => {
+function observePostedCommands(commands: string[]) {
+  // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+  const nativePost = Worker.prototype.postMessage;
+  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request,
+    transferList,
+  ) {
+    let commandType: string | undefined;
+    if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
+      const command: unknown = deserialize(request.input);
+      if (isRecord(command) && typeof command.type === "string") {
+        commandType = command.type;
+      }
+    }
+    nativePost.call(this, request, transferList);
+    if (commandType !== undefined) {
+      commands.push(commandType);
+    }
+  });
+}
+
+it.each([false, true])(
+  "prepares a new custom-store suffix only while absent (appeared=%s)",
+  async (appeared) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("custom", "sessions.json");
+      const basePath = path.join(path.dirname(storePath), "openclaw-agent.sqlite");
+      const suffixPath = path.join(path.dirname(storePath), "openclaw-agent.ops.sqlite");
+      const templatePath = state.statePath("ops-template.sqlite");
+      openOpenClawAgentDatabase({ agentId: "main", path: basePath });
+      openOpenClawAgentDatabase({ agentId: "ops", path: templatePath });
+      await closeOpenClawAgentDatabasesAsync();
+      const existingBytes = await fs.readFile(templatePath);
+      const ready = createDeferred();
+      await using preparation = prepareSessionEntryMutationDatabases(
+        [
+          {
+            scope: { agentId: "ops", storePath, sessionKey: "agent:ops:new" },
+            assertCurrent: () => {},
+          },
+        ],
+        ready.promise,
+      );
+      try {
+        if (appeared) {
+          await fs.copyFile(templatePath, suffixPath);
+        }
+      } finally {
+        ready.resolve();
+      }
+      if (appeared) {
+        await expect(preparation.preparations[0]).rejects.toThrow(
+          "lost its originally captured database target",
+        );
+        expect((await fs.readFile(suffixPath)).equals(existingBytes)).toBe(true);
+      } else {
+        const prepared = await preparation.preparations[0];
+        expect(prepared?.execution).toBeDefined();
+        prepared?.assertCurrent();
+        expect((await fs.stat(suffixPath)).isFile()).toBe(true);
+      }
+    });
+  },
+);
+
+it("creates through an admitted store alias with prepared facts and atomic ownership", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof databaseIdentity !== "string") {
+      throw new Error("Expected a durable session database identity");
+    }
     const key = "agent:main:creation-worker";
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observePostedCommands(commands);
     const alias = state.path("agent-alias");
     await fs.symlink(path.dirname(database.path), alias, "junction");
     const storePath = path.join(alias, path.basename(database.path));
@@ -90,7 +168,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
     const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
-    const stopFacts = sessionChanges.subscribeFacts((change) => {
+    const stopProjection = sessionChanges.subscribeProjection((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         publications.push(readPreparedSessionEntryChange(change, key));
       }
@@ -125,12 +203,21 @@ it("creates with prepared label facts, header and atomic owner without host data
         {
           label: "available",
           bindCreation: (operation) => {
+            expect(() =>
+              assertSessionEntryCreationPublication(operation, {
+                agentId: "main",
+                sessionKey: key,
+                paths: new Set([storePath]),
+                databaseIdentity: "file:0:0",
+              }),
+            ).toThrow("Session creation publication owner is no longer current");
             prepared.bindCreation(operation);
             assertCreation = () =>
               assertSessionEntryCreationPublication(operation, {
                 agentId: "main",
                 sessionKey: key,
                 paths: new Set([database.path]),
+                databaseIdentity: `file:${databaseIdentity}`,
               });
             assertCreation();
           },
@@ -159,21 +246,7 @@ it("creates with prepared label facts, header and atomic owner without host data
         ok: true,
         entry: { sessionId: "created", label: "available" },
       });
-      const writes = post.mock.calls.flatMap(([request]) => {
-        if (
-          !isRecord(request) ||
-          request.type !== "execute" ||
-          !(request.input instanceof Uint8Array)
-        ) {
-          return [];
-        }
-        const command: unknown = deserialize(request.input);
-        return isRecord(command) &&
-          typeof command.type === "string" &&
-          command.type.startsWith("session.")
-          ? [command.type]
-          : [];
-      });
+      const writes = commands.filter((command) => command.startsWith("session."));
       expect(writes).toEqual(["session.entries.replace"]);
       expect(assertCreation).toThrow("Session creation publication owner is no longer current");
       expect(publications).toEqual([
@@ -203,7 +276,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     } finally {
       prepared.release();
       sql.restore();
-      stopFacts();
+      stopProjection();
       stop();
     }
     expect(order).toEqual(["committed", "published", "registered"]);
@@ -296,27 +369,35 @@ it("does not initialize a transcript or invoke follow-up when creation rejects",
   });
 });
 
-it.each(["incognito", "maintenance"] as const)(
+it.each(["maintenance", "alias replacement"] as const)(
   "retains valid native %s creation through follow-up",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey:
-          kind === "incognito"
-            ? "agent:main:dashboard:incognito-fixture"
-            : "agent:main:native-maintenance",
+          kind === "maintenance"
+            ? "agent:main:native-maintenance"
+            : "agent:main:signal:group:NativeReplacement",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-      const schemaLease =
-        kind === "maintenance" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
-      const maintenance = schemaLease
-        ? createOpenClawDatabaseMaintenanceScope({
-            schemaMaintenance: true,
-            assertOwnerCurrent: () => schemaLease.assertCurrent(),
-            assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-          })
-        : undefined;
+      const alias = scope.sessionKey.toLowerCase();
+      const oldSessionId = "native-replaced-session";
+      if (kind === "alias replacement") {
+        writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
+        ensureTranscriptHeader(
+          database,
+          { ...scope, sessionKey: alias, sessionId: oldSessionId },
+          "/old",
+        );
+      }
+      const schemaLease = acquireStateDatabaseSchemaLease(database.path);
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => schemaLease.assertCurrent(),
+        assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+      });
       let followed = false;
       const create = () =>
         createSessionEntryWithTranscript(
@@ -335,96 +416,34 @@ it.each(["incognito", "maintenance"] as const)(
           },
         );
       try {
-        expect((await (maintenance ? maintenance.run(create) : create())).ok).toBe(true);
+        const created = await maintenance.run(create);
+        expect(created.ok).toBe(true);
         expect(followed).toBe(true);
+        if (kind === "alias replacement") {
+          expect(created).toMatchObject({ ok: true, sessionFile: scope.sessionKey });
+          expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+          expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+            "native-created",
+          );
+          expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
+          expect(readTranscriptStorageRows(database, "native-created")).toHaveLength(1);
+        }
       } finally {
         try {
-          await maintenance?.close();
+          await maintenance.close();
         } finally {
-          schemaLease?.release();
+          schemaLease.release();
         }
       }
     });
   },
 );
 
-it("retires the old transcript when native alias creation selects a new session", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:signal:group:NativeReplacement";
-    const alias = sessionKey.toLowerCase();
-    const oldSessionId = "native-replaced-session";
-    writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
-    ensureTranscriptHeader(
-      database,
-      { agentId: "main", sessionKey: alias, sessionId: oldSessionId },
-      "/old",
-    );
-    const lease = acquireStateDatabaseSchemaLease(database.path);
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => lease.assertCurrent(),
-      assertDatabaseAccess: lease.assertDatabaseAccess,
-    });
-    try {
-      const created = await maintenance.run(() =>
-        createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey },
-          () => ({ ok: true, entry: { sessionId: "native-new-session", updatedAt: 2 } }),
-        ),
-      );
-      expect(created).toMatchObject({ ok: true, sessionFile: sessionKey });
-      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
-        "native-new-session",
-      );
-      expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
-      expect(readTranscriptStorageRows(database, "native-new-session")).toHaveLength(1);
-    } finally {
-      try {
-        await maintenance.close();
-      } finally {
-        lease.release();
-      }
-    }
-  });
-});
-
-it("publishes the logical creator identity while retaining the shared database's physical owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("shared.sqlite"),
-    });
-    const key = "agent:work:shared-creation";
-    const agents: string[] = [];
-    const stop = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "create" && mutation.current.sessionKeys.includes(key)) {
-        agents.push(mutation.agentId);
-      }
-    });
-    try {
-      expect(
-        (
-          await createSessionEntryWithTranscript(
-            { agentId: "work", storePath: database.path, sessionKey: key },
-            () => ({ ok: true, entry: { sessionId: "logical-work", updatedAt: 1 } }),
-          )
-        ).ok,
-      ).toBe(true);
-      expect(agents).toEqual(["work"]);
-      expect(readExactSessionEntryRow(database, key)?.entry.sessionId).toBe("logical-work");
-      expect(database.agentId).toBe("main");
-    } finally {
-      stop();
-    }
-  });
-});
-
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    using post = vi.spyOn(Worker.prototype, "postMessage");
+    const commands: string[] = [];
+    using _ = observePostedCommands(commands);
     const sessionKey = "agent:main:signal:group:AbC";
     const alias = sessionKey.toLowerCase();
     const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -546,127 +565,188 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ).ok,
     ).toBe(true);
     expect(readExactSessionEntryRow(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
-    const commands = post.mock.calls.flatMap(([request]) => {
-      if (
-        !isRecord(request) ||
-        request.type !== "execute" ||
-        !(request.input instanceof Uint8Array)
-      ) {
-        return [];
-      }
-      const command: unknown = deserialize(request.input);
-      return isRecord(command) ? [command.type] : [];
-    });
     expect(commands).toContain("session.entries.replace");
     expect(commands).not.toContain("session.archives.preparePublication");
   });
 });
 
-it("keeps native alias deletion rollback and creation notifications with the original owner", async () => {
+it("creates with prepared native finalizers in the worker and settles them after commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:signal:group:Native";
+    const sessionKey = "agent:main:signal:group:TypedNative";
     const alias = sessionKey.toLowerCase();
-    const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
-    const repositories = createSessionRepositoryWorkspaceStore();
-    const workspace = await repositories.create({
-      agentId: "main",
-      sessionKey: alias,
-      url: "https://github.com/example/alias.git",
-      assertCurrent: () => {},
-    });
-    const siblingWorkspace = await repositories.create({
-      agentId: "other",
-      sessionKey: alias,
-      url: "https://github.com/example/sibling.git",
-      assertCurrent: () => {},
-    });
+    const original = {
+      sessionId: "typed-native-alias",
+      updatedAt: 1,
+      agentHarnessId: "typed-owner",
+    };
     writeSessionEntry(database, alias, original);
     ensureTranscriptHeader(
       database,
       { agentId: "main", sessionKey: alias, sessionId: original.sessionId },
       "/workspace",
     );
-    const order: string[] = [];
-    let reject = true;
+    const finalized = vi.fn(() => {
+      expect(database.db.isTransaction).toBe(false);
+    });
+    const rollback = vi.fn();
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push({
       pluginId: "core",
       source: "runtime",
       harness: {
-        id: "alias-owner",
-        label: "Alias fixture",
+        id: "typed-owner",
+        label: "Typed native fixture",
         supports: () => ({ supported: true }),
         runAttempt: async () => {
           throw new Error("unused");
         },
-        withSessionDeletion: async (params, run) => {
-          params.assertCurrent();
-          expect(params.sessionKey).toBe(alias);
-          expect(database.db.isTransaction).toBe(false);
-          order.push("prepare");
-          const result = await run({
-            commit: () => {
-              expect(database.db.isTransaction).toBe(true);
-              order.push("native");
-              if (reject) {
-                throw new Error("native alias failure");
-              }
-            },
-            rollback: () => {
-              order.push("rollback");
-            },
-          });
-          order.push("release");
-          return result;
-        },
+        withSessionDeletion: async (_params, run) =>
+          run(createNativeSessionCommitFinalizer({ commit: finalized, rollback })),
       },
     });
     markPluginRegistryActive(registry);
-    const stop = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "move") {
-        order.push("published");
-      }
-    });
-    const create = () =>
-      withPluginRuntimeRegistryScope(registry, () =>
-        createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey },
-          ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
-          {
-            onLifecycleCommitted: () => {
-              order.push("committed");
-            },
-            afterCommitted: async (_entry, source) => {
-              source.assertCurrent();
-              await Promise.resolve();
-              source.assertCurrent();
-              expect(order).toEqual(["prepare", "native", "committed", "published"]);
-              order.push("followup");
-            },
-          },
+    const sql = observeHostDataSql();
+    try {
+      const result = await withPluginRuntimeRegistryScope(registry, () =>
+        withSqliteSessionDeletions(
+          resolveSqliteScope({ agentId: "main", storePath: database.path, sessionKey: alias }),
+          [{ sessionKey: alias, entry: original }],
+          () =>
+            createSessionEntryWithTranscript(
+              { agentId: "main", storePath: database.path, sessionKey },
+              ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
+              {
+                afterCommitted: async () => {
+                  expect(finalized).toHaveBeenCalledTimes(1);
+                },
+              },
+            ),
         ),
       );
-    try {
-      await expect(create()).rejects.toThrow("native alias failure");
-      expect(order).toEqual(["prepare", "native", "rollback"]);
-      expect(await repositories.get(workspace.workspaceId)).toEqual(workspace);
-      expect(readExactSessionEntryRow(database, alias)?.entry).toMatchObject(original);
-      expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
-      order.length = 0;
-      reject = false;
-      expect((await create()).ok).toBe(true);
-      expect(order).toEqual(["prepare", "native", "committed", "published", "followup", "release"]);
-      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
-      expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
-      expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
+      expect(result.ok).toBe(true);
+      expect(sql.queries).toEqual([]);
+      expect(finalized).toHaveBeenCalledTimes(1);
+      expect(rollback).not.toHaveBeenCalled();
     } finally {
-      stop();
+      sql.restore();
       markPluginRegistryRetired(registry);
     }
+    expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+    expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+      original.sessionId,
+    );
+    expect(readTranscriptStorageRows(database, original.sessionId)).toHaveLength(1);
   });
 });
+
+it.each([false, true])(
+  "keeps alias creation committed when legacy cleanup fails (%s)",
+  async (reject) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const sessionKey = "agent:main:signal:group:Native";
+      const alias = sessionKey.toLowerCase();
+      const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
+      const repositories = createSessionRepositoryWorkspaceStore();
+      const workspace = await repositories.create({
+        agentId: "main",
+        sessionKey: alias,
+        url: "https://github.com/example/alias.git",
+        assertCurrent: () => {},
+      });
+      const siblingWorkspace = await repositories.create({
+        agentId: "other",
+        sessionKey: alias,
+        url: "https://github.com/example/sibling.git",
+        assertCurrent: () => {},
+      });
+      writeSessionEntry(database, alias, original);
+      ensureTranscriptHeader(
+        database,
+        { agentId: "main", sessionKey: alias, sessionId: original.sessionId },
+        "/workspace",
+      );
+      const order: string[] = [];
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "core",
+        source: "runtime",
+        harness: {
+          id: "alias-owner",
+          label: "Alias fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unused");
+          },
+          withSessionDeletion: async (params, run) => {
+            params.assertCurrent();
+            expect(params.sessionKey).toBe(alias);
+            expect(database.db.isTransaction).toBe(false);
+            order.push("prepare");
+            const result = await run({
+              commit: () => {
+                expect(database.db.isTransaction).toBe(false);
+                order.push("native");
+                if (reject) {
+                  throw new Error("native alias failure");
+                }
+              },
+              rollback: () => {
+                order.push("rollback");
+              },
+            });
+            order.push("release");
+            return result;
+          },
+        },
+      });
+      markPluginRegistryActive(registry);
+      const stop = onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "move") {
+          order.push("published");
+        }
+      });
+      const create = () =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          createSessionEntryWithTranscript(
+            { agentId: "main", storePath: database.path, sessionKey },
+            ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
+            {
+              onLifecycleCommitted: () => {
+                order.push("committed");
+              },
+              afterCommitted: async (_entry, source) => {
+                source.assertCurrent();
+                await Promise.resolve();
+                source.assertCurrent();
+                expect(order).toEqual(["prepare", "native", "committed", "published"]);
+                order.push("followup");
+              },
+            },
+          ),
+        );
+      try {
+        expect((await create()).ok).toBe(true);
+        expect(order).toEqual([
+          "prepare",
+          "native",
+          "committed",
+          "published",
+          "followup",
+          "release",
+        ]);
+        expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject(original);
+        expect(await repositories.get(workspace.workspaceId)).toBeUndefined();
+        expect(await repositories.get(siblingWorkspace.workspaceId)).toEqual(siblingWorkspace);
+      } finally {
+        stop();
+        markPluginRegistryRetired(registry);
+      }
+    });
+  },
+);
 
 it("checks both alias and canonical target after source custody is acquired", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

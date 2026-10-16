@@ -1,13 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
   readRestartSentinelRowSync,
   readRestartSentinelSnapshotSync,
   readUpdateInstallReceiptRowSync,
 } from "./restart-sentinel-store.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { readUpdateFailureReportReceiptRowSync } from "./update-failure-report-receipt-store.js";
 
 export const restartSentinelReadOperations = {
+  "restartSentinel.reportReceipt": (input: string, db) => ({
+    type: "restartSentinel.reportReceipt" as const,
+    receipt: readUpdateFailureReportReceiptRowSync(db, input),
+  }),
   "restartSentinel.current": (_input: undefined, db) => ({
     type: "restartSentinel.current" as const,
     state: readRestartSentinelRowSync(db),
@@ -24,4 +29,4 @@ export const restartSentinelReadOperations = {
     type: "restartSentinel.installReceipt" as const,
     sentinel: readUpdateInstallReceiptRowSync(db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

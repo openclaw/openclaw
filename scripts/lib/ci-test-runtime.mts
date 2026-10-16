@@ -2,18 +2,28 @@ import { createHash } from "node:crypto";
 import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
+  gatewayMethodsTestExclude,
+  gatewayMethodsTestInclude,
+} from "../../test/vitest/vitest.gateway-server-paths.mjs";
+import {
+  filterFilesByPatterns,
+  isPlainRepoRelativePath,
+} from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  loadPatternListFromEnv,
   matchesVitestCliSelection,
   matchesVitestGlob,
   relativizeScopedPatterns,
   sharedVitestExcludePatterns,
 } from "../../test/vitest/vitest.pattern-file.ts";
+import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
-  getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
@@ -25,7 +35,7 @@ import { buildVitestRunPlans } from "../test-projects.test-support.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
-export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual";
+export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual" | "bun-all" | "dual-all";
 type TestRuntime = "node" | "bun";
 type TestSelection = {
   configs?: readonly string[];
@@ -39,6 +49,8 @@ type VitestRuntimeSelection = {
   runtime: TestRuntime;
   engine?: "vitest";
   configs?: string[];
+  vitestArgs?: string[];
+  targets?: string[];
   includePatterns?: string[];
   includeAfterShard?: true;
   env?: Readonly<Record<string, string>>;
@@ -50,6 +62,8 @@ export type CiTestRuntimeSelection =
       engine: "bun-test";
       files: string[];
       configs?: never;
+      targets?: never;
+      vitestArgs?: never;
       includePatterns?: never;
       includeAfterShard?: never;
       env?: never;
@@ -60,31 +74,78 @@ export type CiTestRuntimeSelection =
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Each shared worker otherwise grows against the whole runner's RAM. Collect
+  // after 256 MiB of allocation per cycle; this does not cap the live heap.
+  BUN_JSC_gcMaxHeapSize: "268435456",
   // Avoid sweeping parked allocator threads between short UI update cycles.
   MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
 const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
 const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
   nativeBunQualification.helpers;
 const bunCompatibleConfigs = new Set([
+  agentVitestProjectOwners.embeddedRun.config,
+  "test/vitest/vitest.cli.config.ts",
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
+const bunCompatibleWholeOwners = new Map<
+  string,
+  { dir: string; include: readonly string[]; exclude: readonly string[] }
+>([
+  [agentVitestProjectOwners.support.config, agentVitestProjectOwners.support],
+  [
+    "test/vitest/vitest.commands.config.ts",
+    {
+      dir: "src/commands",
+      include: ["src/commands/**/*.test.ts"],
+      exclude: [...commandsLightTestFiles, ...databaseWorkerCoreTestFiles],
+    },
+  ],
+  [
+    gatewayMethodsConfig,
+    { dir: ".", include: gatewayMethodsTestInclude, exclude: gatewayMethodsTestExclude },
+  ],
+]);
 const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-hash-memo.test.ts"];
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
 const bunCompatibleScopedOwners = new Map([
   [
-    agentVitestProjectOwners.support.config,
+    "test/vitest/vitest.extension-database-workers.config.ts",
     {
-      dir: agentVitestProjectOwners.support.dir,
-      files: ["src/agents/worktrees/service.removal-recovery.test.ts"],
+      dir: "extensions",
+      files: [
+        "extensions/codex/src/session-catalog-native-performance.test.ts",
+        "extensions/team-reports/src/render/theme.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-whatsapp.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-slack.config.ts",
+    {
+      dir: "extensions",
+      files: [
+        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
+        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
+        "extensions/slack/src/monitor/ingress.relay.test.ts",
+        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
+        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
+      ],
     },
   ],
   [
@@ -98,7 +159,11 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.plugins.config.ts",
     {
       dir: "src/plugins",
-      files: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      files: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
     },
   ],
   [
@@ -109,11 +174,15 @@ const bunCompatibleScopedOwners = new Map([
         "test/helpers/managed-handoff-isolation.test.ts",
         "test/scripts-update-gateway-legacy.test.ts",
         "test/scripts/bench-gateway-installed.test.ts",
+        "test/scripts/clawhub-bootstrap-artifact.test.ts",
+        "test/scripts/clawhub-fixture-server.test.ts",
+        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
         "test/scripts/oxlint-config.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-state.test.ts",
         "test/scripts/pr-wrappers.test.ts",
         "test/scripts/test-projects-empty-native.test.ts",
+        "test/scripts/test-projects.test.ts",
         "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
         "test/scripts/watch-pr-ci-dependencies.test.ts",
         "test/scripts/watch-pr-ci.test.ts",
@@ -136,7 +205,39 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.infra.config.ts",
     {
       dir: "",
-      files: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      files: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-database-workers.config.ts",
+    {
+      dir: ".",
+      files: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.logging.config.ts",
+    {
+      dir: "src",
+      files: ["src/logging/diagnostic-memory.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.ui-e2e.config.ts",
+    {
+      dir: "",
+      files: [
+        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+        "ui/src/e2e/service-worker-update.e2e.test.ts",
+      ],
     },
   ],
   [
@@ -148,27 +249,6 @@ const bunCompatibleScopedOwners = new Map([
         "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
         "src/cli/update-cli/update-command-lease.test.ts",
         "src/cli/update-cli/update-command-migrated.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.cli.config.ts",
-    {
-      dir: "src/cli",
-      files: [
-        "src/cli/update-cli/update-command-mutable-signals.test.ts",
-        "src/cli/update-cli/update-command-rollback-executor.test.ts",
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.commands.config.ts",
-    {
-      dir: "src/commands",
-      files: [
-        "src/commands/doctor-config-preflight.process.test.ts",
-        "src/commands/doctor-lint.native-capture.test.ts",
-        "src/commands/doctor-tools-md-migration.test.ts",
       ],
     },
   ],
@@ -194,14 +274,59 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
 ]);
-const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
-const bunCompatibleUnitFiles = new Set([
-  "src/library.test.ts",
-  "src/worker/worker-connection-closing-window.test.ts",
+// These contracts exercise Node's transferable POSIX pipe handles, including
+// suites that would otherwise pass on Bun by skipping their broker assertions.
+const nodeRequiredProcessFiles = new Set([
+  "src/process/spawn-broker/callback-context.test.ts",
+  "src/process/spawn-broker/cleanup.test.ts",
+  "src/process/spawn-broker/command-startup.test.ts",
+  "src/process/spawn-broker/detached-cleanup.test.ts",
+  "src/process/spawn-broker/execa.test.ts",
+  "src/process/spawn-broker/execution-deadline.test.ts",
+  "src/process/spawn-broker/handoff-crash.test.ts",
+  "src/process/spawn-broker/handoff.test.ts",
+  "src/process/spawn-broker/host.test.ts",
+  "src/process/spawn-broker/relay.test.ts",
+  "src/process/spawn-broker/spawn-failure.test.ts",
+  "src/process/spawn-broker/stdin-handoff.test.ts",
+  "src/process/spawn-broker/transports.test.ts",
+  "src/process/spawn-utils.test.ts",
+  // Keep the Node broker/subreaper cases and two-process relay retirement proof.
+  "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
+  "src/process/supervisor/service-child-relay-host.retirement.test.ts",
 ]);
-// src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
-// cold fs-safe native initialization roots the caller's ALS through custom_gc.
-// The dependency initialization owner needs a fix; this is not V8-specific proof.
+// Trial policies remove qualification gates, but retain genuine Node/V8 contracts.
+const nodeRequiredFiles = new Set([
+  ...nodeRequiredProcessFiles,
+  // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
+  "src/cli/cli-process-diagnostics.test.ts",
+  "test/scripts/bench-session-history.test.ts",
+  // These proofs require V8 heap instrumentation or Node worker heap flags.
+  "src/infra/worker-heap-flag.test.ts",
+  "src/logging/diagnostic-heap-profile.test.ts",
+  "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
+  // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+  "ui/src/pages/chat/chat-pane-retention.test.ts",
+  "ui/src/pages/chat/chat-thread-retention.test.ts",
+  "ui/src/pages/chat/session-snapshot-store.test.ts",
+  "ui/src/pages/usage/usage-page-retention.test.ts",
+]);
+const knownConfigs = new Set([
+  "ui/vitest.config.ts",
+  ...fullSuiteVitestShards.flatMap(({ config, projects }) => [config, ...(projects ?? [])]),
+]);
+
+// The census covers unit-src; other aggregate-unit owners retain their policy.
+const unitRequiresNode = (file: string) =>
+  !(
+    (file.startsWith("src/") &&
+      !file.startsWith("src/acp/") &&
+      !file.startsWith("src/security/")) ||
+    file === "packages/normalization-core/src/grapheme.test.ts"
+  );
+// State-lease retention stays with its separate infra owner on Node: the completed
+// worker-heartbeat case still retains caller async context on the pinned Bun fork.
 const runtimePartitions = new Map<
   string,
   {
@@ -217,13 +342,7 @@ const runtimePartitions = new Map<
         globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Only qualified complete process contracts run on Bun.
-      nodeRequired: (file) =>
-        ![
-          "src/process/spawn-broker/event-order.test.ts",
-          "src/process/spawn-broker/group-custody.test.ts",
-          "src/process/terminal-pty-bun.test.ts",
-        ].includes(file),
+      nodeRequired: nodeRequiredProcessFiles,
     },
   ],
   [
@@ -231,50 +350,19 @@ const runtimePartitions = new Map<
     {
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
-        // The pinned WebKit still misidentifies UTF-16 surrogate-pair segment boundaries.
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
+        ...nodeRequiredProcessFiles,
+        // Node's trace-exit and diagnostic-report instrumentation is not a Bun contract.
         "src/cli/cli-process-diagnostics.test.ts",
-        // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
-        // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
-        "src/infra/worker-task-pool.memory.test.ts",
-        "src/process/spawn-broker/callback-context.test.ts",
-        "src/process/spawn-broker/cleanup.test.ts",
-        "src/process/spawn-broker/handoff.test.ts",
-        "src/process/spawn-broker/relay.test.ts",
-        "src/process/spawn-broker/startup.test.ts",
-        "src/process/spawn-broker/stdin-handoff.test.ts",
-        "src/process/spawn-broker/transports.test.ts",
         // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
         "test/scripts/bench-session-history.test.ts",
-        "test/scripts/update-restart-module-outcome.test.ts",
       ]),
-    },
-  ],
-  [
-    embeddedRunOwner.config,
-    {
-      files: (cwd) =>
-        globSync(embeddedRunOwner.include, {
-          cwd,
-          exclude: [
-            ...sharedVitestExcludePatterns,
-            ...getUnitFastTestFilesForIncludePatterns(embeddedRunOwner.include),
-            ...embeddedRunOwner.exclude,
-          ],
-        })
-          .map((file) => file.replaceAll("\\", "/"))
-          .toSorted(),
-      // Only the runtime-neutral transcript lifecycle contract is qualified here.
-      nodeRequired: (file) =>
-        file !== "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.test.ts",
     },
   ],
   [
     "test/vitest/vitest.unit.config.ts",
     {
       files: unitFiles,
-      // Preserve the shared qualification in aggregate and src-only unit owners.
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [
@@ -287,7 +375,7 @@ const runtimePartitions = new Map<
             !file.startsWith("src/acp/") &&
             !file.startsWith("src/security/"),
         ),
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [
@@ -297,15 +385,7 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // collectGarbageForTest needs V8's precise collection: JavaScriptCore's
-      // conservative stack scanning can retain unreachable WeakRef targets.
-      nodeRequired: new Set([
-        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-        "ui/src/pages/chat/chat-pane-retention.test.ts",
-        "ui/src/pages/chat/chat-thread-retention.test.ts",
-        "ui/src/pages/chat/session-snapshot-store.test.ts",
-        "ui/src/pages/usage/usage-page-retention.test.ts",
-      ]),
+      nodeRequired: new Set<string>(),
       includeAfterShard: true,
     },
   ],
@@ -328,17 +408,58 @@ function unitFastFiles(includePatterns?: string[]): string[] {
   return getUnitFastTestFiles(includePatterns).filter((file) => !otherOwners.has(file));
 }
 
-function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+function nativeBunSourceHash(file: string, cwd: string): string | undefined {
   try {
-    return (
-      createHash("sha256")
-        .update(readFileSync(path.join(cwd, file)))
-        .digest("hex") === sha256
-    );
+    return createHash("sha256")
+      .update(readFileSync(path.join(cwd, file)))
+      .digest("hex");
   } catch {
     // Missing or unreadable qualification inputs retain the ordinary Vitest run.
-    return false;
+    return undefined;
   }
+}
+
+function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+  return nativeBunSourceHash(file, cwd) === sha256;
+}
+
+export function inspectNativeBunQualifications(cwd = process.cwd()): {
+  staleEntries: string[];
+  changedInputs: { file: string; reason: "changed" | "unreadable" }[];
+} {
+  const hashes = new Map<string, string | undefined>();
+  const changedInputs = new Map<string, "changed" | "unreadable">();
+  const changed = (file: string, expected: string): boolean => {
+    if (!hashes.has(file)) {
+      hashes.set(file, nativeBunSourceHash(file, cwd));
+    }
+    const actual = hashes.get(file);
+    if (actual === expected) {
+      return false;
+    }
+    changedInputs.set(file, actual === undefined ? "unreadable" : "changed");
+    return true;
+  };
+  // Inspect every input even when shared drift already invalidates the cohort.
+  const sharedChanged = Object.entries(nativeBunQualification.setup)
+    .map(([file, sha256]) => changed(file, sha256))
+    .some(Boolean);
+  const staleEntries = Object.entries(nativeBunTestHashes)
+    .filter(([file, sha256]) => {
+      const testChanged = changed(file, sha256);
+      const helperChanged = Object.entries(nativeBunHelperHashes[file] ?? {})
+        .map(([helper, hash]) => changed(helper, hash))
+        .some(Boolean);
+      return sharedChanged || testChanged || helperChanged;
+    })
+    .map(([file]) => file)
+    .toSorted();
+  return {
+    staleEntries,
+    changedInputs: [...changedInputs.keys()]
+      .toSorted()
+      .map((file) => ({ file, reason: changedInputs.get(file)! })),
+  };
 }
 
 function qualifiedNativeBunFiles(files: readonly string[], cwd: string): string[] {
@@ -436,12 +557,204 @@ export function resolveCiTestRuntimePolicy(
   env: NodeJS.ProcessEnv = process.env,
 ): CiTestRuntimePolicy {
   const policy = env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
-  if (policy !== "node" && policy !== "bun-compatible" && policy !== "dual") {
+  if (
+    policy !== "node" &&
+    policy !== "bun-compatible" &&
+    policy !== "dual" &&
+    policy !== "bun-all" &&
+    policy !== "dual-all"
+  ) {
     throw new Error(
-      `Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}; expected node, bun-compatible, or dual`,
+      `Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}; expected node, bun-compatible, dual, bun-all, or dual-all`,
     );
   }
   return policy;
+}
+
+function includesStayWithinWholeOwner(
+  config: string,
+  includePatterns: readonly string[] | null | undefined,
+): boolean {
+  if (!includePatterns?.length) {
+    return true;
+  }
+  const owner = bunCompatibleWholeOwners.get(config)!;
+  const canonical = relativizeScopedPatterns(owner.include, owner.dir);
+  return relativizeScopedPatterns(includePatterns, owner.dir).every((value) => {
+    const pattern = value.replace(/^\.\//u, "");
+    // Include files replace scoped config globs; uncertain patterns must keep Node's envelope.
+    if (!isPlainRepoRelativePath(pattern) || !exactTestFilePattern.test(pattern)) {
+      return canonical.includes(pattern);
+    }
+    const target = path.posix.join(owner.dir, pattern);
+    // Scoped configs also exclude the unit-fast families and shared fixture paths.
+    const exclude = [
+      ...sharedVitestExcludePatterns,
+      ...getUnitFastTestFiles([target]),
+      ...owner.exclude,
+    ];
+    return filterFilesByPatterns([target], owner.include, exclude, matchesVitestGlob).length === 1;
+  });
+}
+
+function resolveAllRuntimeSelections(
+  selection: TestSelection,
+  policy: "bun-all" | "dual-all",
+  cwd: string,
+): CiTestRuntimeSelection[] {
+  const node: CiTestRuntimeSelection = { runtime: "node" };
+  const args = selectionVitestArgs(selection);
+  const configs = selection.configs ?? [];
+  const relativePath = (value: string) =>
+    (path.isAbsolute(value) ? path.relative(cwd, value) : value)
+      .replaceAll("\\", "/")
+      .replace(/^(?:\.\.?\/)+/u, "");
+  const targets = selection.targets?.map(relativePath);
+  const exactTargets =
+    Boolean(targets?.length) && targets!.every((file) => exactTestFilePattern.test(file));
+  const ui = configs.length === 1 && configs[0] === "ui/vitest.config.ts";
+  const patterns = (key: string) => {
+    const value = selection.env?.[key];
+    return loadPatternListFromEnv(key, { [key]: typeof value === "string" ? value : undefined });
+  };
+  const includes = selection.includePatterns?.length
+    ? selection.includePatterns
+    : patterns("OPENCLAW_VITEST_INCLUDE_FILE");
+  const postIncludes = patterns("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE");
+  const matches = (file: string, include: readonly string[]) =>
+    include.some((pattern) => {
+      const relative = relativePath(pattern);
+      return file
+        .split("/")
+        .some((_, index, parts) => matchesVitestGlob(parts.slice(index).join("/"), relative));
+    });
+  const files = exactTargets ? targets! : [...nodeRequiredFiles];
+  const exceptions = files.filter((file) => {
+    if (!nodeRequiredFiles.has(file) || (postIncludes && !matches(file, postIncludes))) {
+      return false;
+    }
+    if (includes && !matches(file, includes)) {
+      return false;
+    }
+    if (exactTargets) {
+      return true;
+    }
+    if (
+      targets?.length &&
+      !targets.some((target) => file.includes(target) || matches(file, [target]))
+    ) {
+      return false;
+    }
+    if (includes) {
+      return true;
+    }
+    if (
+      !args ||
+      !(ui ? supportsUiRuntime(args) : supportsRuntimePartition(args)) ||
+      !configs.length ||
+      configs.some((config) => !knownConfigs.has(config))
+    ) {
+      return true;
+    }
+    const owners = new Set(buildVitestRunPlans([file], cwd).map((plan) => plan.config));
+    return configs.some(
+      (config) =>
+        owners.has(config) ||
+        fullSuiteVitestShards.some(
+          (shard) =>
+            shard.config === config && shard.projects?.some((project) => owners.has(project)),
+        ),
+    );
+  });
+  if (
+    (exactTargets && exceptions.length === files.length) ||
+    (includes?.length && includes.every((file) => nodeRequiredFiles.has(relativePath(file))))
+  ) {
+    return [node];
+  }
+  // UI membership is applied after native sharding, preserving each row's inventory.
+  if (ui && args && supportsUiRuntime(args)) {
+    const inventory = runtimePartitions.get("ui/vitest.config.ts")!.files(cwd);
+    const bunFiles = inventory.filter(
+      (file) => !nodeRequiredFiles.has(file) && (!postIncludes || matches(file, postIncludes)),
+    );
+    return [
+      ...(policy === "dual-all"
+        ? [node]
+        : exceptions.length
+          ? [
+              {
+                runtime: "node" as const,
+                includePatterns: exceptions,
+                includeAfterShard: true as const,
+              },
+            ]
+          : []),
+      { runtime: "bun", includePatterns: bunFiles, includeAfterShard: true, env: BUN_UI_TEST_ENV },
+    ];
+  }
+  // Preserve the native engine's exact source/setup/helper hash qualification.
+  if (
+    !selection.env?.OPENCLAW_VITEST_INCLUDE_FILE &&
+    !postIncludes &&
+    args &&
+    supportsRuntimePartition(args) &&
+    (exactTargets || (configs.length === 1 && configs[0] === unitFastConfig))
+  ) {
+    const qualified = resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd);
+    if (qualified.some((entry) => entry.engine === "bun-test")) {
+      for (const entry of qualified) {
+        if (entry.runtime === "bun" && entry.engine !== "bun-test" && entry.includePatterns) {
+          entry.includePatterns = entry.includePatterns.filter(
+            (file) => !nodeRequiredFiles.has(file),
+          );
+        }
+      }
+      const bun = qualified.filter(
+        (entry) =>
+          entry.runtime === "bun" &&
+          (entry.engine === "bun-test" ||
+            !entry.includePatterns ||
+            entry.includePatterns.length > 0),
+      );
+      return [
+        ...(policy === "dual-all"
+          ? [node]
+          : exceptions.length
+            ? [
+                {
+                  runtime: "node" as const,
+                  ...(exactTargets ? { targets: exceptions } : { includePatterns: exceptions }),
+                },
+              ]
+            : []),
+        ...bun,
+      ];
+    }
+  }
+  return [
+    ...(policy === "dual-all"
+      ? [node]
+      : exceptions.length
+        ? [
+            {
+              runtime: "node" as const,
+              ...(selection.targets?.length
+                ? { targets: exceptions }
+                : { vitestArgs: exceptions.map((file) => path.resolve(cwd, file)) }),
+            },
+          ]
+        : []),
+    {
+      runtime: "bun",
+      ...(ui ? { env: BUN_UI_TEST_ENV } : {}),
+      // Uncertain configs/argv use Bun; only named Node contracts are excluded.
+      // Absolute globs work with both repository-root and scoped Vitest dirs.
+      ...(exceptions.length
+        ? { vitestArgs: exceptions.map((file) => `--exclude=${path.resolve(cwd, file)}`) }
+        : {}),
+    },
+  ];
 }
 
 export function resolveCiTestRuntimeSelections(
@@ -449,6 +762,9 @@ export function resolveCiTestRuntimeSelections(
   policy: CiTestRuntimePolicy,
   cwd = process.cwd(),
 ): CiTestRuntimeSelection[] {
+  if (policy === "bun-all" || policy === "dual-all") {
+    return resolveAllRuntimeSelections(selection, policy, cwd);
+  }
   const node: CiTestRuntimeSelection[] = [{ runtime: "node" }];
   const args = selectionVitestArgs(selection);
   if (
@@ -479,7 +795,12 @@ export function resolveCiTestRuntimeSelections(
     if (!plans.length) {
       return node;
     }
-    if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
+    if (
+      plans.every(
+        (plan) =>
+          bunCompatibleConfigs.has(plan.config) || bunCompatibleWholeOwners.has(plan.config),
+      )
+    ) {
       return completeBun();
     }
     const config = plans[0]!.config;
@@ -551,6 +872,9 @@ export function resolveCiTestRuntimeSelections(
     return node;
   }
   const config = selection.configs[0]!;
+  if (bunCompatibleWholeOwners.has(config)) {
+    return includesStayWithinWholeOwner(config, selection.includePatterns) ? completeBun() : node;
+  }
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
   }

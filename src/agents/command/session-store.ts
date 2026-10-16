@@ -7,6 +7,7 @@ import {
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
+import { projectSessionUsageSnapshot } from "../../config/sessions/session-entry-usage.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -17,8 +18,8 @@ import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
-import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
+import { buildMainSessionRecoveryAfterAgentRunPatch } from "../main-session-recovery/main-session-recovery-clear.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
@@ -136,7 +137,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.agentHarnessId = agentHarnessId;
     }
     next.abortedLastRun = result.meta.aborted ?? false;
-    clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -145,7 +145,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   const hasUsage = hasNonzeroUsage(usage);
-  if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
+  if (!preserveUserFacingRunState) {
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
@@ -155,15 +155,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         agentDir: params.agentDir,
       }),
     );
-    if (hasUsage) {
-      next.inputTokens = usage.input ?? 0;
-      next.outputTokens = usage.output ?? 0;
-      next.cacheRead = usage.cacheRead ?? 0;
-      next.cacheWrite = usage.cacheWrite ?? 0;
-    }
-    // Snapshot cumulative run cost once, independently of current context.
-    // Unknown current cost must clear the previous run's snapshot too.
-    next.estimatedCostUsd = runEstimatedCostUsd;
+    Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));
   }
   if (!preserveUserFacingRunState) {
     const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
@@ -215,6 +207,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
             current: currentEntry,
             reassertAbortedLastRun: result.meta.aborted === true,
           });
+      if (!preserveUserFacingRunState) {
+        Object.assign(
+          patch,
+          buildMainSessionRecoveryAfterAgentRunPatch(
+            { ...currentEntry, ...patch },
+            params.clearRestartRecoveryForceSafeTools,
+          ),
+        );
+      }
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.
         patch.snoozedUntil = undefined;
@@ -223,6 +224,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       return patch;
     },
     {
+      workerGuard: {},
       ...(preserveUserFacingRunState || params.compactionAccounting
         ? {}
         : { fallbackEntry: entry }),
@@ -302,6 +304,7 @@ export async function recordCliCompactionInStore(params: {
       };
     },
     {
+      workerGuard: {},
       onCommitted: (committed) => {
         // Retain the committed fact without overwriting a later writer's cache on return.
         committedEntry = committed;

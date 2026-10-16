@@ -6,6 +6,7 @@ import type { CodexAppServerBindingStore } from "./session-binding.js";
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
+  releaseBinding: vi.fn(),
   start: vi.fn(),
   bundle: vi.fn(),
   user: vi.fn(),
@@ -38,19 +39,23 @@ vi.mock("./config-exec-approvals.js", () => ({
   resolveOpenClawExecPolicyForCodexAppServer: () => ({}),
 }));
 vi.mock("./config-requirements.js", () => ({ readCodexRequirementsToml: () => undefined }));
-vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({ loadExecApprovals: () => ({}) }));
+// mock-isolation: Native-thread handoff uses a fixed policy; approval database I/O is outside this fixture.
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({
+  loadExecApprovalsReadOnlyAsync: async () => ({}),
+}));
 vi.mock("./launch-args.js", () => ({ isCodexAppServerProxyLaunch: () => false }));
 vi.mock("./client-runtime.js", () => ({ ensureCodexAppServerClientRuntime: mocks.ensure }));
 vi.mock("./plugin-app-cache-key.js", () => ({
   buildCodexPluginAppCacheKey: () => "account-cache",
   buildCodexAppServerRuntimeFingerprint: () => "native-owner",
 }));
-vi.mock("./plugin-thread-config-deadline.js", () => ({
+vi.mock("./plugin-thread-config-deadline.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-thread-config-deadline.js")>()),
   resolveCodexPluginThreadConfigStartupPolicy: () => ({ pluginThreadConfigRequired: false }),
-  createCodexPluginThreadConfigStartupProvider: vi.fn(),
+  prepareCodexPluginThreadConfigStartupProvider: vi.fn(),
 }));
-vi.mock("./plugin-thread-config.js", () => ({
-  buildCodexPluginThreadConfigInputFingerprint: () => "plugins",
+vi.mock("./plugin-thread-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-thread-config.js")>()),
   mergeCodexThreadConfigs: (...parts: object[]) => Object.assign({}, ...parts),
 }));
 vi.mock("./session-permission-policy.js", () => ({
@@ -60,10 +65,16 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: mocks.acquire,
   releaseLeasedSharedCodexAppServerClient: mocks.release,
 }));
-vi.mock("./thread-lifecycle.js", () => ({ startOrResumeThread: mocks.start }));
-vi.mock("./session-binding.js", () => ({
+// mock-isolation: Lifecycle imports evaluate binding fingerprints outside this fixture's stubbed binding contract.
+vi.mock("./thread-lifecycle-run.js", () => ({ startOrResumeThread: mocks.start }));
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   sessionBindingIdentity: () => ({ sessionId: "session" }),
-  resolveCodexSessionBinding: async () => ({ binding: undefined, assertCurrent: mocks.assert }),
+  resolveCodexSessionBinding: async () => ({
+    binding: undefined,
+    authority: { assertLegacyCurrent: mocks.assert },
+    release: mocks.releaseBinding,
+  }),
 }));
 vi.mock("./thread-ownership.js", () => ({
   isSameCodexAppServerThreadOwner: () => true,
@@ -87,6 +98,12 @@ function fixture() {
       authProfileStore: { version: 1, profiles: {} },
       hostCapabilities: createCodexTestHostCapabilities({
         assertActive: mocks.assert,
+        preparedEnvironment: () => ({
+          credentialScrubEnv: {},
+          localIdentityEnv: {},
+          managedLocalIdentity: false,
+          localGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
+        }),
         retainSourceAuthority: () => ({
           assertCurrent: mocks.assert,
           release: vi.fn(),
@@ -96,13 +113,15 @@ function fixture() {
     },
     run: async (operation) => operation(),
   };
+  const read = () =>
+    mocks.start.mock.calls.length > 0
+      ? { threadId: "native-thread", clientId: "native-client" }
+      : undefined;
   return {
     preparation,
     bindingStore: {
-      read: () =>
-        mocks.start.mock.calls.length > 0
-          ? { threadId: "native-thread", clientId: "native-client" }
-          : undefined,
+      read,
+      readAsync: async () => read(),
       withLease: async (_identity: unknown, operation: () => Promise<unknown>) => operation(),
     } as unknown as CodexAppServerBindingStore,
     assertCurrent: mocks.assert,
@@ -143,6 +162,7 @@ describe("cold native MCP App session preparation", () => {
         }),
         userMcpServersEnabled: false,
         nativeModelAdmission: "required",
+        shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
         dynamicTools: [],
       }),
     );

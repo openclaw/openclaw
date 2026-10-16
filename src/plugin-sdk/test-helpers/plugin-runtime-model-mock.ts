@@ -26,6 +26,9 @@ export function createPluginModelRuntimeMock(
         version: 1,
         profiles: {},
       })),
+      ensureAuthProfileStoreAsync: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStoreAsync"]>(
+        async () => ({ version: 1, profiles: {} }),
+      ),
       resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
         () => [],
       ),
@@ -35,6 +38,9 @@ export function createPluginModelRuntimeMock(
       isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
         () => false,
       ),
+      isProviderApiKeyConfiguredAsync: vi.fn<
+        PluginRuntime["modelAuth"]["isProviderApiKeyConfiguredAsync"]
+      >(async () => false),
       getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
       getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),

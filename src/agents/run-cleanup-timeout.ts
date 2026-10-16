@@ -9,6 +9,7 @@ import {
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "@openclaw/retry";
 import { formatErrorMessage } from "../infra/errors.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -158,7 +159,6 @@ async function settleAgentCleanupStep(
   params: AgentCleanupStepParams,
 ): Promise<AgentCleanupStepOutcome> {
   const timeoutMs = resolveAgentCleanupStepTimeoutMs(params);
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
   const observedCleanupPromise = cleanupPromise
@@ -172,17 +172,15 @@ async function settleAgentCleanupStep(
       return { error };
     });
   void trackAsyncWork(() => observedCleanupPromise).catch(() => {});
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => {
+  const result = await raceWithTimeout(
+    observedCleanupPromise,
+    timeoutMs,
+    () => {
       timedOut = true;
-      resolve("timeout");
-    }, timeoutMs);
-    timeoutHandle.unref?.();
-  });
-  const result = await Promise.race([observedCleanupPromise, timeoutPromise]);
-  if (timeoutHandle) {
-    clearTimeout(timeoutHandle);
-  }
+      return "timeout" as const;
+    },
+    { ref: false },
+  );
   if (result === "timeout") {
     recordAgentCleanupFailure();
     const details = resolveCleanupTimeoutDetails(params.getTimeoutDetails);

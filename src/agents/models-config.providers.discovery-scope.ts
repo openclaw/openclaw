@@ -7,75 +7,67 @@ import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 
 export type ProviderDiscoveryScope = ReadonlyMap<string, readonly string[]>;
 
-function resolveProviderDiscoveryScope(params: {
+export function resolveImplicitProviderDiscoveryScope(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+  providerDiscoveryProviderIds?: readonly string[];
 }): ProviderDiscoveryScope | undefined {
-  const { config, workspaceDir, env } = params;
-  const scopedProviderIds =
-    params.providerIds !== undefined
-      ? normalizeStringEntries([...params.providerIds])
-          .map(normalizeProviderId)
-          .filter(Boolean)
-      : undefined;
-  if (scopedProviderIds) {
-    return buildProviderDiscoveryScope({
-      providerIds: scopedProviderIds,
-      config,
-      workspaceDir,
-      env,
-      resolveOwners: params.resolveOwners,
-    });
+  const { config, workspaceDir, pluginMetadataSnapshot } = params;
+  const env = params.env ?? process.env;
+  let providerIds: string[];
+  if (params.providerDiscoveryProviderIds !== undefined) {
+    providerIds = normalizeStringEntries([...params.providerDiscoveryProviderIds])
+      .map(normalizeProviderId)
+      .filter(Boolean);
+  } else {
+    const live =
+      env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
+    if (!live) {
+      return undefined;
+    }
+    const rawValues = [
+      env.OPENCLAW_LIVE_PROVIDERS?.trim(),
+      env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
+    ].filter((value): value is string => Boolean(value && value !== "all"));
+    if (rawValues.length === 0) {
+      return undefined;
+    }
+    providerIds = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")))
+      .map(normalizeProviderId)
+      .filter(Boolean);
+    if (providerIds.length === 0) {
+      return undefined;
+    }
   }
-  const live =
-    env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
-  }
-  const rawValues = [
-    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
-    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ].filter((value): value is string => Boolean(value && value !== "all"));
-  if (rawValues.length === 0) {
-    return undefined;
-  }
-  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")))
-    .map(normalizeProviderId)
-    .filter(Boolean);
-  if (ids.length === 0) {
-    return undefined;
-  }
-  return buildProviderDiscoveryScope({
-    providerIds: ids,
-    config,
-    workspaceDir,
-    env,
-    resolveOwners: params.resolveOwners,
-  });
-}
 
-function buildProviderDiscoveryScope(params: {
-  providerIds: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-}): ProviderDiscoveryScope {
-  const providerIds = [...new Set(params.providerIds)];
   const providerIdsByPluginId = new Map<string, string[]>();
-  for (const id of providerIds) {
+  for (const id of new Set(providerIds)) {
+    const metadataOwners = new Set<string>();
+    if (pluginMetadataSnapshot) {
+      for (const ownerMap of [
+        pluginMetadataSnapshot.owners.providers,
+        pluginMetadataSnapshot.owners.modelCatalogProviders,
+        pluginMetadataSnapshot.owners.setupProviders,
+        pluginMetadataSnapshot.owners.cliBackends,
+      ]) {
+        if (!ownerMap) {
+          continue;
+        }
+        for (const [ownedId, pluginIds] of ownerMap) {
+          if (normalizeProviderId(ownedId) === id) {
+            for (const pluginId of pluginIds) {
+              metadataOwners.add(pluginId);
+            }
+          }
+        }
+      }
+    }
     const owners =
-      params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProviderRef({
-        provider: id,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ??
-      [];
+      metadataOwners.size > 0
+        ? [...metadataOwners].toSorted((left, right) => left.localeCompare(right))
+        : (resolveOwningPluginIdsForProviderRef({ provider: id, config, workspaceDir, env }) ?? []);
     for (const pluginId of owners.length > 0 ? owners : [id]) {
       const ownedProviderIds = providerIdsByPluginId.get(pluginId) ?? [];
       if (!ownedProviderIds.includes(id)) {
@@ -87,56 +79,4 @@ function buildProviderDiscoveryScope(params: {
   return new Map(
     [...providerIdsByPluginId.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
   );
-}
-
-function resolvePluginMetadataProviderOwners(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  if (!pluginMetadataSnapshot) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-  const owners = new Set<string>();
-  for (const ownerMap of [
-    pluginMetadataSnapshot.owners.providers,
-    pluginMetadataSnapshot.owners.modelCatalogProviders,
-    pluginMetadataSnapshot.owners.setupProviders,
-    pluginMetadataSnapshot.owners.cliBackends,
-  ]) {
-    if (!ownerMap) {
-      continue;
-    }
-    for (const [ownedId, pluginIds] of ownerMap) {
-      if (normalizeProviderId(ownedId) === normalizedProvider) {
-        for (const pluginId of pluginIds) {
-          owners.add(pluginId);
-        }
-      }
-    }
-  }
-  return owners.size > 0
-    ? [...owners].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-export function resolveImplicitProviderDiscoveryScope(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
-  providerDiscoveryProviderIds?: readonly string[];
-}): ProviderDiscoveryScope | undefined {
-  return resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
 }

@@ -2,28 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as agentScopeConfig from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { isHeartbeatOwnerUnresolved, resolveHeartbeatAgents } from "./heartbeat-config.js";
 import { isHeartbeatEnabledForAgent } from "./heartbeat-summary.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
-});
-
-describe("tryResolveAmbientHeartbeatAgentId", () => {
-  it("prefers an explicit heartbeat owner over the system owner", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: {
-          heartbeat: { agentId: "ops" },
-          systemAgent: { agentId: "main" },
-        },
-      },
-    };
-    expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
-  });
 });
 
 describe("resolveHeartbeatAgents", () => {
@@ -37,22 +22,6 @@ describe("resolveHeartbeatAgents", () => {
   const ownerlessConfig = {
     agents: { ownership: "explicit", entries: { ops: {}, main: {} } },
   } as OpenClawConfig;
-
-  it("enrolls the system agent when ambient heartbeat config is absent", () => {
-    expect(resolveHeartbeatAgents(systemOwnedConfig)).toEqual([
-      { agentId: "ops", heartbeat: undefined },
-    ]);
-    expect(isHeartbeatEnabledForAgent(systemOwnedConfig, "ops")).toBe(true);
-    expect(isHeartbeatEnabledForAgent(systemOwnedConfig, "main")).toBe(false);
-    expect(isHeartbeatOwnerUnresolved(systemOwnedConfig)).toBe(false);
-  });
-
-  it("disables ambient heartbeats when an explicit multi-agent roster has no owner", () => {
-    expect(resolveHeartbeatAgents(ownerlessConfig)).toEqual([]);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig)).toBe(false);
-    expect(isHeartbeatEnabledForAgent(ownerlessConfig, "ops")).toBe(false);
-    expect(isHeartbeatOwnerUnresolved(ownerlessConfig)).toBe(true);
-  });
 
   it.each([
     { frozen: false, prepare: (cfg: OpenClawConfig) => cfg },
@@ -100,16 +69,16 @@ describe("resolveHeartbeatAgents", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("preserves explicit list order and duplicate IDs with the first normalized config", () => {
+  it("preserves explicit roster order and duplicate IDs with the first normalized config", () => {
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         defaults: { heartbeat: { agentId: "main", target: "owner" } },
-        list: [
-          { id: "OPS", heartbeat: { every: "0m" } },
-          { id: "ops", heartbeat: { every: "5m" } },
-          { id: "main" },
-        ],
+        entries: {
+          OPS: { heartbeat: { every: "0m" } },
+          ops: { heartbeat: { every: "5m" } },
+          main: {},
+        },
       },
     };
     expect(resolveHeartbeatAgents(cfg)).toEqual([
@@ -121,22 +90,24 @@ describe("resolveHeartbeatAgents", () => {
   });
 
   it.each([
+    { name: "system agent", cfg: systemOwnedConfig, expectedAgentIds: ["ops"] },
+    { name: "ownerless roster", cfg: ownerlessConfig, expectedAgentIds: [] },
     {
       name: "explicit heartbeat owner",
       cfg: {
         agents: {
           ownership: "explicit",
           entries: { main: {}, ops: {} },
-          defaults: { heartbeat: { agentId: "ops" } },
+          defaults: { heartbeat: { agentId: "ops" }, systemAgent: { agentId: "main" } },
         },
       } as OpenClawConfig,
       expectedAgentIds: ["ops"],
     },
     {
-      name: "legacy default marker",
-      cfg: {
+      name: "migrated legacy default marker",
+      cfg: createCanonicalAgentConfigFixture({
         agents: { entries: { main: { default: true }, ops: {} } },
-      } as OpenClawConfig,
+      }).config,
       expectedAgentIds: ["main"],
     },
     {
@@ -166,20 +137,28 @@ describe("resolveHeartbeatAgents", () => {
       } as OpenClawConfig,
       expectedAgentIds: ["main", "ops"],
     },
-  ])("enrolls exactly the runnable agents for the $name config", ({ cfg, expectedAgentIds }) => {
-    const agents = resolveHeartbeatAgents(cfg);
-    expect(agents.map((agent) => agent.agentId)).toEqual(expectedAgentIds);
-    for (const agentId of Object.keys(cfg.agents?.entries ?? {})) {
-      expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
-    }
-  });
+  ])(
+    "enrolls exactly the runnable agents for the $name config",
+    ({ name, cfg, expectedAgentIds }) => {
+      const agents = resolveHeartbeatAgents(cfg);
+      if (name === "explicit heartbeat owner") {
+        expect(tryResolveAmbientHeartbeatAgentId(cfg)).toBe("ops");
+      } else if (name === "system agent") {
+        expect(agents).toEqual([{ agentId: "ops", heartbeat: undefined }]);
+        expect(isHeartbeatOwnerUnresolved(cfg)).toBe(false);
+      } else if (name === "ownerless roster") {
+        expect(agents).toEqual([]);
+        expect(isHeartbeatEnabledForAgent(cfg)).toBe(false);
+        expect(isHeartbeatOwnerUnresolved(cfg)).toBe(true);
+      }
+      expect(agents.map((agent) => agent.agentId)).toEqual(expectedAgentIds);
+      for (const agentId of Object.keys(cfg.agents?.entries ?? {})) {
+        expect(isHeartbeatEnabledForAgent(cfg, agentId)).toBe(expectedAgentIds.includes(agentId));
+      }
+    },
+  );
 
-  it.each([
-    ["entries", "explicit"],
-    ["entries", "defaults"],
-    ["list", "explicit"],
-    ["list", "defaults"],
-  ] as const)("enrolls a %s %s fleet with linear reads and fresh config", (form, enrollment) => {
+  it.each(["explicit", "defaults"] as const)("enrolls %s fleets linearly", (enrollment) => {
     const size = 64;
     const rows = Array.from({ length: size }, (_, index) => ({
       id: `agent-${index}`,
@@ -201,7 +180,7 @@ describe("resolveHeartbeatAgents", () => {
       agents: {
         ownership: "explicit",
         defaults,
-        ...(form === "entries" ? { entries: observe(entries) } : { list: observe(rows) }),
+        entries: observe(entries),
       },
     };
     const expected = rows.map(({ id }) => ({
@@ -214,11 +193,7 @@ describe("resolveHeartbeatAgents", () => {
     expect(reads).toBeLessThanOrEqual(size * 4);
 
     defaults.heartbeat.every = "20m";
-    if (form === "entries") {
-      delete entries[`agent-${size - 1}`];
-    } else {
-      rows.pop();
-    }
+    delete entries[`agent-${size - 1}`];
     reads = 0;
     expect(resolveHeartbeatAgents(cfg)).toEqual(
       expected.slice(0, -1).map(({ agentId }) => ({

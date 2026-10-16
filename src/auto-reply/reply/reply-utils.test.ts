@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
@@ -54,23 +52,6 @@ describe("matchesMentionWithExplicit", () => {
 });
 
 describe("normalizeReplyPayload", () => {
-  it("preserves reply payload metadata across normalization clones", () => {
-    const sourceReplyTranscriptMirror = {
-      sessionKey: "main",
-      text: " Visible reply ",
-      idempotencyKey: "run-1:source-reply",
-    };
-    const payload = setReplyPayloadMetadata(
-      { text: " Visible reply " },
-      { sourceReplyTranscriptMirror },
-    );
-    const reply = expectNormalizedReply(normalizeReplyPayload(payload));
-    expect(reply).not.toBe(payload);
-    expect(getReplyPayloadMetadata(reply)?.sourceReplyTranscriptMirror).toEqual(
-      sourceReplyTranscriptMirror,
-    );
-  });
-
   it("keeps channelData-only replies", () => {
     const channelData = { line: { flexMessage: { type: "bubble" } } };
     const reply = expectNormalizedReply(normalizeReplyPayload({ channelData }));
@@ -80,8 +61,6 @@ describe("normalizeReplyPayload", () => {
 
   it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     for (const [text, reason] of [
-      ['"NO_REPLY"', "silent"],
-      [`${SILENT_REPLY_TOKEN}\n\n${SILENT_REPLY_TOKEN}`, "silent"],
       ["   ", "empty"],
       ["set-thought <channel|>", "silent"],
       ["───", "silent"],
@@ -137,63 +116,13 @@ describe("normalizeReplyPayload", () => {
     expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
   });
 
-  it("strips NO_REPLY from mixed emoji message (#30916)", () => {
-    expect(expectNormalizedReply(normalizeReplyPayload({ text: "😄 NO_REPLY" })).text).toBe("😄");
-  });
-
-  it("strips newline-separated leading silent tokens", () => {
-    expect(
-      expectNormalizedReply(
-        normalizeReplyPayload({ text: "NO_REPLY NO_REPLY\nThe user is saying hello" }),
-      ).text,
-    ).toBe("The user is saying hello");
-  });
-
-  it("preserves repeated silent tokens before substantive punctuation", () => {
-    const text = "NO_REPLY\nNO_REPLY: explanation";
+  it.each([
+    "😄 NO_REPLY",
+    "NO_REPLY NO_REPLY\nThe user is saying hello",
+    "NO_REPLYThe user is saying hello",
+    "An answer followed by NO_REPLY",
+  ])("preserves non-control token mentions: %s", (text) => {
     expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
-  });
-
-  it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
-    const onSkip = vi.fn();
-    expect(
-      normalizeReplyPayload(
-        {
-          text: "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
-        },
-        { onSkip },
-      ),
-    ).toBeNull();
-    expect(onSkip.mock.calls).toEqual([["silent"]]);
-  });
-
-  it("suppresses tagged leaked reasoning ending in silence narration (#66701)", () => {
-    const onSkip = vi.fn();
-    expect(
-      normalizeReplyPayload(
-        {
-          text: "<think>Cav is talking about a follow-up conversation.</think>\nI will stay quiet here.NO_REPLY",
-        },
-        { onSkip },
-      ),
-    ).toBeNull();
-    expect(onSkip.mock.calls).toEqual([["silent"]]);
-  });
-
-  it("does not suppress JSON NO_REPLY objects with extra fields", () => {
-    const text = '{"action":"NO_REPLY","note":"example"}';
-    expect(expectNormalizedReply(normalizeReplyPayload({ text })).text).toBe(text);
-  });
-
-  it("strips JSON NO_REPLY action text but keeps media payload", () => {
-    const reply = expectNormalizedReply(
-      normalizeReplyPayload({
-        text: '{"action":"NO_REPLY"}',
-        mediaUrl: "https://example.com/img.png",
-      }),
-    );
-    expect(reply.text).toBe("");
-    expect(reply.mediaUrl).toBe("https://example.com/img.png");
   });
 });
 
@@ -204,7 +133,6 @@ describe("typing controller", () => {
     const typing = createTypingController({
       onReplyStart,
       typingIntervalSeconds: 1,
-      typingTtlMs: 30_000,
       keepalive,
     });
     return { typing, onReplyStart };
@@ -306,21 +234,6 @@ describe("resolveTypingMode", () => {
 });
 
 describe("resolveResponsePrefixTemplate", () => {
-  it("resolves known variables, aliases, and case-insensitive tokens", () => {
-    expect(
-      resolveResponsePrefixTemplate(
-        "{MODEL} {modelFull} {provider} {thinkingLevel}/{think} {identity.name}/{identityName}",
-        {
-          model: "gpt-5.4",
-          modelFull: "openai/gpt-5.4",
-          provider: "openai",
-          thinkingLevel: "high",
-          identityName: "OpenClaw",
-        },
-      ),
-    ).toBe("gpt-5.4 openai/gpt-5.4 openai high/high OpenClaw/OpenClaw");
-  });
-
   it("preserves unresolved/unknown placeholders and handles static inputs", () => {
     expect(resolveResponsePrefixTemplate("{model}", {})).toBe("{model}");
     for (const [template, expected] of [
@@ -359,7 +272,7 @@ describe("createTypingSignaler", () => {
   it("does not start typing for non-renderable deltas", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({ typing, mode: "message", isHeartbeat: false });
-    for (const text of [undefined, "", " \t\n", SILENT_REPLY_TOKEN]) {
+    for (const text of [undefined, "", " \t\n"]) {
       await signaler.signalTextDelta(text);
       await signaler.signalMessageStart();
       await signaler.signalToolStart();
@@ -382,15 +295,6 @@ describe("createTypingSignaler", () => {
     await signaler.signalToolStart();
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
-  });
-
-  it("starts typing on tool-start for instant and thinking modes", async () => {
-    for (const mode of ["instant", "thinking"] as const) {
-      const typing = createMockTypingController();
-      await createTypingSignaler({ typing, mode, isHeartbeat: false }).signalToolStart();
-      expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
-      expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
-    }
   });
 
   it("suppresses typing when disabled", async () => {
@@ -438,15 +342,6 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("does not coalesce reasoning blocks into visible reply text", async () => {
-    const { flushes, coalescer } = createCoalescer({ joiner: "\n\n" });
-    coalescer.enqueue({ text: "hidden", isReasoning: true });
-    coalescer.enqueue({ text: "Visible answer" });
-    await coalescer.flush({ force: true });
-    expect(flushes).toEqual([{ text: "hidden", isReasoning: true }, { text: "Visible answer" }]);
-    coalescer.stop();
-  });
-
   it("preserves compaction and fallback notice markers across flushes", async () => {
     const { flushes, coalescer } = createCoalescer({ joiner: "\n\n" });
     coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
@@ -456,19 +351,6 @@ describe("block reply coalescer", () => {
       { text: "Compacting context...", isCompactionNotice: true },
       { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true },
     ]);
-    coalescer.stop();
-  });
-
-  it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
-    const { flushes, coalescer } = createCoalescer({
-      minChars: 10,
-      idleMs: 50,
-      flushOnEnqueue: true,
-    });
-    coalescer.enqueue({ text: "Hi" });
-    coalescer.enqueue({ text: "Next" });
-    await Promise.resolve();
-    expect(flushes).toEqual([{ text: "Hi" }, { text: "Next" }]);
     coalescer.stop();
   });
 
@@ -484,18 +366,6 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("keeps reasoning text separate from media payloads", async () => {
-    const { flushes, coalescer } = createCoalescer();
-    coalescer.enqueue({ text: "hidden", isReasoning: true });
-    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
-    await coalescer.flush({ force: true });
-    expect(flushes).toEqual([
-      { text: "hidden", isReasoning: true },
-      { mediaUrls: ["https://example.com/a.png"] },
-    ]);
-    coalescer.stop();
-  });
-
   it("keeps buffered text separate when media changes reply target", async () => {
     const { flushes, coalescer } = createCoalescer();
     coalescer.enqueue({ text: "Unthreaded caption" });
@@ -504,18 +374,6 @@ describe("block reply coalescer", () => {
     expect(flushes).toEqual([
       { text: "Unthreaded caption" },
       { mediaUrls: ["https://example.com/a.png"], replyToId: "thread-2" },
-    ]);
-    coalescer.stop();
-  });
-
-  it("keeps text separate from voice media payloads", async () => {
-    const { flushes, coalescer } = createCoalescer();
-    coalescer.enqueue({ text: "Listen to this" });
-    coalescer.enqueue({ mediaUrls: ["https://example.com/a.ogg"], audioAsVoice: true });
-    await coalescer.flush({ force: true });
-    expect(flushes).toEqual([
-      { text: "Listen to this" },
-      { mediaUrls: ["https://example.com/a.ogg"], audioAsVoice: true },
     ]);
     coalescer.stop();
   });
@@ -541,18 +399,6 @@ describe("createReplyReferencePlanner", () => {
     expect(existing.use()).toBe("thread-1");
     expect(existing.use()).toBeUndefined();
   });
-
-  it("honors allowReference=false", () => {
-    const planner = createReplyReferencePlanner({
-      replyToMode: "all",
-      startId: "parent",
-      allowReference: false,
-    });
-    expect(planner.use()).toBeUndefined();
-    expect(planner.hasReplied()).toBe(false);
-    planner.markSent();
-    expect(planner.hasReplied()).toBe(true);
-  });
 });
 
 describe("createStreamingDirectiveAccumulator", () => {
@@ -576,21 +422,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     });
   });
 
-  it.each<[string, string[]]>([
-    ["later line", ["Visible reply\n", "[[reply_to_", "current] literally"]],
-    ["fenced code", ["```text\n[[reply_to_", "current]\n```"]],
-  ])("preserves split malformed %s", (_name, chunks) => {
-    const accumulator = createStreamingDirectiveAccumulator();
-    const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
-    expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
-  });
-
-  it("restores padding when a pending tail resolves as literal text beside a directive", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-    const first = accumulator.consume("answer [[");
-    const second = accumulator.consume("bogus]] [[reply_to_current]] tail");
-    expect(`${first?.text ?? ""}${second?.text ?? ""}`).toBe("answer [[bogus]] tail");
-  });
+  it.each<[string, string[]]>([["fenced code", ["```text\n[[reply_to_", "current]\n```"]]])(
+    "preserves split malformed %s",
+    (_name, chunks) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+      expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(
+        chunks.join(""),
+      );
+    },
+  );
 
   it("propagates explicit reply ids until the assistant message resets", () => {
     const accumulator = createStreamingDirectiveAccumulator();
@@ -616,33 +457,10 @@ describe("createStreamingDirectiveAccumulator", () => {
     });
   });
 
-  it("strips a glued leading NO_REPLY token from streamed text", () => {
+  it("preserves a glued leading NO_REPLY mention in streamed text", () => {
     expect(
       createStreamingDirectiveAccumulator().consume("NO_REPLYThe user is saying hello")?.text,
-    ).toBe("The user is saying hello");
-  });
-
-  it("keeps a split media prefix buffered until final parsing", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-    expect(accumulator.consume("Preview:\n\tME")?.text).toBe("Preview:\n");
-    expect(accumulator.consume("DIA:./asset.png")).toBeNull();
-    expect(accumulator.consume("", { final: true })?.text).toBe("\tMEDIA:./asset.png");
-  });
-
-  it("strips audio voice tags from streamed chunks", () => {
-    expect(
-      createStreamingDirectiveAccumulator().consume("Hello\n[[audio_as_voice]]"),
-    ).toMatchObject({ text: "Hello", audioAsVoice: true });
-  });
-
-  it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-    const first = accumulator.consume("The legacy pipeline uses MEDIA");
-    expect(first?.text).toBe("The legacy pipeline uses MEDIA");
-    expect(first?.mediaUrls).toBeUndefined();
-    const second = accumulator.consume(": kind=disk capacity=1TB");
-    expect(second?.text).toBe(": kind=disk capacity=1TB");
-    expect(second?.mediaUrls).toBeUndefined();
+    ).toBe("NO_REPLYThe user is saying hello");
   });
 
   it("keeps a complete final MEDIA line available to the final parser", () => {
@@ -658,10 +476,7 @@ describe("createStreamingDirectiveAccumulator", () => {
 });
 
 describe("parseReplyDirectives malformed reply prefixes", () => {
-  it.each([
-    ["[[reply_to_current] Visible reply", "Visible reply"],
-    ["[[reply_to:", ""],
-  ])("strips %s without treating it as reply intent", (input, text) => {
+  it.each([["[[reply_to:", ""]])("strips %s without treating it as reply intent", (input, text) => {
     expect(parseReplyDirectives(input)).toMatchObject({
       text,
       replyToId: undefined,

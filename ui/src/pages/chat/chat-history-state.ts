@@ -1,11 +1,9 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
-  uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -65,7 +63,6 @@ type ChatHistoryPaneRequests = {
       agentId?: string;
     }
   >;
-  pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
   acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
   initialSnapshotHydration?: InitialChatSnapshotHydration;
@@ -73,15 +70,16 @@ type ChatHistoryPaneRequests = {
 
 export type InitialChatSnapshotHydration = {
   sessionKey: string;
-  startedBeforeReady: boolean;
+  connected: boolean;
   promise: Promise<void>;
-  readyAt?: number;
   wait?: Promise<boolean>;
   complete?: () => void;
   cancel?: () => void;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
+// Start at history publication so slow network time never spends the cache grace period.
+const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   let requests = chatHistoryPaneRequests.get(owner);
@@ -90,7 +88,6 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       historyVersion: 0,
       branchVersion: 0,
       subscriptionGeneration: 0,
-      pendingSubscriptionReleases: new Set(),
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
     };
@@ -144,8 +141,8 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
     return;
   }
   if (state.connected) {
-    hydration.readyAt ??= Date.now();
-  } else if (hydration.readyAt !== undefined) {
+    hydration.connected = true;
+  } else if (hydration.connected) {
     retireInitialChatSnapshot(state);
   }
 }
@@ -156,38 +153,26 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
   if (!hydration) {
     return undefined;
   }
-  if (
-    !hydration.startedBeforeReady ||
-    !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
-  ) {
+  if (!areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)) {
     retireInitialChatSnapshot(state);
     return undefined;
   }
   if (hydration.wait) {
     return hydration.wait;
   }
-  const readyAt = (hydration.readyAt ??= Date.now());
-  // The connection owns the budget; mounting offline must not spend it.
-  const remaining = Math.max(0, 300 - (Date.now() - readyAt));
-  if (remaining === 0) {
-    retireInitialChatSnapshot(state);
-    return undefined;
-  }
   hydration.wait = new Promise<boolean>((resolve) => {
     const finish = (current: boolean) => {
-      clearTimeout(timer);
+      clearTimeout(timeout);
       if (requests.initialSnapshotHydration === hydration) {
         delete requests.initialSnapshotHydration;
       }
       resolve(current);
     };
-    hydration.complete = () => finish(true);
+    const timeout = setTimeout(() => finish(true), INITIAL_CHAT_SNAPSHOT_WAIT_MS);
+    const complete = () => finish(true);
+    hydration.complete = complete;
     hydration.cancel = () => finish(false);
-    const timer = setTimeout(() => finish(true), remaining);
-    void hydration.promise.then(
-      () => finish(true),
-      () => finish(true),
-    );
+    void hydration.promise.then(complete, complete);
   });
   return hydration.wait;
 }
@@ -307,14 +292,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     : load.phase !== "committed" && load.startup;
 }
 
-type ChatHistoryRequestOwnership = {
-  version: number;
-  sessions: ChatState["sessions"];
-  client: GatewayBrowserClient;
-  connectionEpoch: number;
-  sessionKey: string;
-  agentId?: string;
-};
+type ChatHistoryRequestOwnership = ReturnType<typeof beginHistoryRequest>;
 
 export function beginHistoryRequest(
   state: ChatState,
@@ -322,7 +300,7 @@ export function beginHistoryRequest(
   connectionEpoch: number,
   sessionKey: string,
   agentId?: string,
-): ChatHistoryRequestOwnership {
+) {
   return {
     version: ++chatHistoryRequests(state).historyVersion,
     sessions: state.sessions,
@@ -386,12 +364,4 @@ export function setChatError(
   if (requestUpdate) {
     state.requestUpdate?.();
   }
-}
-
-export function chatScopedEventSessionMatches(
-  state: ChatState,
-  sessionKey: string,
-  agentId?: string | null,
-): boolean {
-  return uiConversationMatches(state, state.sessionKey, sessionKey, agentId);
 }

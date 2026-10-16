@@ -1,6 +1,10 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Context } from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type * as TelegramMediaRuntime from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -10,8 +14,11 @@ import {
   from,
   harness,
   nextTelegramTestMessageId,
+  photo,
+  publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { mediaDownload, telegramMediaPng } from "./bot.media.native.test-utils.js";
+import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import { cacheSticker, getCachedSticker } from "./sticker-cache.js";
 import { resolveStickerVisionSupportRuntime } from "./sticker-vision.runtime.js";
 
@@ -20,6 +27,58 @@ vi.mock("./sticker-vision.runtime.js", { spy: true });
 const base = { date: 1736380800, from, chat };
 
 describe("registered Telegram stickers and local media", () => {
+  it.each([
+    { caption: "Animation caption", companionDocument: true },
+    { caption: "Animation caption", companionDocument: false },
+    { caption: undefined, companionDocument: true },
+    { caption: undefined, companionDocument: false },
+  ])("downloads animation as video: %j", async ({ caption, companionDocument }) => {
+    const animationBytes = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");
+    mediaDownload.mockImplementation((params) =>
+      saveMediaBuffer(
+        animationBytes,
+        "video/mp4",
+        "inbound",
+        params.maxBytes,
+        params.originalFilename,
+      ),
+    );
+    const bot = await createBot(false);
+    const animation = {
+      file_id: "animation-file",
+      file_unique_id: "animation-unique",
+      width: 32,
+      height: 32,
+      duration: 1,
+      file_name: "animation.mp4",
+      mime_type: "video/mp4",
+    };
+    const messageId = nextTelegramTestMessageId();
+    await bot.handleUpdate({
+      update_id: messageId,
+      message: {
+        ...base,
+        message_id: messageId,
+        animation,
+        ...(companionDocument ? { document: animation } : {}),
+        ...(caption ? { caption } : {}),
+      },
+    });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    const context = harness.replySpy.mock.calls[0]![0];
+    expect(context.BodyForAgent).toBe(caption ?? "");
+    expect(context.media).toEqual([
+      expect.objectContaining({
+        kind: "video",
+        contentType: "video/mp4",
+        fileName: "animation.mp4",
+      }),
+    ]);
+    expect(await readFile(context.media![0]!.path!)).toEqual(animationBytes);
+    expect(mediaDownload).toHaveBeenCalledOnce();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "getFile")).toHaveLength(1);
+  });
+
   it("reuses a stored description, refreshes its file identity, and skips unsupported sticker bytes", async () => {
     vi.mocked(resolveStickerVisionSupportRuntime).mockResolvedValue(false);
     await cacheSticker({
@@ -138,5 +197,55 @@ describe("registered Telegram stickers and local media", () => {
       await rm(root, { recursive: true, force: true });
       await rm(outside, { force: true });
     }
+  });
+});
+
+describe("registered Telegram media transport", () => {
+  it("downloads actual bytes through the provided transport and configured Bot API prefix", async () => {
+    const token = "123456:media-transport";
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: token, dmPolicy: "open", allowFrom: ["*"] } },
+    };
+    publishTelegramTestConfig(cfg);
+    const apiRoot = `${cfg.channels!.telegram!.apiRoot}/custom-bot-api`;
+    cfg.channels!.telegram!.apiRoot = apiRoot;
+    const bot = await createBot(false, true, cfg);
+    apiResponses.set("getFile", { ok: true, result: { file_path: "photos/transport.png" } });
+    const actual = await vi.importActual<typeof TelegramMediaRuntime>(
+      "openclaw/plugin-sdk/media-runtime",
+    );
+    mediaDownload.mockImplementationOnce(actual.saveRemoteMedia);
+    const sourceFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(telegramMediaPng, {
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("global fetch must not acquire media"),
+    );
+    const messageId = nextTelegramTestMessageId();
+    const ctx = new Context(
+      { update_id: messageId, message: { ...base, chat, message_id: messageId, photo } },
+      bot.api,
+      bot.botInfo,
+    );
+    if (!ctx.has("message")) {
+      throw new Error("Expected Telegram media message");
+    }
+    const media = await resolveMedia({
+      ctx,
+      token,
+      apiRoot,
+      maxBytes: 1024,
+      transport: { fetch: sourceFetch, sourceFetch, close: async () => {} },
+    });
+    expect(
+      sourceFetch.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
+      ),
+    ).toEqual([`${apiRoot}/file/bot${token}/photos/transport.png`]);
+    expect(await readFile(media!.path)).toEqual(telegramMediaPng);
+    expect(media).toMatchObject({ contentType: "image/png", kind: "image" });
   });
 });

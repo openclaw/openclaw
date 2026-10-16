@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
@@ -23,6 +24,7 @@ it.each(["existing", "admitted new"] as const)(
   "uses %s session's private skill identity for both pre-ACK staging calls",
   async (sessionKind) => {
     await withOpenClawTestState({ label: "private-preack-stage" }, async (state) => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       const selection = {
         skillId: "00000000-0000-0000-0000-000000000001",
         revision: "0".repeat(64),
@@ -38,7 +40,7 @@ it.each(["existing", "admitted new"] as const)(
         ctx.media[0].path = "media/inbound/private.txt";
         return { staged: new Map([[0, "media/inbound/private.txt"]]) };
       });
-      const request = normalizeChatSendRequest({
+      const request = await normalizeChatSendRequest({
         client: null,
         params: {
           sessionKey: "agent:main:private",

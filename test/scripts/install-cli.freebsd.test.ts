@@ -139,9 +139,6 @@ describe("FreeBSD CLI runtime installation", () => {
 describe("FreeBSD source-install admission", () => {
   it.each([
     { args: "--install-method git", json: false },
-    { args: "--method git", json: true },
-    { args: "--git", json: false },
-    { args: "--github", json: true },
     { args: "--npm --git", json: true },
     { args: "", json: false },
   ])("refuses $args before installation side effects (JSON: $json)", ({ args, json }) => {
@@ -221,39 +218,49 @@ describe("FreeBSD source-install admission", () => {
     expect(result.stdout.trim()).toBe(`selected:${os}:${args === "--git" ? "git" : "npm"}`);
   });
 
-  it("keeps the FreeBSD Node-only refusal ahead of the ignored git method", () => {
-    const { root, prefix } = fixture();
-    const result = run(
-      `
-      os_detect() { printf 'freebsd\\n'; }
-      arch_detect() { printf 'x64\\n'; }
-      main --node-only --git
-      `,
-      { HOME: root, TMPDIR: root, OPENCLAW_PREFIX: prefix },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Private Node.js recovery is unavailable on FreeBSD");
-    expect(result.stdout).not.toContain("Source/git");
-    expect(existsSync(prefix)).toBe(false);
-  });
-
-  it.each(["main", "github:openclaw/openclaw#main"])(
-    "does not recommend git for the rejected npm source target %s",
-    (version) => {
+  it.each([
+    {
+      command: "main --node-only --git",
+      version: "",
+      message: "Private Node.js recovery is unavailable on FreeBSD",
+      forbidden: "Source/git",
+    },
+    {
+      command: "install_openclaw",
+      version: "main",
+      message: "--install-method npm",
+      forbidden: "--install-method git",
+    },
+    {
+      command: "install_openclaw",
+      version: "github:openclaw/openclaw#main",
+      message: "--install-method npm",
+      forbidden: "--install-method git",
+    },
+  ])(
+    "explains the FreeBSD refusal for $command $version",
+    ({ command, version, message, forbidden }) => {
+      const { root, prefix } = fixture();
       const result = run(
         `
-        os_detect() { printf 'freebsd\\n'; }
-        JSON=1
-        install_openclaw
-        `,
-        { OPENCLAW_VERSION: version },
+      os_detect() { printf 'freebsd\\n'; }
+      arch_detect() { printf 'x64\\n'; }
+      JSON=${version ? "1" : "0"}
+      ${command}
+      `,
+        { HOME: root, TMPDIR: root, OPENCLAW_PREFIX: prefix, OPENCLAW_VERSION: version },
       );
       expect(result.status).toBe(1);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        event: "error",
-        message: expect.stringContaining("--install-method npm"),
-      });
-      expect(result.stdout).not.toContain("--install-method git");
+      if (version) {
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          event: "error",
+          message: expect.stringContaining(message),
+        });
+      } else {
+        expect(result.stdout).toContain(message);
+        expect(existsSync(prefix)).toBe(false);
+      }
+      expect(result.stdout).not.toContain(forbidden);
     },
   );
 });

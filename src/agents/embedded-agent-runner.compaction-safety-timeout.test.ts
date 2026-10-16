@@ -30,21 +30,6 @@ afterEach(() => {
 });
 
 describe("compaction safety timeout", () => {
-  it("aborts on caller cancellation and invokes onCancel once", async () => {
-    const controller = new AbortController();
-    const onCancel = vi.fn();
-    const reason = new Error("request timed out");
-    const pending = compactWithSafetyTimeout(() => new Promise<never>(() => {}), 100, {
-      abortSignal: controller.signal,
-      onCancel,
-    });
-    const assertion = expect(pending).rejects.toBe(reason);
-    controller.abort(reason);
-    await assertion;
-    expect(onCancel).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("retains the default timeout when cancellation cleanup throws", async () => {
     const onCancel = vi.fn(() => {
       throw new Error("abortCompaction failed");

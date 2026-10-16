@@ -12,6 +12,7 @@ import {
   isCronDeliveryStatus,
   isCronRunStatus,
 } from "./run-history-detail.js";
+import { cronRunEntryMatchesLink } from "./run-link.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
@@ -21,6 +22,7 @@ type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
 export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -78,6 +80,7 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   return [
     entry.summary ?? "",
     entry.error ?? "",
+    entry.deliveryError ?? "",
     entry.errorReason ?? "",
     entry.diagnostics?.summary ?? "",
     ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
@@ -115,18 +118,24 @@ export function projectCronRunHistoryPage(
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
   const sortMultiplier = options.sortDir === "asc" ? -1 : 1;
-  const rows = records
+  let rows = records
     .filter(
       (record) =>
         (!jobId || record.jobId === jobId) && cronRunRecordStoreKey(record) === options.storeKey,
     )
     .filter((record) => !agentId || record.agentId === agentId)
     .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
-    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null)
+    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null);
+  if (runId) {
+    const exact = rows.filter(({ entry }) => entry.runId === runId);
+    const aliases = exact.length
+      ? []
+      : rows.filter(({ entry }) => cronRunEntryMatchesLink(runId, entry));
+    // Public ids retain precedence; a reused session or start time cannot select another run.
+    rows = exact.length ? exact : aliases.length === 1 ? aliases : [];
+  }
+  rows = rows
     .filter(({ entry }) => {
-      if (runId && entry.runId !== runId) {
-        return false;
-      }
       if (statuses && (!entry.status || !statuses.includes(entry.status))) {
         return false;
       }
@@ -146,6 +155,14 @@ export function projectCronRunHistoryPage(
   const boundedOffset = Math.min(total, offset);
   const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);
   attachJobNames(entries, options.jobNameById);
+  if (options.view === "summary") {
+    // Search and visibility use the full record before pruning the response page.
+    for (const entry of entries) {
+      delete entry.diagnostics;
+      delete entry.delivery;
+      delete entry.failureNotificationDelivery;
+    }
+  }
   const nextOffset = boundedOffset + entries.length;
   return {
     entries,

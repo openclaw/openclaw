@@ -116,25 +116,11 @@ export type ChromeMcpSessionLease = {
   release: () => Promise<void>;
 };
 
-export type ChromeMcpSessionFactory = (
-  profileName: string,
-  options?: NormalizedChromeMcpProfileOptions,
-) => Promise<ChromeMcpSession>;
-
 /** One OS snapshot row: ancestry and immutable birth identity from the same read. */
 export type ChromeMcpProcessSnapshot = {
   pid: number;
   ppid: number;
   identity: string;
-};
-
-/** Injectable process cleanup dependencies for platform-specific tests. */
-export type ChromeMcpProcessCleanupDeps = {
-  listProcesses?: () => Promise<ChromeMcpProcessSnapshot[]>;
-  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
-  sleep?: (ms: number) => Promise<void>;
-  platform?: NodeJS.Platform;
-  taskkillProcessTree?: (pid: number) => Promise<void>;
 };
 
 export type ChromeMcpOwnedProcess = Pick<ChromeMcpProcessSnapshot, "pid" | "identity">;

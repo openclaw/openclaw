@@ -392,7 +392,18 @@ export function registerRollbackReportTests(
       await printResult(result, { json: true, run });
       expect(json).toHaveBeenCalledWith(
         expect.objectContaining({
-          ...(outcome === "thrown" ? {} : { steps: expect.arrayContaining([restored]) }),
+          ...(outcome === "thrown"
+            ? {}
+            : {
+                steps: expect.arrayContaining([
+                  {
+                    ...restored,
+                    ...(outcome === "failed"
+                      ? { failureFacts: [{ check: "update", code: "source-rollback-failed" }] }
+                      : {}),
+                  },
+                ]),
+              }),
           run: expect.objectContaining({
             steps: expect.arrayContaining([
               expect.objectContaining({

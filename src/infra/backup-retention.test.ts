@@ -5,6 +5,7 @@ import {
   resolveBackupNamespace,
   selectBackupRetention,
   type BackupRetention,
+  type BackupRetentionOptions,
 } from "./backup-retention.js";
 
 const key = (timestamp: string) => `${timestamp}-0123abcd.tar.gz`;
@@ -21,6 +22,16 @@ const timestamps = [
   "20261101T120000Z",
 ];
 const backups = timestamps.map(key);
+const foreign = [
+  `other-host/${backups[0]}`,
+  `backups/other-host/${backups[0]}`,
+  "notes.txt",
+  "archive.tar.gz",
+  "20270101T000000Z-deadbeef.tar.gz.extra",
+  "20270101T000000Z-deadbee.tar.gz",
+  "20260230T000000Z-0123abcd.tar.gz",
+  "20270101T250000Z-0123abcd.tar.gz",
+];
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,7 +44,7 @@ describe("backup retention", () => {
       kept: ["20270104T000100Z"],
     },
     {
-      label: "newest in each nonempty UTC day",
+      label: "newest in each nonempty UTC day with other periods unspecified",
       policy: { keepDaily: 3 },
       kept: ["20270104T000100Z", "20270103T235900Z", "20270101T230000Z"],
     },
@@ -48,7 +59,7 @@ describe("backup retention", () => {
       kept: ["20270104T000100Z", "20261231T235900Z"],
     },
     {
-      label: "union of daily, weekly, and monthly buckets",
+      label: "union of daily, weekly, and monthly buckets across a year boundary",
       policy: { keepDaily: 2, keepWeekly: 3, keepMonthly: 3 },
       kept: [
         "20270104T000100Z",
@@ -58,62 +69,53 @@ describe("backup retention", () => {
         "20261130T120000Z",
       ],
     },
-  ])("keeps $label", ({ policy, kept }) => {
-    const selected = selectBackupRetention(backups.toReversed(), policy);
+  ])("keeps $label and excludes foreign keys", ({ policy, kept }) => {
+    const selected = selectBackupRetention([...foreign, ...backups.toReversed()], policy);
     expect(selected.kept).toEqual(kept.map(key));
     expect(selected.deleted).toEqual(
       timestamps.filter((timestamp) => !kept.includes(timestamp)).map(key),
     );
+    expect([...selected.kept, ...selected.deleted].toSorted()).toEqual(backups.toSorted());
+    expect(selected.kept[0]).toBe(backups[0]);
   });
 
-  it.each([{}, { keepDaily: 0 }])("never selects foreign or malformed keys with %j", (policy) => {
-    const foreign = [
-      `other-host/${backups[0]}`,
-      `backups/other-host/${backups[0]}`,
-      "notes.txt",
-      "archive.tar.gz",
-      "20270101T000000Z-deadbeef.tar.gz.extra",
-      "20270101T000000Z-deadbee.tar.gz",
-      "20260230T000000Z-0123abcd.tar.gz",
-      "20270101T250000Z-0123abcd.tar.gz",
-    ];
-    const result = selectBackupRetention([...foreign, ...backups], policy);
-    expect([...result.kept, ...result.deleted].toSorted()).toEqual(backups.toSorted());
-    expect(result.kept[0]).toBe(backups[0]);
-  });
-
-  it("accepts zero and integer CLI counts", () => {
-    expect(normalizeBackupRetention({ keepDaily: "7", keepWeekly: 0, keepMonthly: "12" })).toEqual({
-      keepDaily: 7,
-      keepWeekly: 0,
-      keepMonthly: 12,
-    });
-  });
-
-  it.each([
-    { keepDaily: "" },
-    { keepDaily: "-1" },
-    { keepDaily: -1 },
-    { keepWeekly: "1.5" },
-    { keepMonthly: Infinity },
-    { keepMonthly: Number.NaN },
-    { keepDaily: Number.MAX_SAFE_INTEGER + 1 },
-  ])("rejects unsafe retention counts %j", (options) => {
-    expect(() => normalizeBackupRetention(options)).toThrow("must be a nonnegative integer");
+  it.each<{ options: BackupRetentionOptions; expected?: BackupRetention }>([
+    {
+      options: { keepDaily: "7", keepWeekly: 0, keepMonthly: "12" },
+      expected: { keepDaily: 7, keepWeekly: 0, keepMonthly: 12 },
+    },
+    { options: { keepDaily: "" } },
+    { options: { keepDaily: "-1" } },
+    { options: { keepDaily: -1 } },
+    { options: { keepWeekly: "1.5" } },
+    { options: { keepMonthly: Infinity } },
+    { options: { keepMonthly: Number.NaN } },
+    { options: { keepDaily: Number.MAX_SAFE_INTEGER + 1 } },
+  ])("validates retention counts $options", ({ options, expected }) => {
+    if (expected) {
+      expect(normalizeBackupRetention(options)).toEqual(expected);
+    } else {
+      expect(() => normalizeBackupRetention(options)).toThrow("must be a nonnegative integer");
+    }
   });
 });
 
 describe("backup namespaces", () => {
-  it("sanitizes the default hostname and preserves explicit namespace identity", () => {
+  it.each([
+    { namespace: undefined, expected: "Peter-s-Mac.local" },
+    { namespace: "Host_A-2.local", expected: "Host_A-2.local" },
+    ...["", ".", "..", "../other-host", "host/child", "host name", "a".repeat(129)].map(
+      (namespace) => ({
+        namespace,
+        expected: undefined,
+      }),
+    ),
+  ])("validates the namespace %j", ({ namespace, expected }) => {
     vi.spyOn(os, "hostname").mockReturnValue("Peter's Mac.local");
-    expect(resolveBackupNamespace()).toBe("Peter-s-Mac.local");
-    expect(resolveBackupNamespace("Host_A-2.local")).toBe("Host_A-2.local");
-  });
-
-  it.each(["", ".", "..", "../other-host", "host/child", "host name", "a".repeat(129)])(
-    "rejects non-segment namespace %j",
-    (namespace) => {
+    if (expected) {
+      expect(resolveBackupNamespace(namespace)).toBe(expected);
+    } else {
       expect(() => resolveBackupNamespace(namespace)).toThrow("Backup namespace");
-    },
-  );
+    }
+  });
 });

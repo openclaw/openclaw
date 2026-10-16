@@ -19,10 +19,20 @@ type ParsedBindArgs = {
 type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
+
+const COMPUTER_USE_OPTIONS = [
+  ["--source", "marketplaceSource"],
+  ["--marketplace-source", "marketplaceSource"],
+  ["--marketplace-path", "marketplacePath"],
+  ["--path", "marketplacePath"],
+  ["--marketplace", "marketplaceName"],
+  ["--plugin", "pluginName"],
+  ["--server", "mcpServerName"],
+  ["--mcp-server", "mcpServerName"],
+] as const;
 
 type ParsedCodexCliSessionsArgs = {
   host?: string;
@@ -38,7 +48,25 @@ export type ParsedResumeArgs = {
   help?: boolean;
 };
 
-/** No-arg `/codex` picker. */
+const CONNECTION_OPTIONS = {
+  bind: new Map([
+    ["--cwd", "cwd"],
+    ["--model", "model"],
+    ["--provider", "provider"],
+    ["--model-provider", "provider"],
+  ]),
+  resume: new Map([
+    ["--host", "host"],
+    ["--node", "host"],
+    ["--bind", "bind"],
+  ]),
+  sessions: new Map([
+    ["--host", "host"],
+    ["--node", "host"],
+    ["--limit", "limit"],
+  ]),
+};
+
 export function buildCodexSubcommandPickerReply(): PluginCommandResult {
   const verbs: CodexCommandPickerButton[] = [
     { label: "plugins", command: "/codex plugins menu" },
@@ -70,63 +98,44 @@ export function buildCodexSubcommandPickerReply(): PluginCommandResult {
   };
 }
 
-export function buildCodexFastMenuReply(): PluginCommandResult {
-  return buildCodexChoiceMenuReply({
-    title: "Codex fast mode",
-    prompt: "Pick a Codex fast mode:",
-    introduction: "Codex fast mode. Pick one or type /codex fast <mode>:",
-    command: "/codex fast",
-    choices: ["on", "off", "status"],
-  });
-}
-
-export function buildCodexPermissionsMenuReply(): PluginCommandResult {
-  return buildCodexChoiceMenuReply({
-    title: "Codex permissions",
-    prompt: "Pick a Codex permissions mode:",
-    introduction: "Codex permissions. Pick one or type /codex permissions <mode>:",
-    command: "/codex permissions",
-    choices: ["default", "yolo", "status"],
-  });
-}
-
-export function buildCodexComputerUseMenuReply(): PluginCommandResult {
-  return buildCodexChoiceMenuReply({
-    title: "Codex computer-use",
-    prompt: "Pick a Codex computer-use action:",
-    introduction: "Codex computer-use. Pick one or type /codex computer-use <action>:",
-    command: "/codex computer-use",
-    choices: ["status", "install"],
-    hint: "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
-  });
-}
-
-function buildCodexChoiceMenuReply(params: {
-  title: string;
-  prompt: string;
-  introduction: string;
-  command: string;
-  choices: readonly string[];
-  hint?: string;
-}): PluginCommandResult {
+export function buildCodexChoiceMenuReply(
+  kind: "fast" | "permissions" | "computer-use",
+): PluginCommandResult {
+  const choices = {
+    fast: ["on", "off", "status"],
+    permissions: ["default", "yolo", "status"],
+    "computer-use": ["status", "install"],
+  }[kind];
+  const title = `Codex ${kind === "fast" ? "fast mode" : kind}`;
+  const argument = kind === "computer-use" ? "action" : "mode";
+  const command = `/codex ${kind}`;
   const buttons: CodexCommandPickerButton[] = [
-    ...params.choices.map((choice) => ({
+    ...choices.map((choice) => ({
       label: choice,
-      command: `${params.command} ${choice}`,
+      command: `${command} ${choice}`,
     })),
     { label: "back", command: "/codex" },
   ];
   const fallbackTextLines = [
-    params.introduction,
+    `${title}. Pick one or type ${command} <${argument}>:`,
     "",
-    ...params.choices.map((choice, index) => `  ${index + 1}. ${params.command} ${choice}`),
+    ...choices.map((choice, index) => `  ${index + 1}. ${command} ${choice}`),
     "",
-    ...(params.hint ? [params.hint, ""] : []),
+    ...(kind === "computer-use"
+      ? [
+          "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
+          "",
+        ]
+      : []),
     "Type '/codex' to go back to the main menu.",
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(params.title, params.prompt, buttons),
+    presentation: buildCodexCommandPickerPresentation(
+      title,
+      `Pick a Codex ${kind} ${argument}:`,
+      buttons,
+    ),
   };
 }
 
@@ -145,37 +154,26 @@ export function splitArgs(value: string | undefined): string[] {
     if (escaping) {
       current += char;
       escaping = false;
-      tokenStarted = true;
-      continue;
-    }
-    if (char === "\\" && quote !== "'") {
+    } else if (char === "\\" && quote !== "'") {
       escaping = true;
-      tokenStarted = true;
-      continue;
-    }
-    if (quote) {
+    } else if (quote) {
       if (char === quote) {
         quote = undefined;
       } else {
         current += char;
       }
-      tokenStarted = true;
-      continue;
-    }
-    if (char === '"' || char === "'") {
+    } else if (char === '"' || char === "'") {
       quote = char;
-      tokenStarted = true;
-      continue;
-    }
-    if (/\s/.test(char)) {
+    } else if (/\s/.test(char)) {
       if (tokenStarted) {
         args.push(current);
         current = "";
         tokenStarted = false;
       }
       continue;
+    } else {
+      current += char;
     }
-    current += char;
     tokenStarted = true;
   }
   if (escaping) {
@@ -188,15 +186,7 @@ export function splitArgs(value: string | undefined): string[] {
 }
 
 export function parseBindArgs(args: string[]): ParsedBindArgs {
-  const { parsed, values } = parseThreadArgs(
-    args,
-    new Map([
-      ["--cwd", "cwd"],
-      ["--model", "model"],
-      ["--provider", "provider"],
-      ["--model-provider", "provider"],
-    ]),
-  );
+  const { parsed, values } = parseConnectionArgs(args, "bind");
   return {
     ...parsed,
     cwd: normalizeOptionalString(values.get("cwd")),
@@ -206,55 +196,16 @@ export function parseBindArgs(args: string[]): ParsedBindArgs {
 }
 
 export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
-  const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
-  const filter: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex sessions argument");
-    if (arg === "--help" || arg === "-h") {
-      parsed.help = true;
-      continue;
-    }
-    if (arg === "--host" || arg === "--node") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.host !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.host = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const value = readRequiredOptionValue(args, index);
-      const parsedLimit = parseStrictPositiveInteger(value);
-      if (parsedLimit === undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.limit = parsedLimit;
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      parsed.help = true;
-      continue;
-    }
-    filter.push(arg);
-  }
-  parsed.host = normalizeOptionalString(parsed.host);
-  parsed.filter = filter.join(" ").trim();
-  return parsed;
+  const { parsed, values, filter } = parseConnectionArgs(args, "sessions");
+  return {
+    ...parsed,
+    host: normalizeOptionalString(values.get("host")),
+    filter: filter.join(" ").trim(),
+  };
 }
 
 export function parseResumeArgs(args: string[]): ParsedResumeArgs {
-  const { parsed, values } = parseThreadArgs(
-    args,
-    new Map([
-      ["--host", "host"],
-      ["--node", "host"],
-      ["--bind", "bind"],
-    ]),
-  );
+  const { parsed, values } = parseConnectionArgs(args, "resume");
   return {
     ...parsed,
     ...(values.has("bind") ? { bindHere: true } : {}),
@@ -262,21 +213,32 @@ export function parseResumeArgs(args: string[]): ParsedResumeArgs {
   };
 }
 
-function parseThreadArgs(
-  args: string[],
-  options: ReadonlyMap<string, "cwd" | "model" | "provider" | "host" | "bind">,
-) {
-  const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> = {};
+function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIONS) {
+  const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> & { limit?: number } = {};
   const values = new Map<string, string>();
+  const filter: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex thread argument");
+    const arg = expectDefined(
+      args[index],
+      `current Codex ${kind === "sessions" ? "sessions" : "thread"} argument`,
+    );
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
     }
-    const option = options.get(arg);
+    const option = CONNECTION_OPTIONS[kind].get(arg);
     if (option) {
       const value = readRequiredOptionValue(args, index);
+      if (option === "limit") {
+        const limit = parseStrictPositiveInteger(value);
+        if (limit === undefined) {
+          parsed.help = true;
+          continue;
+        }
+        parsed.limit = limit;
+        index += 1;
+        continue;
+      }
       if (!value || values.has(option) || (option === "bind" && value !== "here")) {
         parsed.help = true;
         continue;
@@ -285,21 +247,26 @@ function parseThreadArgs(
       index += 1;
       continue;
     }
+    if (kind === "sessions" && !arg.startsWith("-")) {
+      filter.push(arg);
+      continue;
+    }
     if (!arg.startsWith("-") && !parsed.threadId) {
       parsed.threadId = arg;
       continue;
     }
     parsed.help = true;
   }
-  parsed.threadId = normalizeOptionalString(parsed.threadId);
-  return { parsed, values };
+  if (kind !== "sessions") {
+    parsed.threadId = normalizeOptionalString(parsed.threadId);
+  }
+  return { parsed, values, filter };
 }
 
 export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
-    hasOverrides: false,
     persistentIdentity: {},
   };
   let sawAction = false;
@@ -318,33 +285,18 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       parsed.action = arg;
       continue;
     }
-    const option =
-      arg === "--source" || arg === "--marketplace-source"
-        ? "marketplaceSource"
-        : arg === "--marketplace-path" || arg === "--path"
-          ? "marketplacePath"
-          : arg === "--marketplace"
-            ? "marketplaceName"
-            : undefined;
+    const option = COMPUTER_USE_OPTIONS.find(([flag]) => flag === arg)?.[1];
     if (option) {
+      const target: Partial<CodexComputerUseConfig> =
+        option === "pluginName" || option === "mcpServerName"
+          ? parsed.persistentIdentity
+          : parsed.overrides;
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides[option] !== undefined) {
+      if (!value || target[option] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides[option] = value.trim();
-      parsed.hasOverrides = true;
-      index += 1;
-      continue;
-    }
-    if (arg === "--plugin" || arg === "--server" || arg === "--mcp-server") {
-      const value = readRequiredOptionValue(args, index);
-      const configKey = arg === "--plugin" ? "pluginName" : "mcpServerName";
-      if (!value || parsed.persistentIdentity[configKey] !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.persistentIdentity[configKey] = value.trim();
+      target[option] = value.trim();
       index += 1;
       continue;
     }
@@ -357,26 +309,22 @@ export function formatComputerUsePersistentIdentityMigration(
   parsed: ParsedComputerUseArgs,
 ): string {
   const configPrefix = "plugins.entries.codex.config.computerUse";
-  const settings = [
-    parsed.persistentIdentity.pluginName
-      ? `${configPrefix}.pluginName = ${JSON.stringify(parsed.persistentIdentity.pluginName)}`
-      : undefined,
-    parsed.persistentIdentity.mcpServerName
-      ? `${configPrefix}.mcpServerName = ${JSON.stringify(parsed.persistentIdentity.mcpServerName)}`
-      : undefined,
-  ].filter((setting): setting is string => Boolean(setting));
+  const settings = (["pluginName", "mcpServerName"] as const).flatMap((key) => {
+    const value = parsed.persistentIdentity[key];
+    return value ? [`${configPrefix}.${key} = ${JSON.stringify(value)}`] : [];
+  });
+  const retryOptions = [
+    ["marketplaceSource", "--source"],
+    ["marketplacePath", "--marketplace-path"],
+    ["marketplaceName", "--marketplace"],
+  ] as const;
   const retryArgs = [
     `/codex computer-use ${parsed.action}`,
-    parsed.overrides.marketplaceSource
-      ? `--source ${JSON.stringify(parsed.overrides.marketplaceSource)}`
-      : undefined,
-    parsed.overrides.marketplacePath
-      ? `--marketplace-path ${JSON.stringify(parsed.overrides.marketplacePath)}`
-      : undefined,
-    parsed.overrides.marketplaceName
-      ? `--marketplace ${JSON.stringify(parsed.overrides.marketplaceName)}`
-      : undefined,
-  ].filter((arg): arg is string => Boolean(arg));
+    ...retryOptions.flatMap(([key, flag]) => {
+      const value = parsed.overrides[key];
+      return value ? [`${flag} ${JSON.stringify(value)}`] : [];
+    }),
+  ];
   return [
     "One-off Computer Use plugin/server overrides are no longer supported.",
     `Set ${settings.join(" and ")} persistently, then rerun ${retryArgs.join(" ")}.`,

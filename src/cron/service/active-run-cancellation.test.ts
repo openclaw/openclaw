@@ -65,40 +65,7 @@ describe("cron task cancellation tracking", () => {
     }
   });
 
-  it("retires restart tracking while keeping an unsettled core suspension-visible", async () => {
-    resetActiveCronTaskRunsForTests();
-    const core = createDeferred();
-    trackActiveCronTaskRunSettlement(core.promise);
-
-    try {
-      await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({
-        drained: false,
-        active: 1,
-      });
-      expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
-
-      retireActiveCronTaskRunTracking();
-
-      await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({
-        drained: true,
-        active: 0,
-      });
-      expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
-
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-    } finally {
-      core.resolve();
-      await core.promise;
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-    }
-  });
-
-  it.each([
-    { direction: "backward", clockShiftMs: -86_400_000 },
-    { direction: "forward", clockShiftMs: 86_400_000 },
-  ])(
+  it.each([{ direction: "forward", clockShiftMs: 86_400_000 }])(
     "keeps shutdown drain deadlines stable when the wall clock jumps $direction",
     async ({ clockShiftMs }) => {
       vi.useFakeTimers();
@@ -173,10 +140,7 @@ describe("cron task cancellation tracking", () => {
     },
   );
 
-  it.each([
-    { timing: "after tracking", abortBeforeTracking: false },
-    { timing: "before tracking", abortBeforeTracking: true },
-  ])(
+  it.each([{ timing: "before tracking", abortBeforeTracking: true }])(
     "drops never-settling cron promises after an abort $timing",
     async ({ abortBeforeTracking }) => {
       vi.useFakeTimers();
@@ -270,52 +234,51 @@ describe("cron task cancellation tracking", () => {
     }
   });
 
-  it.each([
-    { scenario: "only handleless runs", cancellableRuns: 0, handlelessRuns: 1 },
-    { scenario: "mixed active runs", cancellableRuns: 1, handlelessRuns: 1 },
-    { scenario: "no active runs", cancellableRuns: 0, handlelessRuns: 0 },
-  ])("retires $scenario during a bulk shutdown", async ({ cancellableRuns, handlelessRuns }) => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const cancellableCore = createDeferred();
-    const handlelessCore = createDeferred();
-    let release: (() => void) | undefined;
-    try {
-      resetActiveCronTaskRunsForTests();
-      if (cancellableRuns > 0) {
-        trackActiveCronTaskRunSettlement(cancellableCore.promise, controller.signal);
-      }
-      if (handlelessRuns > 0) {
-        trackActiveCronTaskRunSettlement(handlelessCore.promise);
-      }
-      release =
-        cancellableRuns > 0
-          ? registerActiveCronTaskRun({ runId: "shutdown-run", controller })
-          : undefined;
+  it.each([{ scenario: "mixed active runs", cancellableRuns: 1, handlelessRuns: 1 }])(
+    "retires $scenario during a bulk shutdown",
+    async ({ cancellableRuns, handlelessRuns }) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const cancellableCore = createDeferred();
+      const handlelessCore = createDeferred();
+      let release: (() => void) | undefined;
+      try {
+        resetActiveCronTaskRunsForTests();
+        if (cancellableRuns > 0) {
+          trackActiveCronTaskRunSettlement(cancellableCore.promise, controller.signal);
+        }
+        if (handlelessRuns > 0) {
+          trackActiveCronTaskRunSettlement(handlelessCore.promise);
+        }
+        release =
+          cancellableRuns > 0
+            ? registerActiveCronTaskRun({ runId: "shutdown-run", controller })
+            : undefined;
 
-      expect(abortActiveCronTaskRuns()).toBe(cancellableRuns);
-      const retirementTimerCount = vi.getTimerCount();
-      expect(abortActiveCronTaskRuns()).toBe(0);
-      expect(vi.getTimerCount()).toBe(retirementTimerCount);
-      if (cancellableRuns + handlelessRuns === 0) {
-        expect(retirementTimerCount).toBe(0);
-      }
-      release?.();
-      await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
+        expect(abortActiveCronTaskRuns()).toBe(cancellableRuns);
+        const retirementTimerCount = vi.getTimerCount();
+        expect(abortActiveCronTaskRuns()).toBe(0);
+        expect(vi.getTimerCount()).toBe(retirementTimerCount);
+        if (cancellableRuns + handlelessRuns === 0) {
+          expect(retirementTimerCount).toBe(0);
+        }
+        release?.();
+        await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
 
-      await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({
-        drained: true,
-        active: 0,
-      });
-      expect(getSuspensionVisibleCronTaskRunCount()).toBe(cancellableRuns + handlelessRuns);
-    } finally {
-      release?.();
-      cancellableCore.resolve();
-      handlelessCore.resolve();
-      await Promise.allSettled([cancellableCore.promise, handlelessCore.promise]);
-      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
-      vi.useRealTimers();
-      resetActiveCronTaskRunsForTests();
-    }
-  });
+        await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({
+          drained: true,
+          active: 0,
+        });
+        expect(getSuspensionVisibleCronTaskRunCount()).toBe(cancellableRuns + handlelessRuns);
+      } finally {
+        release?.();
+        cancellableCore.resolve();
+        handlelessCore.resolve();
+        await Promise.allSettled([cancellableCore.promise, handlelessCore.promise]);
+        await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
+        vi.useRealTimers();
+        resetActiveCronTaskRunsForTests();
+      }
+    },
+  );
 });

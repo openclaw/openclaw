@@ -1,4 +1,4 @@
-import type { RetainedOperation } from "./retained-operation.js";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 
 export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, realpathSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,7 @@ import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exe
 const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
 const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 const moduleLoaderUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.moduleLoader);
+const thinkingUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.thinking);
 const sdkEntrypoints = [
   workerBackgroundExecEntrypoints.providerModelMetadata,
   workerBackgroundExecEntrypoints.stringCoerceRuntime,
@@ -137,16 +138,36 @@ export function registerWorkerBackgroundExecLifecycleTests({
             : []),
           `const { runWorkerProcess } = await import(${JSON.stringify(workerProcessUrl.href)});`,
           `const { getPluginModuleLoaderStats } = await import(${JSON.stringify(moduleLoaderUrl.href)});`,
+          `const { resolveThinkingDefaultForModel } = await import(${JSON.stringify(thinkingUrl.href)});`,
           "const nativeRequire = createRequire(import.meta.url);",
           `const sdkTargets = new Set(${JSON.stringify(expectedSdkModules)});`,
+          "const readSdkWitness = () => ({",
+          "  policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
+          "  sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "});",
           "const write = process.stdout.write.bind(process.stdout);",
           "process.stdout.write = (chunk, ...args) => {",
           "  let frame;",
           "  try { frame = JSON.parse(chunk.toString()); } catch {}",
           '  if (frame?.type === "result") {',
+          "    const preparedTurn = readSdkWitness();",
+          // Prepared worker turns do not need local policy discovery. Exercise the
+          // native SDK graph separately through an explicit policy request.
+          `    resolveThinkingDefaultForModel(${JSON.stringify({
+            provider: launch.assignment.modelRef.provider,
+            model: launch.assignment.modelRef.model,
+            catalog: [
+              {
+                provider: launch.assignment.modelRef.provider,
+                id: launch.assignment.modelRef.model,
+                api: "openai-responses",
+                reasoning: false,
+              },
+            ],
+          })});`,
           `    writeFileSync(${JSON.stringify(sdkWitness)}, JSON.stringify({`,
-          "      policyTargets: getPluginModuleLoaderStats().topSourceTransformTargets.map(({ target }) => target),",
-          "      sdkModules: Object.keys(nativeRequire.cache).filter((file) => sdkTargets.has(file)),",
+          "      preparedTurn,",
+          "      ...readSdkWitness(),",
           "    }));",
           "  }",
           "  return write(chunk, ...args);",
@@ -171,10 +192,24 @@ export function registerWorkerBackgroundExecLifecycleTests({
         placementGeneration: 1,
       } satisfies NodeWorkerLaunchInput;
       let capacity = { total: 1, available: 0 };
+      // After anchor loss, ps stalls past its census timeout. Lifetime cleanup must
+      // reach the exec relays without waiting for a process census.
+      const censusBin = path.join(workspaceDir, "census-bin");
+      const censusStalled = path.join(workspaceDir, "census-stalled");
+      await mkdir(censusBin);
+      await writeFile(
+        path.join(censusBin, "ps"),
+        [
+          "#!/bin/sh",
+          `if [ -e '${censusStalled}' ]; then trap '' TERM; sleep 12; fi`,
+          'exec /bin/ps "$@"',
+        ].join("\n"),
+      );
+      await chmod(path.join(censusBin, "ps"), 0o755);
       const supervisorOptions = {
         bundleRoot: root,
         env: {
-          PATH: process.env.PATH,
+          PATH: `${censusBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: home,
           OPENCLAW_STATE_DIR: path.join(workspaceDir, "node-state"),
         },
@@ -275,6 +310,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
         ).toHaveLength(1);
         expect(capacity).toEqual({ total: 1, available: 0 });
         expect(JSON.parse(await readFile(sdkWitness, "utf8"))).toMatchObject({
+          preparedTurn: { policyTargets: [], sdkModules: [] },
           policyTargets: expect.arrayContaining([
             path.resolve("extensions/openai/provider-policy-api.ts"),
           ]),
@@ -296,6 +332,7 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await supervisor.initialize();
         } else {
           if (crashed === "anchor") {
+            await writeFile(censusStalled, "");
             process.kill(runtime!.pid, "SIGSTOP");
             runtimeStopped = true;
           }

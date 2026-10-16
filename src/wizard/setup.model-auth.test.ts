@@ -7,6 +7,7 @@ import {
 import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { resolvePersistCandidateForWrite } from "../config/io.write-prepare.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -96,7 +97,6 @@ function createDefaultAgentConfig(): OpenClawConfig {
       defaults: { workspace: "/tmp/global-workspace" },
       entries: {
         ops: {
-          default: true,
           agentDir: "/tmp/ops-agent",
           workspace: "/tmp/ops-workspace",
         },
@@ -114,10 +114,11 @@ describe("runSetupModelAuthStep", () => {
   });
 
   it("keeps the migrated setup owner and pending credentials through config copies", async () => {
-    let config = createDefaultAgentConfig();
+    const raw: OpenClawConfigWithLegacyRoster = createDefaultAgentConfig();
+    raw.agents!.entries = { alpha: {}, ...raw.agents!.entries };
+    raw.agents!.entries!.ops!.default = true;
+    let config = createCanonicalAgentConfigFixture(raw).config;
     const prompter = createWizardPrompter();
-    config.agents!.entries = { alpha: {}, ...config.agents!.entries };
-    config = createCanonicalAgentConfigFixture(config).config;
     config = await requireRiskAcknowledgement({ config, opts: { acceptRisk: true }, prompter });
     vi.mocked(prompter.select).mockResolvedValueOnce(false);
     config = await requestTelemetryConsent({ config, opts: {}, prompter });

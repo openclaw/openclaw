@@ -1,12 +1,16 @@
 import { clampThinkingLevel } from "../model-utils.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamOpenAICompletionsRequest } from "../transports/openai-completions-transport.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { SimpleStreamOptions, StreamFunction } from "../types.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
+
+type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
+  openclawThinkingExplicit?: boolean;
+};
 
 export const streamOpenAICompletions: StreamFunction<
   "openai-completions",
@@ -16,18 +20,23 @@ export const streamOpenAICompletions: StreamFunction<
 export const streamSimpleOpenAICompletions: StreamFunction<
   "openai-completions",
   SimpleStreamOptions
-> = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
+  // Host session streams attach selection intent without changing the public provider options.
+  const completionsOptions = options as OpenAIThinkingProvenanceOptions | undefined;
 
-  return streamOpenAICompletions(model, context, {
+  const providerOptions = {
     ...base,
     reasoningEffort: clampedReasoning,
-    toolChoice,
-  } satisfies OpenAICompletionsOptions);
+    toolChoice: completionsOptions?.toolChoice,
+    streaming: completionsOptions?.streaming,
+    openclawThinkingExplicit:
+      completionsOptions?.openclawThinkingExplicit ?? options?.reasoning !== undefined,
+  } satisfies OpenAIThinkingProvenanceOptions;
+  return streamOpenAICompletions(model, context, providerOptions);
 };

@@ -2,8 +2,6 @@
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
 import type { ExtensionTestPlanGroup } from "./extension-test-plan.mts";
 
-type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
-
 /** Required behavioral surfaces that plugin prerelease validation must cover. */
 const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
@@ -135,26 +133,25 @@ const staticChecks = Object.freeze([
   },
 ]);
 
-function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
-  return [
-    ...new Set(
-      entries
-        .flatMap((entry) => entry.surfaces)
-        .filter((surface) => typeof surface === "string" && surface.length > 0),
-    ),
-  ].toSorted((a, b) => a.localeCompare(b));
-}
-
-/** Keep each release batch on Node and add only its qualified Bun groups. */
+/** Preserve release defaults while honoring explicit complete-inventory trials. */
 export async function resolvePluginPrereleaseExtensionRuntime({
   planGroups,
   fullReleaseValidation,
   vitestArgs = [],
+  env = process.env,
 }: {
   planGroups: readonly Pick<ExtensionTestPlanGroup, "config" | "roots">[];
   fullReleaseValidation: boolean;
   vitestArgs?: readonly string[];
-}): Promise<{ test_runtime_policy: "dual" | "node"; requires_bun: boolean }> {
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  test_runtime_policy: "dual" | "node" | "bun-all" | "dual-all";
+  requires_bun: boolean;
+}> {
+  const trialPolicy = env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
+  if (trialPolicy === "bun-all" || trialPolicy === "dual-all") {
+    return { test_runtime_policy: trialPolicy, requires_bun: true };
+  }
   if (!fullReleaseValidation) {
     return { test_runtime_policy: "node", requires_bun: false };
   }
@@ -187,7 +184,9 @@ export function createPluginPrereleaseTestPlan() {
       command: entry.command,
       surfaces: entry.surfaces.slice(),
     })),
-    surfaces: coveredSurfaces(allEntries),
+    surfaces: [...new Set(allEntries.flatMap((entry) => entry.surfaces))].toSorted((a, b) =>
+      a.localeCompare(b),
+    ),
   };
 }
 

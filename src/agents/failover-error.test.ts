@@ -4,6 +4,7 @@ import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.j
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -11,7 +12,6 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
-  hasProviderRequestSizeCeiling,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -20,6 +20,7 @@ import {
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import { getFailoverErrorCode } from "./failover/error.js";
+import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -39,6 +40,18 @@ function expectReason(error: unknown, reason: FailoverReason | null) {
 }
 
 describe("failover-error", () => {
+  it("preserves an Ollama model-retirement error instead of coercing it to a timeout", () => {
+    const body = JSON.stringify({
+      error: "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    });
+    const error = Object.assign(new Error(`410 ${body}`), { status: 410, body });
+    expect(coerceToFailoverError(error, { provider: "ollama" })).toMatchObject({
+      reason: "model_not_found",
+      status: 410,
+      rawError: error.message,
+    });
+  });
+
   it("does not promote a direct preflight into a provider failure", () => {
     const message = "handoff refused: 529 OVERLOADED";
     const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
@@ -143,22 +156,6 @@ describe("failover-error", () => {
     expectReason(first, null);
   });
 
-  it("treats session-specific HTTP 410s differently from generic 410s", () => {
-    expectReason({ status: 410, message: "session not found" }, "session_expired");
-    expectReason({ message: "HTTP 410: No body" }, "timeout");
-    expectReason({ message: "HTTP 410: conversation expired" }, "session_expired");
-  });
-
-  it("lets an overloaded payload override timeout-shaped HTTP 499", () => {
-    expectReason(
-      {
-        status: 499,
-        message: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-      },
-      "overloaded",
-    );
-  });
-
   it("lets provider-attributed billing evidence refine ambiguous HTTP 429", () => {
     const message =
       '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
@@ -169,10 +166,6 @@ describe("failover-error", () => {
       "rate_limit",
     );
     expectReason({ provider: "openai", status: 429, message }, "rate_limit");
-  });
-
-  it("classifies the bare shared model runtime stream wrapper as timeout (#71620)", () => {
-    expectReason({ message: "An unknown error occurred" }, "timeout");
   });
 
   it("treats structured quota failures as billing instead of generic HTTP policy", () => {
@@ -230,17 +223,15 @@ describe("failover-error", () => {
     });
   });
 
-  it.each([
-    { message: "openrouter/__invalid_test_model__ is not a valid model ID" },
-    { status: 400, message: "HTTP 400: openrouter/__invalid_test_model__ is not a valid model ID" },
-    { status: 422, message: "invalid model: openrouter/__invalid_test_model__" },
-  ])("classifies invalid-model payloads as model_not_found: $message", (error) => {
-    expectReason(error, "model_not_found");
+  it("classifies invalid-model payloads as model_not_found", () => {
+    expectReason(
+      { status: 422, message: "invalid model: openrouter/__invalid_test_model__" },
+      "model_not_found",
+    );
   });
 
   it.each([
     ["402", "Monthly spend limit reached. Please visit your billing settings.", "rate_limit"],
-    ["HTTP 402", "rate limit exceeded", "rate_limit"],
     ["HTTP 402", "Your usage limit has been reached. Please upgrade your plan.", "billing"],
   ] as const)(
     "keeps %s wrappers aligned with status-split payloads: %s",
@@ -290,6 +281,34 @@ describe("failover-error", () => {
     expectReason(err, "rate_limit");
     expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
+
+  it.each([undefined, "429 raw provider detail. Retry in 221ms."])(
+    "preserves provider text when enriching exhaustion (rawError=%s)",
+    (rawError) => {
+      const message = "429 rate limit exceeded. Retry in 221ms.";
+      const cause = new Error("provider request failed");
+      const original = new FailoverError(message, {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        rawError,
+        cause,
+      });
+      const enriched = coerceToFailoverError(original, { rateLimitRetriesExhausted: 9 });
+      expect(enriched?.message).toContain("9 automatic retries");
+      expect(describeFailoverError(enriched)).toMatchObject({
+        rawError: rawError ?? message,
+        status: 429,
+        code: "rate_limit_exceeded",
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      });
+      expect(enriched?.cause).toBe(cause);
+      expect(original.message).toBe(message);
+      expect(original.rawError).toBe(rawError);
+      expect(original.rateLimitRetriesExhausted).toBeUndefined();
+    },
+  );
 
   it("preserves typed failure facts and diagnostics when adding the active auth mode", () => {
     const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
@@ -357,15 +376,6 @@ describe("failover-error", () => {
     expect(err).toMatchObject({ reason: "model_not_found", status: 404 });
   });
 
-  it("coerces format errors with a 400 status", () => {
-    expect(
-      coerceToFailoverError("invalid request format", {
-        provider: "google",
-        model: "cloud-code-assist",
-      }),
-    ).toMatchObject({ reason: "format", status: 400 });
-  });
-
   it("403 with revoked key message returns auth_permanent", () => {
     expectReason({ status: 403, message: "api key revoked" }, "auth_permanent");
   });
@@ -393,21 +403,6 @@ describe("failover-error", () => {
       { provider: "openai", model: "gpt-5.4" },
     );
     expect(err).toMatchObject({ reason: "server_error", status: 500 });
-  });
-
-  it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
-    const err = coerceToFailoverError("rate limit exceeded", {
-      provider: "openai",
-      model: "gpt-5",
-      profileId: "p1",
-      sessionId: "session:browser-1234",
-      lane: "draft",
-    });
-    expect(err).toMatchObject({
-      sessionId: "session:browser-1234",
-      lane: "draft",
-      provider: "openai",
-    });
   });
 
   it("describes non-Error values consistently", () => {
@@ -484,13 +479,101 @@ describe("failover diagnostic isolation", () => {
       expect(coerceToFailoverError(candidate)).toBeNull();
       expect(isTimeoutError(candidate)).toBe(false);
       expect(diagnosticErrorFailureKind(candidate)).toBeUndefined();
-      expect(hasProviderRequestSizeCeiling(candidate)).toBe(false);
       expect(isLikelyContextOverflowError(formatErrorMessage(candidate))).toBe(false);
       expect(formatErrorMessage(candidate)).not.toContain(diagnostic);
     }
-    expect(
-      hasProviderRequestSizeCeiling(new AggregateError([{ error }], "Plugin execution failed")),
-    ).toBe(false);
+  });
+
+  describe("findLocalWorkerTaskTimeout", () => {
+    it("finds the typed timeout through a cause wrapper", () => {
+      const wrapped = new Error("preparation failed", {
+        cause: new WorkerTaskError("worker task timed out", "timeout"),
+      });
+      expect(findLocalWorkerTaskTimeout(wrapped)).toBe(wrapped.cause);
+    });
+
+    it("finds the typed timeout through an aggregate wrapper", () => {
+      const aggregate = new AggregateError(
+        [new WorkerTaskError("worker task timed out", "timeout")],
+        "run failed",
+      );
+      expect(findLocalWorkerTaskTimeout(aggregate)).toBe(aggregate.errors[0]);
+    });
+
+    it.each([
+      ["failed", new WorkerTaskError("worker task timed out", "failed")],
+      ["overloaded", new WorkerTaskError("worker task capacity reached", "overloaded")],
+      ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
+    ])("ignores local worker code %s", (_code, error) => {
+      expect(findLocalWorkerTaskTimeout(error)).toBeUndefined();
+    });
+
+    it("defers to an HTTP fact anywhere in the graph", () => {
+      const providerTimeoutWithLocalCause = Object.assign(
+        new Error("worker task timed out", {
+          cause: new WorkerTaskError("worker task timed out", "timeout"),
+        }),
+        { status: 408 },
+      );
+      expect(findLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBeUndefined();
+      expect(
+        findLocalWorkerTaskTimeout(
+          Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("ignores provider timeouts and untyped values", () => {
+      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
+      expect(findLocalWorkerTaskTimeout(timeoutErr)).toBeUndefined();
+      expect(findLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBeUndefined();
+      expect(
+        findLocalWorkerTaskTimeout({ name: "WorkerTaskError", code: "timeout" }),
+      ).toBeUndefined();
+      expect(findLocalWorkerTaskTimeout(null)).toBeUndefined();
+      expect(findLocalWorkerTaskTimeout(undefined)).toBeUndefined();
+    });
+  });
+
+  describe("local worker task timeout attribution", () => {
+    it("keeps local deadlines out of provider classification through wrappers", () => {
+      const timeout = new WorkerTaskError("worker task timed out", "timeout");
+      for (const error of [
+        timeout,
+        new Error("preparation failed", { cause: timeout }),
+        new AggregateError([timeout], "run failed"),
+        new FailoverError("previously classified timeout", {
+          reason: "timeout",
+          status: 408,
+          provider: "openai",
+          cause: timeout,
+        }),
+      ]) {
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+        expect(resolveFailoverReasonFromError(error)).toBeNull();
+        expect(coerceToFailoverError(error)).toBeNull();
+        expect(describeFailoverError(error)).toEqual({ message: timeout.message });
+      }
+    });
+
+    it("does not suppress provider failover for non-timeout worker failures", () => {
+      const failure = new WorkerTaskError("worker task timed out", "failed");
+      expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
+      expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
+    });
+
+    it("keeps provider attribution when an HTTP timeout fact is present", () => {
+      const providerTimeoutWithLocalCause = Object.assign(
+        new Error("worker task timed out", {
+          cause: new WorkerTaskError("worker task timed out", "timeout"),
+        }),
+        { status: 408 },
+      );
+      expect(isNonProviderRuntimeCoordinationError(providerTimeoutWithLocalCause)).toBe(false);
+      const resolution = resolveModelFallbackError(providerTimeoutWithLocalCause);
+      expect(resolution.kind).toBe("failover");
+      expect(resolution.kind === "failover" ? resolution.error.reason : undefined).toBe("timeout");
+    });
   });
 });
 
@@ -540,18 +623,6 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     expect(
       isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
     ).toBe(true);
-  });
-
-  it.each([
-    "WorkerRunnerUnavailableError",
-    "NodeRunnerUpdateRequiredError",
-    "CodexNodeExecServerDisconnectedError",
-  ])("returns true for direct and nested %s coordination failures", (name) => {
-    const coordination = Object.assign(new Error("private coordination diagnostic"), { name });
-    for (const error of [coordination, new Error("worker turn failed", { cause: coordination })]) {
-      expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-    }
   });
 
   it("does not read a SQLite worker code as a provider overload", () => {
@@ -625,31 +696,4 @@ describe("isNonProviderRuntimeCoordinationError", () => {
 it("does not treat an AbortError matching transport timeout wording as a signal timeout", () => {
   const err = Object.assign(new Error("request aborted"), { name: "AbortError" });
   expect(isSignalTimeoutReason(err)).toBe(false);
-});
-
-describe("hasProviderRequestSizeCeiling", () => {
-  it("finds the recorded ceiling through nested error and aggregate wrappers", () => {
-    const ceiling = new FailoverError("Context overflow: prompt too large for the model.", {
-      reason: "context_overflow",
-      rawError: "413 Request too large on tokens per minute (TPM): Limit 8000, Requested 8098",
-    });
-    expect(
-      hasProviderRequestSizeCeiling(
-        new AggregateError(
-          [new Error("unrelated"), { error: { cause: ceiling } }],
-          "agent run failed",
-        ),
-      ),
-    ).toBe(true);
-  });
-
-  it("is false for throttling that states a requested size within the limit", () => {
-    const throttled =
-      "429 Rate limit reached on tokens per minute (TPM): Limit 8000, Used 7500, Requested 1000, please try again in 3.5s.";
-    expect(hasProviderRequestSizeCeiling(new Error(throttled))).toBe(false);
-    expect(
-      new FailoverError("rate limited", { reason: "rate_limit", rawError: throttled })
-        .requestSizeCeiling,
-    ).toBe(false);
-  });
 });

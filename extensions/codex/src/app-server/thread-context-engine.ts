@@ -52,25 +52,17 @@ export function isContextEngineBindingCompatible(
   previous: CodexAppServerContextEngineBinding | undefined,
   next: CodexAppServerContextEngineBinding,
 ): boolean {
+  const previousProjection = previous?.projection;
+  const nextProjection = next.projection;
   return (
     previous?.schemaVersion === next.schemaVersion &&
     previous.engineId === next.engineId &&
     previous.policyFingerprint === next.policyFingerprint &&
-    areContextEngineProjectionBindingsCompatible(previous.projection, next.projection)
-  );
-}
-
-function areContextEngineProjectionBindingsCompatible(
-  previous: CodexAppServerContextEngineProjectionBinding | undefined,
-  next: CodexAppServerContextEngineProjectionBinding | undefined,
-): boolean {
-  if (!next) {
-    return previous === undefined;
-  }
-  return (
-    previous?.schemaVersion === next.schemaVersion &&
-    previous.mode === next.mode &&
-    previous.epoch === next.epoch &&
-    previous.fingerprint === next.fingerprint
+    (!nextProjection
+      ? previousProjection === undefined
+      : previousProjection?.schemaVersion === nextProjection.schemaVersion &&
+        previousProjection.mode === nextProjection.mode &&
+        previousProjection.epoch === nextProjection.epoch &&
+        previousProjection.fingerprint === nextProjection.fingerprint)
   );
 }

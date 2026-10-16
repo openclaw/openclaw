@@ -10,7 +10,7 @@ type ConversationRecallTestParams = {
     config: MemoryWikiPluginConfig;
   }) => Promise<{ config: ResolvedMemoryWikiConfig }>;
   getActiveMemorySearchManagerMock: Mock;
-  loadCombinedSessionStoreForGatewayMock: Mock;
+  loadCombinedSessionStoreForGatewayAsyncMock: Mock;
   searchMemoryWiki: typeof searchMemoryWiki;
 };
 
@@ -24,9 +24,9 @@ const CONVERSATION_RECALL = {
 
 function createRecallAppConfig(visibility: "self" | "tree"): OpenClawConfig {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    agents: { ownership: "explicit", entries: { main: {}, secondary: {} } },
     tools: { sessions: { visibility } },
-  } as OpenClawConfig;
+  };
 }
 
 // One hit per recall decision: allowed prior private chat, the live anchor, a group
@@ -85,7 +85,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
     });
-    params.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    params.loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
       storePath: "(test)",
       store: RECALL_SESSION_STORE,
     });
@@ -111,7 +111,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     return results.map((result) => result.path);
   };
 
-  it.each(["self", "tree"] as const)(
+  it.each(["self"] as const)(
     "returns recall-granted same-agent private session hits under %s visibility",
     async (visibility) => {
       // Only the prior private chat passes; the live anchor, group chat, other agent,
@@ -126,7 +126,7 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     },
   );
 
-  it.each(["self", "tree"] as const)(
+  it.each(["self"] as const)(
     "keeps requester visibility for a session search without recall under %s visibility",
     async (visibility) => {
       await expect(

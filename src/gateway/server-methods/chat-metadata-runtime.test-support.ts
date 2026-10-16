@@ -6,6 +6,7 @@ import {
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
@@ -17,7 +18,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import type { ChatMetadataRuntimeDeps } from "./chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
@@ -113,6 +114,7 @@ export function createChatMetadataOwner(
   provider = "test",
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
+  prepareSharedAuthStoreOwnershipForNative();
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
   const authStore: AuthProfileStore = {
     version: 1,
@@ -153,8 +155,6 @@ export function createChatMetadataOwner(
 export function createChatMetadataHarness(
   initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } },
   runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
     useDefaultProjection?: boolean;
     onChanged?: () => void;
   } = {},

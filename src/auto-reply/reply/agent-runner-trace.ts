@@ -104,26 +104,22 @@ function formatFallbackChainTraceBlock(
         `   result=${attempt.result}`,
         ...(attempt.reason ? [`   reason=${attempt.reason}`] : []),
         ...(attempt.stage ? [`   stage=${attempt.stage}`] : []),
-        ...(typeof attempt.elapsedMs === "number"
+        ...(attempt.elapsedMs !== undefined
           ? [`   elapsed=${(attempt.elapsedMs / 1000).toFixed(1)}s`]
           : []),
-        ...(typeof attempt.status === "number" ? [`   status=${attempt.status}`] : []),
+        ...(attempt.status !== undefined ? [`   status=${attempt.status}`] : []),
       ].join("\n"),
     )
     .join("\n\n");
   return `🔎 Fallback Chain:\n~~~text\n${body}\n~~~`;
 }
 
-function toSnakeCase(value: string): string {
-  return value
+function resolveMetadataSegmentKey(label: string): string {
+  const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-}
-
-function resolveMetadataSegmentKey(label: string): string {
-  const normalized = toSnakeCase(label);
   if (normalized === "conversation_info") {
     return "conversation_metadata";
   }
@@ -144,9 +140,6 @@ export function derivePromptSegments(
   const segments = new Map<string, number>();
   let userChars = 0;
   const addChars = (key: string, chars: number) => {
-    if (!chars || chars <= 0) {
-      return;
-    }
     segments.set(key, (segments.get(key) ?? 0) + chars);
   };
   let index = 0;
@@ -207,10 +200,10 @@ function formatPromptSegmentsTraceBlock(
   const lines = (segments ?? []).map(
     (segment) => `${segment.key}=${segment.chars.toLocaleString()} chars`,
   );
-  if (typeof totalPromptText === "string" && totalPromptText.length > 0) {
+  if (totalPromptText?.length) {
     lines.push(`totalPromptText=${totalPromptText.length.toLocaleString()} chars`);
   }
-  return lines.length > 0 ? `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~` : undefined;
+  return `🔎 Prompt Segments:\n~~~text\n${lines.join("\n")}\n~~~`;
 }
 
 function formatToolSummaryTraceBlock(
@@ -292,8 +285,8 @@ function formatRequestContextTraceBlock(params: {
     `model=${params.model ?? "n/a"}`,
     formatTraceUsageLine("used", used),
     formatTraceUsageLine("limit", limit),
-    `headroom=${typeof headroom === "number" ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
-    `usage=${typeof percent === "number" ? `${percent}%` : "n/a"}`,
+    `headroom=${headroom !== undefined ? `${headroom.toLocaleString()} tok (${formatTokenCount(headroom)})` : "n/a"}`,
+    `usage=${percent !== undefined ? `${percent}%` : "n/a"}`,
   ].join("\n")}\n~~~`;
 }
 
@@ -307,10 +300,10 @@ function formatRawTraceSummaryLine(
     params.executionTrace?.winnerModel
       ? `winner=${params.executionTrace.winnerModel}${thinking ? ` 🧠 ${thinking}` : ""}`
       : undefined,
-    typeof params.executionTrace?.fallbackUsed === "boolean"
+    params.executionTrace?.fallbackUsed !== undefined
       ? `fallback=${params.executionTrace.fallbackUsed ? "yes" : "no"}`
       : undefined,
-    typeof params.executionTrace?.attempts?.length === "number"
+    params.executionTrace?.attempts !== undefined
       ? `attempts=${params.executionTrace.attempts.length.toLocaleString()}`
       : undefined,
     params.completion?.stopReason ? `stop=${params.completion.stopReason}` : undefined,
@@ -319,14 +312,12 @@ function formatRawTraceSummaryLine(
       : undefined,
     ...TRACE_USAGE_FIELDS.map(([key, icon]) => {
       const value = params.usage?.[key];
-      return typeof value === "number" && value > 0
-        ? `${icon} ${formatTokenCount(value)}`
-        : undefined;
+      return value !== undefined && value > 0 ? `${icon} ${formatTokenCount(value)}` : undefined;
     }),
-    typeof params.toolSummary?.calls === "number" && params.toolSummary.calls > 0
+    params.toolSummary && params.toolSummary.calls > 0
       ? `tools=${params.toolSummary.calls.toLocaleString()}`
       : undefined,
-    typeof params.contextManagement?.lastTurnCompactions === "number" &&
+    params.contextManagement?.lastTurnCompactions !== undefined &&
     params.contextManagement.lastTurnCompactions > 0
       ? `compactions=${params.contextManagement.lastTurnCompactions.toLocaleString()}`
       : undefined,

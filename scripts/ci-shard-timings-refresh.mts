@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
+import { isCiTimingRuntimeTrial } from "./lib/ci-test-timings-refit.mts";
 import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
@@ -159,6 +160,7 @@ function main() {
           job.conclusion !== "success" ||
           !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
+          job.name.startsWith("checks-node-release-packed-") ||
           !job.labels.includes("ubuntu-24.04") ||
           job.labels.some(
             (label) =>
@@ -174,7 +176,12 @@ function main() {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end > Date.now()) {
           throw new Error(`Invalid wall clock for CI timing job ${job.id}`);
         }
-        const key = timingKey(api(`actions/jobs/${job.id}/logs`));
+        const log = api(`actions/jobs/${job.id}/logs`);
+        if (isCiTimingRuntimeTrial(log)) {
+          console.log(`Skipped CI ${run.id}: runtime trial is excluded from timing refresh.`);
+          return;
+        }
+        const key = timingKey(log);
         measurements.set(
           key,
           Math.max(measurements.get(key) ?? 0, Math.ceil((end - start) / 1000)),

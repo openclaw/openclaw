@@ -180,12 +180,12 @@ describe("msteams doctor state migration", () => {
           `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
         ],
       });
-      const before = await fs.readdir(stateDir, { recursive: true });
+      const before = (await fs.readdir(stateDir, { recursive: true })).toSorted();
       expect(await migration.collectBackupResources?.(params)).toEqual([
         { path: filePath, kind: "file" },
         { path: archiveDirectory, kind: "directory" },
       ]);
-      expect(await fs.readdir(stateDir, { recursive: true })).toEqual(before);
+      expect((await fs.readdir(stateDir, { recursive: true })).toSorted()).toEqual(before);
       expect(await fs.readFile(filePath, "utf8")).toBe(JSON.stringify(token));
       const result = await migration.migrateLegacyState(params);
 

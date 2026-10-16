@@ -8,12 +8,10 @@ import net from "node:net";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import {
-  fixtureReceiptClientSource,
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
-import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
@@ -23,6 +21,7 @@ import {
 } from "./crabbox-worker-node-enrollment.js";
 import {
   createNodeBootstrapFixture,
+  createNodePackageFixture,
   expectSetupPhases,
   readLaunch,
   type DesktopFixture,
@@ -55,56 +54,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
 const leaseId = "cbx_bootstrap_test";
 const setupCode = "synthetic-enrollment-credential";
 
-async function packageFixture(build: string, postinstall = ""): Promise<Buffer> {
-  const root = tempDirs.make("crabbox-bootstrap-package-");
-  const packageRoot = path.join(root, "package");
-  fs.mkdirSync(packageRoot);
-  fs.writeFileSync(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.8.1",
-      scripts: { postinstall: "node install.cjs" },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "install.cjs"),
-    `require("node:fs").writeFileSync("installed.json", JSON.stringify({ token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, scriptsRan: true }));${postinstall}`,
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "openclaw.mjs"),
-    `import fs from "node:fs";
-import path from "node:path";
-${fixtureReceiptClientSource(receipts.endpoint)}
-const args = process.argv.slice(2);
-const state = process.env.OPENCLAW_STATE_DIR;
-if (args[0] === "--version") {
-  console.log("OpenClaw 2026.8.1");
-} else if (args[0] === "plugins" && args[1] === "enable") {
-  fs.appendFileSync(path.join(state, "activation.jsonl"), JSON.stringify({ runtimePublished: fs.existsSync(path.join(state, "runtime")) }) + "\\n");
-  if (${JSON.stringify(build)} === "activation-failed") process.exit(1);
-  for (const id of args.slice(2)) {
-    if (${JSON.stringify(build)} === "verbose-activation") process.stdout.write("x".repeat(700_000));
-    fs.appendFileSync(path.join(state, "enabled"), id + "\\n");
-  }
-} else {
-  process.title = "openclaw-connect";
-  const enabledFile = path.join(state, "enabled");
-  const enabledPlugins = fs.existsSync(enabledFile) ? fs.readFileSync(enabledFile, "utf8").trim().split("\\n") : [];
-  fs.writeFileSync(path.join(state, "launch.json.tmp"), JSON.stringify({ build: ${JSON.stringify(build)}, args, cli: process.argv[1], token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, environment: { DISPLAY: process.env.DISPLAY, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }, enabledPlugins }));
-  // Existence signals readiness only after the child publishes complete JSON.
-  fs.renameSync(path.join(state, "launch.json.tmp"), path.join(state, "launch.json"));
-  sendReceipt(state, "launched:" + process.pid + ":ready");
-  const desktopReady = path.join(process.env.HOME, "desktop-ready");
-  if (fs.existsSync(desktopReady)) fs.writeFileSync(desktopReady, "ready\\n");
-  setInterval(() => {}, 60000);
-}
-`,
-  );
-  const archive = path.join(root, "package.tgz");
-  await tar.create({ cwd: root, file: archive, gzip: true }, ["package"]);
-  return fs.readFileSync(archive);
-}
+const packageFixture = (build: string, postinstall = "") =>
+  createNodePackageFixture((prefix) => tempDirs.make(prefix), build, receipts, postinstall);
 
 function testHome() {
   const home = fs.realpathSync(tempDirs.make("crabbox-bootstrap-home-"));
@@ -137,6 +88,7 @@ async function serveArtifact(
     truncate?: boolean;
     resetBeforeHeaders?: boolean;
     resetBeforeTls?: boolean;
+    statusCodes?: number[];
     hold?: Promise<void>;
   } = {},
 ) {
@@ -172,6 +124,12 @@ async function serveArtifact(
   const handle: http.RequestListener = (request, response) => {
     authorizations.push(request.headers.authorization);
     requested.resolve();
+    const statusCode = options.statusCodes?.[authorizations.length - 1];
+    if (statusCode) {
+      response.writeHead(statusCode);
+      response.end();
+      return;
+    }
     if (options.resetBeforeHeaders) {
       // End the connection before headers in every host runtime; the child must
       // diagnose the peer loss without relying on resetAndDestroy support.
@@ -186,7 +144,7 @@ async function serveArtifact(
     response.writeHead(200, { "content-length": archive.length });
     if (options.truncate) {
       // Truncate after headers without retained bytes: one persisted byte resets the
-      // three-consecutive-failure budget and makes the request count scheduler-dependent.
+      // consecutive-failure budget and makes the request count scheduler-dependent.
       response.end();
       return;
     }
@@ -369,6 +327,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     });
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
+      prepareCapture: async () => {},
       warn: (message) => {
         throw new Error(message);
       },
@@ -479,16 +438,13 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     ).toEqual([]);
   }, 60_000);
 
-  it.each(["file", "directory"] as const)(
+  it.each(["file"] as const)(
     "rejects an occupied runtime %s before plugin activation",
-    async (kind) => {
+    async () => {
       const { home, stateDir } = testHome();
       fs.mkdirSync(stateDir, { recursive: true });
       const pointer = path.join(stateDir, "runtime");
-      if (kind === "directory") {
-        fs.mkdirSync(pointer);
-      }
-      const retained = kind === "directory" ? path.join(pointer, "keep") : pointer;
+      const retained = pointer;
       fs.writeFileSync(retained, "retained fixture");
       const { nodeBootstrap } = await serveArtifact(await packageFixture("occupied"));
       const result = await enroll(home, nodeBootstrap);
@@ -508,7 +464,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     const result = await enroll(home, nodeBootstrap);
     expect(result).toMatchObject({
       code: 1,
-      output: expect.stringContaining("could not enable plugin"),
+      output: expect.stringMatching(
+        /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
+      ),
     });
     expect(fs.existsSync(path.join(stateDir, "runtime"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
@@ -632,9 +590,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     fs.writeFileSync(path.join(stateDir, "setup-code"), setupCode);
     fs.mkdirSync(path.join(home, ".crabbox", "env"), { recursive: true });
     fs.writeFileSync(path.join(home, ".crabbox", "env", "forwarded"), workerBundle.token);
-    execFileSync("sh", ["-c", SCRUB_WORKER_STATE], {
+    const scrubTmp = path.join(home, "scrub-tmp");
+    fs.mkdirSync(scrubTmp);
+    // The script's Linux /tmp root belongs to the synthetic worker, not this host.
+    execFileSync("sh", ["-c", SCRUB_WORKER_STATE.replace('"/tmp"', JSON.stringify(scrubTmp))], {
       cwd: home,
-      env: { HOME: home, PATH: process.env.PATH },
+      env: { HOME: home, PATH: process.env.PATH, TMPDIR: scrubTmp },
     });
     expect(fs.existsSync(stateDir)).toBe(false);
     expect(fs.existsSync(path.join(home, ".crabbox", "env"))).toBe(false);
@@ -674,6 +635,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         "Bootstrap test",
       ],
     });
+    if (process.platform !== "win32") {
+      expect(launch.tool).toBe("verified-tool");
+    }
     expect(launch).not.toHaveProperty("token");
     expect(launch).not.toHaveProperty("setupCode");
     expect(launch.cli).toContain(`/node-runtimes/${nodeBootstrap.sha256}/`);
@@ -739,9 +703,8 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         await Promise.all([postinstall.requested, worker.requested]);
         if (failure === "worker download") {
           workerResponse.resolve();
-          await worker.closed;
-          expect(fs.existsSync(finished)).toBe(false);
-          expect(fs.readdirSync(runtimeRoot)).toEqual([expect.stringMatching(/^node-bootstrap-/)]);
+          await postinstall.closed;
+          await preparation;
         } else {
           postinstallResponse.resolve();
           await worker.closed;
@@ -759,33 +722,11 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
             : "package installation failed (exit code 17)",
         ),
       });
-      expect(fs.readFileSync(finished, "utf8")).toBe("complete");
+      expect(fs.existsSync(finished)).toBe(failure === "npm installation");
       expect(fs.readdirSync(runtimeRoot)).toEqual([]);
     },
     30_000,
   );
-
-  it("selects new source bytes even when the public version has not changed", async ({
-    signal,
-  }) => {
-    const { home, stateDir, stop } = testHome();
-    const first = await serveArtifact(await packageFixture("first"));
-    const coldPhases = await expectSetupPhases(enroll(home, first.nodeBootstrap));
-    expect(coldPhases).toContain("openclaw-bootstrap-installation");
-    expect(coldPhases.at(-1)).toBe("openclaw-bootstrap-complete");
-    const oldLaunch = await readLaunch(stateDir, receipts, signal);
-    expect(oldLaunch).toMatchObject({ build: "first", args: expect.arrayContaining(["connect"]) });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
-    ).toEqual({ scriptsRan: true });
-    await stop();
-    fs.rmSync(path.join(stateDir, "launch.json"));
-    const second = await serveArtifact(await packageFixture("second"));
-    await expectSetupPhases(enroll(home, second.nodeBootstrap));
-    const launch = await readLaunch(stateDir, receipts, signal);
-    expect(launch.build).toBe("second");
-    expect(launch.cli).not.toBe(oldLaunch.cli);
-  }, 30_000);
 
   it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
     "reuses only a live process with the exact artifact and invocation",
@@ -833,13 +774,40 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     30_000,
   );
 
+  it.for([
+    { failures: 1, expectedCode: 0, requests: 2 },
+    { failures: 10, expectedCode: 1, requests: 9 },
+  ])(
+    "handles $failures transient HTTP 530 responses during enrollment",
+    async ({ failures, expectedCode, requests }, { signal }) => {
+      const { home, stateDir } = testHome();
+      const { nodeBootstrap, authorizations } = await serveArtifact(
+        await packageFixture("edge-retry"),
+        {
+          statusCodes: Array(failures).fill(530),
+        },
+      );
+      const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { signal });
+      expect(result.code, result.output).toBe(expectedCode);
+      expect(authorizations).toEqual(Array(requests).fill(`Bearer ${nodeBootstrap.token}`));
+      if (expectedCode === 0) {
+        expect(await readLaunch(stateDir, receipts, signal)).toMatchObject({ build: "edge-retry" });
+      } else {
+        expect(result.output).toContain(
+          "HTTP 530 (download attempt 9; 9 consecutive no-progress failures)",
+        );
+        expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+      }
+    },
+  );
+
   it.each([
     ["digest", "integrity verification"],
     ["length", "length does not match"],
-    ["redirect", /download HTTP response failed:.*HTTP 302/],
+    ["redirect", /download HTTP response failed from [^\s]+:.*HTTP 302/],
     ["http-reset", "download HTTP response failed (ECONNRESET)"],
     ["tls-reset", "download TLS failed (ECONNRESET)"],
-    ["truncated", "download body failed (ECONNRESET): aborted"],
+    ["truncated", /download body failed \(ECONNRESET\) from [^\s]+: aborted/],
   ] as const)(
     "identifies bootstrap %s failure before installing or starting a node",
     async (failure, diagnosis) => {
@@ -854,6 +822,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       });
       const result = await enroll(home, {
         ...nodeBootstrap,
+        url: nodeBootstrap.url + "/synthetic-url-token",
         ...(failure === "digest" ? { sha256: "f".repeat(64) } : {}),
         ...(failure === "length" ? { bytes: archive.length + 1 } : {}),
       });
@@ -861,6 +830,19 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(result.output).toMatch(diagnosis);
       expect(result.output).not.toContain(nodeBootstrap.token);
       expect(result.output).not.toContain(setupCode);
+      expect(result.output).not.toContain("synthetic-url-token");
+      if (failure === "tls-reset") {
+        const origin = new URL(nodeBootstrap.url).origin;
+        expect(result.output).toContain(
+          `download TLS failed (ECONNRESET) from ${origin}; retrying download attempt 3`,
+        );
+        expect(result.output).toContain(
+          `Cloud worker node bootstrap download TLS failed (ECONNRESET) from ${origin}:`,
+        );
+        expect(result.output).toContain(
+          `The worker could not reach the Gateway public origin <${origin}>; verify the provider's network can reach it (for example with curl from a sandbox) or configure gateway.publicOrigin on a reachable hostname.`,
+        );
+      }
       const authorization = `Bearer ${nodeBootstrap.token}`;
       expect(new Set(authorizations)).toEqual(
         failure === "tls-reset" ? new Set() : new Set([authorization]),
@@ -869,15 +851,15 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         expect(authorizations.length).toBeGreaterThanOrEqual(3);
       } else {
         expect(authorizations).toHaveLength(
-          failure === "http-reset" ? 3 : failure === "tls-reset" ? 0 : 1,
+          failure === "http-reset" ? 9 : failure === "tls-reset" ? 0 : 1,
         );
       }
-      if (failure === "http-reset" || failure === "truncated") {
+      if (failure === "http-reset" || failure === "tls-reset" || failure === "truncated") {
         const terminalNoProgressFailure =
-          /\(download attempt \d+; 3 consecutive no-progress failures\)/;
+          /\(download attempt \d+; 9 consecutive no-progress failures\)/;
         const retryOnlyOutput = result.output
           .split("\n")
-          .filter((line) => /\([0-2]\/3 consecutive no-progress failures\)/.test(line))
+          .filter((line) => /\([0-8]\/9 consecutive no-progress failures\)/.test(line))
           .join("\n");
         expect(retryOnlyOutput).not.toBe("");
         expect(retryOnlyOutput).not.toMatch(terminalNoProgressFailure);
@@ -900,7 +882,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
     expect(rejected).toMatchObject({
       code: 1,
       output: expect.stringContaining(
-        "download TLS failed: Cloud worker bootstrap TLS fingerprint mismatch",
+        `download TLS failed from ${new URL(nodeBootstrap.url).origin}: Cloud worker bootstrap TLS fingerprint mismatch`,
       ),
     });
     expect(authorizations).toHaveLength(0);

@@ -46,6 +46,9 @@ on:
       - "ui/package.json"
       - "ui/vite.config.ts"
       - "tsdown.config.ts"
+      - "!scripts/README.md"
+      - "!scripts/AGENTS.md"
+      - "!patches/README.md"
 
 permissions:
   contents: read
@@ -95,6 +98,8 @@ jobs:
     if: ${{ !cancelled() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || needs.admission.result == 'success') }}
     concurrency:
       group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      # Preserve earlier waiters when unrelated leases share a budget slot.
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
@@ -120,7 +125,7 @@ jobs:
         run: |
           if [[ ! "$TESTBOX_EXPIRES_AT" =~ ^[0-9]+$ ]] ||
             (( $(date +%s) >= TESTBOX_EXPIRES_AT / 1000 )); then
-            echo "Testbox waited more than 10 minutes; request a fresh lease." >&2
+            echo "Testbox admission expired after 60 minutes from dispatch; stop this lease and request a fresh one." >&2
             exit 1
           fi
 

@@ -1,6 +1,3 @@
-// Channels-page fixtures for the Control UI mock dev harness: a deterministic
-// channels.status snapshot plus a scripted setup-wizard step sequence.
-
 export function buildChannelsStatusMock(baseTime: number) {
   const channelMeta = [
     { id: "whatsapp", label: "WhatsApp", detailLabel: "WhatsApp Web" },
@@ -13,16 +10,14 @@ export function buildChannelsStatusMock(baseTime: number) {
     { id: "nostr", label: "Nostr", detailLabel: "Nostr relays" },
   ];
   const account = (params: {
-    accountId?: string;
-    configured?: boolean;
     running?: boolean;
     connected?: boolean;
     lastInboundAt?: number;
     lastError?: string;
   }) => ({
-    accountId: params.accountId ?? "default",
-    enabled: params.configured ?? true,
-    configured: params.configured ?? true,
+    accountId: "default",
+    enabled: true,
+    configured: true,
     running: params.running ?? false,
     connected: params.connected ?? null,
     ...(params.lastInboundAt ? { lastInboundAt: params.lastInboundAt } : {}),

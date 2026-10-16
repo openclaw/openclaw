@@ -23,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    withSessionTranscriptWriteLock: async (
+    withSessionTranscriptWrite: async (
       _params: unknown,
       run: (context: {
         appendMessage: (params: {

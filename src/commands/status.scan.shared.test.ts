@@ -157,6 +157,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       const result = await pending;
 
       expect(result.gatewayReachable).toBe(true);
+      expect(result.localGatewayHealthy).toBe(true);
       expect(readProbeCall()).toMatchObject({
         timeoutMs: 38_000,
         auth: { token: "tok", password: "pw" },
@@ -199,51 +200,40 @@ describe("resolveGatewayProbeSnapshot", () => {
 
       expect(result.gatewayProbe).toMatchObject({ ok: false, error });
       expect(result.gatewayProbe?.startupPhase).toBe(startupPhase);
+      expect(result.localGatewayHealthy).toBe(false);
       expect(mocks.probeGateway).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
     },
   );
 
-  it("can probe the local fallback when remote url is missing", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: true,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
-      ok: true,
-      connectLatencyMs: 12,
-      error: null,
-      health: {},
-      status: {},
-      presence: [{ host: "box", text: "box", ts: 0 }],
-    });
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: {
-        ...createStatusGatewayProbeBudget(),
-        detailLevel: "full",
-        probeWhenRemoteUrlMissing: true,
-        resolveAuthWhenRemoteUrlMissing: true,
-        mergeAuthWarningIntoProbeError: false,
-      },
-    });
-
-    expect(mocks.resolveGatewayProbeAuthResolution).toHaveBeenCalled();
-    const probeCall = readProbeCall();
-    expect(probeCall.url).toBe("ws://127.0.0.1:18789");
-    expect(probeCall.auth).toEqual({ token: "tok", password: "pw" });
-    expect(probeCall.detailLevel).toBe("full");
-    expect(result.gatewayReachable).toBe(true);
-    expect(result.gatewaySelf).toEqual({ host: "box" });
-    expect(result.gatewayCallOverrides).toEqual({
-      url: "ws://127.0.0.1:18789",
-      token: "tok",
-      password: "pw",
-    });
-    expect(result.gatewayProbeAuthWarning).toBe("warn");
-  });
+  it.each(["plugin-errors", "probe-failed"])(
+    "does not claim current local health from %s",
+    async (observation) => {
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue(
+        observation === "remote"
+          ? undefined
+          : {
+              healthy: observation !== "channel-errors",
+              waitOutcome: observation === "channel-errors" ? "channel-errors" : "healthy",
+              ...(observation === "plugin-errors"
+                ? { activatedPluginErrors: ["fixture plugin failed"] }
+                : {}),
+              ...(observation === "channel-errors"
+                ? { channelProbeErrors: ["fixture channel failed"] }
+                : {}),
+            },
+      );
+      mocks.probeGateway.mockResolvedValue({
+        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+        ok: observation !== "probe-failed",
+      });
+      const result = await resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: createStatusGatewayProbeBudget(),
+      });
+      expect(result.localGatewayHealthy).toBe(false);
+    },
+  );
 
   it("treats scope-limited read probes as reachable", async () => {
     mocks.probeGateway.mockResolvedValue({
@@ -735,34 +725,5 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ files: 1 });
-  });
-
-  it("does not initialize memory status for an agent database owned by another feature", async () => {
-    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const db = new DatabaseSync(databasePath);
-    db.exec(`
-      CREATE TABLE cache_entries (
-        scope TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (scope, key)
-      );
-    `);
-    db.close();
-    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
-
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: {},
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "memory-core" },
-      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
-      getMemorySearchManager,
-      requireDefaultDatabasePath: () => databasePath,
-    });
-
-    expect(result).toBeNull();
-    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });

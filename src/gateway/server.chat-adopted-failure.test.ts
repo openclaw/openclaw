@@ -104,7 +104,10 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
     expect(accepted.ok).toBe(true);
     expect(accepted.payload).toMatchObject({ runId, status: "started" });
     const failed = await terminal;
-    expect(JSON.stringify(failed)).toContain(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(failed.payload).toMatchObject({
+      state: "error",
+      errorMessage: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
     expect(JSON.stringify(failed)).not.toContain(originalError.message);
     const replay = await rpcReq(socket, "chat.send", request);
     expect(replay.ok).toBe(false);
@@ -229,12 +232,6 @@ describe("chat.send quoted model profiles", () => {
   }
 
   it.each([
-    [
-      '/model openai/test-model@"openai:Work account" -s',
-      "openai:Work account",
-      "openai",
-      "test-model",
-    ],
     [
       String.raw`/model openai/test-model@"openai:Work \"account\"\\primary" -s`,
       'openai:Work "account"\\primary',

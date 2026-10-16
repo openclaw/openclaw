@@ -1,5 +1,3 @@
-import { initialState, Task, TaskStatus } from "@lit/task";
-import type { ReactiveControllerHost } from "lit";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -8,24 +6,26 @@ import type {
   PluginDiscoveryEntry,
   PluginDiscoveryResult,
 } from "../../lib/plugins/index.ts";
-import type { PluginDiscoveryIntent } from "./catalog-results.ts";
+import type { PluginDiscoveryIntent } from "./catalog-results.tsx";
+import { PluginRequest } from "./plugin-request.ts";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
-const NO_CATALOG_CLIENT: GatewayBrowserClient | null = null;
-const NO_CATALOG_CURSOR: string | null = null;
 
-type CatalogPageLoad = {
-  items: PluginDiscoveryEntry[];
+type CatalogPageArgs = readonly [
+  client: GatewayBrowserClient,
+  intent: PluginDiscoveryIntent,
+  category: string | null,
+  query: string,
+];
+
+type CatalogPageLoad = PluginDiscoveryResult & {
   overview: boolean;
   selection: {
     intent: PluginDiscoveryIntent;
     category: string | null;
     query: string;
   };
-  categories?: PluginDiscoveryCategory[];
-  nextCursor?: string;
-  remoteError?: string;
 };
 
 type PluginDiscoveryGateway = {
@@ -36,28 +36,16 @@ type PluginDiscoveryGateway = {
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
   membership: "featured" | "trending",
-  rank: "featuredRank" | "trendingRank",
 ): PluginDiscoveryEntry[] {
+  const rank = `${membership}Rank` as const;
   return items
     .filter((item) => item.catalog[membership])
     .toSorted(
       (left, right) =>
         (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
-    );
-}
-
-function appendUniqueEntries(
-  existing: readonly PluginDiscoveryEntry[],
-  incoming: readonly PluginDiscoveryEntry[],
-): PluginDiscoveryEntry[] {
-  const entries = new Map(existing.map((item) => [item.id, item]));
-  for (const item of incoming) {
-    // Cursor pages contain remote catalog projections, so they replace any first-page local
-    // placeholder while carrying forward the Gateway's latest authoritative local state.
-    entries.set(item.id, item);
-  }
-  return [...entries.values()];
+    )
+    .slice(0, CATALOG_SECTION_SIZE);
 }
 
 export class PluginDiscoveryController {
@@ -70,7 +58,10 @@ export class PluginDiscoveryController {
   categoriesError: string | null = null;
   private categoriesReady = false;
   private categoriesStarted = false;
-  private readonly categoriesTask: Task;
+  private readonly categoriesTask: PluginRequest<
+    readonly [GatewayBrowserClient],
+    { categories: PluginDiscoveryCategory[] }
+  >;
   featured: PluginDiscoveryEntry[] = [];
   trending: PluginDiscoveryEntry[] = [];
   loadMoreError: string | null = null;
@@ -80,24 +71,26 @@ export class PluginDiscoveryController {
 
   private committedQuery = "";
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly browseTask: Task;
-  private readonly loadMoreTask: Task;
+  private readonly browseTask: PluginRequest<
+    readonly [...CatalogPageArgs, boolean],
+    CatalogPageLoad
+  >;
+  private readonly loadMoreTask: PluginRequest<
+    readonly [...CatalogPageArgs, string],
+    CatalogPageLoad & { requestedCursor?: string }
+  >;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly notify: () => void,
     private readonly gateway: PluginDiscoveryGateway,
   ) {
-    this.categoriesTask = new Task(host, {
-      autoRun: false,
-      args: () => [NO_CATALOG_CLIENT] as const,
-      task: ([client], { signal }) =>
-        client
-          ? client.request<{ categories: PluginDiscoveryCategory[] }>(
-              "plugins.catalog.categories",
-              {},
-              { signal },
-            )
-          : initialState,
+    this.categoriesTask = new PluginRequest(notify, {
+      task: ([client]: readonly [GatewayBrowserClient], { signal }) =>
+        client.request<{ categories: PluginDiscoveryCategory[] }>(
+          "plugins.catalog.categories",
+          {},
+          { signal },
+        ),
       onComplete: ({ categories }) => {
         this.categories = categories;
         this.categoriesReady = true;
@@ -107,44 +100,31 @@ export class PluginDiscoveryController {
         this.categoriesError = formatUiError(error);
       },
     });
-    this.browseTask = new Task(host, {
-      autoRun: false,
-      args: () =>
-        [
-          this.gateway.isConnected() ? this.gateway.getClient() : null,
-          this.intent,
-          this.category,
-          this.committedQuery,
-          false,
-        ] as const,
-      task: ([client, intent, category, query, manual], { signal }) =>
-        client
-          ? this.fetchAvailablePage({ client, intent, category, query, manual, signal })
-          : initialState, // Lit returns to INITIAL without invoking onComplete.
+    this.browseTask = new PluginRequest(notify, {
+      task: (
+        [client, intent, category, query, manual]: readonly [...CatalogPageArgs, manual: boolean],
+        { signal },
+      ) => this.fetchAvailablePage({ client, intent, category, query, manual, signal }),
       onComplete: (page) => this.applyPage(page),
       onError: (error) => {
         this.error = formatUiError(error);
       },
     });
-    this.loadMoreTask = new Task(host, {
-      autoRun: false,
-      args: () =>
-        [
-          NO_CATALOG_CLIENT,
-          this.intent,
-          this.category,
-          this.committedQuery,
-          NO_CATALOG_CURSOR,
-        ] as const,
-      task: ([client, intent, category, query, cursor], { signal }) =>
-        client && cursor
-          ? this.fetchAvailablePage({ client, intent, category, query, cursor, signal })
-          : initialState,
+    this.loadMoreTask = new PluginRequest(notify, {
+      task: (
+        [client, intent, category, query, cursor]: readonly [...CatalogPageArgs, cursor: string],
+        { signal },
+      ) => this.fetchAvailablePage({ client, intent, category, query, cursor, signal }),
       onComplete: (page) => {
         if (!this.result || this.result.nextCursor !== page.requestedCursor) {
           return;
         }
-        const items = appendUniqueEntries(this.result.items, page.items);
+        const entries = new Map(this.result.items.map((item) => [item.id, item]));
+        for (const item of page.items) {
+          // Cursor projections replace first-page placeholders with current Gateway local state.
+          entries.set(item.id, item);
+        }
+        const items = [...entries.values()];
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery
@@ -175,19 +155,13 @@ export class PluginDiscoveryController {
       // if it beats the lightweight read (including older ClawHub servers that
       // cannot serve that endpoint), and retire the slower request.
       if (page.categories) {
-        void this.categoriesTask.run([null]);
+        this.categoriesTask.reset();
         this.categories = page.categories;
         this.categoriesReady = true;
         this.categoriesError = null;
       }
-      this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
-        0,
-        CATALOG_SECTION_SIZE,
-      );
-      this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
-        0,
-        CATALOG_SECTION_SIZE,
-      );
+      this.featured = rankedOverviewShelf(page.items, "featured");
+      this.trending = rankedOverviewShelf(page.items, "trending");
     }
   }
 
@@ -197,7 +171,7 @@ export class PluginDiscoveryController {
     return (
       this.gateway.isConnected() &&
       (this.query.trim() !== this.committedQuery ||
-        (this.browseTask.status === TaskStatus.PENDING &&
+        (this.browseTask.pending &&
           (!this.result ||
             this.resultSelection?.intent !== this.intent ||
             this.resultSelection.category !== this.category ||
@@ -210,7 +184,7 @@ export class PluginDiscoveryController {
       this.gateway.isConnected() &&
       this.categoriesStarted &&
       !this.categoriesReady &&
-      this.categoriesTask.status === TaskStatus.PENDING
+      this.categoriesTask.pending
     );
   }
 
@@ -220,7 +194,7 @@ export class PluginDiscoveryController {
       !client ||
       !this.gateway.isConnected() ||
       this.categoriesReady ||
-      (this.categoriesStarted && (this.categoriesTask.status === TaskStatus.PENDING || !retry))
+      (this.categoriesStarted && (this.categoriesTask.pending || !retry))
     ) {
       return;
     }
@@ -229,16 +203,8 @@ export class PluginDiscoveryController {
     await this.categoriesTask.run([client]);
   }
 
-  get featuredLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
-  }
-
-  get trendingLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
-  }
-
   get loadingMore(): boolean {
-    return this.gateway.isConnected() && this.loadMoreTask.status === TaskStatus.PENDING;
+    return this.gateway.isConnected() && this.loadMoreTask.pending;
   }
 
   private async fetchAvailablePage(params: {
@@ -248,7 +214,7 @@ export class PluginDiscoveryController {
     query: string;
     manual?: boolean;
     cursor?: string;
-    signal?: AbortSignal;
+    signal: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
     const overview =
       !params.cursor && this.isGroupedOverview(params.intent, params.category, params.query);
@@ -262,7 +228,7 @@ export class PluginDiscoveryController {
         ...(params.cursor ? { cursor: params.cursor } : {}),
         pageSize: CATALOG_PAGE_SIZE,
       },
-      params.signal ? { signal: params.signal } : undefined,
+      { signal: params.signal },
     );
     const items =
       params.intent === "all" && !params.query
@@ -307,14 +273,14 @@ export class PluginDiscoveryController {
 
   disconnect(): void {
     this.overview = null;
-    void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
+    this.browseTask.reset();
     this.categoriesStarted = false;
-    void this.categoriesTask.run([null]);
+    this.categoriesTask.reset();
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;
     }
-    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
+    this.loadMoreTask.reset();
   }
 
   async refresh(): Promise<void> {
@@ -331,12 +297,12 @@ export class PluginDiscoveryController {
     this.error = null;
     this.remoteError = null;
     this.loadMoreError = null;
-    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
+    this.loadMoreTask.reset();
     if (this.isGroupedOverview() && this.overview) {
       // Retire the search before restoring the overview; late results belong to the old intent.
-      void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
+      this.browseTask.reset();
       this.applyPage(this.overview);
-      this.host.requestUpdate();
+      this.notify();
       return;
     }
     await this.browseTask.run([client, this.intent, this.category, this.committedQuery, manual]);
@@ -379,7 +345,7 @@ export class PluginDiscoveryController {
       this.intent = "all";
       this.category = null;
     }
-    this.host.requestUpdate();
+    this.notify();
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;

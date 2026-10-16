@@ -25,9 +25,10 @@ export function migrateLegacyConfig(
   if (!next) {
     return { config: null, ...diagnostics };
   }
-  const resolvedCandidate = context
-    ? (applyLegacyDoctorMigrations(context.resolvedRaw, options).next ?? context.resolvedRaw)
-    : next;
+  const resolvedCandidate =
+    context && context.resolvedRaw !== raw
+      ? (applyLegacyDoctorMigrations(context.resolvedRaw, options).next ?? context.resolvedRaw)
+      : next;
   // Runtime defaults create unrelated plugin entries that Doctor would then load
   // and persist. Validate repair candidates without materializing those defaults.
   const validated = validateConfigObjectRawWithPlugins(resolvedCandidate, {

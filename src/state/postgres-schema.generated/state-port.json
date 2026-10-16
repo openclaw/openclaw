@@ -1,0 +1,1905 @@
+{
+  "tables": [
+    {
+      "name": "acp_replay_events",
+      "identities": []
+    },
+    {
+      "name": "acp_replay_sessions",
+      "identities": []
+    },
+    {
+      "name": "acp_sessions",
+      "identities": []
+    },
+    {
+      "name": "agent_database_leases",
+      "identities": []
+    },
+    {
+      "name": "agent_databases",
+      "identities": []
+    },
+    {
+      "name": "apns_registration_tombstones",
+      "identities": []
+    },
+    {
+      "name": "apns_registrations",
+      "identities": []
+    },
+    {
+      "name": "audit_events",
+      "identities": [
+        {
+          "column": "sequence",
+          "autoIncrement": true
+        }
+      ]
+    },
+    {
+      "name": "audit_identity_keys",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "backup_runs",
+      "identities": []
+    },
+    {
+      "name": "capture_blobs",
+      "identities": []
+    },
+    {
+      "name": "capture_events",
+      "identities": [
+        {
+          "column": "id",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "capture_sessions",
+      "identities": []
+    },
+    {
+      "name": "channel_ingress_events",
+      "identities": []
+    },
+    {
+      "name": "channel_pairing_allow_entries",
+      "identities": []
+    },
+    {
+      "name": "channel_pairing_requests",
+      "identities": []
+    },
+    {
+      "name": "claw_cron_refs",
+      "identities": []
+    },
+    {
+      "name": "claw_installs",
+      "identities": []
+    },
+    {
+      "name": "claw_mcp_server_refs",
+      "identities": []
+    },
+    {
+      "name": "claw_package_refs",
+      "identities": []
+    },
+    {
+      "name": "claw_workspace_files",
+      "identities": []
+    },
+    {
+      "name": "clawhub_promotion_claims",
+      "identities": []
+    },
+    {
+      "name": "config_health_entries",
+      "identities": []
+    },
+    {
+      "name": "config_machine_state",
+      "identities": []
+    },
+    {
+      "name": "cron_job_scratch",
+      "identities": []
+    },
+    {
+      "name": "cron_jobs",
+      "identities": []
+    },
+    {
+      "name": "current_conversation_bindings",
+      "identities": []
+    },
+    {
+      "name": "delivery_queue_entries",
+      "identities": []
+    },
+    {
+      "name": "device_auth_tokens",
+      "identities": []
+    },
+    {
+      "name": "device_bootstrap_tokens",
+      "identities": []
+    },
+    {
+      "name": "device_identities",
+      "identities": []
+    },
+    {
+      "name": "device_pairing_paired",
+      "identities": []
+    },
+    {
+      "name": "device_pairing_pending",
+      "identities": []
+    },
+    {
+      "name": "diagnostic_events",
+      "identities": []
+    },
+    {
+      "name": "exec_approvals_config",
+      "identities": []
+    },
+    {
+      "name": "flow_runs",
+      "identities": []
+    },
+    {
+      "name": "gateway_boot_lifecycle",
+      "identities": []
+    },
+    {
+      "name": "gateway_origin_device_tokens",
+      "identities": []
+    },
+    {
+      "name": "gateway_restart_handoff",
+      "identities": []
+    },
+    {
+      "name": "gateway_restart_intent",
+      "identities": []
+    },
+    {
+      "name": "gateway_restart_sentinel",
+      "identities": []
+    },
+    {
+      "name": "macos_port_guardian_records",
+      "identities": [
+        {
+          "column": "pid",
+          "autoIncrement": false
+        }
+      ]
+    },
+    {
+      "name": "managed_outgoing_image_records",
+      "identities": []
+    },
+    {
+      "name": "mcp_oauth_stores",
+      "identities": []
+    },
+    {
+      "name": "meeting_transcript_sessions",
+      "identities": []
+    },
+    {
+      "name": "meeting_transcript_summaries",
+      "identities": []
+    },
+    {
+      "name": "meeting_transcript_utterances",
+      "identities": []
+    },
+    {
+      "name": "migration_runs",
+      "identities": []
+    },
+    {
+      "name": "migration_sources",
+      "identities": []
+    },
+    {
+      "name": "native_hook_relay_bridges",
+      "identities": []
+    },
+    {
+      "name": "official_external_plugin_catalog_snapshots",
+      "identities": []
+    },
+    {
+      "name": "operator_approvals",
+      "identities": []
+    },
+    {
+      "name": "outbound_media_provenance",
+      "identities": []
+    },
+    {
+      "name": "plugin_binding_approvals",
+      "identities": []
+    },
+    {
+      "name": "plugin_blob_entries",
+      "identities": []
+    },
+    {
+      "name": "plugin_state_entries",
+      "identities": []
+    },
+    {
+      "name": "sandbox_registry_entries",
+      "identities": []
+    },
+    {
+      "name": "schema_meta",
+      "identities": []
+    },
+    {
+      "name": "session_groups",
+      "identities": []
+    },
+    {
+      "name": "session_state_events",
+      "identities": [
+        {
+          "column": "sequence",
+          "autoIncrement": true
+        }
+      ]
+    },
+    {
+      "name": "session_state_heads",
+      "identities": []
+    },
+    {
+      "name": "session_upstream_links",
+      "identities": []
+    },
+    {
+      "name": "session_watch_cursors",
+      "identities": []
+    },
+    {
+      "name": "skill_upload_chunks",
+      "identities": []
+    },
+    {
+      "name": "skill_uploads",
+      "identities": []
+    },
+    {
+      "name": "skill_usage",
+      "identities": []
+    },
+    {
+      "name": "state_leases",
+      "identities": []
+    },
+    {
+      "name": "subagent_runs",
+      "identities": []
+    },
+    {
+      "name": "task_delivery_state",
+      "identities": []
+    },
+    {
+      "name": "task_runs",
+      "identities": []
+    },
+    {
+      "name": "web_push_subscriptions",
+      "identities": []
+    },
+    {
+      "name": "worker_environment_credentials",
+      "identities": []
+    },
+    {
+      "name": "worker_environments",
+      "identities": []
+    },
+    {
+      "name": "worker_inference_turns",
+      "identities": []
+    },
+    {
+      "name": "worker_session_placements",
+      "identities": []
+    },
+    {
+      "name": "worker_session_tool_operations",
+      "identities": []
+    },
+    {
+      "name": "worker_transcript_commit_heads",
+      "identities": []
+    },
+    {
+      "name": "worker_transcript_commits",
+      "identities": []
+    },
+    {
+      "name": "worker_turn_tool_authorities",
+      "identities": []
+    },
+    {
+      "name": "worker_workspace_pending_results",
+      "identities": []
+    },
+    {
+      "name": "worker_workspace_reconciliations",
+      "identities": []
+    },
+    {
+      "name": "workspace_generated_bootstrap_hashes",
+      "identities": []
+    },
+    {
+      "name": "workspace_path_aliases",
+      "identities": []
+    },
+    {
+      "name": "workspace_setup_state",
+      "identities": []
+    },
+    {
+      "name": "worktree_provisioned_file_chunks",
+      "identities": []
+    },
+    {
+      "name": "worktrees",
+      "identities": []
+    }
+  ],
+  "preData": [
+    0,
+    51662
+  ],
+  "postData": [
+    51662,
+    71984
+  ],
+  "sqliteRanges": [
+    [
+      42261,
+      42632
+    ],
+    [
+      41503,
+      42002
+    ],
+    [
+      40601,
+      41055
+    ],
+    [
+      43643,
+      43886
+    ],
+    [
+      42737,
+      42960
+    ],
+    [
+      29415,
+      29552
+    ],
+    [
+      28947,
+      29300
+    ],
+    [
+      3069,
+      3877
+    ],
+    [
+      6873,
+      7056
+    ],
+    [
+      63442,
+      63639
+    ],
+    [
+      47227,
+      47470
+    ],
+    [
+      47472,
+      48152
+    ],
+    [
+      46986,
+      47225
+    ],
+    [
+      44418,
+      45028
+    ],
+    [
+      27526,
+      27783
+    ],
+    [
+      26981,
+      27279
+    ],
+    [
+      98958,
+      99340
+    ],
+    [
+      96883,
+      97689
+    ],
+    [
+      99342,
+      99891
+    ],
+    [
+      98057,
+      98956
+    ],
+    [
+      97691,
+      98055
+    ],
+    [
+      36482,
+      36693
+    ],
+    [
+      36242,
+      36480
+    ],
+    [
+      19800,
+      19959
+    ],
+    [
+      52650,
+      52986
+    ],
+    [
+      49285,
+      49892
+    ],
+    [
+      56565,
+      57075
+    ],
+    [
+      53113,
+      53718
+    ],
+    [
+      22943,
+      23167
+    ],
+    [
+      21225,
+      21565
+    ],
+    [
+      22572,
+      22829
+    ],
+    [
+      20509,
+      21100
+    ],
+    [
+      19961,
+      20396
+    ],
+    [
+      384,
+      623
+    ],
+    [
+      13085,
+      13472
+    ],
+    [
+      58161,
+      58718
+    ],
+    [
+      40256,
+      40492
+    ],
+    [
+      23290,
+      23570
+    ],
+    [
+      39646,
+      40144
+    ],
+    [
+      39382,
+      39644
+    ],
+    [
+      38809,
+      39266
+    ],
+    [
+      23572,
+      23772
+    ],
+    [
+      25674,
+      26311
+    ],
+    [
+      2,
+      216
+    ],
+    [
+      59109,
+      59980
+    ],
+    [
+      61902,
+      62418
+    ],
+    [
+      61160,
+      61720
+    ],
+    [
+      62420,
+      62611
+    ],
+    [
+      62710,
+      63214
+    ],
+    [
+      25282,
+      25549
+    ],
+    [
+      36697,
+      37111
+    ],
+    [
+      13474,
+      16874
+    ],
+    [
+      100415,
+      100655
+    ],
+    [
+      57529,
+      57802
+    ],
+    [
+      45386,
+      45679
+    ],
+    [
+      43888,
+      44157
+    ],
+    [
+      48335,
+      48782
+    ],
+    [
+      19555,
+      19798
+    ],
+    [
+      66258,
+      66436
+    ],
+    [
+      10053,
+      10417
+    ],
+    [
+      10662,
+      10928
+    ],
+    [
+      11885,
+      12462
+    ],
+    [
+      11283,
+      11774
+    ],
+    [
+      46597,
+      46984
+    ],
+    [
+      45924,
+      46369
+    ],
+    [
+      742,
+      1041
+    ],
+    [
+      12571,
+      12857
+    ],
+    [
+      55838,
+      56163
+    ],
+    [
+      57928,
+      58159
+    ],
+    [
+      54590,
+      55458
+    ],
+    [
+      27927,
+      28277
+    ],
+    [
+      93918,
+      94454
+    ],
+    [
+      66587,
+      68845
+    ],
+    [
+      95985,
+      96721
+    ],
+    [
+      75713,
+      80357
+    ],
+    [
+      83353,
+      84078
+    ],
+    [
+      94627,
+      94959
+    ],
+    [
+      95118,
+      95832
+    ],
+    [
+      82558,
+      83040
+    ],
+    [
+      85923,
+      86543
+    ],
+    [
+      85210,
+      85779
+    ],
+    [
+      24987,
+      25280
+    ],
+    [
+      24650,
+      24874
+    ],
+    [
+      23895,
+      24545
+    ],
+    [
+      64418,
+      64666
+    ],
+    [
+      63732,
+      64242
+    ],
+    [
+      625,
+      740
+    ],
+    [
+      1043,
+      1130
+    ],
+    [
+      3879,
+      3979
+    ],
+    [
+      3981,
+      4083
+    ],
+    [
+      4085,
+      4192
+    ],
+    [
+      4194,
+      4292
+    ],
+    [
+      4294,
+      4391
+    ],
+    [
+      4393,
+      4494
+    ],
+    [
+      4496,
+      4599
+    ],
+    [
+      4601,
+      4708
+    ],
+    [
+      10419,
+      10542
+    ],
+    [
+      10544,
+      10660
+    ],
+    [
+      11776,
+      11883
+    ],
+    [
+      12464,
+      12569
+    ],
+    [
+      12859,
+      12989
+    ],
+    [
+      12991,
+      13083
+    ],
+    [
+      16876,
+      16978
+    ],
+    [
+      16980,
+      17104
+    ],
+    [
+      17106,
+      17218
+    ],
+    [
+      17220,
+      17370
+    ],
+    [
+      17372,
+      17575
+    ],
+    [
+      17577,
+      17724
+    ],
+    [
+      17726,
+      17871
+    ],
+    [
+      20398,
+      20507
+    ],
+    [
+      21102,
+      21223
+    ],
+    [
+      21567,
+      21658
+    ],
+    [
+      22831,
+      22941
+    ],
+    [
+      23169,
+      23288
+    ],
+    [
+      23774,
+      23893
+    ],
+    [
+      24547,
+      24648
+    ],
+    [
+      24876,
+      24983
+    ],
+    [
+      25551,
+      25672
+    ],
+    [
+      26313,
+      26457
+    ],
+    [
+      26459,
+      26629
+    ],
+    [
+      26631,
+      26791
+    ],
+    [
+      26793,
+      26979
+    ],
+    [
+      27281,
+      27391
+    ],
+    [
+      27393,
+      27524
+    ],
+    [
+      27785,
+      27925
+    ],
+    [
+      28279,
+      28406
+    ],
+    [
+      29302,
+      29413
+    ],
+    [
+      37113,
+      37273
+    ],
+    [
+      39268,
+      39380
+    ],
+    [
+      40146,
+      40254
+    ],
+    [
+      40494,
+      40599
+    ],
+    [
+      41057,
+      41177
+    ],
+    [
+      41179,
+      41299
+    ],
+    [
+      41301,
+      41401
+    ],
+    [
+      41403,
+      41501
+    ],
+    [
+      42004,
+      42144
+    ],
+    [
+      42146,
+      42259
+    ],
+    [
+      42634,
+      42735
+    ],
+    [
+      44159,
+      44279
+    ],
+    [
+      44281,
+      44416
+    ],
+    [
+      45030,
+      45156
+    ],
+    [
+      45158,
+      45272
+    ],
+    [
+      45274,
+      45384
+    ],
+    [
+      45681,
+      45799
+    ],
+    [
+      45801,
+      45922
+    ],
+    [
+      46371,
+      46454
+    ],
+    [
+      46456,
+      46595
+    ],
+    [
+      48154,
+      48247
+    ],
+    [
+      48249,
+      48333
+    ],
+    [
+      48784,
+      48918
+    ],
+    [
+      48920,
+      49104
+    ],
+    [
+      49106,
+      49283
+    ],
+    [
+      49894,
+      50013
+    ],
+    [
+      52988,
+      53111
+    ],
+    [
+      53720,
+      53839
+    ],
+    [
+      53841,
+      53957
+    ],
+    [
+      53959,
+      54123
+    ],
+    [
+      54125,
+      54311
+    ],
+    [
+      54313,
+      54588
+    ],
+    [
+      55460,
+      55577
+    ],
+    [
+      55578,
+      55706
+    ],
+    [
+      55707,
+      55836
+    ],
+    [
+      56165,
+      56291
+    ],
+    [
+      56292,
+      56426
+    ],
+    [
+      56427,
+      56563
+    ],
+    [
+      57077,
+      57230
+    ],
+    [
+      57231,
+      57397
+    ],
+    [
+      57398,
+      57527
+    ],
+    [
+      57804,
+      57926
+    ],
+    [
+      58720,
+      58789
+    ],
+    [
+      58790,
+      58865
+    ],
+    [
+      58866,
+      58943
+    ],
+    [
+      59982,
+      60111
+    ],
+    [
+      60113,
+      60268
+    ],
+    [
+      60270,
+      60394
+    ],
+    [
+      60396,
+      60524
+    ],
+    [
+      60526,
+      60641
+    ],
+    [
+      60643,
+      60918
+    ],
+    [
+      60920,
+      61039
+    ],
+    [
+      61041,
+      61158
+    ],
+    [
+      61722,
+      61900
+    ],
+    [
+      62613,
+      62708
+    ],
+    [
+      63216,
+      63336
+    ],
+    [
+      63338,
+      63440
+    ],
+    [
+      63641,
+      63730
+    ],
+    [
+      64244,
+      64335
+    ],
+    [
+      64337,
+      64416
+    ],
+    [
+      68847,
+      68997
+    ],
+    [
+      68999,
+      69129
+    ],
+    [
+      80359,
+      80482
+    ],
+    [
+      80484,
+      80609
+    ],
+    [
+      80611,
+      80762
+    ],
+    [
+      96723,
+      96881
+    ]
+  ],
+  "fragments": [
+    {
+      "id": "user_profiles",
+      "tables": [
+        {
+          "name": "user_profile_emails",
+          "identities": []
+        },
+        {
+          "name": "user_profile_identities",
+          "identities": []
+        },
+        {
+          "name": "user_profiles",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1024
+      ],
+      "postData": [
+        1024,
+        1385
+      ]
+    },
+    {
+      "id": "skill_library_entries",
+      "tables": [
+        {
+          "name": "skill_library_entries",
+          "identities": []
+        },
+        {
+          "name": "skill_library_events",
+          "identities": []
+        },
+        {
+          "name": "skill_library_revisions",
+          "identities": []
+        },
+        {
+          "name": "skill_library_uploads",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1470
+      ],
+      "postData": [
+        1470,
+        1470
+      ]
+    },
+    {
+      "id": "operator_approval_standing_grants",
+      "tables": [
+        {
+          "name": "operator_approval_standing_grant_generations",
+          "identities": []
+        },
+        {
+          "name": "operator_approval_standing_grants",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1155
+      ],
+      "postData": [
+        1155,
+        1790
+      ]
+    },
+    {
+      "id": "worker_environment_session_attachments",
+      "tables": [
+        {
+          "name": "worker_environment_session_attachments",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        577
+      ],
+      "postData": [
+        577,
+        947
+      ]
+    },
+    {
+      "id": "user_background_images",
+      "tables": [
+        {
+          "name": "user_background_images",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        476
+      ],
+      "postData": [
+        476,
+        632
+      ]
+    },
+    {
+      "id": "local_workspace_projections",
+      "tables": [
+        {
+          "name": "local_workspace_projections",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1156
+      ],
+      "postData": [
+        1156,
+        1156
+      ]
+    },
+    {
+      "id": "update_runs",
+      "tables": [
+        {
+          "name": "update_runs",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1749
+      ],
+      "postData": [
+        1749,
+        2019
+      ]
+    },
+    {
+      "id": "session_repository_workspaces",
+      "tables": [
+        {
+          "name": "session_repository_workspaces",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1468
+      ],
+      "postData": [
+        1468,
+        1468
+      ]
+    },
+    {
+      "id": "github_repository_publication_requests",
+      "tables": [
+        {
+          "name": "github_repository_publication_requests",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        2686
+      ],
+      "postData": [
+        2686,
+        3169
+      ]
+    },
+    {
+      "id": "github_publication_session_lifecycles",
+      "tables": [
+        {
+          "name": "github_publication_session_lifecycles",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        422
+      ],
+      "postData": [
+        422,
+        422
+      ]
+    },
+    {
+      "id": "github_personal_publication_requests",
+      "tables": [
+        {
+          "name": "github_personal_publication_requests",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        4446
+      ],
+      "postData": [
+        4446,
+        4851
+      ]
+    },
+    {
+      "id": "cron_job_runtime_authorities",
+      "tables": [
+        {
+          "name": "cron_job_runtime_authorities",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        635
+      ],
+      "postData": [
+        635,
+        819
+      ]
+    },
+    {
+      "id": "cron_run_trigger_state_retirements",
+      "tables": [
+        {
+          "name": "cron_run_trigger_state_retirements",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        206
+      ],
+      "postData": [
+        206,
+        386
+      ]
+    },
+    {
+      "id": "execution_identity_contexts",
+      "tables": [
+        {
+          "name": "execution_identity_contexts",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        894
+      ],
+      "postData": [
+        894,
+        1082
+      ]
+    },
+    {
+      "id": "mcp_oauth_pending_authorizations",
+      "tables": [
+        {
+          "name": "mcp_oauth_pending_authorizations",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        267
+      ],
+      "postData": [
+        267,
+        267
+      ]
+    },
+    {
+      "id": "node_worker_launch_containers",
+      "tables": [
+        {
+          "name": "node_worker_launch_containers",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        235
+      ],
+      "postData": [
+        235,
+        235
+      ]
+    },
+    {
+      "id": "node_worker_launch_boots",
+      "tables": [
+        {
+          "name": "node_worker_launch_boots",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        299
+      ],
+      "postData": [
+        299,
+        470
+      ]
+    },
+    {
+      "id": "node_worker_launch_cleanup",
+      "tables": [
+        {
+          "name": "node_worker_launch_cleanup",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        397
+      ],
+      "postData": [
+        397,
+        570
+      ]
+    },
+    {
+      "id": "node_worker_launch_process_scopes",
+      "tables": [
+        {
+          "name": "node_worker_launch_process_scopes",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        392
+      ],
+      "postData": [
+        392,
+        572
+      ]
+    },
+    {
+      "id": "node_worker_launches",
+      "tables": [
+        {
+          "name": "node_worker_launches",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        3295
+      ],
+      "postData": [
+        3295,
+        3486
+      ]
+    },
+    {
+      "id": "node_worker_prepared_workspaces",
+      "tables": [
+        {
+          "name": "node_worker_prepared_workspaces",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        2487
+      ],
+      "postData": [
+        2487,
+        2487
+      ]
+    },
+    {
+      "id": "node_worker_turns",
+      "tables": [
+        {
+          "name": "node_worker_turns",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1937
+      ],
+      "postData": [
+        1937,
+        2439
+      ]
+    },
+    {
+      "id": "operator_approval_execution_identities",
+      "tables": [
+        {
+          "name": "operator_approval_execution_identities",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        556
+      ],
+      "postData": [
+        556,
+        743
+      ]
+    },
+    {
+      "id": "web_push_approval_deliveries",
+      "tables": [
+        {
+          "name": "web_push_approval_deliveries",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        383
+      ],
+      "postData": [
+        383,
+        918
+      ]
+    },
+    {
+      "id": "execution_decision_facts",
+      "tables": [
+        {
+          "name": "execution_decision_facts",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1648
+      ],
+      "postData": [
+        1648,
+        2146
+      ]
+    },
+    {
+      "id": "execution_owner_lifecycle_bindings",
+      "tables": [
+        {
+          "name": "execution_owner_lifecycle_bindings",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        343
+      ],
+      "postData": [
+        343,
+        343
+      ]
+    },
+    {
+      "id": "outbound_message_execution_bindings",
+      "tables": [
+        {
+          "name": "outbound_message_execution_bindings",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        496
+      ],
+      "postData": [
+        496,
+        907
+      ]
+    },
+    {
+      "id": "outbound_message_progress",
+      "tables": [
+        {
+          "name": "outbound_message_progress",
+          "identities": [
+            {
+              "column": "sequence",
+              "autoIncrement": true
+            }
+          ]
+        }
+      ],
+      "preData": [
+        0,
+        1808
+      ],
+      "postData": [
+        1808,
+        2141
+      ]
+    },
+    {
+      "id": "agent_provenance",
+      "tables": [
+        {
+          "name": "agent_provenance",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        360
+      ],
+      "postData": [
+        360,
+        360
+      ]
+    },
+    {
+      "id": "cron_run_receipts",
+      "tables": [
+        {
+          "name": "cron_run_receipts",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        986
+      ],
+      "postData": [
+        986,
+        1466
+      ]
+    },
+    {
+      "id": "config_revision_keys",
+      "tables": [
+        {
+          "name": "config_revision_keys",
+          "identities": [
+            {
+              "column": "id",
+              "autoIncrement": false
+            }
+          ]
+        }
+      ],
+      "preData": [
+        0,
+        292
+      ],
+      "postData": [
+        292,
+        292
+      ]
+    },
+    {
+      "id": "secret_store_entries",
+      "tables": [
+        {
+          "name": "secret_store_entries",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        811
+      ],
+      "postData": [
+        811,
+        1002
+      ]
+    },
+    {
+      "id": "projects",
+      "tables": [
+        {
+          "name": "projects",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        439
+      ],
+      "postData": [
+        439,
+        439
+      ]
+    },
+    {
+      "id": "worktree_templates",
+      "tables": [
+        {
+          "name": "worktree_templates",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        681
+      ],
+      "postData": [
+        681,
+        681
+      ]
+    },
+    {
+      "id": "user_preferences",
+      "tables": [
+        {
+          "name": "user_preferences",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        316
+      ],
+      "postData": [
+        316,
+        316
+      ]
+    },
+    {
+      "id": "device_pair_setup_completions",
+      "tables": [
+        {
+          "name": "device_pair_setup_completions",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        489
+      ],
+      "postData": [
+        489,
+        489
+      ]
+    },
+    {
+      "id": "github_publication_requests",
+      "tables": [
+        {
+          "name": "github_publication_requests",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        2970
+      ],
+      "postData": [
+        2970,
+        3155
+      ]
+    },
+    {
+      "id": "device_pairing_join_codes",
+      "tables": [
+        {
+          "name": "device_pairing_join_codes",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        243
+      ],
+      "postData": [
+        243,
+        243
+      ]
+    },
+    {
+      "id": "skill_workshop_changes",
+      "tables": [
+        {
+          "name": "skill_workshop_changes",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        709
+      ],
+      "postData": [
+        709,
+        978
+      ]
+    },
+    {
+      "id": "worker_environment_ssh_fallback_ports",
+      "tables": [
+        {
+          "name": "worker_environment_ssh_fallback_ports",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        420
+      ],
+      "postData": [
+        420,
+        613
+      ]
+    },
+    {
+      "id": "worker_session_placement_moves",
+      "tables": [
+        {
+          "name": "worker_session_placement_moves",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        1200
+      ],
+      "postData": [
+        1200,
+        1384
+      ]
+    },
+    {
+      "id": "agent_deletion_journal",
+      "tables": [
+        {
+          "name": "agent_deletion_journal",
+          "identities": []
+        }
+      ],
+      "preData": [
+        0,
+        654
+      ],
+      "postData": [
+        654,
+        654
+      ]
+    }
+  ]
+}

@@ -9,38 +9,16 @@ func gatewayIntValue(_ value: Any?) -> Int? {
     if let value = value as? Int64 {
         return Int(exactly: value)
     }
-    if let value = value as? Double, value.rounded() == value {
+    if let value = value as? Double {
         return Int(exactly: value)
     }
     if let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() {
-        let doubleValue = value.doubleValue
-        guard doubleValue.rounded() == doubleValue else {
-            return nil
-        }
-        return Int(exactly: doubleValue)
+        return Int(exactly: value.doubleValue)
     }
     if let value = value as? String {
         return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     return nil
-}
-
-/// Bridges task cancellation into the request continuation without racing send.
-final class GatewayRequestCancellationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-
-    var isCancelled: Bool {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cancelled
-    }
-
-    func cancel() {
-        self.lock.lock()
-        self.cancelled = true
-        self.lock.unlock()
-    }
 }
 
 extension GatewayChannelActor {

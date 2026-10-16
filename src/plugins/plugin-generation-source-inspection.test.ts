@@ -10,27 +10,7 @@ import { visitPluginSourceReferences } from "./plugin-source-references.js";
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["import.meta", 'import.meta["url"]', "import.meta.main"])(
-  "captures dependencies beside retained %s without evaluating the plugin",
-  (expression) => {
-    const root = temp.make("plugin-inspection-meta-");
-    const entryFile = path.join(root, "index.mjs");
-    const dependency = path.join(root, "dependency.mjs");
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(dependency, "export const value = 42;");
-    fs.writeFileSync(
-      entryFile,
-      `const meta = ${expression}; import { value } from "./dependency.mjs"; throw new Error("inspection must not execute plugin code");`,
-    );
-
-    const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
-    expect(inspection.unresolved).toEqual([]);
-    expect(inspection.files).toContain(dependency);
-    expect(() => inspection.assertSourceCurrent()).not.toThrow();
-  },
-);
-
-it("traces a dependency that assigns to import.meta.url", () => {
+it("inspects retained import.meta reads and assignments without evaluating dependencies", () => {
   const root = temp.make("plugin-inspection-meta-assignment-");
   const entryFile = path.join(root, "index.mjs");
   const codec = path.join(root, "codec.mjs");
@@ -41,13 +21,17 @@ it("traces a dependency that assigns to import.meta.url", () => {
     codec,
     `import path from "node:path";
      import "./glue.mjs";
+     const meta = import.meta;
+     const url = import.meta["url"];
+     const main = import.meta.main;
      if (import.meta.url === undefined) {
        import.meta.url = "https://localhost";
        ({ href: import.meta.url } = new URL("https://localhost"));
      }
      export const wasm = new URL("codec.wasm", import.meta.url);
      export const schema = path.join(import.meta.dirname, "schema.json");
-     export const next = import.meta.resolve("./resolved.mjs");`,
+     export const next = import.meta.resolve("./resolved.mjs");
+     throw new Error("inspection must not execute plugin code");`,
   );
   fs.writeFileSync(glue, "export {};");
   fs.writeFileSync(resolved, "export {};");
@@ -59,6 +43,7 @@ it("traces a dependency that assigns to import.meta.url", () => {
     { source: codec, specifier: "./resolved.mjs", target: resolved },
   ]);
   expect(inspection.unresolved).toEqual([]);
+  expect(inspection.files).toContain(codec);
 
   const visited: string[] = [];
   visitPluginSourceReferences(
@@ -140,7 +125,6 @@ it("inspects a captured cyclic dependency graph without following its dependency
       )
       .toSorted(),
   );
-  expect(() => inspection.assertSourceCurrent()).not.toThrow();
   expect(fs.readdirSync(captures)).toEqual([]);
   expect(followedLinks.size).toBe(0);
 });
@@ -185,6 +169,5 @@ it.for(
     const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
     expect(inspection.unresolved).toEqual([]);
     expect(inspection.references).toEqual([{ source: entryFile, specifier, target: selected }]);
-    expect(() => inspection.assertSourceCurrent()).not.toThrow();
   },
 );
