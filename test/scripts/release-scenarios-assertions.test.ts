@@ -130,12 +130,8 @@ describe("release scenario assertions", () => {
     expect(result.stderr.length).toBeLessThan(4 * 1024);
   });
 
-  it("scans large request logs for image describe responses", () => {
-    expect(imageAssertion("describe")).toMatchObject({ status: 0, stderr: "" });
-  });
-
-  it("scans large request logs for image generation requests", () => {
-    expect(imageAssertion("generate")).toMatchObject({ status: 0, stderr: "" });
+  it.each(["describe", "generate"] as const)("scans large image %s request logs", (kind) => {
+    expect(imageAssertion(kind)).toMatchObject({ status: 0, stderr: "" });
   });
 
   it("accepts OpenAI env refs from the SQLite auth profile store", () => {
@@ -146,28 +142,24 @@ describe("release scenario assertions", () => {
     ).toBe(false);
   });
 
-  it("rejects SQLite auth profile stores without a usable OpenAI env ref", () => {
-    const { result } = authAssertion({ note: "OPENAI_API_KEY" });
+  it.each([
+    ["missing env ref", { note: "OPENAI_API_KEY" }, {}, "OpenAI env ref was not persisted"],
+    [
+      "inline profile key",
+      { type: "api_key", provider: "openai", key: "sk-test-raw-key" },
+      {},
+      "raw OpenAI key was persisted",
+    ],
+    [
+      "inline config key",
+      envRef,
+      { models: { providers: { openai: { apiKey: "sk-test-raw-key" } } } },
+      "raw OpenAI key was persisted",
+    ],
+  ] as const)("rejects %s", (_name, profile, config, message) => {
+    const { result } = authAssertion(profile, config);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("OpenAI env ref was not persisted");
-  });
-
-  it("rejects inline OpenAI keys in the SQLite auth profile store", () => {
-    const { result } = authAssertion({
-      type: "api_key",
-      provider: "openai",
-      key: "sk-test-raw-key",
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("raw OpenAI key was persisted");
-  });
-
-  it("rejects raw OpenAI keys leaked outside the SQLite auth profile store", () => {
-    const { result } = authAssertion(envRef, {
-      models: { providers: { openai: { apiKey: "sk-test-raw-key" } } },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("raw OpenAI key was persisted");
+    expect(result.stderr).toContain(message);
   });
 
   it("passes when the installed package version matches the candidate version", () => {

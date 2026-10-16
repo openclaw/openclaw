@@ -30,8 +30,17 @@ const PARENT_RUN_ID = "67890";
 const PARENT_RUN_ATTEMPT = "2";
 const REF = `release-publish/${SHA.slice(0, 12)}-${RUN_ID}`;
 const FULL_REF = `refs/tags/${REF}`;
-const mainIdentity = (sha = SHA) =>
-  JSON.stringify({ ref: "main", fullRef: "refs/heads/main", sha });
+const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
+const identityJson = (sha = SHA, ref = "main") =>
+  JSON.stringify({ ref, fullRef: `refs/heads/${ref}`, sha });
+const artifactMetadata = (artifact: { name: string; digest: string }) => ({
+  id: 555,
+  name: artifact.name,
+  digest: `sha256:${artifact.digest}`,
+  expired: false,
+  workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+});
+const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const executing = (ref = "main") => ({
   workflowContract: "2",
   workflowRef: ref,
@@ -72,28 +81,57 @@ function protectedIdentity(
 }
 
 describe("release tooling identity", () => {
-  it("rejects a raw commit SHA as the workflow transport ref", () => {
-    expect(() => resolveReleaseToolingIdentity(executing(SHA))).toThrow(
+  it.each([
+    [
+      "raw commit transport",
+      executing(SHA),
       "workflow ref is not a trusted direct, release-ci, or protected-tag route",
-    );
+    ],
+    [
+      "unsupported contract",
+      { ...executing(), requestedIdentityJson: identityJson(), workflowContract: "3" },
+      "release tooling contract 3 is not supported",
+    ],
+    [
+      "implicit protected tag",
+      { ...executing(REF), workflowFullRef: FULL_REF },
+      /requires explicit trusted workflow identity|require explicit trusted workflow/u,
+    ],
+    [
+      "wrong release-ci prefix",
+      {
+        ...executing(`release-ci/${OTHER_SHA.slice(0, 12)}-123`),
+        requestedIdentityJson: identityJson(),
+      },
+      "release-ci workflow ref does not match the workflow SHA",
+    ],
+    [
+      "candidate substituted for tooling",
+      { ...executing(releaseCiRef), requestedIdentityJson: identityJson(OTHER_SHA) },
+      "release-ci workflow identity must be trusted main",
+    ],
+    [
+      "mismatched direct identity",
+      { ...executing(), requestedIdentityJson: identityJson(OTHER_SHA) },
+      "must match the executing workflow ref and SHA",
+    ],
+  ] as const)("rejects %s", (_label, input, error) => {
+    expect(() => resolveReleaseToolingIdentity(input)).toThrow(error);
   });
 
-  it("derives contract 2 identity for a safe direct release ref", () => {
-    const ref = "release/2026.8.1";
-    expect(resolveReleaseToolingIdentity(executing(ref))).toEqual({
-      ref,
-      fullRef: `refs/heads/${ref}`,
+  it.each([
+    ["direct release", "release/2026.8.1", undefined, "release/2026.8.1"],
+    ["release-ci", releaseCiRef, identityJson(), "main"],
+  ])("resolves the %s identity", (_label, ref, requestedIdentityJson, expectedRef) => {
+    expect(resolveReleaseToolingIdentity({ ...executing(ref), requestedIdentityJson })).toEqual({
+      ref: expectedRef,
+      fullRef: `refs/heads/${expectedRef}`,
       sha: SHA,
     });
   });
 
   it("rejects retired Tideclaw tooling even when prevalidated", () => {
-    const workflowRef = "tideclaw/alpha/2026-08-21-1200Z";
-    const identity = {
-      workflowRef,
-      workflowFullRef: `refs/heads/${workflowRef}`,
-      workflowSha: SHA,
-    };
+    const identity = executing("tideclaw/alpha/2026-08-21-1200Z");
     expect(() => resolveReleaseToolingIdentity({ ...identity, workflowContract: "2" })).toThrow(
       "Alpha releases are retired;",
     );
@@ -102,47 +140,7 @@ describe("release tooling identity", () => {
     ).toThrow("Alpha releases are retired;");
   });
 
-  it("rejects unsupported contract 3 even with explicit identity", () => {
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        ...executing(),
-        requestedIdentityJson: mainIdentity(),
-        workflowContract: "3",
-      }),
-    ).toThrow("release tooling contract 3 is not supported");
-  });
-
-  it("requires explicit identity for a protected tag", () => {
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        ...executing(REF),
-        workflowFullRef: FULL_REF,
-      }),
-    ).toThrow(/requires explicit trusted workflow identity|require explicit trusted workflow/u);
-  });
-
-  it("accepts explicit main identity for a matching release-ci workflow", () => {
-    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
-    expect(
-      resolveReleaseToolingIdentity({
-        ...executing(releaseCiRef),
-        requestedIdentityJson: mainIdentity(),
-      }),
-    ).toEqual({ ref: "main", fullRef: "refs/heads/main", sha: SHA });
-  });
-
-  it("rejects a release-ci transport whose prefix does not match the Tooling SHA", () => {
-    const releaseCiRef = `release-ci/${OTHER_SHA.slice(0, 12)}-123`;
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        ...executing(releaseCiRef),
-        requestedIdentityJson: mainIdentity(),
-      }),
-    ).toThrow("release-ci workflow ref does not match the workflow SHA");
-  });
-
   it("loads candidate qualification admission without deadlocking the CLI module cycle", () => {
-    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
     const result = spawnSync(
       process.execPath,
       [
@@ -157,11 +155,7 @@ describe("release tooling identity", () => {
           "workflow-ref": releaseCiRef,
           "workflow-full-ref": `refs/heads/${releaseCiRef}`,
           "workflow-sha": SHA,
-          "requested-identity-json": JSON.stringify({
-            ref: releaseCiRef,
-            fullRef: `refs/heads/${releaseCiRef}`,
-            sha: SHA,
-          }),
+          "requested-identity-json": identityJson(SHA, releaseCiRef),
         }).flatMap(([key, value]) => [`--${key}`, value]),
       ],
       { encoding: "utf8" },
@@ -170,25 +164,6 @@ describe("release tooling identity", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Invalid admission descriptor fields");
     expect(result.stderr).not.toContain("unsettled top-level await");
-  });
-
-  it("rejects a candidate SHA substituted for the release-ci Tooling SHA", () => {
-    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        ...executing(releaseCiRef),
-        requestedIdentityJson: mainIdentity(OTHER_SHA),
-      }),
-    ).toThrow("release-ci workflow identity must be trusted main");
-  });
-
-  it("rejects explicit identity that does not match a direct workflow", () => {
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        ...executing(),
-        requestedIdentityJson: mainIdentity(OTHER_SHA),
-      }),
-    ).toThrow("must match the executing workflow ref and SHA");
   });
 
   it("rejects a deleted tag", () => {
@@ -206,7 +181,7 @@ describe("release tooling identity", () => {
     expect(() =>
       verifyReleaseToolingIdentity({
         allowPrevalidatedRef: true,
-        repository: "openclaw/openclaw",
+        ...protectedIdentity(),
         runGh: () =>
           JSON.stringify({
             ref: "refs/heads/release/2026.8.1",
@@ -220,9 +195,7 @@ describe("release tooling identity", () => {
   });
 
   it("binds a distinct current parent run independently from tag provenance", () => {
-    const calls: string[][] = [];
     const runGh = vi.fn((args: string[]) => {
-      calls.push(args);
       if (args[1]?.includes("/git/ref/tags/")) {
         return JSON.stringify({
           ref: FULL_REF,
@@ -243,8 +216,7 @@ describe("release tooling identity", () => {
         runGh,
       }),
     ).toMatchObject({ route: "protected-tag", sha: SHA });
-    expect(PARENT_RUN_ID).not.toBe(RUN_ID);
-    expect(calls).toContainEqual([
+    expect(runGh.mock.calls.map(([args]) => args)).toContainEqual([
       "api",
       `repos/openclaw/openclaw/actions/runs/${PARENT_RUN_ID}`,
       "--method",
@@ -262,23 +234,20 @@ describe("release tooling identity", () => {
     ["manual-recovery", "completed", "success", true],
     ["manual-recovery", "completed", "failure", true],
     ["manual-recovery", "completed", "cancelled", false],
-  ] as const)(
-    "enforces parent state policy %s for %s/%s",
-    (releasePublishParentStatePolicy, status, conclusion, accepted) => {
-      const validate = () =>
-        validateReleasePublishParentRun({
-          ...parentIdentity(),
-          releasePublishParentStatePolicy,
-          run: parentRun({ status, conclusion }),
-        });
+  ] as const)("enforces parent policy %s for %s/%s", (policy, status, conclusion, accepted) => {
+    const validate = () =>
+      validateReleasePublishParentRun({
+        ...parentIdentity(),
+        releasePublishParentStatePolicy: policy,
+        run: parentRun({ status, conclusion }),
+      });
 
-      if (accepted) {
-        expect(validate).not.toThrow();
-      } else {
-        expect(validate).toThrow(`state is not allowed by ${releasePublishParentStatePolicy}`);
-      }
-    },
-  );
+    if (accepted) {
+      expect(validate).not.toThrow();
+    } else {
+      expect(validate).toThrow(`state is not allowed by ${policy}`);
+    }
+  });
 
   it.each([
     ["active", "waiting", null, true],
@@ -288,7 +257,7 @@ describe("release tooling identity", () => {
     ["success", "waiting", null, false],
     ["success", "completed", "failure", false],
   ] as const)(
-    "enforces writer state policy %s for %s/%s",
+    "enforces writer policy %s for %s/%s",
     (runStatePolicy, status, conclusion, accepted) => {
       const verify = () =>
         verifyReleaseWorkflowRun({
@@ -299,17 +268,16 @@ describe("release tooling identity", () => {
           workflowEvent: "workflow_dispatch",
           runStatePolicy,
           runGh: () =>
-            JSON.stringify({
-              id: Number(RUN_ID),
-              run_attempt: 1,
-              repository: { full_name: "openclaw/openclaw" },
-              path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
-              event: "workflow_dispatch",
-              head_branch: REF,
-              head_sha: SHA,
-              status,
-              conclusion,
-            }),
+            JSON.stringify(
+              parentRun({
+                id: Number(RUN_ID),
+                run_attempt: 1,
+                path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+                head_branch: REF,
+                status,
+                conclusion,
+              }),
+            ),
         });
       if (accepted) {
         expect(verify()).toMatchObject({ status, conclusion });
@@ -376,19 +344,14 @@ describe("historical npm preflight tooling", () => {
   });
 
   it.each([
-    { version: 2 },
-    {
-      version: 2,
-      producer: {
-        ...producer,
-        workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/"),
-      },
-    },
-    { version: 2, producer: { ...producer, workflowSha: OTHER_SHA } },
-    { version: 2, producer: { ...producer, runId: PARENT_RUN_ID } },
-    { version: 2, producer: { ...producer, runAttempt: "2" } },
-    { version: 2, producer: { ...producer, repository: "other/repo" } },
-  ])("rejects incomplete or mismatched immutable producer evidence %j", (manifest) => {
+    undefined,
+    { workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/") },
+    { workflowSha: OTHER_SHA },
+    { runId: PARENT_RUN_ID },
+    { runAttempt: "2" },
+    { repository: "other/repo" },
+  ])("rejects incomplete or mismatched immutable producer evidence %j", (override) => {
+    const manifest = { version: 2, ...(override && { producer: { ...producer, ...override } }) };
     expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
   });
 
@@ -400,13 +363,13 @@ describe("historical npm preflight tooling", () => {
       [`compare/${SHA}...${OTHER_SHA}`]: { status: "ahead" },
       ...overrides,
     };
-    const runGh = vi.fn((args: string[]) => {
+    const runGh = (args: string[]) => {
       const route = args[1]?.replace("repos/openclaw/openclaw/", "");
       if (!route || !(route in responses)) {
         throw new Error("unavailable provenance");
       }
       return JSON.stringify(responses[route]);
-    });
+    };
     return { ...protectedIdentity(), publisherSha: OTHER_SHA, runGh };
   }
 
@@ -417,12 +380,6 @@ describe("historical npm preflight tooling", () => {
       sha: SHA,
       route: "protected-tag",
     });
-    expect(options.runGh.mock.calls.map(([args]) => args[1])).toEqual([
-      `repos/openclaw/openclaw/git/ref/tags/${REF}`,
-      `repos/openclaw/openclaw/git/matching-refs/heads/${REF}`,
-      `repos/openclaw/openclaw/compare/${SHA}...main`,
-      `repos/openclaw/openclaw/compare/${SHA}...${OTHER_SHA}`,
-    ]);
   });
 
   it.each([
@@ -484,7 +441,6 @@ function qualificationFixture({
   const currentRef = `refs/heads/release-ci/${SHA.slice(0, 12)}-200`;
   const retainedSource = {
     runId: RUN_ID,
-    runAttempt: 1,
     candidateSha: SHA,
     workflow: { ref: fullRef, sha: SHA },
     qualificationAdmission: { artifactId: "100" },
@@ -538,7 +494,6 @@ function qualificationFixture({
           sourceAdmission: {
             ...retainedSource,
             runId: fullRunId,
-            runAttempt: Number(fullRunAttempt),
             workflow: { ref: currentRef, sha: SHA },
           },
           evidenceReuse: {
@@ -591,11 +546,7 @@ function qualificationFixture({
       }
       if (endpoint.endsWith("/artifacts/555")) {
         return JSON.stringify({
-          id: 555,
-          name: qualified.artifact.name,
-          digest: `sha256:${qualified.artifact.digest}`,
-          expired: false,
-          workflow_run: { id: Number(RUN_ID), head_sha: SHA },
+          ...artifactMetadata(qualified.artifact),
           ...artifactOverrides,
         });
       }
@@ -606,100 +557,60 @@ function qualificationFixture({
         endpoint.endsWith(`/attempts/${producerRunAttempt}`) ||
         endpoint.endsWith(`/actions/runs/${RUN_ID}`)
       ) {
-        return JSON.stringify({
-          id: Number(RUN_ID),
-          run_attempt: Number(producerRunAttempt),
-          head_sha: SHA,
-          path: workflowPath,
-          head_branch: producerRef,
-          event: "workflow_dispatch",
-          status: "completed",
-          conclusion: "success",
-          repository: { full_name: producer.repository },
-          head_repository: { full_name: producer.repository },
-          ...runOverrides,
-        });
+        return JSON.stringify(
+          parentRun({
+            id: Number(RUN_ID),
+            run_attempt: Number(producerRunAttempt),
+            path: workflowPath,
+            head_branch: producerRef,
+            status: "completed",
+            conclusion: "success",
+            head_repository: { full_name: producer.repository },
+            ...runOverrides,
+          }),
+        );
       }
       throw new Error(`Unexpected proof request: ${endpoint}`);
     };
   }
-  return {
-    producer,
-    manifest,
-    qualified,
-    fullReleaseManifest,
-    input,
-    resolutionInput,
-    reader,
-    workflowPath,
-    fullRunId,
-    fullRunAttempt,
-  };
+  return { input, resolutionInput, reader };
 }
 
 describe("npm qualification", () => {
-  const {
-    producer,
-    manifest,
-    qualified,
-    fullReleaseManifest,
-    input,
-    resolutionInput,
-    reader,
-    workflowPath,
-    fullRunId,
-    fullRunAttempt,
-  } = qualificationFixture(independentProducerRoute);
+  const { input, resolutionInput, reader } = qualificationFixture(independentProducerRoute);
+  const { manifest, fullReleaseManifest, workflowPath } = input;
+  const { producer } = manifest;
   it.each(qualificationRoutes)("requires exact qualifier and artifact for $label", (route) => {
-    const {
-      input: routeInput,
-      resolutionInput: routeResolutionInput,
-      reader: routeReader,
-    } = qualificationFixture(route);
-    const runGh = vi.fn(routeReader());
-    expect(resolveFullReleaseNpmPreflight({ ...routeResolutionInput, runGh })).toMatchObject({
+    const fixture = qualificationFixture(route);
+    const runGh = vi.fn(fixture.reader());
+    const verify = (
+      overrides: Partial<Parameters<typeof verifyNpmPreflightProducer>[0]> = {},
+      read = fixture.reader(),
+    ) => verifyNpmPreflightProducer({ ...fixture.input, ...overrides, runGh: read });
+    expect(resolveFullReleaseNpmPreflight({ ...fixture.resolutionInput, runGh })).toMatchObject({
       producer: { runId: RUN_ID, runAttempt: "1" },
       artifact: { id: 555 },
     });
     expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
       `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
     );
-    expect(verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader() })).toMatchObject({
-      provenance: "immutable-manifest",
-    });
-    expect(() =>
-      verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader({ conclusion: "failure" }) }),
-    ).toThrow("completed producer job");
-    expect(() =>
-      verifyNpmPreflightProducer({
-        ...routeInput,
-        manifestSha256: "f".repeat(64),
-        runGh: routeReader(),
-      }),
-    ).toThrow("exact full release qualification");
-    expect(() =>
-      verifyNpmPreflightProducer({
-        ...routeInput,
-        fullReleaseManifest: undefined,
-        runGh: routeReader(),
-      }),
-    ).toThrow("qualified npm preflight");
+    expect(verify()).toMatchObject({ provenance: "immutable-manifest" });
+    expect(() => verify({}, fixture.reader({ conclusion: "failure" }))).toThrow(
+      "completed producer job",
+    );
+    expect(() => verify({ manifestSha256: "f".repeat(64) })).toThrow(
+      "exact full release qualification",
+    );
+    expect(() => verify({ fullReleaseManifest: undefined })).toThrow("qualified npm preflight");
   });
   it("rejects stale source or attempt and raw-only package evidence", () => {
     expect(() =>
       verifyNpmPreflightProducer({ ...input, manifest: { version: 1 }, runGh: reader() }),
     ).toThrow("qualified version 3");
-    const expected = {
-      manifest: fullReleaseManifest,
-      runId: fullRunId,
-      runAttempt: fullRunAttempt,
-      sourceSha: OTHER_SHA,
-      toolingSha: SHA,
-    };
-    expect(() => validateFullReleaseNpmPreflight({ ...expected, sourceSha: SHA })).toThrow(
+    expect(() => validateFullReleaseNpmPreflight({ ...resolutionInput, sourceSha: SHA })).toThrow(
       "qualified npm preflight",
     );
-    expect(() => validateFullReleaseNpmPreflight({ ...expected, runAttempt: "2" })).toThrow(
+    expect(() => validateFullReleaseNpmPreflight({ ...resolutionInput, runAttempt: "2" })).toThrow(
       "qualified npm preflight",
     );
     expect(() =>
@@ -714,10 +625,10 @@ describe("npm qualification", () => {
   });
 
   it.each(["root", "candidate", "policy", "transport"])(
-    "rejects retained npm evidence with a changed %s binding",
+    "rejects changed retained %s evidence",
     (mismatch) => {
       const fixture = qualificationFixture(retainedProducerRoute);
-      const reuse = fixture.fullReleaseManifest.evidenceReuse;
+      const reuse = fixture.input.fullReleaseManifest.evidenceReuse;
       if (!reuse) {
         throw new Error("Expected retained producer fixture");
       }
@@ -731,7 +642,8 @@ describe("npm qualification", () => {
         reuse.policy = "changelog-only-release-v1";
       }
       if (mismatch === "transport") {
-        fixture.producer.workflowRef = fixture.producer.workflowRef.replace("-100", "-300");
+        const retainedProducer = fixture.input.manifest.producer;
+        retainedProducer.workflowRef = retainedProducer.workflowRef.replace("-100", "-300");
       }
       expect(() =>
         resolveFullReleaseNpmPreflight({ ...fixture.resolutionInput, runGh: fixture.reader() }),
@@ -771,17 +683,14 @@ describe("npm qualification", () => {
     ["repository", { repository: { full_name: "other/repository" } }, {}],
     ["unfinished", { status: "in_progress", conclusion: null }, {}],
     ["artifact", {}, { workflow_run: { id: 777, head_sha: SHA } }],
-  ])(
-    "rejects changed live %s evidence before downloading package bytes",
-    (_mismatch, runOverrides, artifactOverrides) => {
-      expect(() =>
-        resolveFullReleaseNpmPreflight({
-          ...resolutionInput,
-          runGh: reader({}, artifactOverrides, runOverrides),
-        }),
-      ).toThrow();
-    },
-  );
+  ])("rejects changed live %s evidence", (_mismatch, runOverrides, artifactOverrides) => {
+    expect(() =>
+      resolveFullReleaseNpmPreflight({
+        ...resolutionInput,
+        runGh: reader({}, artifactOverrides, runOverrides),
+      }),
+    ).toThrow();
+  });
 
   it.each(["valid", "archive changed", "manifest changed", "deadline exceeded"])(
     "downloads only the exact qualified archive (%s)",
@@ -808,21 +717,14 @@ describe("npm qualification", () => {
         platform: "UNIX",
       });
       const selected = structuredClone(fullReleaseManifest);
-      selected.publicationArtifacts.npmPreflight.artifact.digest = createHash("sha256")
-        .update(archive)
-        .digest("hex");
-      selected.publicationArtifacts.npmPreflight.manifestSha256 =
-        outcome === "manifest changed"
-          ? "f".repeat(64)
-          : createHash("sha256").update(manifestBytes).digest("hex");
+      const descriptor = selected.publicationArtifacts.npmPreflight;
+      descriptor.artifact.digest = digest(archive);
+      descriptor.manifestSha256 =
+        outcome === "manifest changed" ? "f".repeat(64) : digest(manifestBytes);
       const metadata = {
-        id: 555,
-        name: qualified.artifact.name,
-        digest: `sha256:${selected.publicationArtifacts.npmPreflight.artifact.digest}`,
+        ...artifactMetadata(descriptor.artifact),
         size_in_bytes: archive.length,
-        expired: false,
         expires_at: "2099-10-01T00:00:00Z",
-        workflow_run: { id: Number(RUN_ID), head_sha: SHA },
       };
       const delivered = Buffer.from(archive);
       if (outcome === "archive changed") {

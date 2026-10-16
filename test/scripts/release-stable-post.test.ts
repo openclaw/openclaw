@@ -7,8 +7,13 @@ import {
   REPOSITORY,
   REPO_ROOT,
   actionRun,
+  dispatchWorkflow,
   fetchMain,
   fields,
+  gateApproval,
+  gitShow,
+  jsonStep,
+  pendingGates,
   closeoutMain,
   compatibilityInventory,
   githubRelease,
@@ -22,18 +27,18 @@ import {
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const fixture = () => {
+const fixture = (state = postState("macos")) => {
   const scratch = join(REPO_ROOT, ".tmp");
   mkdirSync(scratch, { recursive: true });
-  return releaseFixture(directories.make(".release-stable-post-test-", scratch));
+  const release = releaseFixture(directories.make(".release-stable-post-test-", scratch));
+  release.seed(state);
+  return release;
 };
-const closeoutAssets = (
-  names = [
-    `openclaw-${RELEASE}-stable-main-closeout.json`,
-    `openclaw-${RELEASE}-stable-main-closeout.json.sha256`,
-  ],
-) =>
-  step(
+const macosRepo = "openclaw/releases";
+const macosWorkflow = "openclaw-macos-publish.yml";
+const closeoutAsset = `openclaw-${RELEASE}-stable-main-closeout.json`;
+const closeoutAssets = (names = [closeoutAsset, `${closeoutAsset}.sha256`]) =>
+  jsonStep(
     "gh",
     [
       "release",
@@ -46,7 +51,7 @@ const closeoutAssets = (
       "--jq",
       "[.assets[].name]",
     ],
-    JSON.stringify(names),
+    names,
   );
 
 const websiteDispatch = () =>
@@ -62,6 +67,12 @@ const websiteDispatch = () =>
     ],
     "503",
   );
+const closeoutChecks = (conclusion = "success") => [
+  ...closeoutMain(),
+  closeoutAssets(),
+  websiteDispatch(),
+  actionRun("openclaw/openclaw.ai", 503, conclusion),
+];
 
 describe("release:stable post-publication CLI", () => {
   it.each(["already-synced", "parent", "manual"])("syncs beta using the %s path", (mode) => {
@@ -128,7 +139,6 @@ describe("release:stable post-publication CLI", () => {
 
   it("refuses macOS publication before approving gates when main lacks compatibility evidence", () => {
     const release = fixture();
-    release.seed(postState("macos"));
     const result = release.run([
       ...compatibilityInventory("2026.9.5"),
       step("npm", ["view", `openclaw@${RELEASE}`, "dist.integrity"], "sha512-fixture"),
@@ -146,7 +156,6 @@ describe("release:stable post-publication CLI", () => {
 
   it("prints the failed preflight's notarization receipt and requires a replacement run on resume", () => {
     const release = fixture();
-    release.seed(postState("macos"));
     const result = release.run([
       ...compatibilityInventory(),
       ...macosWait(201),
@@ -162,66 +171,39 @@ describe("release:stable post-publication CLI", () => {
 
   it("publishes macOS with both verified lane IDs, approves only mac-release, and requires main's appcast", () => {
     const release = fixture();
-    release.seed(postState("macos"));
     const result = release.run([
       ...compatibilityInventory(),
       ...macosWait(201),
       ...macosWait(202),
       githubRelease(false),
-      step("gh", [
-        "workflow",
-        "run",
-        "openclaw-macos-publish.yml",
-        "--repo",
-        "openclaw/releases",
-        "--ref",
-        "main",
-      ]),
-      workflowRuns("openclaw-macos-publish.yml", "openclaw/releases", [
+      dispatchWorkflow(macosWorkflow, macosRepo),
+      workflowRuns(macosWorkflow, macosRepo, [
         {
-          ...workflowRun("openclaw-macos-publish.yml", 202, `Preflight v${RELEASE}`),
+          ...workflowRun(macosWorkflow, 202, `Preflight v${RELEASE}`),
           created_at: new Date(Date.now() + 1_000).toISOString(),
         },
-        workflowRun("openclaw-macos-publish.yml", 203, `Publish v${RELEASE}`),
+        workflowRun(macosWorkflow, 203, `Publish v${RELEASE}`),
       ]),
-      step(
-        "gh",
-        ["api", "repos/openclaw/releases/actions/runs/203/pending_deployments"],
-        JSON.stringify([
-          { environment: { id: 71, name: "mac-release" } },
-          { environment: { id: 72, name: "npm-release" } },
-        ]),
+      pendingGates(
+        203,
+        [
+          { id: 71, name: "mac-release" },
+          { id: 72, name: "npm-release" },
+        ],
+        macosRepo,
       ),
-      step("gh", [
-        "api",
-        "-X",
-        "POST",
-        "repos/openclaw/releases/actions/runs/203/pending_deployments",
-        "-f",
-        "state=approved",
-        "-f",
-        `comment=${RELEASE} stable publish approved by release-test`,
-        "-F",
-        "environment_ids[]=71",
-      ]),
-      actionRun("openclaw/releases", 203),
+      gateApproval(203, 71, macosRepo),
+      actionRun(macosRepo, 203),
       fetchMain(),
-      step(
-        "git",
-        ["show", "origin/main:appcast.xml"],
+      gitShow(
+        "origin/main:appcast.xml",
         `<sparkle:shortVersionString>${RELEASE}</sparkle:shortVersionString>`,
       ),
     ]);
     expect(result.status, result.output).toBe(0);
     const dispatch = result.calls.find((call) => call.args[0] === "workflow");
     expect(dispatch?.args).toEqual([
-      "workflow",
-      "run",
-      "openclaw-macos-publish.yml",
-      "--repo",
-      "openclaw/releases",
-      "--ref",
-      "main",
+      ...dispatchWorkflow(macosWorkflow, macosRepo).match,
       ...fields(
         `tag=v${RELEASE}`,
         `source_ref=release/${RELEASE}`,
@@ -243,7 +225,6 @@ describe("release:stable post-publication CLI", () => {
   });
 
   it("resets only macOS and closeout, retains receipts, and uses replacement lane IDs for appcast recovery", () => {
-    const release = fixture();
     const state = postState("macos");
     state.phases.macos = { status: "completed", completedAt: state.startedAt };
     state.phases.closeout = { status: "completed", completedAt: state.startedAt };
@@ -255,7 +236,7 @@ describe("release:stable post-publication CLI", () => {
     };
     state.closeout = { runId: "501", verifiedAt: state.startedAt };
     state.publish.approvedGates = ["203:71"];
-    release.seed(state);
+    const release = fixture(state);
     const result = release.run(
       [
         ...compatibilityInventory(),
@@ -263,8 +244,8 @@ describe("release:stable post-publication CLI", () => {
         ...macosWait(212),
         ...macosWait(203),
         fetchMain(),
-        step("git", ["show", "origin/main:appcast.xml"], `<version>${RELEASE}0</version>`),
-        step(
+        gitShow("origin/main:appcast.xml", `<version>${RELEASE}0</version>`),
+        jsonStep(
           "gh",
           [
             "pr",
@@ -278,7 +259,7 @@ describe("release:stable post-publication CLI", () => {
             "--json",
             "number,url",
           ],
-          JSON.stringify([{ number: 42, url: `https://github.com/${REPOSITORY}/pull/42` }]),
+          [{ number: 42, url: `https://github.com/${REPOSITORY}/pull/42` }],
         ),
       ],
       ["--from", "macos", "--macos-validate-run-id", "211", "--macos-preflight-run-id", "212"],
@@ -304,14 +285,10 @@ describe("release:stable post-publication CLI", () => {
       { phase: "macos", event: "reset" },
       { phase: "closeout", event: "reset" },
     ]);
-    expect(JSON.parse(retained.history[0]?.detail ?? "null")).toEqual({
-      phase: state.phases.macos,
-      data: state.macos,
-    });
-    expect(JSON.parse(retained.history[1]?.detail ?? "null")).toEqual({
-      phase: state.phases.closeout,
-      data: state.closeout,
-    });
+    expect(retained.history.map(({ detail }) => JSON.parse(detail ?? "null"))).toEqual([
+      { phase: state.phases.macos, data: state.macos },
+      { phase: state.phases.closeout, data: state.closeout },
+    ]);
     expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
   });
 
@@ -321,8 +298,7 @@ describe("release:stable post-publication CLI", () => {
   ])(
     "refuses closeout when main's $label differs from the shipped release",
     ({ version, notes }) => {
-      const release = fixture();
-      release.seed(postState("closeout"));
+      const release = fixture(postState("closeout"));
       const result = release.run(closeoutMain(version, notes));
       expect(result.status).toBe(2);
       expect(result.stderr).toContain(
@@ -339,12 +315,18 @@ describe("release:stable post-publication CLI", () => {
     },
   );
 
-  it.each([false, true])(
-    "completes closeout with immutable release assets (dispatch=%s)",
-    (dispatch) => {
-      const release = fixture();
-      release.seed(postState("closeout"));
-      const result = release.run([
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])("verifies closeout (dispatch=%s, restart=%s)", (dispatch, restart) => {
+    const state = postState("closeout");
+    if (restart) {
+      state.closeout = { websiteRunId: "499", verifiedAt: state.startedAt };
+    }
+    const release = fixture(state);
+    const result = release.run(
+      [
         ...closeoutMain(),
         ...(dispatch
           ? [
@@ -361,89 +343,55 @@ describe("release:stable post-publication CLI", () => {
         closeoutAssets(),
         websiteDispatch(),
         actionRun("openclaw/openclaw.ai", 503),
-      ]);
-      expect(result.status, result.output).toBe(0);
-      expect(release.readState().phases.closeout.status).toBe("completed");
-      expect(release.readState().closeout).toMatchObject({
-        publishRunConclusion: "success",
-        verifiedAt: expect.any(String),
-      });
-      if (dispatch) {
-        expect(result.calls.find((call) => call.args[0] === "workflow")?.args.slice(7)).toEqual([
-          "-f",
-          `tag=v${RELEASE}`,
-        ]);
-        expect(release.readState().closeout.runId).toBe("502");
-      } else {
-        expect(release.readState().closeout.runId).toBeUndefined();
-        expect(result.calls.filter((call) => call.args[0] === "workflow")).toHaveLength(0);
-        expect(release.readState().closeout.websiteRunId).toBe("503");
-        expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
-      }
-    },
-  );
-
-  it("checks production again when a completed closeout is restarted", () => {
-    const release = fixture();
-    const state = postState("closeout");
-    state.closeout = { websiteRunId: "499", verifiedAt: state.startedAt };
-    release.seed(state);
-    const result = release.run(
-      [
-        ...closeoutMain(),
-        closeoutAssets(),
-        websiteDispatch(),
-        actionRun("openclaw/openclaw.ai", 503),
       ],
-      ["--from", "closeout"],
+      restart ? ["--from", "closeout"] : [],
     );
     expect(result.status, result.output).toBe(0);
-    expect(release.readState().closeout.websiteRunId).toBe("503");
-    expect(
-      result.calls.some((call) =>
-        call.args.includes("repos/openclaw/openclaw.ai/actions/runs/499"),
-      ),
-    ).toBe(false);
+    expect(release.readState().phases.closeout.status).toBe("completed");
+    expect(release.readState().closeout).toMatchObject({
+      publishRunConclusion: "success",
+      verifiedAt: expect.any(String),
+    });
+    if (dispatch) {
+      expect(result.calls.find((call) => call.args[0] === "workflow")?.args.slice(7)).toEqual([
+        "-f",
+        `tag=v${RELEASE}`,
+      ]);
+      expect(release.readState().closeout.runId).toBe("502");
+    } else {
+      expect(release.readState().closeout.runId).toBeUndefined();
+      expect(result.calls.filter((call) => call.args[0] === "workflow")).toHaveLength(0);
+      expect(release.readState().closeout.websiteRunId).toBe("503");
+      expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
+    }
+    if (restart) {
+      expect(result.calls.flatMap(({ args }) => args)).not.toContain(
+        "repos/openclaw/openclaw.ai/actions/runs/499",
+      );
+    }
   });
 
   it("keeps closeout incomplete when the website verification fails despite existing receipts", () => {
-    const release = fixture();
-    release.seed(postState("closeout"));
-    const result = release.run([
-      ...closeoutMain(),
-      closeoutAssets(),
-      websiteDispatch(),
-      actionRun("openclaw/openclaw.ai", 503, "failure"),
-    ]);
+    const release = fixture(postState("closeout"));
+    const result = release.run(closeoutChecks("failure"));
     expect(result.status, result.output).toBe(2);
     expect(result.stderr).toContain("Website verification 503 concluded failure");
-    expect(release.readState().phases.closeout.status).toBe("refused");
-    expect(release.readState().closeout.verifiedAt).toBeUndefined();
-    expect(release.readState().closeout.websiteRunId).toBeUndefined();
-    const resumed = release.run(
-      [
-        ...closeoutMain(),
-        closeoutAssets(),
-        websiteDispatch(),
-        actionRun("openclaw/openclaw.ai", 503),
-      ],
-      ["--from", "closeout"],
-    );
+    const refused = release.readState();
+    expect(refused.phases.closeout.status).toBe("refused");
+    expect([refused.closeout.verifiedAt, refused.closeout.websiteRunId]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const resumed = release.run(closeoutChecks(), ["--from", "closeout"]);
     expect(resumed.status, resumed.output).toBe(0);
     expect(release.readState().phases.closeout.status).toBe("completed");
   });
 
-  it.each([
-    { label: "only the evidence", names: [`openclaw-${RELEASE}-stable-main-closeout.json`] },
-    {
-      label: "only the checksum",
-      names: [`openclaw-${RELEASE}-stable-main-closeout.json.sha256`],
-    },
-  ])("refuses a successful closeout with $label", ({ names }) => {
-    const release = fixture();
+  it.each([closeoutAsset, `${closeoutAsset}.sha256`])("refuses closeout with only %s", (name) => {
+    const names = [name];
     const state = postState("closeout");
     state.closeout.runId = "501";
-    release.seed(state);
+    const release = fixture(state);
     const result = release.run([
       ...closeoutMain(),
       closeoutAssets(names),
