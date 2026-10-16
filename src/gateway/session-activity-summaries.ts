@@ -133,18 +133,32 @@ export function createSessionActivitySummaries(deps: {
   const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
+  // The pump rechecks every queued state; store paths change only with a config publication.
+  let storePathConfig: OpenClawConfig | undefined;
+  const storePaths = new Map<string, string>();
+  const storePathFor = (agentId: string) => {
+    const cfg = deps.getConfig();
+    if (cfg !== storePathConfig) {
+      storePathConfig = cfg;
+      storePaths.clear();
+    }
+    let storePath = storePaths.get(agentId);
+    if (storePath === undefined) {
+      storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      storePaths.set(agentId, storePath);
+    }
+    return storePath;
+  };
   const scope = (target: ActivitySummaryTarget) => ({
     agentId: target.agentId,
     sessionKey: target.key,
-    storePath: resolveSessionStorePathCore(deps.getConfig().session?.store, {
-      agentId: target.agentId,
-    }),
+    storePath: storePathFor(target.agentId),
   });
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
     sessionActivitySummaryOwnerIsCurrent(state, owner) &&
-    scope(state).storePath === state.storePath;
+    storePathFor(state.agentId) === state.storePath;
   const publish = (state: Tracked, value: ActivitySummaryView["state"], force = false) => {
     if (!current(state)) {
       return;
