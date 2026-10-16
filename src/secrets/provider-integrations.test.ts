@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import {
@@ -37,12 +36,33 @@ function writeSecureFile(file: string, contents: string): void {
   fs.chmodSync(file, 0o600);
 }
 
+function writePluginManifest(rootDir: string, manifest: Record<string, unknown>): void {
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      ...manifest,
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    }),
+    "utf8",
+  );
+}
+
 function createCandidate(
   rootDir: string,
   idHint: string,
   origin: PluginOrigin = "global",
 ): PluginCandidate {
-  return { idHint, source: path.join(rootDir, "index.ts"), rootDir, origin };
+  return {
+    idHint,
+    source: path.join(rootDir, "index.ts"),
+    rootDir,
+    origin,
+  };
 }
 
 function loadTestRegistry(
@@ -58,48 +78,11 @@ function loadTestRegistry(
 function pluginIntegrationProviderConfig(pluginId: string, integrationId: string) {
   return {
     source: "exec" as const,
-    pluginIntegration: { pluginId, integrationId },
-  };
-}
-
-function writeIntegration(
-  rootDir: string,
-  id: string,
-  integration: Record<string, unknown> = {},
-  integrationId = "vault",
-  manifest: Record<string, unknown> = {},
-): void {
-  const pluginManifest = {
-    id,
-    ...manifest,
-    secretProviderIntegrations: {
-      [integrationId]: {
-        source: "exec",
-        command: "${node}",
-        args: ["./resolve.mjs"],
-        ...integration,
-      },
+    pluginIntegration: {
+      pluginId,
+      integrationId,
     },
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
   };
-  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify(pluginManifest),
-    "utf8",
-  );
-}
-
-function resolveIntegration(
-  manifestRegistry: Pick<PluginManifestRegistry, "plugins">,
-  pluginId: string,
-  integrationId = "vault",
-) {
-  return resolveSecretProviderIntegrationConfig({
-    manifestRegistry,
-    providerAlias: integrationId,
-    providerConfig: pluginIntegrationProviderConfig(pluginId, integrationId),
-  });
 }
 
 afterEach(() => {
@@ -120,24 +103,28 @@ describe("secret provider integration presets", () => {
       const rootDir = makeTempDir();
       makeSecureDir(path.join(rootDir, "bin"));
       writeSecureFile(path.join(rootDir, "bin", "resolve.mjs"), "process.stdin.resume();\n");
-      writeIntegration(
-        rootDir,
-        "acme-secrets",
-        {
-          providerAlias: "acme",
-          displayName: "Acme Vault",
-          description: "Acme exec resolver",
-          args: ["./bin/resolve.mjs", "--profile", "work"],
-          timeoutMs: 3000,
-          noOutputTimeoutMs: 3000,
-          maxOutputBytes: 4096,
-          passEnv: ["HOME"],
-          env: { ACME_PROFILE: "work" },
-          jsonOnly: false,
+      writePluginManifest(rootDir, {
+        id: "acme-secrets",
+        name: "Acme Secrets",
+        secretProviderIntegrations: {
+          acme: {
+            providerAlias: "acme",
+            displayName: "Acme Vault",
+            description: "Acme exec resolver",
+            source: "exec",
+            command: "${node}",
+            args: ["./bin/resolve.mjs", "--profile", "work"],
+            timeoutMs: 3000,
+            noOutputTimeoutMs: 3000,
+            maxOutputBytes: 4096,
+            passEnv: ["HOME"],
+            env: {
+              ACME_PROFILE: "work",
+            },
+            jsonOnly: false,
+          },
         },
-        "acme",
-        { name: "Acme Secrets" },
-      );
+      });
 
       const registry = loadTestRegistry(rootDir, "acme-secrets");
 
@@ -152,7 +139,13 @@ describe("secret provider integration presets", () => {
           providerConfig: pluginIntegrationProviderConfig("acme-secrets", "acme"),
         },
       ]);
-      expect(resolveIntegration(registry, "acme-secrets", "acme")).toEqual({
+      expect(
+        resolveSecretProviderIntegrationConfig({
+          manifestRegistry: registry,
+          providerAlias: "acme",
+          providerConfig: pluginIntegrationProviderConfig("acme-secrets", "acme"),
+        }),
+      ).toEqual({
         ok: true,
         providerConfig: {
           source: "exec",
@@ -167,7 +160,9 @@ describe("secret provider integration presets", () => {
           noOutputTimeoutMs: 3000,
           maxOutputBytes: 4096,
           passEnv: ["HOME"],
-          env: { ACME_PROFILE: "work" },
+          env: {
+            ACME_PROFILE: "work",
+          },
           trustedDirs: [path.dirname(process.execPath), rootDir],
           jsonOnly: false,
         },
@@ -186,13 +181,28 @@ describe("secret provider integration presets", () => {
       "process.stdin.resume();\n",
       "utf8",
     );
-    writeIntegration(
-      rootDir,
-      "long-integration-secrets",
-      { providerAlias: "short-alias" },
-      longIntegrationId,
-    );
-    writeIntegration(longPluginRootDir, longPluginId, { providerAlias: "short-plugin-alias" });
+    writePluginManifest(rootDir, {
+      id: "long-integration-secrets",
+      secretProviderIntegrations: {
+        [longIntegrationId]: {
+          providerAlias: "short-alias",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.mjs"],
+        },
+      },
+    });
+    writePluginManifest(longPluginRootDir, {
+      id: longPluginId,
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "short-plugin-alias",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.mjs"],
+        },
+      },
+    });
 
     const registry = loadPluginManifestRegistryCore({
       candidates: [
@@ -204,28 +214,50 @@ describe("secret provider integration presets", () => {
     expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
   });
 
-  it("skips non-node manifest preset commands for global plugin roots", () => {
-    const rootDir = makeTempDir();
-    fs.mkdirSync(path.join(rootDir, "bin"));
-    writeIntegration(rootDir, "global-secrets", {
-      providerAlias: "vault",
-      command: "./bin/vault-resolver",
-      args: undefined,
-    });
+  it.each<PluginOrigin>(["global"])(
+    "skips non-node manifest preset commands for %s plugin roots",
+    (origin) => {
+      const rootDir = makeTempDir();
+      fs.mkdirSync(path.join(rootDir, "bin"));
+      writePluginManifest(rootDir, {
+        id: `${origin}-secrets`,
+        ...(origin === "bundled" ? { enabledByDefault: true } : {}),
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "./bin/vault-resolver",
+          },
+        },
+      });
 
-    const registry = loadTestRegistry(rootDir, "global-secrets");
+      const registry = loadTestRegistry(rootDir, `${origin}-secrets`, origin);
 
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
-  });
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+    },
+  );
 
-  it("skips secret provider presets from workspace plugin roots", () => {
-    const rootDir = makeTempDir();
-    writeIntegration(rootDir, "workspace-secrets", { providerAlias: "vault" });
+  it.each<PluginOrigin>(["workspace"])(
+    "skips secret provider presets from %s plugin roots",
+    (origin) => {
+      const rootDir = makeTempDir();
+      writePluginManifest(rootDir, {
+        id: `${origin}-secrets`,
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+      });
 
-    const registry = loadTestRegistry(rootDir, "workspace-secrets", "workspace");
+      const registry = loadTestRegistry(rootDir, `${origin}-secrets`, origin);
 
-    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
-  });
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+    },
+  );
 
   it("resolves a node-based plugin preset with plugin trusted dirs", async () => {
     const rootDir = makeTempDir();
@@ -244,10 +276,17 @@ describe("secret provider integration presets", () => {
         "});",
       ].join("\n"),
     );
-    writeIntegration(rootDir, "vault-secrets", {
-      providerAlias: "vault",
-      args: ["./bin/resolve.mjs"],
-      allowInsecurePath: true,
+    writePluginManifest(rootDir, {
+      id: "vault-secrets",
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./bin/resolve.mjs"],
+          allowInsecurePath: true,
+        },
+      },
     });
 
     await withSecureTestNodeExecPath(async () => {
@@ -255,19 +294,29 @@ describe("secret provider integration presets", () => {
       expect(registry.plugins[0]?.secretProviderIntegrations?.vault).not.toHaveProperty(
         "allowInsecurePath",
       );
-      const preset = expectDefined(
-        listSecretProviderIntegrationPresets({ manifestRegistry: registry })[0],
-        "vault preset",
-      );
+      const [preset] = listSecretProviderIntegrationPresets({ manifestRegistry: registry });
+      if (!preset) {
+        throw new Error("Expected vault preset");
+      }
 
-      expect(preset.providerConfig).toEqual(
-        pluginIntegrationProviderConfig("vault-secrets", "vault"),
-      );
+      expect(preset.providerConfig).toEqual({
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "vault-secrets",
+          integrationId: "vault",
+        },
+      });
       await expect(
         resolveSecretRefString(
           { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
           {
-            config: { secrets: { providers: { vault: preset.providerConfig } } },
+            config: {
+              secrets: {
+                providers: {
+                  vault: preset.providerConfig,
+                },
+              },
+            },
             manifestRegistry: registry,
           },
         ),
@@ -279,9 +328,25 @@ describe("secret provider integration presets", () => {
     const rootDir = makeTempDir();
     const resolverPath = path.join(rootDir, "resolve.mjs");
     fs.writeFileSync(resolverPath, "process.stdin.resume();\n", "utf8");
-    writeIntegration(rootDir, "revoked-secrets", { providerAlias: "vault" });
+    writePluginManifest(rootDir, {
+      id: "revoked-secrets",
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.mjs"],
+        },
+      },
+    });
     const config = {
-      plugins: { entries: { "revoked-secrets": { enabled: false } } },
+      plugins: {
+        entries: {
+          "revoked-secrets": {
+            enabled: false,
+          },
+        },
+      },
       secrets: {
         providers: {
           vault: pluginIntegrationProviderConfig("revoked-secrets", "vault"),
@@ -296,23 +361,46 @@ describe("secret provider integration presets", () => {
     await expect(
       resolveSecretRefString(
         { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
-        { config, manifestRegistry: registry },
+        {
+          config,
+          manifestRegistry: registry,
+        },
       ),
     ).rejects.toThrow("plugin integration is unavailable");
   });
 
   it("does not materialize non-node integrations from registry records", () => {
     const rootDir = makeTempDir();
-    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
-    writeIntegration(rootDir, "raw-secrets", { providerAlias: "vault" });
-    const manifestRegistry = loadTestRegistry(rootDir, "raw-secrets");
-    const integration = expectDefined(
-      manifestRegistry.plugins[0]?.secretProviderIntegrations?.vault,
-      "raw integration",
-    );
-    integration.command = "./bin/resolve";
+    fs.mkdirSync(path.join(rootDir, "bin"));
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "bin", "resolve"), "exit 0\n", "utf8");
+    const manifestRegistry = {
+      plugins: [
+        {
+          id: "raw-secrets",
+          rootDir,
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "./bin/resolve",
+            },
+          },
+        },
+      ],
+    } as unknown as Pick<PluginManifestRegistry, "plugins">;
 
-    expect(resolveIntegration(manifestRegistry, "raw-secrets")).toEqual({
+    expect(
+      resolveSecretProviderIntegrationConfig({
+        manifestRegistry,
+        providerAlias: "vault",
+        providerConfig: pluginIntegrationProviderConfig("raw-secrets", "vault"),
+      }),
+    ).toEqual({
       ok: false,
       reason: 'plugin "raw-secrets" integration "vault" could not be materialized',
     });
@@ -320,14 +408,16 @@ describe("secret provider integration presets", () => {
 
   it("skips node presets without a plugin-root relative entrypoint arg", () => {
     const rootDir = makeTempDir();
-    writeIntegration(
-      rootDir,
-      "bad-trust-secrets",
-      {
-        args: ["--import", "./bin/hook.mjs", "./bin/resolve.mjs"],
+    writePluginManifest(rootDir, {
+      id: "bad-trust-secrets",
+      secretProviderIntegrations: {
+        bad: {
+          source: "exec",
+          command: "${node}",
+          args: ["--import", "./bin/hook.mjs", "./bin/resolve.mjs"],
+        },
       },
-      "bad",
-    );
+    });
 
     const registry = loadTestRegistry(rootDir, "bad-trust-secrets");
 
@@ -345,9 +435,16 @@ describe("secret provider integration presets", () => {
         path.join(outsideDir, "resolve.mjs"),
         path.join(rootDir, "bin", "resolve.mjs"),
       );
-      writeIntegration(rootDir, "symlink-secrets", {
-        providerAlias: "vault",
-        args: ["./bin/resolve.mjs"],
+      writePluginManifest(rootDir, {
+        id: "symlink-secrets",
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./bin/resolve.mjs"],
+          },
+        },
       });
 
       const registry = loadTestRegistry(rootDir, "symlink-secrets");
@@ -364,9 +461,16 @@ describe("secret provider integration presets", () => {
     fs.symlinkSync(realRoot, linkedRoot, "dir");
     makeSecureDir(path.join(realRoot, "bin"));
     writeSecureFile(path.join(realRoot, "bin", "resolve.mjs"), "process.stdin.resume();\n");
-    writeIntegration(realRoot, "linked-root-secrets", {
-      providerAlias: "vault",
-      args: ["./bin/resolve.mjs"],
+    writePluginManifest(realRoot, {
+      id: "linked-root-secrets",
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./bin/resolve.mjs"],
+        },
+      },
     });
 
     const registry = loadTestRegistry(linkedRoot, "linked-root-secrets");
@@ -380,19 +484,29 @@ describe("secret provider integration presets", () => {
         providerConfig: pluginIntegrationProviderConfig("linked-root-secrets", "vault"),
       },
     ]);
-    const resolved = resolveIntegration(registry, "linked-root-secrets");
+    const resolved = resolveSecretProviderIntegrationConfig({
+      manifestRegistry: registry,
+      providerAlias: "vault",
+      providerConfig: pluginIntegrationProviderConfig("linked-root-secrets", "vault"),
+    });
     expect(resolved.ok).toBe(true);
     if (resolved.ok) {
       expect(resolved.providerConfig.args?.at(-1)).toBe(
         fs.realpathSync(path.join(realRoot, "bin", "resolve.mjs")),
       );
     }
-    const integration = expectDefined(
-      registry.plugins[0]?.secretProviderIntegrations?.vault,
-      "linked-root integration",
-    );
+    const integration = registry.plugins[0]?.secretProviderIntegrations?.vault;
+    if (!integration) {
+      throw new Error("Expected the linked-root integration");
+    }
     integration.args = ["./../real-plugin/bin/resolve.mjs"];
-    expect(resolveIntegration(registry, "linked-root-secrets").ok).toBe(false);
+    expect(
+      resolveSecretProviderIntegrationConfig({
+        manifestRegistry: registry,
+        providerAlias: "vault",
+        providerConfig: pluginIntegrationProviderConfig("linked-root-secrets", "vault"),
+      }).ok,
+    ).toBe(false);
   });
 
   it.each([false, true])(
@@ -407,12 +521,22 @@ describe("secret provider integration presets", () => {
         path.join(rootDir, "bin"),
         process.platform === "win32" ? "junction" : "dir",
       );
-      writeIntegration(rootDir, "parent-link-secrets", { args: ["./bin/resolve.mjs"] });
+      writePluginManifest(rootDir, {
+        id: "parent-link-secrets",
+        secretProviderIntegrations: {
+          vault: {
+            source: "exec",
+            command: "${node}",
+            args: ["./bin/resolve.mjs"],
+          },
+        },
+      });
 
-      const resolved = resolveIntegration(
-        loadTestRegistry(rootDir, "parent-link-secrets"),
-        "parent-link-secrets",
-      );
+      const resolved = resolveSecretProviderIntegrationConfig({
+        manifestRegistry: loadTestRegistry(rootDir, "parent-link-secrets"),
+        providerAlias: "vault",
+        providerConfig: pluginIntegrationProviderConfig("parent-link-secrets", "vault"),
+      });
       expect(resolved.ok).toBe(process.platform === "win32" && !outsideRoot);
       if (resolved.ok) {
         expect(resolved.providerConfig.args?.at(-1)).toBe(
@@ -429,14 +553,23 @@ describe("secret provider integration presets", () => {
       const sourcePath = path.join(rootDir, "source.mjs");
       writeSecureFile(sourcePath, "process.stdin.resume();\n");
       fs.linkSync(sourcePath, path.join(rootDir, "resolve.mjs"));
-      writeIntegration(rootDir, "hardlinked-secrets", {}, "vault", {
-        enabledByDefault: origin === "bundled" ? true : undefined,
+      writePluginManifest(rootDir, {
+        id: "hardlinked-secrets",
+        ...(origin === "bundled" ? { enabledByDefault: true } : {}),
+        secretProviderIntegrations: {
+          vault: {
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
       });
 
-      const resolved = resolveIntegration(
-        loadTestRegistry(rootDir, "hardlinked-secrets", origin),
-        "hardlinked-secrets",
-      );
+      const resolved = resolveSecretProviderIntegrationConfig({
+        manifestRegistry: loadTestRegistry(rootDir, "hardlinked-secrets", origin),
+        providerAlias: "vault",
+        providerConfig: pluginIntegrationProviderConfig("hardlinked-secrets", "vault"),
+      });
       expect(resolved.ok).toBe(origin === "bundled");
     },
   );
@@ -450,9 +583,16 @@ describe("secret provider integration presets", () => {
       fs.writeFileSync(path.join(binDir, "resolve.mjs"), "process.stdin.resume();\n");
       fs.chmodSync(binDir, 0o777);
       try {
-        writeIntegration(rootDir, "writable-parent-secrets", {
-          providerAlias: "vault",
-          args: ["./bin/resolve.mjs"],
+        writePluginManifest(rootDir, {
+          id: "writable-parent-secrets",
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "${node}",
+              args: ["./bin/resolve.mjs"],
+            },
+          },
         });
 
         const registry = loadTestRegistry(rootDir, "writable-parent-secrets");

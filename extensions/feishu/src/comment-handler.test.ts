@@ -21,8 +21,11 @@ vi.mock("./comment-dispatcher.js", () => ({
   createFeishuCommentReplyDispatcher: createFeishuCommentReplyDispatcherMock,
 }));
 
+// mock-isolation: comment dispatch must not create real dynamic agents.
 vi.mock("./dynamic-agent.js", () => ({ maybeCreateDynamicAgent: maybeCreateDynamicAgentMock }));
+// mock-isolation: comment dispatch uses a synthetic client, without network access.
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+// mock-isolation: capture comment delivery without calling the remote drive API.
 vi.mock("./drive.js", () => ({ deliverCommentThreadText: deliverCommentThreadTextMock }));
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {

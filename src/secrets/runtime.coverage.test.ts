@@ -109,6 +109,7 @@ const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
   ].map((provider) => [provider.pluginId, provider]),
 );
 
+// mock-isolation: secret traversal uses the fixed provider inventory below, not installed plugins.
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: ({
     onlyPluginIds,

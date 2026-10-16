@@ -164,8 +164,9 @@ function holdAdmission(beforeRun = false) {
       await release.promise;
       return run();
     }
-    await run();
+    const runResult = await run();
     await release.promise;
+    return runResult;
   });
   return { entered, release };
 }

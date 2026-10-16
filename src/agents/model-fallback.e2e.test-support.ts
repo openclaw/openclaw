@@ -25,6 +25,7 @@ export function createFallbackE2eMocks(
   );
   const sleepWithAbortMock = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
   function install() {
+    // mock-isolation: runner tests isolate plugin discovery from the process registry.
     vi.doMock("../plugins/runtime.js", () => {
       if (!replyEntry) {
         return {
@@ -42,6 +43,7 @@ export function createFallbackE2eMocks(
         requireActivePluginRegistry: () => registry,
       };
     });
+    // mock-isolation: select the fixture harness without activating a real plugin.
     vi.doMock("./harness/runtime-plugin.js", () => ({
       ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
     }));
@@ -51,6 +53,7 @@ export function createFallbackE2eMocks(
       computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
       sleepWithAbort: (ms, signal) => sleepWithAbortMock(ms, signal),
     });
+    // mock-isolation: resolve synthetic models without provider credentials or discovery.
     vi.doMock("./embedded-agent-runner/model.js", () => ({
       resolveModelAsync: async (provider: string, model: string) =>
         createResolvedEmbeddedRunnerModel(provider, model),

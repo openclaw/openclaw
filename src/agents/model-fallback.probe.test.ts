@@ -113,22 +113,22 @@ function runOptions(
     },
   };
 }
-function cooldownDecision(
-  soonest: number,
-  params: {
-    hasFallbackCandidates?: boolean;
-    usageStats?: AuthProfileStore["usageStats"];
-  } = {},
-) {
-  getExpiry.mockReturnValue(soonest);
-  unavailableReason.mockReturnValue("rate_limit");
+function cooldownDecision(params: {
+  reason: "rate_limit" | "billing";
+  soonest: number;
+  hasFallbackCandidates?: boolean;
+  throttleKey?: string;
+  usageStats?: AuthProfileStore["usageStats"];
+}) {
+  getExpiry.mockReturnValue(params.soonest);
+  unavailableReason.mockReturnValue(params.reason);
   return resolveCooldownDecision({
     candidate,
     isPrimary: true,
     requestedModel: true,
     hasFallbackCandidates: params.hasFallbackCandidates ?? true,
     now: NOW,
-    probeThrottleKey: "openai",
+    probeThrottleKey: params.throttleKey ?? "openai",
     authRuntime: {
       getSoonestCooldownExpiry: getExpiry,
       resolveProfilesUnavailableReason: unavailableReason,
@@ -141,17 +141,6 @@ function cooldownDecision(
     profileIds: ["openai-profile-1"],
   });
 }
-function blockedQuota(blockedUntil: number): AuthProfileStore["usageStats"] {
-  return {
-    "openai-profile-1": {
-      blockedUntil,
-      blockedReason: "subscription_limit",
-      blockedSource: "wham",
-    },
-  };
-}
-const allowedProbe = { type: "attempt", reason: "rate_limit", markProbe: true };
-const suspendedProbe = { type: "suspend_session", reason: "rate_limit" };
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -192,21 +181,46 @@ describe("runWithModelFallback probe logic", () => {
 
   it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
     const soonest = NOW + 6 * 24 * 60 * 60 * 1000;
-    const params = {
+    const params: Parameters<typeof cooldownDecision>[0] = {
+      reason: "rate_limit",
+      soonest,
       hasFallbackCandidates: false,
-      usageStats: blockedQuota(soonest),
+      usageStats: {
+        "openai-profile-1": {
+          blockedUntil: soonest,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        },
+      },
     };
-    expect(cooldownDecision(soonest, params)).toEqual(allowedProbe);
+    expect(cooldownDecision(params)).toEqual({
+      type: "attempt",
+      reason: "rate_limit",
+      markProbe: true,
+    });
     probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
-    expect(cooldownDecision(soonest, params)).toEqual(suspendedProbe);
+    expect(cooldownDecision(params)).toEqual({ type: "suspend_session", reason: "rate_limit" });
   });
 
   it("honors provider-recorded reset windows while generic rate-limit cooldowns may probe", () => {
-    const soonest = NOW + 30 * 60 * 1000;
-    expect(cooldownDecision(soonest)).toEqual(allowedProbe);
-    expect(cooldownDecision(soonest, { usageStats: blockedQuota(soonest) })).toEqual(
-      suspendedProbe,
-    );
+    const params = { reason: "rate_limit" as const, soonest: NOW + 30 * 60 * 1000 };
+    expect(cooldownDecision(params)).toEqual({
+      type: "attempt",
+      reason: "rate_limit",
+      markProbe: true,
+    });
+    expect(
+      cooldownDecision({
+        ...params,
+        usageStats: {
+          "openai-profile-1": {
+            blockedUntil: params.soonest,
+            blockedReason: "subscription_limit",
+            blockedSource: "wham",
+          },
+        },
+      }),
+    ).toEqual({ type: "suspend_session", reason: "rate_limit" });
   });
 
   it("logs primary metadata when a cooldown probe succeeds", async () => {

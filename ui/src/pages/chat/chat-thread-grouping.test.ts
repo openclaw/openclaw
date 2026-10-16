@@ -161,7 +161,7 @@ it.each([
   },
 ])("groups the same $name without losing provenance", ({ from, attribution, expected }) => {
   const groups = expectProvenance([from("First report"), from("Second report")]);
-  expect(groups.map(attribution)).toEqual([expected]);
+  expect(groups.map((group) => attribution(group))).toEqual([expected]);
 });
 it.each([
   { type: "image", source: { type: "url", url: "https://example.com/result.png" } },

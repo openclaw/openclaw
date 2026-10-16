@@ -215,7 +215,7 @@ function query(sql: string, file = targetPath) {
 }
 
 function interceptOpen(
-  matches: (file: string, flags: string | number) => boolean,
+  matches: (file: string, flags: Parameters<typeof fs.open>[1]) => boolean,
   effect: (file: string, open: () => Promise<FileHandle>) => Promise<FileHandle | void>,
 ) {
   const originalOpen = fs.open.bind(fs);

@@ -10,12 +10,12 @@ export function message(
   return { role, content, ...(timestamp === undefined ? {} : { timestamp }), ...extra };
 }
 
-export function nativeMessage<C, M extends object, E extends object>(
+export function nativeMessage<C, M extends object>(
   role: string,
   content: C,
   timestamp: number,
   metadata: M,
-  extra?: E,
+  extra?: object,
 ) {
   return { role, content, timestamp, __openclaw: metadata, ...extra };
 }

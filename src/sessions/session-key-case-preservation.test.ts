@@ -62,7 +62,7 @@ it("keeps Matrix room id case in the channel session key (both prod rooms)", () 
   for (const [agentId, peerId] of [
     ["main", ROOM_A],
     ["ops", ROOM_B],
-  ]) {
+  ] as const) {
     expect(
       buildAgentPeerSessionKey({ agentId, channel: "matrix", peerKind: "channel", peerId }),
     ).toBe(`agent:${agentId}:matrix:channel:${peerId}`);

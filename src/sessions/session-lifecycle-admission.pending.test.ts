@@ -305,7 +305,7 @@ it.for(["caller abort", "Stop", "targeted Stop"])(
 
 it("rejects arrivals during awaited cleanup and its final microtask, then reopens only after release", async () => {
   const scope = "hostile-await.sqlite";
-  const identities = ["agent:main:fence", "fence-session"];
+  const identities: [string, string] = ["agent:main:fence", "fence-session"];
   const barrier = gate();
   const reason = createAgentRunDirectAbortError();
   const onInterrupt = vi.fn();

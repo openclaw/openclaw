@@ -11,6 +11,7 @@ import type { FeishuConfig } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: directory lookups use synthetic SDK responses, not remote clients.
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 
 const { listFeishuDirectoryGroupsLive, listFeishuDirectoryPeersLive } = await importFreshModule<

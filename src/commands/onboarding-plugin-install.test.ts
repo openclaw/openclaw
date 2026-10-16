@@ -54,11 +54,13 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout,
 }));
+// mock-isolation: onboarding exercises install decisions without installing packages.
 vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmSpec: installers.npm,
   installPluginFromNpmPackArchive: installers.archive,
 }));
 
+// mock-isolation: package lookup and installation use fixtures instead of the live registry.
 vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",

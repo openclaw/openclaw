@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   removeSandboxBrowserContainer: vi.fn(),
 }));
 const { clackConfirm } = vi.hoisted(() => ({ clackConfirm: vi.fn() }));
+// mock-isolation: CLI decisions must not inspect or mutate real sandbox containers.
 vi.mock("../agents/sandbox.js", () => mocks);
 
 vi.mock("../cli/local-state-owner.js", () => ({
