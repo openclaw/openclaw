@@ -14,11 +14,14 @@ import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/co
 import type { SearchSchema } from "../infra/database-engine/contract.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 async function loadOwners() {
   const [
@@ -298,19 +301,40 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         UPDATE openclaw_schema_meta
           SET version = 27, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         COMMIT;`);
-      await owners.withAgentDatabaseMaintenanceLease(
-        { env: process.env, processBound: true, schemaPolicy: "existing" },
-        async (lease) => {
-          using anchor = openNodeSqliteDatabase(database.path);
-          lease.assertOwned();
-          withEngineStoreAdmission(() => {
-            const engine = owners.openAgentEngineStore(anchor, target.agentId, database.path, true);
-            if (engine !== anchor) {
-              engine.close();
-            }
-          });
-        },
-      );
+      const owner = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath() });
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: owner.assertCurrent,
+        assertDatabaseAccess: owner.assertDatabaseAccess,
+      });
+      try {
+        await maintenance.run(() =>
+          owners.withAgentDatabaseMaintenanceLease(
+            { env: process.env, processBound: true, schemaPolicy: "existing" },
+            async (lease) => {
+              using anchor = openNodeSqliteDatabase(database.path);
+              lease.assertOwned();
+              withEngineStoreAdmission(() => {
+                const engine = owners.openAgentEngineStore(
+                  anchor,
+                  target.agentId,
+                  database.path,
+                  true,
+                );
+                if (engine !== anchor) {
+                  engine.close();
+                }
+              });
+            },
+          ),
+        );
+      } finally {
+        try {
+          await maintenance.close();
+        } finally {
+          owner.release();
+        }
+      }
       const upgraded = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
       assert(isPostgresSqlConnection(upgraded.db));
       expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(28);
