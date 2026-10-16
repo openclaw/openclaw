@@ -30,6 +30,7 @@ import {
   isSqliteTranscriptSnapshotUnchanged,
   readTranscriptEventRows,
   readTranscriptSnapshot,
+  type SqliteTranscriptSnapshotRow,
   type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -466,8 +467,10 @@ async function runNativeTranscriptWriteLock<T>(
                   expectedSnapshot,
                 );
               }
-              replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
-              const nextRows = readTranscriptEventRows(writeDatabase, resolved.sessionId);
+              const nextRows: SqliteTranscriptSnapshotRow[] = [];
+              replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events, {
+                writtenRows: nextRows,
+              });
               assertLockedTranscriptWriteAllowed(writeDatabase, resolved, fencedScope);
               return nextRows;
             },

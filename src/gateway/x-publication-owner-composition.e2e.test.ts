@@ -42,7 +42,7 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import {
   getPluginRecordRegistry,
   isPluginRecordActive,
@@ -340,6 +340,15 @@ describe("X publication production-owner composition", () => {
     setTestPluginRegistry(builder.registry);
     const instance = expectDefined(getPluginInstance(record), "registered X instance");
     instance.run(() => setXRuntime(api.runtime));
+    // Agent-core starts tools while consuming the provider's stream, inside that
+    // provider plugin's invocation. Host tools must not borrow its runtime slots.
+    const providerRecord = createPluginRecord({ id: "proof-provider", origin: "bundled" });
+    builder.createApi(providerRecord, { config: cfg(), registrationMode: "full" });
+    builder.registry.plugins.push(providerRecord);
+    const providerInstance = expectDefined(
+      getPluginInstance(providerRecord),
+      "registered provider instance",
+    );
     const allowlist = openXAllowlist(api.runtime);
     const allowlistEntry = (userId: string) => ({
       userId,
@@ -534,15 +543,18 @@ describe("X publication production-owner composition", () => {
                 tools.find((tool) => tool.name === "sessions_spawn"),
                 "real sessions_spawn tool",
               );
-              return spawn.execute("x-proof-" + activeCase, {
-                task: "Persist the synthetic publication composition answer.",
-                label: "X publication " + activeCase,
-                runtime: "subagent",
-                agentId: "coder",
-                visible: true,
-                context: "isolated",
-                expectsCompletionMessage: false,
-              });
+              const providerStream = providerInstance.run(() => Promise.resolve({}));
+              return runPluginStreamConsumer(providerStream, () =>
+                spawn.execute("x-proof-" + activeCase, {
+                  task: "Persist the synthetic publication composition answer.",
+                  label: "X publication " + activeCase,
+                  runtime: "subagent",
+                  agentId: "coder",
+                  visible: true,
+                  context: "isolated",
+                  expectsCompletionMessage: false,
+                }),
+              );
             });
             outcomes.set(activeCase, result.details);
             if (isRecord(result.details) && typeof result.details.error === "string") {

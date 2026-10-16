@@ -358,8 +358,8 @@ describe("followup queue authority", () => {
     const recovery = resolveStrandedReplyRecovery({
       base: parent,
       payloads: [],
-      finalText:
-        "This answer must reach the original conversation. It contains enough detail to require the existing one-shot delivery recovery.",
+      finalText: "The answer is ready.",
+      terminalReply: { disposition: "visible", text: "The answer is ready." },
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,

@@ -3,6 +3,10 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
@@ -162,22 +166,33 @@ describe("followup queue drain restart after idle window", () => {
     let suspensionStarted = false;
     let subordinateAdmissionClosed: boolean | undefined;
     let activeRootCountDuringDrain: number | undefined;
+    let generationDuringDrain: unknown;
+    const predecessorGeneration = {
+      remoteCatalog: null,
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {} as never,
+    };
     try {
-      await parent.run(async () => {
-        enqueueFollowupRun(key, createRun({ prompt: "detached" }), defaults);
-        scheduleFollowupDrain(key, async () => {
-          await parentReleased.promise;
-          const suspension = tryBeginGatewaySuspendAdmission(() => {});
-          suspensionStarted = suspension !== null;
-          try {
-            subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-            activeRootCountDuringDrain = getActiveGatewayRootWorkCount();
-          } finally {
-            suspension?.rollback();
-            drained.resolve();
-          }
-        });
-      });
+      await withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
+        parent.run(async () => {
+          expect(getPreparedModelRuntimePluginGeneration()).toBe(predecessorGeneration);
+          enqueueFollowupRun(key, createRun({ prompt: "detached" }), defaults);
+          scheduleFollowupDrain(key, async () => {
+            await parentReleased.promise;
+            const suspension = tryBeginGatewaySuspendAdmission(() => {});
+            suspensionStarted = suspension !== null;
+            try {
+              generationDuringDrain = getPreparedModelRuntimePluginGeneration();
+              subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+              activeRootCountDuringDrain = getActiveGatewayRootWorkCount();
+            } finally {
+              suspension?.rollback();
+              drained.resolve();
+            }
+          });
+        }),
+      );
 
       parent.release();
       parentReleased.resolve();
@@ -186,6 +201,7 @@ describe("followup queue drain restart after idle window", () => {
       expect(suspensionStarted).toBe(true);
       expect(subordinateAdmissionClosed).toBe(false);
       expect(activeRootCountDuringDrain).toBe(1);
+      expect(generationDuringDrain).toBeUndefined();
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       parent.release();

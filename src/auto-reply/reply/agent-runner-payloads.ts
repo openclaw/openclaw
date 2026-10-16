@@ -19,7 +19,6 @@ import {
   isRenderablePayload,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -198,7 +197,6 @@ export async function buildReplyPayloads(params: {
       const parsed = normalizeReplyPayloadDirectives({
         payload,
         currentMessageId: params.currentMessageId,
-        silentToken: SILENT_REPLY_TOKEN,
         parseMode: "always",
         extractMarkdownImages: params.extractMarkdownImages,
       });
@@ -209,9 +207,6 @@ export async function buildReplyPayloads(params: {
               await params.normalizeMediaPaths(parsed.payload),
             )
           : parsed.payload;
-      if (parsed.isSilent) {
-        mediaNormalizedPayload.text = undefined;
-      }
       return setReplyPayloadMetadata(mediaNormalizedPayload, {
         replyDelivery,
         ...(replyDeliverySource ? { replyDeliverySource } : {}),

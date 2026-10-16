@@ -3318,7 +3318,8 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-pane__layout-trigger {
+.chat-pane__layout-trigger,
+.chat-pane__sharing-trigger {
   padding: 5px 8px;
   line-height: 1;
 }

@@ -150,7 +150,10 @@ describe("restart tombstone channel feedback", () => {
     if (change === "session") {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
-      sessionStoreMocks.currentEntry!.mainRestartRecovery!.cycleId = "replacement-cycle";
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        ...sessionStoreMocks.currentEntry!.mainRestartRecovery,
+        cycleId: "replacement-cycle",
+      };
     }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);

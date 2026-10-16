@@ -1010,6 +1010,15 @@ function detachCurrentSharedClient(
   return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
 }
 
+/** Captures the physical client lifetime for passive catalog reads. */
+export function captureSharedCodexAppServerCatalogLifetime(
+  client: CodexAppServerClient,
+): () => boolean {
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
 /** Registration ends on retirement even when sibling leases keep the process alive. */
 function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();

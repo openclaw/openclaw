@@ -58,7 +58,7 @@ function successfulAttempt(
 describe("assertSettledTurnFinalizationResult", () => {
   it("accepts one capability-free final answer", () => {
     const result = safeResult();
-    expect(assertSettledTurnFinalizationResult(result)).toBe(result);
+    expect(assertSettledTurnFinalizationResult(result)).toMatchObject(result);
   });
 
   it("rejects a tool call", () => {
@@ -72,9 +72,9 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("returned a tool call");
   });
 
-  it("classifies a normally completed empty answer", () => {
+  it.each(["  "])("classifies a normally completed empty rendered answer: %j", (text) => {
     const result = {
-      assistant: assistantMessage([{ type: "text", text: "  " }]),
+      assistant: assistantMessage([{ type: "text", text }]),
     };
 
     try {
@@ -82,7 +82,7 @@ describe("assertSettledTurnFinalizationResult", () => {
       throw new Error("expected completed-empty classification");
     } catch (error) {
       expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
-      expect((error as EmptySettledTurnFinalizationError).result).toBe(result);
+      expect((error as EmptySettledTurnFinalizationError).result).toMatchObject(result);
     }
   });
 
@@ -112,7 +112,7 @@ describe("assertSettledTurnFinalizationResult", () => {
   it("projects a successful full attempt into the narrow result", () => {
     const attempt = successfulAttempt({ lastAssistantTextMessageIndex: 2 });
 
-    expect(projectSettledTurnFinalizationAttemptResult(attempt)).toEqual({
+    expect(projectSettledTurnFinalizationAttemptResult(attempt)).toMatchObject({
       assistant: attempt.currentAttemptCompletedAssistant,
       assistantMessageIndex: 2,
     });

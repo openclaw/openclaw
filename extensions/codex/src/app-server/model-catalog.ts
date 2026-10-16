@@ -19,7 +19,10 @@ import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  captureSharedCodexAppServerCatalogLifetime,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
@@ -59,6 +62,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
     authMode?: string;
+    isCurrent?: () => boolean;
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
   const scopeKey = (params: AgentHarnessModelCatalogParams) =>
@@ -78,7 +82,8 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation !== undefined &&
         observation.pluginConfig === pluginConfig &&
         observation.models?.has(params.modelId) &&
-        observation.accountType
+        observation.accountType &&
+        observation.isCurrent?.()
         ? {
             accountType: observation.accountType,
             ...(observation.authMode ? { authMode: observation.authMode } : {}),
@@ -99,7 +104,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       }
       const key = scopeKey(params);
       const observation: Observation = { pluginConfig };
-      // Replace the prior observation before refreshing, including failed or disabled discovery.
+      // Revoke before any await, including failed/disabled refreshes and superseded reads.
       observations.set(key, observation);
       const configured = readCodexPluginConfig(pluginConfig);
       const discovery = configured.discovery;
@@ -126,7 +131,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
-      if ((usesNativeHome && !native) || disposed) {
+      if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return { entries: [] };
       }
       const { start } = options;
@@ -145,11 +150,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         async (request, client) => {
           try {
             // Codex serializes this read after login's delayed account/updated.
-            // Resolve the startup account transition before native discovery.
+            // Drain startup before pinning the account revision for discovery.
             await request<CodexGetAccountResponse>({
               method: "account/read",
               requestParams: { refreshToken: false },
             });
+            const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
             const listed = await listAllCodexAppServerModels({
               request,
               limit: 100,
@@ -172,7 +178,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 ? observedType
                 : undefined
               : undefined;
-            return { models, accountType } as const;
+            return { models, isCurrent, accountType } as const;
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -183,7 +189,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         },
       );
       // Publish only after the bounded operation settles; a late timed-out callback cannot publish.
-      if (disposed) {
+      if (disposed || observations.get(key) !== observation || !result.isCurrent()) {
         return { entries: [] };
       }
       observation.models = new Set(result.models.map((model) => model.id));
@@ -193,6 +199,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         ((native?.mode === "oauth" || native?.mode === "token") && result.accountType === "chatgpt")
           ? result.accountType
           : undefined;
+      observation.isCurrent = result.isCurrent;
       // A remote ChatGPT account does not distinguish OAuth from caller-supplied tokens.
       // Carry the local mode only after its account type matches this discovery observation.
       observation.authMode =

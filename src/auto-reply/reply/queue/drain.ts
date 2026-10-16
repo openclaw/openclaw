@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -1075,14 +1076,16 @@ export function scheduleFollowupDrain(
   // Queue drains outlive their enqueue request across debounce and retries.
   // The detached root and fresh async scope keep tracked work alive after
   // the triggering request's scope closes, and join it at ordinary shutdown.
-  void runWithGatewayDetachedWorkContinuation(drainQueuedFollowups, "session:followup-drain").catch(
-    (err: unknown) => {
-      // Once entered, the drain's finally alone owns rescheduling.
-      if (!drainStarted && FOLLOWUP_QUEUES.get(key) === queue) {
-        queue.draining = false;
-      }
-      defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
-    },
-  );
+  // Queued turns re-admit against the current generation, not their predecessor's.
+  void runWithGatewayDetachedWorkContinuation(
+    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    "session:followup-drain",
+  ).catch((err: unknown) => {
+    // Once entered, the drain's finally alone owns rescheduling.
+    if (!drainStarted && FOLLOWUP_QUEUES.get(key) === queue) {
+      queue.draining = false;
+    }
+    defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

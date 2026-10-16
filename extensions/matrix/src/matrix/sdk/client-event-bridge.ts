@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  SyncState,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
@@ -76,7 +77,7 @@ export function registerMatrixClientBridge(params: {
   params.client.on(ClientEvent.Room, params.emitMembershipForRoom);
   params.client.on(ClientEvent.Sync, (state, prevState, data) => {
     // CATCHUP can precede the first successful sync after startup connection errors.
-    initialSyncComplete ||= state === "PREPARED" || state === "SYNCING";
+    initialSyncComplete ||= state === SyncState.Prepared || state === SyncState.Syncing;
     const error = data?.error;
     const fromCache = data?.fromCache === true;
     params.setCurrentSyncState(state, error, fromCache);

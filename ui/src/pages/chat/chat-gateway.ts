@@ -12,7 +12,6 @@ import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-disp
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
   isHiddenAssistantStreamText,
-  isSilentReplyStream,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
@@ -464,8 +463,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
     if (typeof next === "string") {
-      const hidden =
-        isSilentReplyStream(next) || isAssistantHeartbeatAckForDisplay(payload.message);
+      const hidden = isAssistantHeartbeatAckForDisplay(payload.message);
       // A replacement retires the previous baseline even when its new text is hidden;
       // ignoring it would keep already-saved text visible beside its durable row.
       if (payload.replace) {

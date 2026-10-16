@@ -61,10 +61,9 @@ export function applyXaiRuntimeModelCompat<T extends XaiRuntimeModelCompat>(
 ): T & { compat: ModelCompatConfig; thinkingLevelMap: XaiThinkingLevelMap } {
   const withCompat = applyXaiModelCompat(model);
   const id = withCompat.id.trim().toLowerCase();
-  const efforts =
-    withCompat.reasoning === true
-      ? (readListedReasoningEfforts(withCompat.compat) ?? resolveXaiIdReasoningEfforts(id))
-      : [];
+  const efforts = withCompat.reasoning
+    ? (readListedReasoningEfforts(withCompat.compat) ?? resolveXaiIdReasoningEfforts(id))
+    : [];
   const supportsReasoningEffort = efforts.some((effort) => effort !== "none");
   const compat = {
     ...withCompat.compat,

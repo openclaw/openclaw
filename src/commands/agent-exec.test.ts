@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
@@ -17,8 +18,9 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveExecBaseConfig } from "./agent-exec-input.js";
+import { applyExecConfigOverrides, resolveExecBaseConfig } from "./agent-exec-input.js";
 import { classifyAgentExecResult } from "./agent-exec-result.js";
 import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -107,6 +109,112 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
+  it.each(["ambient", "pinned"])(
+    "overlays the %s config for one run without replacing inherited settings",
+    async (mode) => {
+      const root = tempDirs.make("openclaw-agent-exec-override-");
+      const configPath = path.join(root, "openclaw.json");
+      const base = {
+        agents: {
+          defaults: { systemAgent: { agentId: "alpha" }, thinkingDefault: "low" },
+          entries: {
+            alpha: { model: "custom/model-a", workspace: "/original", skills: ["one"] },
+          },
+        },
+        models: {
+          providers: {
+            custom: { baseUrl: "https://example.invalid", apiKey: "test-key", models: [] },
+          },
+        },
+        tools: { deny: ["browser"], codeMode: { enabled: false, maxOutputBytes: 4096 } },
+      } satisfies OpenClawConfig;
+      const original = JSON.stringify(base);
+      await fs.writeFile(configPath, original);
+      if (mode === "ambient") {
+        setRuntimeConfigSnapshot(base);
+      }
+      const result = await runAgentExecWithMock(
+        "inspect",
+        {
+          ...(mode === "pinned" ? { config: configPath } : {}),
+          cwd: root,
+          model: "explicit/model",
+          thinking: "high",
+          codeMode: "direct",
+          localModelLean: true,
+          configOverride: [
+            JSON.stringify({
+              agents: {
+                defaults: {
+                  thinkingDefault: "medium",
+                  workspace: "/ignored",
+                  experimental: { localModelLean: false },
+                },
+                entries: { alpha: { skills: [], workspace: "/also-ignored" } },
+              },
+              tools: {
+                deny: ["exec"],
+                codeMode: { enabled: true },
+                exec: { pathPrepend: ["~/.local/bin"] },
+              },
+            }),
+            '{"tools":{"deny":[]}}',
+          ],
+        },
+        createTestRuntime(),
+        async (invocation) => {
+          expect(invocation).toMatchObject({
+            agentId: "alpha",
+            model: "explicit/model",
+            thinking: "high",
+            codeModeOverride: false,
+          });
+          expect(getRuntimeConfigSnapshot()).toMatchObject({
+            agents: {
+              defaults: {
+                thinkingDefault: "medium",
+                workspace: root,
+                experimental: { localModelLean: true },
+              },
+              entries: { alpha: { model: "custom/model-a", workspace: root, skills: [] } },
+            },
+            models: base.models,
+            tools: {
+              deny: [],
+              codeMode: { enabled: true, maxOutputBytes: 4096 },
+              exec: { pathPrepend: [path.join(os.homedir(), ".local", "bin")] },
+            },
+          });
+          return successResult();
+        },
+      );
+      expect(result.envelope.error).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      expect(JSON.stringify(base)).toBe(original);
+      expect(getRuntimeConfigSnapshot()).toEqual(mode === "ambient" ? base : null);
+    },
+  );
+
+  it("restores base-config environment imports when an override fails validation", async () => {
+    const root = tempDirs.make("openclaw-agent-exec-invalid-override-");
+    const config = path.join(root, "openclaw.json");
+    await fs.writeFile(
+      config,
+      JSON.stringify({ env: { vars: { OPENCLAW_EXEC_OVERRIDE_PROBE: "from-config" } } }),
+    );
+    const runAgent = vi.fn(async () => successResult());
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { config, configOverride: ['{"tools":{"profile":"invalid"}}'] },
+      createTestRuntime(),
+      runAgent,
+    );
+    expect(result.envelope.error?.message).toContain("Invalid --config-override");
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(process.env.OPENCLAW_EXEC_OVERRIDE_PROBE).toBeUndefined();
+  });
+
   it("treats invalid timeout syntax as an ordinary usage error", async () => {
     const runtime = createTestRuntime();
 
@@ -403,7 +511,7 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("undoes environment mutations made by loading the config", async () => {
+  it("applies config environment overrides for the run and restores the original environment", async () => {
     const seedDir = tempDirs.make("openclaw-agent-exec-envseed-");
     const seedPath = path.join(seedDir, "openclaw.json");
     await fs.writeFile(
@@ -416,7 +524,10 @@ describe("agent exec command composition", () => {
 
     await runAgentExecWithMock(
       "inspect",
-      { config: seedPath },
+      {
+        config: seedPath,
+        configOverride: ['{"env":{"vars":{"OPENCLAW_EXEC_ENV_PROBE":"from-override"}}}'],
+      },
       runtime,
       vi.fn(async () => {
         observedDuringRun = process.env.OPENCLAW_EXEC_ENV_PROBE;
@@ -424,7 +535,7 @@ describe("agent exec command composition", () => {
       }),
     );
 
-    expect(observedDuringRun).toBe("from-config");
+    expect(observedDuringRun).toBe("from-override");
     // Config-applied values must not outlive the command, or a later isolated
     // run in the same process would inherit them.
     expect(process.env.OPENCLAW_EXEC_ENV_PROBE).toBeUndefined();
@@ -432,6 +543,32 @@ describe("agent exec command composition", () => {
 });
 
 describe("agent exec base config resolution", () => {
+  it("overlays isolated defaults without inheriting ambient settings", async () => {
+    setRuntimeConfigSnapshot({ tools: { profile: "messaging" } });
+    const config = await applyExecConfigOverrides(await resolveExecBaseConfig({ isolated: true }), [
+      '{"tools":{"deny":["exec"]}}',
+    ]);
+    expect(config.tools?.deny).toEqual(["exec"]);
+    expect(config.tools?.profile).toBeUndefined();
+    expect(config.agents?.entries?.main).toBeDefined();
+  });
+
+  it.each([
+    ["not-json", "must contain valid JSON"],
+    ["null", "must be a JSON object"],
+    ["[]", "must be a JSON object"],
+    ['"text"', "must be a JSON object"],
+    ['{"tools":{"profile":"invalid"}}', "Invalid --config-override"],
+  ])("rejects invalid override %s", async (value, message) => {
+    await expect(applyExecConfigOverrides({}, [value])).rejects.toThrow(message);
+  });
+
+  it("rejects overrides with environment-only credentials", async () => {
+    await expect(
+      resolveExecBaseConfig({ authEnvOnly: true, configOverride: ["{}"] }),
+    ).rejects.toThrow("--config-override cannot be combined with --auth-env-only");
+  });
+
   it("rejects a missing or invalid pinned config instead of falling back", async () => {
     const missing = path.join(tempDirs.make("openclaw-agent-exec-seed-"), "absent.json");
     await expect(resolveExecBaseConfig({ config: missing })).rejects.toThrow(

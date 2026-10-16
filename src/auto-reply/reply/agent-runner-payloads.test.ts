@@ -709,7 +709,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("keeps voice media payloads during silent turns", async () => {
+  it("keeps prepared voice media captions during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       silentExpected: true,
       payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/voice.opus", audioAsVoice: true }],
@@ -717,7 +717,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
-      text: undefined,
+      text: "NO_REPLY",
       mediaUrl: "file:///tmp/voice.opus",
       audioAsVoice: true,
     });
