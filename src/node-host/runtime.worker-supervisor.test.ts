@@ -188,7 +188,6 @@ describe("node-host runtime worker supervisor lifetime", () => {
         nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 1 } },
       },
       env: { ...fixture.env, PATH: process.env.PATH },
-      platform: "linux",
     });
     expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
     const runtime = prepared.start({ client: { request } });
@@ -221,6 +220,20 @@ describe("node-host runtime worker supervisor lifetime", () => {
         ok: false,
         error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
       });
+
+      // The rejection fails one command; the same runtime keeps answering later requests.
+      await runtime.invoke({
+        id: "invoke-status-after",
+        nodeId: "node-1",
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-missing" }),
+      });
+      const after = responses.find(
+        ({ method, params }) =>
+          method === "node.invoke.result" &&
+          (params as { id?: string } | undefined)?.id === "invoke-status-after",
+      )?.params;
+      expect(after).toMatchObject({ ok: true, payloadJSON: "null" });
 
       await flushLogger();
       const raw = fs.readFileSync(logFile, "utf8");
