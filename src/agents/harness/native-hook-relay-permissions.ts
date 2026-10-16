@@ -113,6 +113,18 @@ export function setNativeHookRelayPreToolUseApproval(params: {
   return true;
 }
 
+/**
+ * Whether a plugin approval for this native tool call is parked on the relay,
+ * waiting for Codex's own approval surface to answer it.
+ */
+export function hasNativeHookRelayPreToolUseApproval(params: {
+  relayId: string;
+  toolUseId?: string;
+}): boolean {
+  const key = nativeHookRelayPreToolUseApprovalKey(params);
+  return key ? pendingPreToolUseApprovals.has(key) : false;
+}
+
 export function detachNativeHookRelayApprovalState(relayId: string): () => void {
   const preToolUseApprovals: NativeHookRelayPreToolUseApproval[] = [];
   for (const [key, approval] of pendingPreToolUseApprovals) {

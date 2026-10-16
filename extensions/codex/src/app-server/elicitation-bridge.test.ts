@@ -445,6 +445,68 @@ describe("Codex app-server elicitation bridge", () => {
     }
   });
 
+  it("keeps a relay-deferred MCP plugin approval per-call", async () => {
+    const server = "linear";
+    const item = { id: "call-1", server, tool: "list_issues" };
+    const pendingPreToolUseApproval = vi.fn(() => true);
+    mockApprovalDecision("plugin:deferred-mcp", "allow-once");
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        serverName: server,
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session", "always"],
+          tool_title: "This is not the tool identity",
+          tool_params_display: [{ name: "q", value: "x", display_name: "q" }],
+        },
+      },
+      paramsForRun: {
+        ...createParams(),
+        config: { mcp: { servers: { [server]: { url: "https://mcp.example.test" } } } },
+      },
+      getActiveMcpToolCall: () => item,
+      nativeHookRelay: {
+        relayId: "relay-deferred",
+        hasPendingPreToolUseApproval: pendingPreToolUseApproval,
+      },
+    });
+
+    expect(pendingPreToolUseApproval).toHaveBeenCalledWith("call-1");
+    expect(result?.action).toBe("accept");
+  });
+
+  it("offers persistence when no plugin approval is parked on the relay", async () => {
+    const server = "linear";
+    const pendingPreToolUseApproval = vi.fn(() => false);
+    mockApprovalDecision("plugin:free-mcp", "allow-always");
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        serverName: server,
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session", "always"],
+          tool_title: "This is not the tool identity",
+          tool_params_display: [{ name: "q", value: "x", display_name: "q" }],
+        },
+      },
+      paramsForRun: {
+        ...createParams(),
+        config: { mcp: { servers: { [server]: { url: "https://mcp.example.test" } } } },
+      },
+      getActiveMcpToolCall: () => ({ id: "call-2", server, tool: "list_issues" }),
+      nativeHookRelay: {
+        relayId: "relay-free",
+        hasPendingPreToolUseApproval: pendingPreToolUseApproval,
+      },
+    });
+
+    expect(pendingPreToolUseApproval).toHaveBeenCalledWith("call-2");
+  });
+
   it("does not trust request-time decisions for two-phase MCP approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({

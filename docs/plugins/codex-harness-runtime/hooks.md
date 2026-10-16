@@ -152,6 +152,15 @@ maps the decision back to Codex. Codex `PermissionRequest` events are a
 separate approval path and can still route through OpenClaw approvals when
 configured for that bridge.
 
+MCP tool calls take the same deferred route. Codex raises its own
+`mcpServer/elicitation/request` for an MCP server whose projected approval mode
+requires consent, so a `requireApproval` result on an `mcp__*` PreToolUse event
+is recorded and answered with no native decision instead of waiting inside the
+short-lived hook subprocess. The human decision then arrives through Codex's
+in-process elicitation and maps back to the same tool call. Servers projected to
+`approve` never raise that elicitation, so the relay keeps the approval wait in
+the hook for them; an unresolved native server name does the same.
+
 Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions not already covered by the native
 `PostToolUse` relay. These are telemetry/compatibility only; they cannot

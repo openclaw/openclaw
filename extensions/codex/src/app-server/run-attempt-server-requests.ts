@@ -135,6 +135,7 @@ export function createCodexAttemptServerRequestController(
           projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
           getActiveMcpToolCall: (serverName) => projector?.getActiveMcpToolCall(serverName),
           pluginAppPolicyContext: resourceState.thread.pluginAppPolicyContext,
+          nativeHookRelay: resourceState.nativeHookRelay,
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),

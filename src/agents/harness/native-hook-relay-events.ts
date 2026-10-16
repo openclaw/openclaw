@@ -13,6 +13,10 @@ import {
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import {
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "../mcp-codex-tool-approval.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -46,8 +50,50 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
 
 type NativeHookRelayPolicy = Pick<
   ActiveNativeHookRelayRegistration,
-  "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
+  | "preToolUseLoopDetection"
+  | "requirePreToolUse"
+  | "sessionKey"
+  | "config"
+  | "agentId"
+  | "autoApproveMcpTools"
+  | "projectedMcpServers"
 > & { executionAdmissionToolNames?: readonly string[] };
+
+/**
+ * Whether Codex itself will gate this MCP call with its own approval elicitation.
+ *
+ * Codex raises `mcpServer/elicitation/request` for every approval mode except
+ * `approve`; only `approve` executes without a prompt. When Codex gates the call
+ * we must not wait for the human inside the short-lived hook subprocess — defer
+ * the plugin approval and let Codex's elicitation (handled in-process) own the
+ * wait. Otherwise the hook keeps custody (fail-closed on its deadline).
+ */
+export function mcpToolApprovalDefersToCodex(
+  registration: Pick<
+    NativeHookRelayPolicy,
+    "config" | "autoApproveMcpTools" | "projectedMcpServers"
+  >,
+  toolName: string,
+): boolean {
+  if (!toolName.startsWith("mcp__")) {
+    return false;
+  }
+  const serverName = /^mcp__(.+?)__/.exec(toolName)?.[1];
+  if (!serverName) {
+    return false;
+  }
+  const server = registration.config?.mcp?.servers?.[serverName];
+  const projected = registration.projectedMcpServers?.[serverName];
+  if (!server && !projected) {
+    // Native MCP names can be hashed or trimmed; an unresolved server keeps the
+    // hook in custody rather than deferring an unverified gate.
+    return false;
+  }
+  return requiresMcpCodexToolApproval({
+    mode: resolveProjectedMcpCodexToolApprovalMode(serverName, server ?? {}, projected),
+    fullPermission: registration.autoApproveMcpTools === true,
+  });
+}
 
 /** Snapshot the same canonical native tool family for planning and receipt admission. */
 export function snapshotNativeHookRelayExecutionAdmission(
@@ -145,6 +191,11 @@ async function runNativeHookRelayPreToolUse(
   const toolInput = readCodexToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
+  // Defer when OpenClaw marked the payload for report mode (exec app-server
+  // approvals) or when Codex gates this MCP call itself; either way the human
+  // wait must not live inside this short-lived hook. See #173073.
+  const deferPluginApproval =
+    approvalMode === "report" || mcpToolApprovalDefersToCodex(params.registration, toolName);
   const policyRequest = {
     toolName,
     params: toolInput,
@@ -154,12 +205,12 @@ async function runNativeHookRelayPreToolUse(
   const outcome = params.registration.runBeforeToolCall
     ? await params.registration.runBeforeToolCall({
         ...policyRequest,
-        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ...(deferPluginApproval ? { approvalMode: "defer" } : {}),
         ...(params.invocation.cwd ? { nativeOperation: { cwd: params.invocation.cwd } } : {}),
       })
     : await runBeforeToolCallHook({
         ...policyRequest,
-        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ...(deferPluginApproval ? { approvalMode: "defer" } : {}),
         ctx: {
           ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
           sessionId: params.registration.sessionId,

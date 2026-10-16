@@ -564,6 +564,7 @@ export async function runCodexAppServerSideQuestion(
             getActiveMcpToolCall: (serverName) =>
               nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
             pluginAppPolicyContext,
+            nativeHookRelay,
             signal,
           });
           return approvalResult.kind === "handled"

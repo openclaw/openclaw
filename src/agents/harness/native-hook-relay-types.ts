@@ -76,6 +76,10 @@ export type NativeHookRelayRegistration = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  /** Prepared session posture: let the native runtime own MCP tool approvals. */
+  autoApproveMcpTools?: boolean;
+  /** Codex-projected MCP servers, mirroring the native approval projection. */
+  projectedMcpServers?: CodexMcpServersConfig;
   deferMcpToolApprovals?: boolean;
   runId: string;
   channelId?: string;
@@ -106,6 +110,8 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
+  /** Whether a plugin approval for this native tool call is parked on the relay. */
+  hasPendingPreToolUseApproval?: (toolUseId?: string) => boolean;
   commandForEvent: (
     event: NativeHookRelayEvent,
     options?: NativeHookRelayCommandForEventOptions,
