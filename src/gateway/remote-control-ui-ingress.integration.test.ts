@@ -45,6 +45,7 @@ import {
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
 import {
   expectMcpRelayPrincipalAuthority,
+  createIngressPerson,
   setIngressRole,
 } from "./remote-control-ui-mcp-relay.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -75,6 +76,7 @@ const FRAME_ANCESTORS = [
   "https://chatgpt.com",
 ];
 const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
+const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
 describe("remote Control UI ingress production composition", () => {
@@ -208,7 +210,7 @@ describe("remote Control UI ingress production composition", () => {
       },
     );
     projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
-    auth = { mode: "token", token: SHARED_TOKEN, allowTailscale: false };
+    auth = TOKEN_AUTH;
     const logger = createSubsystemLogger("test/remote-control-ui-ingress");
     const methodRegistry = createRequestGatewayMethodRegistry(extraHandlers);
     const requestContext = bindSessionRowProjection(
@@ -406,6 +408,22 @@ describe("remote Control UI ingress production composition", () => {
     projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
   }
 
+  const configureAuth = (
+    nextAuth: ResolvedGatewayAuth,
+    roles?: NonNullable<OpenClawConfig["gateway"]>["roles"],
+  ) => configure({ ...config, gateway: { ...config.gateway, roles, auth: nextAuth } }, nextAuth);
+
+  async function expectStatus(response: Promise<Response>, status: number) {
+    const result = await response;
+    expect(result.status).toBe(status);
+    await result.body?.cancel();
+  }
+
+  const personOptions = (profileId: string) => ({
+    ...principalOptions,
+    principal: { kind: "person" as const, profileId },
+  });
+
   it("serves read-only UI config, images and chat media under the grant without opening general APIs", async () => {
     const iconKey = encodeURIComponent(OWNER_SESSION_KEY);
     const imagePaths = [
@@ -436,22 +454,17 @@ describe("remote Control UI ingress production composition", () => {
       assistantAvatar: expect.stringContaining("/claw/avatar/main"),
     });
     for (const pathname of [configPath, imagePaths[2]!]) {
-      const unauthenticated = await fetch(`${directOrigin}${pathname}`);
-      expect(unauthenticated.status).toBe(401);
-      await unauthenticated.body?.cancel();
+      await expectStatus(fetch(`${directOrigin}${pathname}`), 401);
     }
     const metadata = await readRemote(`${assistantMediaPath}&meta=1`);
     expect(metadata.status).toBe(200);
     const media = (await metadata.json()) as { available: boolean; mediaTicket: string };
-    expect(media.available).toBe(true);
-    expect(media.mediaTicket).toMatch(/^v1\./);
+    expect(media).toMatchObject({ available: true, mediaTicket: expect.stringMatching(/^v1\./) });
     const ticketedPath = `${assistantMediaPath}&mediaTicket=${encodeURIComponent(media.mediaTicket)}`;
     const remoteMedia = await readRemote(ticketedPath);
     expect(remoteMedia.status).toBe(200);
     expect(await remoteMedia.text()).toBe("Ingress chat media\n");
-    const directReplay = await fetch(`${directOrigin}${ticketedPath}`);
-    expect(directReplay.status).toBe(404);
-    await directReplay.body?.cancel();
+    await expectStatus(fetch(`${directOrigin}${ticketedPath}`), 404);
   });
 
   it("pairs visible devices without issuing credentials and reconnects under the live owner grant", async () => {
@@ -503,8 +516,7 @@ describe("remote Control UI ingress production composition", () => {
         },
       );
       const list = await request(owner, "device.pair.list", {});
-      expect(list.ok).toBe(true);
-      expect(list.payload?.pending).toEqual([]);
+      expect(list).toMatchObject({ ok: true, payload: { pending: [] } });
       expect(list.payload?.paired).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -594,44 +606,23 @@ describe("remote Control UI ingress production composition", () => {
 
   it("restricts Team HTTP assets and admits a reader under the current role", async () => {
     await ingress!.close();
-    const admin = await ensureCanonicalUserProfileForEmail("admin@ingress.example.test");
-    const reader = await ensureCanonicalUserProfileForEmail("reader@ingress.example.test");
-    await setIngressRole(admin.id, "admin");
-    await setIngressRole(reader.id, "reader");
+    const admin = await createIngressPerson("admin", "admin", state.workspaceDir);
+    const reader = await createIngressPerson("reader", "reader", state.workspaceDir);
     const people = [admin, reader];
     for (const person of people) {
       await setCanonicalUserProfileAvatar(person.id, PNG_BYTES, "image/png");
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: `agent:main:ingress-${person.id}` },
-        {
-          sessionId: `ingress-${person.id}`,
-          updatedAt: Date.now(),
-          label: person.id,
-          spawnedCwd: state.workspaceDir,
-          createdActor: { type: "human", source: "profile", id: person.id },
-          visibility: "draft",
-        },
-      );
     }
-    await configure(
-      {
-        ...config,
-        gateway: {
-          ...config.gateway,
-          auth: { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY },
-          roles: TEAM_ROLES,
-        },
-      },
+    await configureAuth(
       { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false },
+      TEAM_ROLES,
     );
     let adminMediaTicket: string | undefined;
     for (const person of people) {
       const isAdmin = person.id === admin.id;
       const ceiling = isAdmin ? ["operator.admin"] : [...SCOPES];
       const binding = await factory.bindPrincipal({
-        ...principalOptions,
+        ...personOptions(person.id),
         audienceId: person.id,
-        principal: { kind: "person", profileId: person.id },
         operatorScopeCeiling: ceiling,
       });
       try {
@@ -650,49 +641,42 @@ describe("remote Control UI ingress production composition", () => {
           adminMediaTicket = ((await metadata.json()) as { mediaTicket: string }).mediaTicket;
         } else if (person.id === reader.id) {
           expect(adminMediaTicket).toBeDefined();
-          const replay = await readRemote(
-            `${assistantMediaPath}&mediaTicket=${encodeURIComponent(adminMediaTicket!)}`,
-            ui,
+          await expectStatus(
+            readRemote(
+              `${assistantMediaPath}&mediaTicket=${encodeURIComponent(adminMediaTicket!)}`,
+              ui,
+            ),
+            404,
           );
-          expect(replay.status).toBe(404);
-          await replay.body?.cancel();
         }
-        const avatar = await readRemote(`/claw/api/users/${person.id}/avatar`, ui);
-        expect(avatar.status).toBe(200);
-        await avatar.body?.cancel();
-        const ownIcon = await readRemote(
-          `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
-          ui,
+        await expectStatus(readRemote(`/claw/api/users/${person.id}/avatar`, ui), 200);
+        await expectStatus(
+          readRemote(
+            `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
+            ui,
+          ),
+          isAdmin ? 200 : 403,
         );
-        expect(ownIcon.status).toBe(isAdmin ? 200 : 403);
-        await ownIcon.body?.cancel();
       } finally {
         await binding.close();
       }
     }
     for (const profileId of ["missing-ingress-person", "gateway-owner"]) {
-      await expect(
-        factory.bindPrincipal({
-          ...principalOptions,
-          principal: { kind: "person", profileId },
-        }),
-      ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(factory.bindPrincipal(personOptions(profileId))).rejects.toMatchObject({
+        code: "forbidden",
+      });
     }
     const policyPerson = await ensureCanonicalUserProfileForEmail("policy@ingress.example.test");
     await setIngressRole(policyPerson.id, "policy");
-    await expect(
-      factory.bindPrincipal({
-        ...principalOptions,
-        principal: { kind: "person", profileId: policyPerson.id },
-      }),
-    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(factory.bindPrincipal(personOptions(policyPerson.id))).rejects.toMatchObject({
+      code: "forbidden",
+    });
     for (const change of ["role", "merge", "grant"] as const) {
       const subject = await ensureCanonicalUserProfileForEmail(`${change}@ingress.example.test`);
       await setIngressRole(subject.id, "admin");
       const grant = new AbortController();
       const binding = await factory.bindPrincipal({
-        ...principalOptions,
-        principal: { kind: "person", profileId: subject.id },
+        ...personOptions(subject.id),
         signal: grant.signal,
       });
       try {
@@ -713,17 +697,7 @@ describe("remote Control UI ingress production composition", () => {
 
   it("fences held HTTP, WebSocket and RPC work before effects and publication on grant revocation", async () => {
     const subject = { id: "gateway-owner" };
-    await configure(
-      {
-        ...config,
-        gateway: {
-          ...config.gateway,
-          roles: undefined,
-          auth: { mode: "token", token: SHARED_TOKEN },
-        },
-      },
-      { mode: "token", token: SHARED_TOKEN, allowTailscale: false },
-    );
+    await configureAuth(TOKEN_AUTH);
     const grant = new AbortController();
     let grantCurrent = true;
     const binding = await factory.bindPrincipal({
@@ -757,15 +731,13 @@ describe("remote Control UI ingress production composition", () => {
       heldRead = { entered: createDeferred(), release: createDeferred() };
       const pendingHttp = readRemote("/claw/control-ui-config.json?held=1", ui);
       const rejectedHttp = pendingHttp.catch((error: unknown) => error);
-      const pendingWs = request(peer, "users.setDisplayName", {
+      const mutation = {
         profileId: subject.id,
         displayName: "Must not be published",
-      });
+      };
+      const pendingWs = request(peer, "users.setDisplayName", mutation);
       const rejectedWs = pendingWs.catch((error: unknown) => error);
-      const pending = binding.request("users.setDisplayName", {
-        profileId: subject.id,
-        displayName: "Must not be published",
-      });
+      const pending = binding.request("users.setDisplayName", mutation);
       const rejected = pending.catch((error: unknown) => error);
       await awaitGateBeforeSettlement(
         heldMutation.entered.promise,

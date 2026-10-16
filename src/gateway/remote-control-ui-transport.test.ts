@@ -1,7 +1,7 @@
 import { once } from "node:events";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js";
+import { WebSocketServer, type WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayControlUiIngressRequestV1 } from "../plugins/gateway-ingress.types.js";
 import { markGatewayIngressTransport, readGatewayIngressTransport } from "./ingress-attribution.js";
@@ -17,7 +17,7 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((close) => close()));
 });
 
-function websocketServer() {
+function websocketFixture(accept: (ws: WebSocket, req: IncomingMessage) => void) {
   const server = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
   cleanups.push(
     () =>
@@ -25,7 +25,17 @@ function websocketServer() {
         server.close(() => resolve());
       }),
   );
-  return server;
+  return fixture({
+    handleUpgrade: async (req, socket, head) => {
+      server.handleUpgrade(req, socket, head, (ws) => accept(ws, req));
+    },
+  });
+}
+
+function write(res: ServerResponse, bytes: Uint8Array) {
+  return new Promise<void>((resolve, reject) => {
+    res.write(bytes, (error) => (error ? reject(error) : resolve()));
+  });
 }
 
 const websocketRequest = {
@@ -37,14 +47,10 @@ const websocketRequest = {
 
 function fixture(overrides: Partial<GatewayControlUiIngressHost> = {}) {
   let current = true;
+  function revoke() {
+    current = false;
+  }
   const context = createRemoteControlUiIngressTestContext({
-    pluginId: "test-ingress",
-    audienceId: "test-audience",
-    publicOrigin: "https://ui.example.test",
-    sandboxOrigin: "https://sandbox.example.test",
-    operatorScopeCeiling: ["operator.read", "operator.write"],
-    frameAncestors: ["https://chat.example.test"],
-    signal: new AbortController().signal,
     assertCurrent() {
       if (!current) {
         throw new Error("Grant revoked");
@@ -80,13 +86,7 @@ function fixture(overrides: Partial<GatewayControlUiIngressHost> = {}) {
     headers: [["host", "ui.example.test"]],
     signal: new AbortController().signal,
   };
-  return {
-    transport,
-    input,
-    revoke: () => {
-      current = false;
-    },
-  };
+  return { transport, input, revoke };
 }
 
 describe("remote Control UI memory transport", () => {
@@ -147,15 +147,10 @@ describe("remote Control UI memory transport", () => {
   });
 
   it("uses real WebSocket text/binary framing and fences stale message sends", async () => {
-    const wss = websocketServer();
-    const { transport, revoke } = fixture({
-      handleUpgrade: async (req, socket, head) => {
-        expect(readGatewayIngressTransport(req)?.kind).toBe("remote-forwarded");
-        expect(req.headers.origin).toBe("https://ui.example.test");
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          ws.on("message", (bytes, isBinary) => ws.send(bytes, { binary: isBinary }));
-        });
-      },
+    const { transport, revoke } = websocketFixture((ws, req) => {
+      expect(readGatewayIngressTransport(req)?.kind).toBe("remote-forwarded");
+      expect(req.headers.origin).toBe("https://ui.example.test");
+      ws.on("message", (bytes, isBinary) => ws.send(bytes, { binary: isBinary }));
     });
     const { socket } = await transport.openWebSocket(websocketRequest);
     const reader = socket.messages[Symbol.asyncIterator]();
@@ -179,16 +174,11 @@ describe("remote Control UI memory transport", () => {
   it("gives upgraded sockets net.Socket timeouts so Gateway keepalive can arm them", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
     try {
-      const wss = websocketServer();
       const accepted = createDeferred<IncomingMessage["socket"]>();
       const missedPong = vi.fn();
-      const { transport } = fixture({
-        handleUpgrade: async (req, socket, head) => {
-          wss.handleUpgrade(req, socket, head, (ws) => {
-            startWebSocketKeepalive(ws, missedPong, req.socket);
-            accepted.resolve(req.socket);
-          });
-        },
+      const { transport } = websocketFixture((ws, req) => {
+        startWebSocketKeepalive(ws, missedPong, req.socket);
+        accepted.resolve(req.socket);
       });
       await transport.openWebSocket(websocketRequest);
       const upgraded = await accepted.promise;
@@ -205,17 +195,13 @@ describe("remote Control UI memory transport", () => {
   });
 
   it("keeps accepted WebSocket authority with the grant when the browser transport disconnects", async () => {
-    const wss = websocketServer();
     const admitted = createDeferred<RemoteControlUiIngressContext>();
-    const { transport, revoke } = fixture({
-      handleUpgrade: async (req, socket, head) => {
-        const provenance = readGatewayIngressTransport(req);
-        if (provenance?.kind !== "remote-forwarded") {
-          throw new Error("Missing remote provenance");
-        }
-        admitted.resolve(provenance.context);
-        wss.handleUpgrade(req, socket, head, () => {});
-      },
+    const { transport, revoke } = websocketFixture((_ws, req) => {
+      const provenance = readGatewayIngressTransport(req);
+      if (provenance?.kind !== "remote-forwarded") {
+        throw new Error("Missing remote provenance");
+      }
+      admitted.resolve(provenance.context);
     });
     const browser = new AbortController();
     const { socket } = await transport.openWebSocket({
@@ -234,11 +220,7 @@ describe("remote Control UI memory transport", () => {
   it("delivers the final buffered response chunk before normal transport completion", async () => {
     const { transport, input } = fixture({
       handleRequest: async (_req, res) => {
-        await new Promise<void>((resolve, reject) => {
-          res.write(new Uint8Array(128 * 1024).fill(1), (error) =>
-            error ? reject(error) : resolve(),
-          );
-        });
+        await write(res, new Uint8Array(128 * 1024).fill(1));
         res.end(new Uint8Array(128 * 1024).fill(2));
       },
     });
@@ -260,9 +242,7 @@ describe("remote Control UI memory transport", () => {
             await complete;
           } else {
             for (let index = 0; index < 101; index += 1) {
-              await new Promise<void>((resolve, reject) => {
-                res.write(chunk, (error) => (error ? reject(error) : resolve()));
-              });
+              await write(res, chunk);
             }
           }
           res.end();
@@ -273,8 +253,7 @@ describe("remote Control UI memory transport", () => {
         direction === "request"
           ? new ReadableStream<Uint8Array>({
               pull(controller) {
-                if (chunks < 101) {
-                  chunks += 1;
+                if (chunks++ < 101) {
                   controller.enqueue(chunk);
                 } else {
                   controller.close();

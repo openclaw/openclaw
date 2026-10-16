@@ -56,6 +56,27 @@ export function setIngressRole(
   });
 }
 
+export async function createIngressPerson(
+  name: string,
+  role: Parameters<typeof setIngressRole>[1],
+  spawnedCwd?: string,
+) {
+  const person = await ensureCanonicalUserProfileForEmail(`${name}@ingress.example.test`);
+  await setIngressRole(person.id, role);
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: `agent:main:ingress-${person.id}` },
+    {
+      sessionId: `ingress-${person.id}`,
+      updatedAt: Date.now(),
+      label: person.id,
+      ...(spawnedCwd ? { spawnedCwd } : {}),
+      createdActor: { type: "human", source: "profile", id: person.id },
+      visibility: "draft",
+    },
+  );
+  return person;
+}
+
 const { default: mcpRelayPlugin } = await loadBundledPluginFacade<{
   default: Required<Pick<OpenClawPluginDefinition, "register">>;
 }>({ pluginId: "mcp-relay", artifactBasename: "index.js" });
@@ -65,15 +86,10 @@ type RelayFrame = {
   id?: string;
   sid?: string;
   op?: string;
-  ok?: boolean;
-  status?: number;
   b64?: string;
   text?: string;
   more?: boolean;
-  code?: number | string;
   params?: { codeHash?: string; principal?: string; ceiling?: string[] };
-  result?: unknown;
-  error?: { code: string; message: string };
 };
 
 /** Only relay I/O is fake; the plugin, keyed state, and ingress transport are real. */
@@ -148,21 +164,8 @@ export async function expectMcpRelayPrincipalAuthority(params: {
   for (const method of ["agents.list", "sessions.list", "sessions.describe", "chat.history"]) {
     await prepareGatewayRequestHandler(coreGatewayHandlers[method]!);
   }
-  const admin = await ensureCanonicalUserProfileForEmail("relay-admin@ingress.example.test");
-  const reader = await ensureCanonicalUserProfileForEmail("relay-reader@ingress.example.test");
-  for (const person of [admin, reader]) {
-    await setIngressRole(person.id, "admin");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: `agent:main:ingress-${person.id}` },
-      {
-        sessionId: `ingress-${person.id}`,
-        updatedAt: Date.now(),
-        label: person.id,
-        createdActor: { type: "human", source: "profile", id: person.id },
-        visibility: "draft",
-      },
-    );
-  }
+  const admin = await createIngressPerson("relay-admin", "admin");
+  const reader = await createIngressPerson("relay-reader", "admin");
   for (const profileId of [undefined, reader.id]) {
     const auth: ResolvedGatewayAuth = profileId
       ? { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false }
@@ -254,16 +257,28 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           if (!relay) {
             throw new Error("MCP relay did not connect");
           }
+          const receive = (type: string, fields: Record<string, unknown>) =>
+            relay.receive({ type, ...fields });
+          const next = async (expected: object, matches?: (frame: RelayFrame) => boolean) => {
+            const frame = await relay.next(matches);
+            expect(frame).toMatchObject(expected);
+            return frame;
+          };
+          let requestSequence = 0;
+          const exchange = async (op: string, input: object, grantId?: string) => {
+            const id = `relay-${++requestSequence}`;
+            receive("req", { id, ...(grantId ? { grantId } : {}), op, params: input });
+            await clock.advanceBy(0);
+            return relay.next((frame) => frame.type === "res" && frame.id === id);
+          };
           const { gatewayId } = (await call("status")) as { gatewayId: string };
-          relay.receive({
-            type: "challenge",
+          receive("challenge", {
             protocol: 1,
             nonce: Buffer.alloc(32, 7).toString("base64url"),
             relay: "mcp.openclaw.ai",
           });
-          expect(await relay.next()).toMatchObject({ type: "hello", protocol: 1 });
-          relay.receive({
-            type: "ready",
+          await next({ type: "hello", protocol: 1 });
+          receive("ready", {
             gatewayId,
             ui: { frameAncestors: params.openOptions.frameAncestors },
           });
@@ -285,28 +300,22 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             params: { principal: profileId ? "person" : "owner", ceiling },
           });
           expect(offer.params).not.toHaveProperty("profileId");
-          relay.receive({ type: "res", id: offer.id, ok: true, result: {} });
+          receive("res", { id: offer.id, ok: true, result: {} });
           await pairing;
           const grantId = `gr_${Buffer.alloc(32, profileId ? 21 : 20).toString("base64url")}`;
-          relay.receive({
-            type: "req",
-            id: "grant-create",
-            op: "grant.create",
-            params: {
+          expect(
+            await exchange("grant.create", {
               grantId,
               codeHash: offer.params?.codeHash,
               client: { id: "integration", name: "Synthetic relay browser" },
-            },
-          });
-          await clock.advanceBy(0);
-          expect(await relay.next()).toMatchObject({ type: "res", id: "grant-create", ok: true });
+            }),
+          ).toMatchObject({ type: "res", ok: true });
           const origins = {
             grantId,
             publicOrigin: params.openOptions.publicOrigin,
             sandboxOrigin: params.openOptions.sandboxOrigin,
           };
-          relay.receive({
-            type: "ui.http",
+          receive("ui.http", {
             sid: "http-root",
             ...origins,
             surface: "control-ui",
@@ -317,15 +326,10 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             more: false,
           });
           const serving = clock.advanceBy(0);
-          expect(await relay.next()).toMatchObject({
-            type: "ui.http.head",
-            sid: "http-root",
-            status: 200,
-          });
+          await next({ type: "ui.http.head", sid: "http-root", status: 200 });
           const chunks: Buffer[] = [];
           for (;;) {
-            const frame = await relay.next();
-            expect(frame).toMatchObject({
+            const frame = await next({
               type: "ui.http.body",
               sid: "http-root",
               b64: expect.any(String),
@@ -338,8 +342,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           await serving;
           expect(Buffer.concat(chunks).toString()).toContain('data-openclaw-remote-ingress="true"');
           const openSocket = (sid: string) =>
-            relay.receive({
-              type: "ui.ws.open",
+            receive("ui.ws.open", {
               sid,
               ...origins,
               path: "/claw",
@@ -350,11 +353,10 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           openSocket(browserSid);
           // Opening jobs own socket lifetimes; join them after revocation closes the sockets.
           const opening = clock.advanceBy(0);
-          expect(await relay.next()).toMatchObject({ type: "ui.ws.opened", sid: "ws-browser" });
+          await next({ type: "ui.ws.opened", sid: "ws-browser" });
           const peer: Peer = {
             send: async (frame) => {
-              relay.receive({
-                type: "ui.ws.msg",
+              receive("ui.ws.msg", {
                 sid: browserSid,
                 text: JSON.stringify(frame),
                 more: false,
@@ -380,21 +382,15 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             "remote-ingress",
             ceiling,
           );
-          let requestSequence = 0;
-          const dataRequest = async (op: string, input: Record<string, unknown>) => {
-            const id = `data-${++requestSequence}`;
-            relay.receive({ type: "req", id, grantId, op, params: input });
-            await clock.advanceBy(0);
-            return relay.next((frame) => frame.type === "res" && frame.id === id);
-          };
+          const dataRequest = (op: string, input: Record<string, unknown>) =>
+            exchange(op, input, grantId);
           expect(await dataRequest("status", {})).toMatchObject({
             ok: true,
             result: { agents: [expect.objectContaining({ id: "main" })] },
           });
           const ownKey = profileId ? `agent:main:ingress-${profileId}` : params.ownerSessionKey;
           const foreignKey = `agent:main:ingress-${admin.id}`;
-          const listed = await dataRequest("conversations.list", { limit: 50 });
-          expect(listed).toMatchObject({
+          expect(await dataRequest("conversations.list", { limit: 50 })).toMatchObject({
             ok: true,
             result: {
               conversations: expect.arrayContaining([
@@ -409,13 +405,12 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             // Existing UI authority retires; the same live grant then binds the current role.
             await setIngressRole(profileId, "reader");
             expect(await dataRequest("status", {})).toMatchObject({ ok: false });
-            expect(
-              await relay.next(
-                (frame) =>
-                  frame.sid === browserSid &&
-                  (frame.type === "ui.error" || frame.type === "ui.ws.close"),
-              ),
-            ).toHaveProperty("sid", browserSid);
+            await next(
+              { sid: browserSid },
+              (frame) =>
+                frame.sid === browserSid &&
+                (frame.type === "ui.error" || frame.type === "ui.ws.close"),
+            );
             expect(await dataRequest("status", {})).toMatchObject({ ok: true });
             expect(await dataRequest("conversations.list", { limit: 50 })).toMatchObject({
               result: {
@@ -436,20 +431,14 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             ).toMatchObject({ ok: false });
             expect(errors).toContainEqual("mcp-relay: op=message.send method=chat.send failed");
           }
-          relay.receive({
-            type: "req",
-            id: "revoke-grant",
-            op: "grant.revoked",
-            params: { grantId, reason: "client_revoked" },
-          });
-          await clock.advanceBy(0);
           expect(
-            await relay.next((frame) => frame.type === "res" && frame.id === "revoke-grant"),
+            await exchange("grant.revoked", { grantId, reason: "client_revoked" }),
           ).toMatchObject({ ok: true });
           if (!profileId) {
-            expect(
-              await relay.next((frame) => frame.sid === browserSid && frame.type === "ui.error"),
-            ).toMatchObject({ code: "grant_revoked" });
+            await next(
+              { code: "grant_revoked" },
+              (frame) => frame.sid === browserSid && frame.type === "ui.error",
+            );
           }
           expect(await dataRequest("conversations.list", { limit: 1 })).toMatchObject({
             ok: false,
@@ -457,10 +446,13 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           });
           openSocket("ws-reopened");
           await clock.advanceBy(0);
-          expect(await relay.next((frame) => frame.sid === "ws-reopened")).toMatchObject({
-            type: "ui.error",
-            code: "grant_revoked",
-          });
+          await next(
+            {
+              type: "ui.error",
+              code: "grant_revoked",
+            },
+            (frame) => frame.sid === "ws-reopened",
+          );
           await opening;
         } finally {
           await service.stop?.(context);

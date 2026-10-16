@@ -35,10 +35,7 @@ const questions: Question[] = [
     questionId: "choice",
     header: "Choice",
     question: "Which option?",
-    options: [
-      { label: "One", description: "First" },
-      { label: "Two", description: "Second" },
-    ],
+    options: [{ label: "One" }, { label: "Two" }],
     isOther: true,
   },
 ];
@@ -48,32 +45,18 @@ const receiptResult = (resolutionId: string) => ({ ...answerResult, resolutionId
 const questionList = (overrides: Partial<Question>) => [{ ...questions[0]!, ...overrides }];
 const choiceAnswer = (...values: string[]) => ({ answers: { choice: values } });
 
-const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> = [
-  [
-    "an unanswered prototype-key id",
-    questionList({ questionId: "constructor" }),
-    { answers: {} },
-    "constructor",
-  ],
-  [
-    "an unknown question id",
-    questions,
-    { answers: { choice: ["Two"], unknown: ["value"] } },
-    "unknown",
-  ],
-  [
-    "a missing question answer",
-    [...questions, { ...questions[0]!, questionId: "second" }],
-    answers,
-    "second",
-  ],
-  ["an empty string", questions, choiceAnswer("  "), "choice"],
-  ["an empty secret", questionList({ options: [], isSecret: true }), choiceAnswer(""), "choice"],
-  ["multiple single-select values", questions, choiceAnswer("One", "Two"), "choice"],
-  ["an undeclared option", questionList({ isOther: false }), choiceAnswer("Three"), "choice"],
+const invalidAnswerCases: Array<[string, QuestionAnswers, Question[]?, string?]> = [
+  ["prototype id", { answers: {} }, questionList({ questionId: "constructor" }), "constructor"],
+  ["unknown id", { answers: { choice: ["Two"], unknown: ["value"] } }, undefined, "unknown"],
+  ["missing answer", answers, [...questions, ...questionList({ questionId: "second" })], "second"],
+  ["empty string", choiceAnswer("  ")],
+  ["empty secret", choiceAnswer(""), questionList({ options: [], isSecret: true })],
+  ["multiple single-select values", choiceAnswer("One", "Two")],
+  ["undeclared option", choiceAnswer("Three"), questionList({ isOther: false })],
 ];
 
 let manager: QuestionManager;
+let onResolved: ReturnType<typeof vi.fn>;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
@@ -98,7 +81,22 @@ function publicationRoot(label: string) {
   manager = new QuestionManager(scheduler, failure);
   const parent = tryBeginGatewayRootWorkAdmission(label);
   expect(parent).not.toBeNull();
-  return { parent, failure, releaseWait: vi.fn(() => parent!.release()) };
+  const releaseWait = vi.fn(() => parent!.release());
+  const request = (overrides: Partial<PublicQuestionRequest>) =>
+    parent!.run(async () =>
+      askQuestion({
+        questions,
+        timeoutMs: 10_000,
+        registerHumanInputWait: () => releaseWait,
+        ...overrides,
+      } satisfies PublicQuestionRequest),
+    );
+  return { parent, failure, releaseWait, request };
+}
+
+function expectManagerError(run: () => unknown, code: QuestionManagerError["code"]) {
+  expect(run).toThrowError(QuestionManagerError);
+  expect(run).toThrowError(expect.objectContaining({ code }));
 }
 
 beforeEach(() => {
@@ -107,6 +105,7 @@ beforeEach(() => {
   clock = createGatewaySchedulerClock(1_000);
   scheduler = createTestGatewayScheduler(clock.clock);
   manager = new QuestionManager(scheduler);
+  onResolved = vi.fn();
 });
 
 afterEach(async () => {
@@ -119,7 +118,6 @@ afterEach(async () => {
 describe("QuestionManager", () => {
   it("hides a committing question on reset and settles it without touching a reused id", async () => {
     const commit = createDeferredCore();
-    const onResolved = vi.fn();
     const original = askQuestion({ onResolved });
     const waiting = manager.waitAnswer(original.id);
     const pending = manager.resolveWithCommit(original.id, answers, undefined, {
@@ -147,7 +145,6 @@ describe("QuestionManager", () => {
       const release = vi.fn();
       const access = sessionAccess(release);
       let requesterActive = true;
-      const onResolved = vi.fn();
       const record = askQuestion({
         sessionAccess: access,
         onResolved,
@@ -184,7 +181,7 @@ describe("QuestionManager", () => {
 
   it("keeps secret classification immutable and observes without settling expiry", () => {
     const secret = { ...questions[0]!, isSecret: true };
-    const onResolved = vi.fn();
+
     const record = askQuestion({ questions: [secret], timeoutMs: 10, onResolved });
     const observation = manager.observe(record.id)!;
     secret.isSecret = false;
@@ -216,16 +213,10 @@ describe("QuestionManager", () => {
     const first = askQuestion({ id: "ask_client_id" });
 
     expect(first.id).toBe("ask_client_id");
-    expect(() => askQuestion({ id: "ask_client_id" })).toThrowError(QuestionManagerError);
-    try {
-      askQuestion({ id: "ask_client_id" });
-    } catch (error) {
-      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ID_IN_USE });
-    }
+    expectManagerError(() => askQuestion({ id: first.id }), QuestionManagerErrorCodes.ID_IN_USE);
   });
 
   it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
-    const onResolved = vi.fn();
     const record = askQuestion({ onResolved });
     const legacy = manager.waitAnswer(record.id);
     const tracked = manager.waitAnswer(record.id, undefined, true);
@@ -272,7 +263,7 @@ describe("QuestionManager", () => {
 
   it.each(invalidAnswerCases)(
     "rejects %s without terminalizing",
-    (_name, requestQuestions, invalid, questionId) => {
+    (_name, invalid, requestQuestions = questions, questionId = "choice") => {
       const record = askQuestion({ questions: [...requestQuestions] });
 
       expect(() => manager.resolve(record.id, invalid)).toThrow(`question '${questionId}'`);
@@ -280,76 +271,53 @@ describe("QuestionManager", () => {
     },
   );
 
-  it("accepts trimmed option labels and free text when allowed", () => {
-    const strict = askQuestion({
-      questions: questionList({ isOther: false }),
-    });
-    expect(manager.resolve(strict.id, choiceAnswer("  Two  "))).toMatchObject({
-      status: "answered",
-    });
-
-    const open = askQuestion();
-    expect(manager.resolve(open.id, choiceAnswer("custom"))).toMatchObject({
-      status: "answered",
-    });
-
-    const freeText = askQuestion({
-      questions: questionList({ options: [], isOther: false }),
-    });
-    expect(manager.resolve(freeText.id, choiceAnswer("custom"))).toMatchObject({
-      status: "answered",
-    });
+  it.each<[string, Partial<Question>, string]>([
+    ["trimmed option", { isOther: false }, "  Two  "],
+    ["Other text", {}, "custom"],
+    ["free text", { options: [], isOther: false }, "custom"],
+  ])("accepts %s", (_name, overrides, value) => {
+    const record = askQuestion({ questions: questionList(overrides) });
+    expect(manager.resolve(record.id, choiceAnswer(value))).toMatchObject({ status: "answered" });
   });
 
-  it("retires local questions without cancelling truth or refreshing human-input recovery", async () => {
-    const onResolved = vi.fn();
-    const releaseHumanInputWait = vi.fn();
-    const releaseSessionAccess = vi.fn();
-    const record = askQuestion({
-      onResolved,
-      sessionAccess: sessionAccess(releaseSessionAccess),
-      registerHumanInputWait: () => releaseHumanInputWait,
-    });
-    const waiting = manager.waitAnswer(record.id, 5_000);
-
-    manager.reset();
-    await expect(waiting).resolves.toEqual({ status: "pending" });
-    expect(record.status).toBe("pending");
-    expect(manager.get(record.id)).toBeNull();
-    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
-    expect(releaseSessionAccess).toHaveBeenCalledOnce();
-    expect(manager.observe(record.id)?.sessionAccess).toBeUndefined();
-    await clock.advanceBy(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
-    expect(onResolved).not.toHaveBeenCalled();
-    expect(releaseSessionAccess).toHaveBeenCalledOnce();
-    expect(askQuestion({ id: record.id }).status).toBe("pending");
-  });
-
-  it("permanently closes admission without reset reopening the retired owner", () => {
-    const releaseHumanInputWait = vi.fn();
-    const releaseSessionAccess = vi.fn();
-    const onResolved = vi.fn();
-    const record = askQuestion({
-      onResolved,
-      sessionAccess: sessionAccess(releaseSessionAccess),
-      registerHumanInputWait: () => releaseHumanInputWait,
-    });
-    manager.close();
-    manager.reset();
-    manager.close();
-    expect(() => askQuestion()).toThrow("Question manager is closed");
-    expect(manager.get(record.id)).toBeNull();
-    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
-    expect(releaseSessionAccess).toHaveBeenCalledOnce();
-    expect(onResolved).not.toHaveBeenCalled();
-    expect(clock.armedAtMs).toBeNull();
-  });
+  it.each(["reset", "close"] as const)(
+    "retires local questions on %s without cancelling truth",
+    async (retirement) => {
+      const releaseHumanInputWait = vi.fn();
+      const releaseSessionAccess = vi.fn();
+      const record = askQuestion({
+        onResolved,
+        sessionAccess: sessionAccess(releaseSessionAccess),
+        registerHumanInputWait: () => releaseHumanInputWait,
+      });
+      const waiting = retirement === "reset" ? manager.waitAnswer(record.id, 5_000) : undefined;
+      manager[retirement]();
+      if (retirement === "close") {
+        manager.reset();
+        manager.close();
+      }
+      expect(manager.get(record.id)).toBeNull();
+      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+      expect(releaseSessionAccess).toHaveBeenCalledOnce();
+      if (retirement === "close") {
+        expect(() => askQuestion()).toThrow("Question manager is closed");
+        expect(clock.armedAtMs).toBeNull();
+      } else {
+        await expect(waiting).resolves.toEqual({ status: "pending" });
+        expect(record.status).toBe("pending");
+        expect(manager.observe(record.id)?.sessionAccess).toBeUndefined();
+        await clock.advanceBy(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
+        expect(releaseSessionAccess).toHaveBeenCalledOnce();
+        expect(askQuestion({ id: record.id }).status).toBe("pending");
+      }
+      expect(onResolved).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["replacement", "answer"] as const)(
     "keeps a reentrant %s intact when refreshing the original requester",
     (transition) => {
       let armed = false;
-      const onResolved = vi.fn();
       const original = askQuestion({
         id: "reentrant-liveness",
         onResolved,
@@ -416,9 +384,7 @@ describe("QuestionManager", () => {
   });
 
   it("does not recreate a retention timer when resolution closes the manager reentrantly", () => {
-    const record = askQuestion({
-      onResolved: () => manager.close(),
-    });
+    const record = askQuestion({ onResolved: () => manager.close() });
     expect(manager.resolve(record.id, answers)).toEqual(answerResult);
     expect(manager.get(record.id)).toBeNull();
     expect(clock.armedAtMs).toBeNull();
@@ -427,7 +393,6 @@ describe("QuestionManager", () => {
   it("preserves an answer recorded before human-input release reentrantly closes its observer", async () => {
     const observer = new AsyncWorkScope();
     const releaseHumanInputWait = vi.fn(() => observer.beginClose());
-    const onResolved = vi.fn();
     const record = askQuestion({
       onResolved,
       registerHumanInputWait: () => releaseHumanInputWait,
@@ -449,7 +414,7 @@ describe("QuestionManager", () => {
 
   it("detaches only the closing observer without releasing the question's human-input wait", async () => {
     const observer = new AsyncWorkScope();
-    const onResolved = vi.fn();
+
     const releaseHumanInputWait = vi.fn();
     const record = askQuestion({
       onResolved,
@@ -503,8 +468,8 @@ describe("QuestionManager", () => {
 
   it("expires once after sleep and joins the terminal publication when the scheduler closes", async () => {
     const publication = createDeferredCore();
-    const onResolved = vi.fn(() => publication.promise);
-    const record = askQuestion({ questions, timeoutMs: 50, onResolved });
+    onResolved = vi.fn(() => publication.promise);
+    const record = askQuestion({ timeoutMs: 50, onResolved });
     const waiting = manager.waitAnswer(record.id);
     clock.setTime(70_000);
     const waking = clock.wake();
@@ -534,21 +499,16 @@ describe("QuestionManager", () => {
     const answered = askQuestion();
     manager.resolve(answered.id, answers);
 
-    expect(() => manager.resolve(answered.id, answers)).toThrowError(QuestionManagerError);
-    try {
-      manager.resolve(answered.id, answers);
-    } catch (error) {
-      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
-    }
+    expectManagerError(
+      () => manager.resolve(answered.id, answers),
+      QuestionManagerErrorCodes.ALREADY_TERMINAL,
+    );
 
-    const expired = askQuestion({ questions, timeoutMs: 10 });
+    const expired = askQuestion({ timeoutMs: 10 });
     await clock.advanceBy(10);
-    try {
-      manager.resolve(expired.id, answers);
-      throw new Error("expected resolve to fail");
-    } catch (error) {
-      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
-    }
+    expect(() => manager.resolve(expired.id, answers)).toThrowError(
+      expect.objectContaining({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL }),
+    );
   });
 
   it("retains authority sweeping for legacy requesters without a run selector", () => {
@@ -576,39 +536,28 @@ describe("answer canonicalization", () => {
     { label: "Blue", value: "blue-1" },
     { label: "Blue", value: "blue-2" },
   ];
-  const valuedAnswerCases: Array<
-    [string, Partial<Question>, Question["options"], string, string | undefined]
-  > = [
-    ["installed form label", { presentation: "form" }, valuedOptions, "Blue", "blue-1"],
-    ["form value", { presentation: "form" }, valuedOptions, "blue-1", "blue-1"],
-    ["unknown form label", { presentation: "form" }, valuedOptions, "Green", undefined],
-    ["inexact form label", { presentation: "form" }, valuedOptions, " Blue ", undefined],
-    [
-      "value before a conflicting label",
-      { presentation: "form" },
-      [
-        { label: "a", value: "b" },
-        { label: "b", value: "c" },
-      ],
-      "b",
-      "b",
-    ],
-    ["trimmed ordinary label", {}, valuedOptions, "  Blue  ", "blue-1"],
-    ["inexact secret label", { isSecret: true }, valuedOptions, " Blue ", undefined],
-    [
-      "Other form text preserves exact bytes",
-      { presentation: "form", isOther: true },
-      valuedOptions,
-      "\tanything else\n",
-      "\tanything else\n",
-    ],
-    ["ambiguous form label", { presentation: "form" }, duplicateLabels, "Blue", undefined],
-    ["first duplicate-label value", { presentation: "form" }, duplicateLabels, "blue-1", "blue-1"],
-    ["ambiguous trimmed ordinary label", {}, duplicateLabels, " Blue ", undefined],
+  const form: Partial<Question> = { presentation: "form" };
+  const conflicts = [
+    { label: "a", value: "b" },
+    { label: "b", value: "c" },
   ];
-  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, options, submitted, expected) => {
+  const otherText = "\tanything else\n";
+  const valuedAnswerCases: Array<[string, Partial<Question>, string, string | undefined]> = [
+    ["installed form label", form, "Blue", "blue-1"],
+    ["form value", form, "blue-1", "blue-1"],
+    ["unknown form label", form, "Green", undefined],
+    ["inexact form label", form, " Blue ", undefined],
+    ["value before conflicting label", { ...form, options: conflicts }, "b", "b"],
+    ["trimmed ordinary label", {}, "  Blue  ", "blue-1"],
+    ["inexact secret label", { isSecret: true }, " Blue ", undefined],
+    ["Other form bytes", { ...form, isOther: true }, otherText, otherText],
+    ["ambiguous form label", { ...form, options: duplicateLabels }, "Blue", undefined],
+    ["duplicate-label value", { ...form, options: duplicateLabels }, "blue-1", "blue-1"],
+    ["ambiguous trimmed label", { options: duplicateLabels }, " Blue ", undefined],
+  ];
+  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, submitted, expected) => {
     const record = askQuestion({
-      questions: questionList({ options, isOther: false, ...overrides }),
+      questions: questionList({ options: valuedOptions, isOther: false, ...overrides }),
     });
     const resolve = () => manager.resolve(record.id, choiceAnswer(submitted));
     if (expected === undefined) {
@@ -652,26 +601,19 @@ describe("answer canonicalization", () => {
 it.each(["fulfilled", "rejected"] as const)(
   "joins %s terminal publication on the original root while admission and the owner close",
   async (outcome) => {
-    const { parent, failure, releaseWait } = publicationRoot("question-publication");
+    const { parent, failure, releaseWait, request } = publicationRoot("question-publication");
     const gate = createDeferredCore();
     const entered = vi.fn();
-    let id = "";
-    await parent!.run(async () => {
-      const request = {
-        questions,
-        timeoutMs: 10_000,
-        registerHumanInputWait: () => releaseWait,
-        onResolved: async () => {
-          entered();
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
-          await gate.promise;
-          if (outcome === "rejected") {
-            throw new Error("private fixture failure");
-          }
-          return { published: true };
-        },
-      };
-      id = askQuestion(request satisfies PublicQuestionRequest).id;
+    const { id } = await request({
+      onResolved: async () => {
+        entered();
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        await gate.promise;
+        if (outcome === "rejected") {
+          throw new Error("private fixture failure");
+        }
+        return { published: true };
+      },
     });
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
@@ -706,28 +648,24 @@ it.each(["fulfilled", "rejected"] as const)(
 it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
   "holds terminal grace through %s publication",
   async (outcome) => {
-    const { parent, failure, releaseWait } = publicationRoot("question-delayed-publication");
+    const { parent, failure, releaseWait, request } = publicationRoot(
+      "question-delayed-publication",
+    );
     const gate = createDeferredCore();
     const delivered = vi.fn();
     const releaseSession = vi.fn();
-    let id = "";
-    await parent!.run(async () => {
-      const request = {
-        questions,
-        timeoutMs: 60_000,
-        registerHumanInputWait: () => releaseWait,
-        sessionAccess: sessionAccess(releaseSession),
-        onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
-          await gate.promise;
-          if (outcome === "rejected") {
-            throw new Error("Question publication fixture failure");
-          }
-          if (observation.isCurrent()) {
-            delivered(event);
-          }
-        },
-      };
-      id = askQuestion(request satisfies PublicQuestionRequest).id;
+    const { id } = await request({
+      timeoutMs: 60_000,
+      sessionAccess: sessionAccess(releaseSession),
+      onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+        await gate.promise;
+        if (outcome === "rejected") {
+          throw new Error("Question publication fixture failure");
+        }
+        if (observation.isCurrent()) {
+          delivered(event);
+        }
+      },
     });
     const observation = manager.observe(id)!;
     const waiting = manager.waitAnswer(id);
@@ -787,17 +725,12 @@ it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
 it.each(["answered", "cancelled", "expired"] as const)(
   "settles local %s waiters when reset retired the original publication root",
   async (status) => {
-    const { parent, failure, releaseWait } = publicationRoot("question-reset-publication");
+    const { parent, failure, releaseWait, request } = publicationRoot("question-reset-publication");
     const releaseSession = vi.fn();
-    const onResolved = vi.fn();
-    let id = "";
-    await parent!.run(async () => {
-      id = askQuestion({
-        timeoutMs: 1_000,
-        registerHumanInputWait: () => releaseWait,
-        onResolved,
-        sessionAccess: sessionAccess(releaseSession),
-      }).id;
+    const { id } = await request({
+      timeoutMs: 1_000,
+      onResolved,
+      sessionAccess: sessionAccess(releaseSession),
     });
     const settled = vi.fn();
     const waiting = manager.waitAnswer(id).then(settled);
