@@ -579,7 +579,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <div class="sidebar-shell__content">
               <div
                 ref={scrollRef}
-                class={`sidebar-shell__body sidebar-shell__body--scroll-${scroll.state()}`}
+                class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
                 onScroll={scroll.onScroll}
               >
                 <Show

@@ -55,7 +55,7 @@ export function createSidebarScroll(
       }
       observation?.schedule();
     },
-    onScroll() {
+    onScroll: () => {
       if (scroller) {
         positions.set(presentedKey, scroller.scrollTop);
       }
