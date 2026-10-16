@@ -43,7 +43,7 @@ function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
  * Shares pending loads and caches successful values for a short TTL after completion.
  */
 export async function getCachedLiveCatalogValue<T>(params: {
-  /** Stable JSON-serializable values that identify one provider/config catalog load. */
+  /** Stable JSON-serializable values identifying one provider/config load and result type. */
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
   load: (signal?: AbortSignal) => Promise<T>;
@@ -66,6 +66,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
   const refresh = consumeLiveCatalogRefresh(key);
+  // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
     if (
