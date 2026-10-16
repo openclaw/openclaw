@@ -7,6 +7,7 @@ const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
 export const DEFAULT_REVIEW_INSTRUCTIONS = `Decide whether the agent is wasting the user's time compared with a clearly better next step it can take now.
 Correct it when it repeats an action whose result has not changed; waits or polls on work that already finished or failed; stops, reports a blocker or asks the user about something it can resolve with the files, tools, credentials or authority it already has; builds a workaround when an installed tool does the job; grows scope beyond the request; claims an outcome the tool results contradict; or ignores an explicit user constraint.
 Also compare the effort spent with what the request warrants: a small fix or question that turned into a long investigation, a large diff or repeated proof cycles is a wrong turn.
+If the agent already replied to the user, judge whether it stopped short of the request while a fix was within reach; your correction then starts its next turn.
 Stay quiet when the work is progressing, when requested repetition or waiting still yields new information, or when you cannot name a concrete better step.`;
 
 const REVIEW_PREFIX =
