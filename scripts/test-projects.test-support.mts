@@ -3773,6 +3773,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["package-mac-app", "package-mac-dist", "xcode-test-logs"],
   ],
   [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
+  [/^scripts\/lib\/mac-standalone-runtime\.mjs$/u, ["mac-standalone-runtime", "package-mac-app"]],
   [
     /^scripts\/(stage-cloudflared-macos\.sh|lib\/cloudflared-macos\.json)$/u,
     ["stage-cloudflared-macos", "package-mac-app"],

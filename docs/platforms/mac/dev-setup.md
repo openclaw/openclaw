@@ -50,81 +50,41 @@ Packaging requires a real signing identity by default and fails if none is
 available. Ad-hoc signing is an explicit opt-in; it does not preserve TCC
 permissions. See [macOS signing](/platforms/mac/signing).
 
-Packaging builds the JavaScript runtime and Control UI, then stages the full
-standard package with production dependencies under
-`Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
-package's `files` filter, including its CLI, Gateway, Control UI, npm, and
-optional `sqlite-vec`. Builds at an exact release tag retain the published plugin
-layout. Other commits also stage official external plugins built with that
-commit, including their target-architecture dependencies. If their estimated
-additional size exceeds 300 MiB, packaging stages only Codex for automatic setup.
-The installer prefers these staged copies and records their bundled paths, so
-development builds do not mix a newer SDK with older registry plugins. Plugin
-updates and Doctor retain the same-build copies until the app itself is updated.
-Release automation passes `RELEASE_TAG` and its verified `RELEASE_SHA` so shallow,
-tagless checkouts retain the release layout. Staging rejects tag/version/commit
-mismatches. With only `RELEASE_TAG`, it fetches that tag when needed; without an
-explicit release identity, local builds use tags pointing at the current commit.
-The root tarball uses the repository-pinned pnpm packer; Corepack-only
-setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
-build-time Node and npm, then stages Bun and SQLite. No Node executable or
-npm/corepack/npx shims ship in the app.
+Packaging builds the same-commit JavaScript runtime and Control UI, then invokes
+[`scripts/build-bun-standalone.mjs`](/install/standalone) with the production-pinned
+Bun compiler. The app contains `Contents/Resources/runtime/openclaw`, its loose
+`runtime/` sidecar, and a manifest. The sidecar includes the signed SQLite
+library at `runtime/lib/libsqlite3.dylib`.
+There is no separate Bun interpreter or installed `lib/node_modules/openclaw`
+package in the app. The sidecar retains the builder's native dependencies and
+resources, including same-commit plugins.
 
-For an executable-plus-sidecar packaging input, the separate
-[standalone builder](/install/standalone) emits `openclaw`, `runtime/`, and a
-manifest with compiler provenance and mode-specific signing entitlements.
-Desktop packaging owns seeding and replacement of that complete artifact.
+`OPENCLAW_MAC_RUNTIME_MODE=jit` is the default. Select
+`OPENCLAW_MAC_RUNTIME_MODE=bytecode` to embed bytecode instead. Both modes use
+exactly the entitlements declared by the builder manifest. Packaging checks the
+manifest's version, commit, architecture, executable checksum, and complete
+sidecar checksum before copying any artifact. Each app contains one architecture;
+pass `BUILD_ARCHS=arm64` or `BUILD_ARCHS=x86_64` to select its matching builder
+output. Both app and distribution packaging default to the host architecture.
+Universal and multi-architecture requests fail before building. ARM64 is currently
+qualified; Intel qualification awaits the builder's cross-compilation support.
 
-The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
-consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
-`scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
-downloads it; Darwin accepts both architectures for a universal binary.
-Archives are cached under `.cache/openclaw-bun/<tag>/`. Staging verifies the
-release manifest against `SHA256SUMS`, its identity and artifact fields against
-the pin, each archive against both sources, then the executable checksum,
-native architecture, and runnable fork revision. The fork's package auto-install
-default stays off; OpenClaw's runtime admission still applies at launch.
-`scripts/build-mac-sqlite.sh` builds
-the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
-`apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
-SQLite extensions without relying on Apple's system SQLite or Homebrew.
+For an existing build, `OPENCLAW_MAC_RUNTIME_PREBUILT=/path/to/output` skips
+compilation while retaining every manifest check. The output must match this
+checkout's exact commit and selected mode. This is a build input, not an app
+runtime switch. Stale prebuilt output cannot be relabeled to match newer source.
 
-Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
-`sqlite-vec` loading, native capabilities, and worker readiness in temporary
-state before and after signing, then replaces the previous app. It also rejects
-any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
-`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
-caches still avoid unnecessary declaration work.
+The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`.
+The compiler is staged outside the app and discarded after packaging.
+The standalone builder supplies the pinned SQLite library with extension
+loading. The executable selects its bundled library without an app-provided
+environment override. The app needs no runtime download during onboarding.
 
-The private worker preserves the app's saved desktop-sharing preference and
-profile selection. Packaging checks startup with sharing enabled, disabled,
-and unspecified, including named-profile launches, before and after signing.
-
-Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
-version for the temporary package installation. If unset or empty, the CLI
-installer's default applies. This build-time override does not change the
-bundled Bun pin.
-
-The runtime shares one JavaScript package across requested `BUILD_ARCHS`
-architectures. Universal builds combine Bun and SQLite into universal binaries
-and retain the separate arm64 and x64 Darwin native packages. Staging installs
-each CPU's optional dependencies separately, merges matching shared files, and
-combines distinct Mach-O slices at shared paths. Other shared-file conflicts
-fail packaging. Single-architecture
-builds retain only their compatible native payloads. Linux and Windows prebuilds
-are removed; compatible JavaScript, WASM, and other resources remain intact.
-Universal staging on Apple silicon requires Rosetta for x64 dependency install
-hooks, which execute native code using a temporary x64 Node driver.
-
-Packaging executes verification for each runnable architecture. Verifying
-x86_64 on Apple silicon requires Rosetta; without it, packaging reports that
-architecture's execution checks as skipped. Missing binary architectures or
-nonportable native dependencies fail packaging. Downloads and package
-installation need network access on the build host. A packaged app needs no
-runtime download during onboarding: it seeds that payload into the profile's
-state directory and hosts the Gateway with Bun. The stage script writes the
-package's `openclaw-install-owner.json` marker so Gateway updates remain owned
-by the app.
+Packaging verifies the relocated executable's version, Gateway help, Doctor,
+and embedded node-worker readiness. Native portability and signature checks
+cover the executable and sidecar. The canonical signer signs nested native code,
+refreshes the packaged manifest checksums, then seals the enclosing app.
+`SKIP_TSC=1` does not bypass the runtime build or provenance checks.
 
 Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
 and copies its SwiftPM resource bundles into `Contents/Resources`. The native
@@ -173,14 +133,15 @@ To replace a release install, package the release identity from a clean
 checkout:
 
 ```bash
-BUILD_CONFIG=release BUNDLE_ID=ai.openclaw.mac ./scripts/package-mac-app.sh
+BUILD_CONFIG=release BUILD_ARCHS=arm64 BUNDLE_ID=ai.openclaw.mac ./scripts/package-mac-app.sh
 ```
 
 Release configuration runs `scripts/apple-release-source-check.sh`, which fails
 unless the checkout is clean at the commit being built, and it requires the MLX
-voice helper. It builds a universal app unless you set `BUILD_ARCHS` (for
-example `BUILD_ARCHS=arm64`). Before installing, check the designated
-requirement:
+voice helper. Build Intel artifacts separately with `BUILD_ARCHS=x86_64` once the
+builder supports that target. Release publishing must keep each architecture's
+ZIP, DMG, and Sparkle update separate, including native-architecture routing for
+existing universal installations. Before installing, check the designated requirement:
 
 ```bash
 codesign -dr - dist/OpenClaw.app
@@ -234,15 +195,15 @@ individual artifact or copy the pin into an app or workflow.
 ## 3. Install the CLI and Gateway
 
 On a fresh profile in a packaged app, choose **This Mac** during onboarding.
-The app prepares its bundled Bun runtime, starts the Gateway as its child,
+The app prepares its standalone runtime, starts the Gateway as its child,
 and creates the profile's terminal CLI shim. It does not invoke
 `scripts/install-cli.sh`, install Node, or ask for an install channel.
 Unbundled DEBUG builds retain the installer and channel chooser.
 
 Runtime copies live at `<state>/runtime/<runtimeBuildId>/`. App-hosted children
-and app-managed Bun LaunchAgents use concrete build paths; only the terminal
+and app-managed LaunchAgents use concrete build paths; only the terminal
 shim uses `runtime/current`. Post-update setup reseeds the payload and refreshes
-app-owned Bun service pins before verifying health and collecting old builds.
+app-owned service pins before verifying health and collecting old builds.
 See [Gateway on macOS](/platforms/mac/bundled-gateway).
 
 For manual development recovery, install the matching CLI yourself. Read the

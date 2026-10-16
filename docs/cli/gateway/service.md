@@ -190,6 +190,17 @@ The path must be absolute, executable, and match `--runtime` when that option is
 also supplied. The runtime must pass the current Node/Bun and SQLite capability
 checks. Paths containing spaces are supported; quote them in your shell.
 
+A [standalone OpenClaw artifact](/install/standalone) uses `--runtime bun` with
+its compiled executable as `--runtime-path`. The service recognizes the adjacent
+manifest, checks the executable's reported OpenClaw version, and launches
+`openclaw gateway ...` directly. Packaging owns the artifact's SQLite validation.
+An implicit fresh install run from this executable selects the same artifact,
+even when host Node is available; explicit runtime choices and existing pins
+keep their precedence.
+Keep the executable, manifest, and sidecar together. The macOS app selects this
+pin when replacing its previous bundled Bun service; reinstalling an older app
+can select that app's bundled Bun and script again.
+
 The pin is saved in machine-state metadata for this managed service.
 Forced reinstall, update, and definition repair preserve it. A missing or
 unsupported pin fails with a diagnostic rather than silently switching runtimes.

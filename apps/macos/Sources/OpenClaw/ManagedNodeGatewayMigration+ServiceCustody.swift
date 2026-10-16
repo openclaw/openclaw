@@ -102,8 +102,7 @@ extension ManagedNodeGatewayMigration {
               let cli = GatewayLaunchAgentManager.installedServiceCLI(
                   snapshot: snapshot, environmentFile: artifacts.environment, environmentWrapper: artifacts.wrapper),
               cli.matchesBundledRuntime(runtime),
-              let entrypoint = cli.prefix.last,
-              snapshot.environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path,
+              snapshot.environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibraryOverride,
               snapshot.port == port,
               snapshot.programArguments.contains("--allow-unconfigured") == allowUnconfigured
         else { throw Failure(message: "The Gateway service does not match this Bun installation; it was preserved.") }
@@ -111,7 +110,7 @@ extension ManagedNodeGatewayMigration {
         guard plist["WorkingDirectory"] == nil || plist["WorkingDirectory"] is String else {
             throw Failure(message: "The installed Gateway working directory could not be inspected.")
         }
-        let expectedCommand = [runtime.bun.path, entrypoint, "gateway", "--port", String(port)] +
+        let expectedCommand = runtime.cliCommand + ["gateway", "--port", String(port)] +
             (allowUnconfigured ? ["--allow-unconfigured"] : [])
         // A failed writer may publish the service before committing its pin. Without that
         // binding, only the exact packaged installer command and profile working directory qualify.
@@ -132,6 +131,6 @@ extension ManagedNodeGatewayMigration {
     {
         guard let record else { return allowMissing }
         // The daemon reports known intent only after checking its binding to the current definition.
-        return record.pin?.runtime == "bun" && record.pin?.path == runtime.bun.path
+        return record.pin?.runtime == "bun" && record.pin?.path == runtime.executable.path
     }
 }

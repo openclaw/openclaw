@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import { resolveReleaseTagPackageIdentity } from "./release-version.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
-const MAX_PLUGIN_BYTES = 300 * 1024 * 1024;
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const git = (root, args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
 
@@ -59,22 +58,6 @@ export function desktopRuntimeReleaseTag(root, version, commit) {
   return null;
 }
 
-function directoryBytes(directory) {
-  let bytes = 0;
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name === "node_modules") {
-      continue;
-    }
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      bytes += directoryBytes(file);
-    } else if (entry.isFile()) {
-      bytes += fs.statSync(file).size;
-    }
-  }
-  return bytes;
-}
-
 function dependencyRoot(from, name) {
   for (let cursor = from; ; cursor = path.dirname(cursor)) {
     const candidate = path.join(cursor, "node_modules", name);
@@ -85,33 +68,6 @@ function dependencyRoot(from, name) {
       return null;
     }
   }
-}
-
-function runtimeDependencies(root, seen = new Set()) {
-  const manifest = readJson(path.join(root, "package.json"));
-  for (const [name, optional] of [
-    ...Object.keys(manifest.dependencies ?? {}).map((dependencyName) => [dependencyName, false]),
-    ...Object.keys(manifest.optionalDependencies ?? {}).map((dependencyName) => [
-      dependencyName,
-      true,
-    ]),
-  ]) {
-    const dependency = dependencyRoot(root, name);
-    if (!dependency) {
-      if (optional) {
-        continue;
-      }
-      throw new Error(
-        `Missing build dependency ${name} from ${root}; install workspace dependencies first.`,
-      );
-    }
-    if (seen.has(dependency)) {
-      continue;
-    }
-    seen.add(dependency);
-    runtimeDependencies(dependency, seen);
-  }
-  return seen;
 }
 
 function normalizeStagedCodexVoiceHost(packageRoot) {
@@ -145,7 +101,32 @@ function normalizeStagedCodexVoiceHost(packageRoot) {
   }
 }
 
-/** Select all official source plugins unless their additional installed payload exceeds 300 MiB. */
+const PUBLISHED_DESKTOP_IDS = new Set([
+  "codex",
+  "slack",
+  "discord",
+  "whatsapp",
+  "imessage",
+  "sms",
+  "voice-call",
+]);
+
+/** Derive the desktop image from the builder's install-route and development policy. */
+export async function planDesktopStandalonePlugins(root) {
+  // Keep the loose Tauri planner independent of the standalone builder's TypeScript imports.
+  const { classifyStandalonePlugins } = await import("./bun-standalone-plugins.mjs");
+  const plugins = classifyStandalonePlugins(root);
+  const embedded = [];
+  const omitted = [];
+  for (const plugin of plugins) {
+    const selected =
+      !plugin.devOnly && (!plugin.hasInstallRoute || PUBLISHED_DESKTOP_IDS.has(plugin.id));
+    (selected ? embedded : omitted).push(plugin.id);
+  }
+  return { embedded, omitted };
+}
+
+/** Plan same-commit source plugins for the loose Tauri runtime. */
 export function planDesktopRuntimePlugins(root, { pluginIds: selectedIds } = {}) {
   const manifest = readJson(path.join(root, "package.json"));
   const commit = git(root, ["rev-parse", "HEAD"]);
@@ -182,25 +163,7 @@ export function planDesktopRuntimePlugins(root, { pluginIds: selectedIds } = {})
       pluginIds: [...new Set(selectedIds)].toSorted((a, b) => a.localeCompare(b)),
     };
   }
-  const coreDependencies = runtimeDependencies(root);
-  const addedDependencies = new Set();
-  let allPluginBytes = 0;
-  for (const plugin of plugins) {
-    allPluginBytes += directoryBytes(path.join(root, "dist/extensions", plugin.id));
-    for (const dependency of runtimeDependencies(plugin.directory)) {
-      if (!coreDependencies.has(dependency)) {
-        addedDependencies.add(dependency);
-      }
-    }
-  }
-  for (const dependency of addedDependencies) {
-    allPluginBytes += directoryBytes(dependency);
-  }
-  const pluginIds = allPluginBytes > MAX_PLUGIN_BYTES ? ["codex"] : plugins.map(({ id }) => id);
-  if (!plugins.some(({ id }) => id === "codex")) {
-    throw new Error("The official Codex source plugin is missing.");
-  }
-  return { commit, releaseTag: null, pluginIds, allPluginBytes };
+  return { commit, releaseTag: null, pluginIds: plugins.map(({ id }) => id) };
 }
 
 /** Stamp installed artifacts only, preserving release source and build-info bytes. */
@@ -228,15 +191,21 @@ export function stampDesktopRuntimePlugins(packageRoot, plan) {
   fs.writeFileSync(file, `${JSON.stringify(build, null, 2)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
+  fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   const [operation, root, planFile] = process.argv.slice(2);
-  if (operation === "plan") {
+  if (operation === "standalone-ids") {
+    console.log((await planDesktopStandalonePlugins(root)).embedded.join(","));
+  } else if (operation === "plan") {
     console.log(JSON.stringify(planDesktopRuntimePlugins(root)));
   } else if (operation === "stamp") {
     stampDesktopRuntimePlugins(root, readJson(planFile));
   } else {
     throw new Error(
-      "Usage: desktop-runtime-plugins.mjs plan <source> | stamp <installed-package> <plan.json>",
+      "Usage: desktop-runtime-plugins.mjs standalone-ids <source> | plan <source> | stamp <installed-package> <plan.json>",
     );
   }
 }

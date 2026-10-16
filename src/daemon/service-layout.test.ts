@@ -1,11 +1,65 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service-plan.js";
-import { summarizeGatewayServiceLayout } from "./service-layout.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  gatewayServiceCommandOverlapsPhysicalInstallation,
+  resolveGatewayServiceInstallationRefreshRoot,
+  summarizeGatewayServiceLayout,
+} from "./service-layout.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("summarizeGatewayServiceLayout", () => {
+  it("keeps a standalone service bound to its sidecar installation", async () => {
+    const root = tempDirs.make("openclaw-standalone-layout-");
+    const sidecar = path.join(root, "runtime");
+    const executable = path.join(root, "openclaw");
+    await fs.mkdir(sidecar);
+    await fs.writeFile(executable, "standalone");
+    await fs.writeFile(
+      path.join(sidecar, "package.json"),
+      '{"name":"openclaw","version":"2026.10.14"}',
+    );
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "jit",
+        executable: { path: "openclaw" },
+        runtime: { path: "runtime" },
+        openclaw: { version: "2026.10.14" },
+        bun: { version: "1.4.3" },
+      }),
+    );
+    const command = { programArguments: [executable, "gateway", "--port", "19523"] };
+    await expect(summarizeGatewayServiceLayout(command)).resolves.toMatchObject({
+      entrypoint: executable,
+      packageRoot: sidecar,
+      packageRootReal: sidecar,
+      packageVersion: "2026.10.14",
+    });
+    await expect(gatewayServiceCommandMatchesRoot(sidecar, command)).resolves.toBe(true);
+    await expect(gatewayServiceCommandOverlapsPhysicalInstallation(root, command)).resolves.toBe(
+      true,
+    );
+    await expect(
+      resolveGatewayServiceInstallationRefreshRoot({
+        root: sidecar,
+        state: {
+          env: {},
+          installed: true,
+          running: true,
+          command,
+          loadState: { status: "loaded" },
+          runtime: { status: "running", systemd: { managerUid: 1000 } },
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
   it.each(
     [
       ["node", "dist/index.js", "gateway", "run"],

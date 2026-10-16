@@ -38,9 +38,7 @@ private final class FakeGatewayChild: Sendable {
 @MainActor
 struct GatewayChildSupervisorTests {
     @Test func `default launcher appends both streams and drains its isolated child`() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gateway-child-launch-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let directory = try makeFirstRunTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         let readyURL = directory.appendingPathComponent("ready")
         try #require(mkfifo(readyURL.path, 0o600) == 0)
@@ -49,19 +47,22 @@ struct GatewayChildSupervisorTests {
         let readyHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? readyHandle.close() }
         try """
+        #!/bin/sh
         trap 'exit 0' TERM
         printf 'stdout\\n'
         printf 'stderr\\n' >&2
         printf R > "$OPENCLAW_TEST_READY_FIFO"
         IFS= read -r value
-        """.write(to: directory.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
+        """.write(to: directory.appendingPathComponent("openclaw"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: directory.appendingPathComponent("openclaw").path)
         let logURL = directory.appendingPathComponent("gateway.log")
         try "previous\n".write(to: logURL, atomically: true, encoding: .utf8)
         let supervisor = GatewayChildSupervisor()
         do {
             let pid = try await supervisor.start(configuration: .init(
-                bun: URL(fileURLWithPath: "/bin/sh"),
-                packageRoot: directory,
+                executable: directory.appendingPathComponent("openclaw"),
                 environment: ["OPENCLAW_TEST_READY_FIFO": readyURL.path],
                 logPath: logURL.path,
                 port: 19487,
@@ -90,11 +91,14 @@ struct GatewayChildSupervisorTests {
         #expect(AppTerminationTiming.signalExitFailsafeSeconds(hasAppHostedGateway: true) > hostedDeadline)
     }
 
-    private func configuration(logPath: String = "/unused/gateway.log") -> GatewayChildSupervisor.Configuration {
+    private func configuration(
+        executablePath: String = "/fixture/runtime/current/openclaw",
+        environment: [String: String] = [:],
+        logPath: String = "/unused/gateway.log") -> GatewayChildSupervisor.Configuration
+    {
         .init(
-            bun: URL(fileURLWithPath: "/fixture/runtime/current/bin/bun"),
-            packageRoot: URL(fileURLWithPath: "/fixture/runtime/current/lib/node_modules/openclaw"),
-            environment: [:],
+            executable: URL(fileURLWithPath: executablePath),
+            environment: environment,
             logPath: logPath,
             port: 19487,
             allowUnconfigured: false)
@@ -102,11 +106,10 @@ struct GatewayChildSupervisorTests {
 
     @Test func `child keeps profile and SQLite while dropping inherited service ownership`() {
         let configuration = GatewayChildSupervisor.Configuration(
-            bun: URL(fileURLWithPath: "/fixture/runtime/current/bin/bun"),
-            packageRoot: URL(fileURLWithPath: "/fixture/runtime/current/lib/node_modules/openclaw"),
+            executable: URL(fileURLWithPath: "/fixture/runtime/current/openclaw"),
             environment: [
                 "PATH": "/usr/bin:/bin", "OPENCLAW_PROFILE": "test-hosted",
-                "OPENCLAW_SQLITE_LIBRARY": "/fixture/runtime/current/lib/libsqlite3.dylib",
+                "OPENCLAW_SQLITE_LIBRARY": "/fixture/runtime/current/runtime/lib/libsqlite3.dylib",
                 "OPENCLAW_LAUNCHD_LABEL": "ai.openclaw.gateway", "LAUNCH_JOB_LABEL": "ai.openclaw.gateway",
                 "LAUNCH_JOB_NAME": "ai.openclaw.gateway", "LAUNCH_JOB_EXTRA": "inherited",
                 "XPC_SERVICE_NAME": "ai.openclaw.gateway", "OPENCLAW_SUPERVISOR_MODE": "external",
@@ -118,20 +121,17 @@ struct GatewayChildSupervisorTests {
             allowUnconfigured: true)
 
         #expect(configuration.arguments == [
-            "/fixture/runtime/current/lib/node_modules/openclaw/openclaw.mjs",
             "gateway", "run", "--port", "19487", "--allow-unconfigured",
         ])
         #expect(configuration.childEnvironment == [
             "PATH": "/usr/bin:/bin", "OPENCLAW_PROFILE": "test-hosted",
-            "OPENCLAW_SQLITE_LIBRARY": "/fixture/runtime/current/lib/libsqlite3.dylib",
+            "OPENCLAW_SQLITE_LIBRARY": "/fixture/runtime/current/runtime/lib/libsqlite3.dylib",
             "OPENCLAW_GATEWAY_HOST_LIFELINE": "stdin",
         ])
     }
 
     @Test func `crashes back off and stop after five failures with a log tail`() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gateway-child-log-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let directory = try makeFirstRunTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         let log = directory.appendingPathComponent("gateway.log")
         try Data("fixture startup failure".utf8).write(to: log)
@@ -167,6 +167,100 @@ struct GatewayChildSupervisorTests {
         #expect(message.contains("fixture startup failure"))
         #expect(children.count == 5)
         #expect(supervisor.processIdentifier == nil)
+        #expect(supervisor.configuration == nil)
+        await supervisor.stop()
+    }
+
+    @Test(arguments: [
+        "/fixture/runtime/ready/openclaw",
+        "/Applications/Renamed.app/Contents/Resources/runtime/openclaw",
+    ])
+    func `restart resolves the next runtime without changing the running child`(nextPath: String) async throws {
+        let initial = self.configuration(
+            executablePath: "/Applications/OpenClaw.app/Contents/Resources/runtime/openclaw",
+            environment: ["OPENCLAW_SQLITE_LIBRARY": "/bundle/runtime/lib/libsqlite3.dylib"])
+        var next = initial
+        var resolutions = 0
+        var launched: [GatewayChildSupervisor.Configuration] = []
+        var children: [FakeGatewayChild] = []
+        let clock = ManualTestClock()
+        let supervisor = GatewayChildSupervisor(clock: clock, launcher: { configuration in
+            launched.append(configuration)
+            let child = FakeGatewayChild(pid: Int32(600 + children.count))
+            children.append(child)
+            return child.child
+        })
+        let (events, continuation) = AsyncStream<GatewayChildSupervisor.Event>.makeStream()
+        defer { continuation.finish() }
+        var iterator = events.makeAsyncIterator()
+        _ = try await supervisor.start(
+            configuration: initial,
+            configurationForRestart: {
+                resolutions += 1
+                return next
+            },
+            onEvent: { continuation.yield($0) })
+
+        next = self.configuration(
+            executablePath: nextPath,
+            environment: ["OPENCLAW_SQLITE_LIBRARY": "/next/runtime/lib/libsqlite3.dylib"])
+        #expect(resolutions == 0)
+        #expect(launched.count == 1)
+        #expect(supervisor.configuration?.executable == initial.executable)
+        #expect(supervisor.configuration?.environment == initial.environment)
+        #expect(children[0].terminations.withLock { $0 } == 0)
+
+        children[0].exited.open()
+        #expect(await iterator.next() == .restarting(delay: .seconds(1)))
+        #expect(supervisor.configuration == nil)
+        await clock.waitForSleep(until: clock.now + .seconds(1))
+        clock.advance(by: .seconds(1))
+        #expect(await iterator.next() == .started(601))
+        #expect(resolutions == 1)
+        #expect(launched.last?.executable == next.executable)
+        #expect(launched.last?.environment == next.environment)
+        #expect(supervisor.configuration?.executable == next.executable)
+        await supervisor.stop()
+        #expect(children[1].terminations.withLock { $0 } == 1)
+        #expect(supervisor.configuration == nil)
+    }
+
+    @Test func `runtime resolution failures use the bounded restart budget`() async throws {
+        let clock = ManualTestClock()
+        let child = FakeGatewayChild(pid: 700)
+        var launches = 0
+        var resolutions = 0
+        let supervisor = GatewayChildSupervisor(clock: clock, launcher: { _ in
+            launches += 1
+            return child.child
+        })
+        let (events, continuation) = AsyncStream<GatewayChildSupervisor.Event>.makeStream()
+        defer { continuation.finish() }
+        var iterator = events.makeAsyncIterator()
+        _ = try await supervisor.start(
+            configuration: self.configuration(),
+            configurationForRestart: {
+                resolutions += 1
+                throw CocoaError(.fileNoSuchFile)
+            },
+            onEvent: { continuation.yield($0) })
+        child.exited.open()
+
+        for seconds in [1, 2, 4, 8] {
+            #expect(await iterator.next() == .restarting(delay: .seconds(seconds)))
+            await clock.waitForSleep(until: clock.now + .seconds(seconds))
+            clock.advance(by: .seconds(seconds))
+        }
+        guard case let .failed(message) = await iterator.next() else {
+            Issue.record("expected terminal failure after runtime resolution exhausted the restart budget")
+            await supervisor.stop()
+            return
+        }
+        #expect(message.contains("five failed starts"))
+        #expect(launches == 1)
+        #expect(resolutions == 4)
+        #expect(supervisor.configuration == nil)
+        #expect(!supervisor.isActive)
         await supervisor.stop()
     }
 
@@ -264,6 +358,7 @@ struct GatewayChildSupervisorTests {
         await supervisor.stop()
         #expect(children[0].terminations.withLock { $0 } == 1)
         #expect(supervisor.processIdentifier == nil)
+        #expect(supervisor.configuration == nil)
 
         _ = try await supervisor.start(configuration: self.configuration()) { continuation.yield($0) }
         children[1].exited.open()
@@ -273,6 +368,7 @@ struct GatewayChildSupervisorTests {
         clock.advance(by: .seconds(60))
         #expect(children.count == 2)
         #expect(supervisor.processIdentifier == nil)
+        #expect(supervisor.configuration == nil)
     }
 
     @Test func `stop during spawn drains the child without publishing its late PID`() async {
@@ -290,6 +386,81 @@ struct GatewayChildSupervisorTests {
         } catch { #expect(error is CancellationError) }
         #expect(child.terminations.withLock { $0 } == 1)
         #expect(supervisor.processIdentifier == nil)
+        #expect(supervisor.configuration == nil)
         #expect(events.isEmpty)
+    }
+
+    @Test func `stop during runtime resolution prevents a replacement launch`() async throws {
+        let clock = ManualTestClock()
+        let first = FakeGatewayChild(pid: 790)
+        let resolving = AsyncTestGate()
+        let cancelled = AsyncTestGate()
+        var launches = 0
+        let supervisor = GatewayChildSupervisor(clock: clock, launcher: { _ in
+            launches += 1
+            return first.child
+        })
+        let (events, continuation) = AsyncStream<GatewayChildSupervisor.Event>.makeStream()
+        defer { continuation.finish() }
+        var iterator = events.makeAsyncIterator()
+        _ = try await supervisor.start(
+            configuration: self.configuration(),
+            configurationForRestart: {
+                resolving.open()
+                await withTaskCancellationHandler {
+                    await cancelled.wait()
+                } onCancel: {
+                    cancelled.open()
+                }
+                return self.configuration(executablePath: "/fixture/runtime/ready/openclaw")
+            },
+            onEvent: { continuation.yield($0) })
+        first.exited.open()
+        #expect(await iterator.next() == .restarting(delay: .seconds(1)))
+        await clock.waitForSleep(until: clock.now + .seconds(1))
+        clock.advance(by: .seconds(1))
+        await resolving.wait()
+
+        await supervisor.stop()
+        #expect(launches == 1)
+        #expect(supervisor.processIdentifier == nil)
+        #expect(!supervisor.isActive)
+    }
+
+    @Test func `stop during a runtime transition drains the new child without publishing it`() async throws {
+        let clock = ManualTestClock()
+        let first = FakeGatewayChild(pid: 800)
+        let next = FakeGatewayChild(pid: 801, startsImmediately: false)
+        var launches = 0
+        let supervisor = GatewayChildSupervisor(clock: clock, launcher: { _ in
+            launches += 1
+            return launches == 1 ? first.child : next.child
+        })
+        let (events, continuation) = AsyncStream<GatewayChildSupervisor.Event>.makeStream()
+        defer { continuation.finish() }
+        var iterator = events.makeAsyncIterator()
+        var started: [Int32] = []
+        _ = try await supervisor.start(
+            configuration: self.configuration(),
+            configurationForRestart: {
+                self.configuration(executablePath: "/fixture/runtime/ready/openclaw")
+            },
+            onEvent: { event in
+                if case let .started(pid) = event { started.append(pid) }
+                continuation.yield(event)
+            })
+        first.exited.open()
+        #expect(await iterator.next() == .restarting(delay: .seconds(1)))
+        await clock.waitForSleep(until: clock.now + .seconds(1))
+        clock.advance(by: .seconds(1))
+        await next.startupObserved.wait()
+        #expect(supervisor.configuration == nil)
+
+        await supervisor.stop()
+        #expect(next.terminations.withLock { $0 } == 1)
+        #expect(supervisor.configuration == nil)
+        #expect(supervisor.processIdentifier == nil)
+        #expect(!supervisor.isActive)
+        #expect(started.isEmpty)
     }
 }

@@ -10,81 +10,15 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it as baseIt } from "vitest";
-import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { registerMacRuntimeMaterializationTests } from "./mac-runtime-materialization.test-support.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
-
-registerMacRuntimeMaterializationTests();
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app runtime publication", () => {
-  baseIt.each([undefined])(
-    "preserves the requested build-time installer Node version (%s)",
-    (version) => {
-      const root = temps.make("openclaw-runtime-version-");
-      const scripts = path.join(root, "scripts");
-      const bin = path.join(root, "bin");
-      mkdirSync(scripts);
-      mkdirSync(path.join(scripts, "lib"));
-      writeFileSync(
-        path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
-        'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
-      );
-      mkdirSync(bin);
-      symlinkSync(process.execPath, path.join(bin, "node"));
-      writeFileSync(
-        path.join(scripts, "stage-mac-runtime.sh"),
-        readFileSync("scripts/stage-mac-runtime.sh"),
-      );
-      writeFileSync(
-        path.join(scripts, "package-openclaw-for-docker.mjs"),
-        `import fs from "node:fs";
-const file = process.argv[process.argv.indexOf("--output-dir") + 1] + "/openclaw.tgz";
-fs.writeFileSync(file, "fixture");
-console.log(file);
-`,
-      );
-      // Stop at the download boundary after the real installer resolves its
-      // version. No downloads, app signing, service control, or native build.
-      writeFileSync(
-        path.join(scripts, "install-cli.sh"),
-        `${readStandaloneInstaller(process.cwd(), "install-cli.sh")}
-install_node() {
-  printf '%s\\n' "$NODE_VERSION" "$DEFAULT_NODE_VERSION" "$NODE_VERSION_REQUESTED" "\${OPENCLAW_CONFIG_PATH:-}" "\${OPENCLAW_GATEWAY_TOKEN:-}"
-  exit 77
-}
-`,
-      );
-      const result = spawnSync(
-        "/bin/bash",
-        [path.join(scripts, "stage-mac-runtime.sh"), path.join(root, "runtime"), "arm64"],
-        {
-          encoding: "utf8",
-          env: {
-            HOME: root,
-            TMPDIR: root,
-            PATH: `${bin}:/usr/bin:/bin`,
-            ...(version === undefined ? {} : { OPENCLAW_NODE_VERSION: version }),
-            OPENCLAW_CONFIG_PATH: "/fixture/operator-config",
-            OPENCLAW_GATEWAY_TOKEN: "synthetic-isolation-sentinel",
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(77);
-      const [selected, defaultVersion, requested, config, token] = result.stdout.split("\n");
-      expect(selected).toBe(version || defaultVersion);
-      expect(requested).toBe(version ? "1" : "0");
-      expect(config).toBe("");
-      expect(token).toBe("");
-      expect(existsSync(path.join(root, "runtime"))).toBe(false);
-    },
-  );
-
   baseIt
     .skipIf(process.platform !== "darwin")
     .each(["sign", "runtime", "seal", "stage", "success"])(
@@ -101,12 +35,13 @@ install_node() {
       const publication = packageScript.slice(
         packageScript.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]'),
       );
-      const bun = path.join(staged, "Contents/Resources/runtime/bin/bun");
-      mkdirSync(path.dirname(bun), { recursive: true });
-      writeFileSync(bun, `#!/bin/bash\nexit ${failure === "runtime" ? 6 : 0}\n`);
-      chmodSync(bun, 0o755);
+
       const scripts = path.join(root, "scripts");
       mkdirSync(scripts);
+      writeFileSync(
+        path.join(scripts, "verify-mac-runtime.mjs"),
+        `process.exit(${failure === "runtime" ? 6 : 0});`,
+      );
       writeFileSync(
         path.join(scripts, "codesign-mac-app.sh"),
         `#!/bin/bash\nexit ${failure === "sign" ? 9 : 0}\n`,
@@ -124,6 +59,7 @@ install_node() {
       APP_STAGE_DIR=${quote(root)}
       BUILD_ARCHS=(${process.arch === "arm64" ? "arm64" : "x86_64"})
       APP_DESTINATION=${quote(target)}
+      PATH=${quote(path.dirname(testNodeExecPath))}:"$PATH"
       codesign_calls=0
       codesign() {
         codesign_calls=$((codesign_calls + 1))

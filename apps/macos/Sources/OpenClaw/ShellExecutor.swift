@@ -5,6 +5,11 @@ import OpenClawIPC
 import Subprocess
 
 enum ShellExecutor {
+    enum CancellationPolicy: Sendable {
+        case killProcessGroup
+        case waitForSignalCleanup
+    }
+
     struct ShellResult: Sendable {
         var stdout: String
         var stderr: String
@@ -83,15 +88,23 @@ enum ShellExecutor {
         }
     }
 
-    private static func configuration(command: [String], cwd: String?, env: [String: String]?) -> Configuration {
+    private static func configuration(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?,
+        cancellationPolicy: CancellationPolicy = .killProcessGroup) -> Configuration
+    {
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
         platformOptions.createSession = true
+        let waitForSignalCleanup = cancellationPolicy == .waitForSignalCleanup
+        // Doctor's signal barrier may join two 10-second process-group settlement
+        // windows. Let that owner finish before Subprocess applies its final kill.
         platformOptions.teardownSequence = [
             .send(
-                signal: .kill,
+                signal: waitForSignalCleanup ? .terminate : .kill,
                 toProcessGroup: true,
-                allowedDurationToNextStep: .zero),
+                allowedDurationToNextStep: waitForSignalCleanup ? .seconds(30) : .zero),
         ]
         return Configuration(
             executable: .path(.init("/usr/bin/env")),
@@ -147,7 +160,8 @@ enum ShellExecutor {
 
     private static func waitForExitOrTimeout(
         execution: Execution<some InputProtocol, some OutputProtocol, some OutputProtocol>,
-        timeout: Double) async -> Bool
+        timeout: Double,
+        cancellationPolicy: CancellationPolicy = .killProcessGroup) async -> Bool
     {
         let processIdentifier = pid_t(execution.processIdentifier.value)
         return await withTaskCancellationHandler {
@@ -165,7 +179,9 @@ enum ShellExecutor {
             return true
         } onCancel: {
             // Cancellation can arrive before the timeout race finishes.
-            _ = Darwin.kill(-processIdentifier, SIGKILL)
+            if cancellationPolicy == .killProcessGroup {
+                _ = Darwin.kill(-processIdentifier, SIGKILL)
+            }
         }
     }
 
@@ -174,6 +190,7 @@ enum ShellExecutor {
         cwd: String?,
         env: [String: String]?,
         timeout: Double?,
+        cancellationPolicy: CancellationPolicy = .killProcessGroup,
         beforeSpawn: (@Sendable () -> String?)? = nil) async -> ShellResult
     {
         guard !command.isEmpty else {
@@ -187,7 +204,8 @@ enum ShellExecutor {
             return self.failedResult(message: "failed to capture output: \(error.localizedDescription)")
         }
 
-        let configuration = self.configuration(command: command, cwd: cwd, env: env)
+        let configuration = self.configuration(
+            command: command, cwd: cwd, env: env, cancellationPolicy: cancellationPolicy)
 
         if let message = beforeSpawn?() {
             _ = output.readAndRemove()
@@ -205,7 +223,8 @@ enum ShellExecutor {
                     output: output.subprocessStandardOutput,
                     error: output.subprocessStandardError)
                 { execution in
-                    await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
+                    await self.waitForExitOrTimeout(
+                        execution: execution, timeout: timeout, cancellationPolicy: cancellationPolicy)
                 }
                 terminationStatus = result.terminationStatus
                 timedOut = result.closureResult

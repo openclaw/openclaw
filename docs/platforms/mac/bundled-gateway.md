@@ -7,26 +7,35 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-OpenClaw.app bundles a private runtime built from the OpenClaw Bun fork, a signed
-SQLite library with extension loading, and the full matching OpenClaw package
-(CLI, Gateway, and Control UI). Its app-owned `node worker` helper and fixed local
-Chrome-extension setup entry point run on this Bun runtime. The app bundle
-contains no Node executable.
+OpenClaw.app bundles a standalone `openclaw` executable, a loose companion
+`runtime/` directory, and a signed SQLite library with extension loading.
+The CLI, Gateway, Doctor, app-owned node worker, and local Chrome-extension
+setup use this executable. No separate Node or Bun interpreter ships in the app.
 
-The payload lives in one `Contents/Resources/runtime` directory. Universal apps
-share the JavaScript package between architectures and include universal Bun and
-SQLite binaries plus each architecture's native dependencies. Rebuilding or
-replacing the app replaces this runtime too, including rebuilds with the same
-public version. The app validates the package's version, commit, build time, and
-build ID before launch. Moving the app or removing its build checkout does not
+The macOS executable embeds every plugin without an official external install
+route, except development and QA plugins. It also embeds Codex, Discord, iMessage,
+Slack, SMS, Voice Call, and WhatsApp. Other published official plugins are fetched
+on first use. Packaging derives this selection from the repository's plugin
+metadata and rejects builder output whose embedded plugin list differs.
+
+The payload lives in `Contents/Resources/runtime/`. The builder manifest binds
+its executable and sidecar to the same OpenClaw commit and records the selected
+JIT or bytecode mode. Packaging validates both checksums and source identity;
+the app validates its packaged build identity before launch. Rebuilding or
+replacing the app replaces the complete runtime, including rebuilds with the
+same public version. Moving the app or removing its build checkout does not
 change which runtime it uses.
 
-On a fresh profile, the **app hosts the Gateway** as a child process using its
-bundled Bun runtime. The Gateway starts with the app and stops when the app
+On a fresh profile, the **app hosts the Gateway** as a child process by running
+`openclaw gateway run`. The Gateway starts with the app and stops when the app
 quits. An existing Gateway on the configured port is attached instead of
-duplicated. Existing independently managed installations keep their current
-lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
-their always-on service.
+duplicated. Existing independently managed installations keep their lifecycle.
+
+If you move or rename the app while its first Gateway is still running from the
+bundle, the app restarts that Gateway so lazy runtime loads use valid paths. It
+uses the warmed persistent runtime when ready, otherwise the bundle at its new
+location. The Connection window shows the move and restart status. Gateways
+already running from the persistent runtime do not need a restart.
 
 Before launching an app-hosted Gateway, the app saves a local authentication
 token when neither configuration nor the child environment supplies credentials
@@ -41,14 +50,40 @@ It leaves authentication unchanged when a credential source is unreadable or
 cannot be resolved safely. Trusted dotenv files are the profile's `.env` and,
 for the default state directory, `~/.config/openclaw/gateway.env`.
 
-The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
-`<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
-directory clone when available, falling back to a file copy, and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
-build directory so each process keeps its matching package and SQLite library.
-The `runtime/current` symlink selects the runtime for the terminal CLI shim.
-The app retains the current and previous builds; older copies are removed only
-after Gateway health succeeds and no process runs from them.
+When the current app build has no warmed profile runtime, the app starts its
+Gateway directly from `Contents/Resources/runtime/openclaw`, beside its matching
+sidecar. App-internal Doctor and setup commands use the same runtime. This avoids
+assessing a newly copied executable before the first Gateway can start.
+
+After Gateway health succeeds, the app prepares
+`<state>/runtime/<runtimeBuildId>/`, where `<state>` is `~/.openclaw` or
+`~/.openclaw-<profile>`. Preparation uses an APFS directory clone when available,
+falling back to a file copy. The app checks manifest identity, contained paths,
+payload sizes, and the executable checksum before publishing the copy atomically.
+It then runs `--version` at low priority, without a short timeout, to warm the
+copied executable. A build-specific extended attribute on the seed directory
+records successful warming; the executable itself is not modified.
+
+Only then does the app select `runtime/current` and install its terminal CLI
+wrapper. Background-service installation waits for warming before recording a
+concrete executable path. The current app child keeps using its bundle runtime;
+its next natural restart and later app launches select the warmed seed. Each
+process and its self-respawns keep one executable and its matching sidecar.
+While a runtime migration is pending, child restarts preserve the current runtime
+and background preparation leaves `runtime/current` unchanged. After Doctor resolves
+the migration, the next app launch can prepare and select the new warmed seed.
+Terminal CLI installation also waits for the migration to finish. If the selected
+runtime is a previous loose payload, stop the profile's Gateway, run the bundled
+`openclaw doctor --fix` for that profile, then restart OpenClaw.
+Moving or renaming the app does not restart the child; its next start resolves
+the app's new location. Read-only or translocated app bundles can execute in
+place while preparation uses the writable profile directory.
+
+Quitting cancels background preparation. An interrupted or failed warm leaves
+the previous CLI and service selection intact and retries on the next launch.
+Failures are reported in the app's Gateway diagnostics while its current child
+continues running. The app retains current and previous builds; older copies
+are removed only after Gateway health succeeds and no process runs from them.
 
 For an app-owned full Gateway payload, packaging writes
 `openclaw-install-owner.json` at the OpenClaw package root with `schemaVersion: 1`,
@@ -86,7 +121,8 @@ Gateway startup, then opens automatic setup once the Gateway is ready. A termina
 failure or cancellation leaves onboarding unfinished.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
-current bundled CLI with Bun and the included SQLite library. When the app runs
+current warmed standalone executable, which selects its included SQLite library.
+This command becomes available after background preparation finishes. When the app runs
 from a persistent location, it also links `openclaw-mac` beside it, and the
 default profile adds that bin directory to the usual shell profile files. Named
 profiles, and copies running from Downloads, the Desktop, a disk image, or a
@@ -192,9 +228,10 @@ until Doctor or a CLI start/repair completes it. An app-hosted resume that runs
 neither Doctor nor the CLI start fence may keep the receipt pending; the next
 CLI start/repair or `openclaw doctor` completes it.
 
-A newly installed app-managed Bun service is pinned to
-`<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and
-`OPENCLAW_SQLITE_LIBRARY` environment. After an app update, the app reinstalls
+An app-managed standalone service uses
+`<state>/runtime/<runtimeBuildId>/openclaw`, which selects SQLite from its matching
+sidecar. Only retained Bun-plus-script commands need the SQLite environment
+override for rollback. After an app update, the app reinstalls
 only services it owns whose executable is inside `<state>/runtime/` onto the new
 concrete build. A service using an executable outside that directory stays
 unchanged, including an unpinned executable. The update window reports
@@ -327,13 +364,28 @@ closes the host lifeline and waits for graceful shutdown before forcing an
 unresponsive process group to exit.
 
 After an app update, including a rebuild with the same public version, the app
-seeds the new runtime and restarts its Gateway in the selected hosting mode.
-The app drains its producer and runs Doctor through the selected runtime before
-restarting the Gateway. Doctor owns core migrations and configured plugin host-link
+repairs the profile through the new bundle's Doctor before starting its first
+app-hosted Gateway. This also applies when the previous app quit before its
+background seed finished. Fresh profiles and ordinary same-build launches skip
+this update repair. The Gateway then starts from the new bundle and prepares its
+persistent runtime after health succeeds. A background service waits for the
+new seed to warm before switching. An existing loose Bun seed is retained as
+the previous build while the app prepares the standalone payload in a new build
+directory. The managed terminal shim
+is rewritten to execute `runtime/current/openclaw`; operator-managed commands
+are preserved. Configuration and user data stay in the existing profile.
+Runtime retention is not a rollback of database migrations or user state.
+The app drains any existing producer and runs Doctor through the selected runtime before
+starting the replacement Gateway. App hosting can use the new bundle for this step without
+waiting for a persistent seed. Doctor owns core migrations and configured plugin host-link
 repair; the app owns service publication and activation. Required repair refusals
 keep recovery pending and restore the previous service when native custody permits.
+Automatic update reconciliation reuses the completed repair while that build's
+app-owned Gateway remains healthy; an explicit **Retry** runs repair again.
 If Doctor cleanup cannot be confirmed, the app keeps the Gateway stopped and recovery
 pending; preserve the reported custody diagnostics before retrying.
+Quitting during repair asks Doctor to cancel its work and release database ownership
+before forcing it to stop if cleanup does not finish.
 Conditional plugin warnings remain visible, with their pending repair records retained.
 It verifies health before removing old builds. A paused Gateway stays paused.
 Seeded installations never run npm self-update; update OpenClaw.app to update
@@ -369,7 +421,7 @@ database migrations. A failed update leaves the runtime on Node and shows the
 existing update failure and Retry window.
 
 On the next launch or Retry, once the core update or repair completes and the
-versions match, the app seeds its bundled runtime and reinstalls the service with matching concrete Bun, package, and
+versions match, the app seeds its bundled runtime and reinstalls the service with matching concrete executable, sidecar, and
 SQLite paths. It verifies health before completing the migration. If that step
 fails, it reinstalls and verifies the retained same-version Node command, then
 shows the failure with Retry. The app retains the old Node tools and npm package
@@ -407,7 +459,7 @@ exact or unset install policy. While paused, the app only records the hosting
 preference; it does not update, seed, or install a Gateway.
 
 On Resume, an older Node installation uses its core updater to reach the app's
-version without restarting a service. It then seeds Bun, installs the service,
+version without restarting a service. It then seeds the standalone runtime, installs the service,
 and verifies health in the same startup attempt. If the runtime switch fails,
 the app reinstalls and verifies the same-version Node service and shows the
 update failure with Retry. Fresh profiles retain app hosting; channel policies,

@@ -52,6 +52,7 @@ final class GatewayProcessManager {
     private(set) var log: String = ""
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
+    var bundleRelocationStatus: String?
     var lastFailureReason: String?
     var nodeMigrationFailure: String?
     var nodeMigrationVersionUpdated = false
@@ -163,6 +164,10 @@ final class GatewayProcessManager {
     private var gatewayStartTaskGeneration: UInt64?
     private var gatewayStartTaskID: UUID?
     let childSupervisor: GatewayChildSupervisor
+    var runtimePreparationTask: Task<Void, Never>?
+    var runtimePreparationAttempted = false
+    /// Completed Doctor work; automatic update reconciliation still checks the owned child.
+    var repairedAppHostedRuntimeBuildID: String?
     var bundledUpdateTask: Task<BundledRuntimeUpdateResult, Error>?
     var bundledUpdateTaskID: UUID?
     var hostingChangeTask: Task<Void, Error>?
@@ -373,9 +378,8 @@ final class GatewayProcessManager {
         if let restoration = request.serviceForRestoration {
             let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
-            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
-                .deletingLastPathComponent().deletingLastPathComponent())
+            guard self.isCurrentGatewayStart(request.generation), !cli.prefix.isEmpty else { return .skipped }
+            let runtime = BundledRuntime(retainedCLI: cli)
             error = await GatewayLaunchAgentManager.runDaemonCommand(
                 GatewayLaunchAgentManager.installArguments(
                     port: request.port,
@@ -1275,6 +1279,7 @@ extension GatewayProcessManager {
             self.clearCompletedLaunchAgentInstall(generation: context.generation)
             self.refreshLog()
             if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
+            if ownedChild { self.preparePersistentRuntimeAfterHealth() }
             return true
 
         case let .failed(terminalFailure):

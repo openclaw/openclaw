@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -1300,7 +1301,10 @@ struct BundledGatewayPreparationTests {
             manager.isTerminating = false
             let old = BundledRuntime(root: state.appendingPathComponent("runtime/previous-build"))
             var cli = GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: [updateFails ? "/operator/bin/bun" : old.bun.path, old.cliCommand[1]],
+                prefix: updateFails ? [
+                    "/operator/bin/bun",
+                    old.packageRoot.appendingPathComponent("openclaw.mjs").path,
+                ] : old.cliCommand,
                 sqliteLibrary: old.sqliteLibrary.path)
             cli.hadRuntimePin = true
             manager.retainedServiceCLI = retained ? cli : nil
@@ -1316,7 +1320,7 @@ struct BundledGatewayPreparationTests {
             let ownerWarning = "Gateway service uses an operator-pinned runtime; update it yourself"
             manager.bundledUpdateTask = Task { @MainActor in
                 if updateFails { throw GatewayHostingError(message: ownerWarning) }
-                try self.publishRuntime(runtime, current: current)
+                try await self.publishRuntime(runtime, current: current)
                 return .init(activation: .ready, generation: manager.gatewayStartGeneration, source: .request)
             }
             do {
@@ -1330,17 +1334,25 @@ struct BundledGatewayPreparationTests {
         }
     }
 
-    private func publishRuntime(_ runtime: BundledRuntime, current: URL) throws {
-        for directory in [runtime.bun.deletingLastPathComponent(), runtime.packageRoot.appendingPathComponent("dist")] {
+    private func publishRuntime(_ runtime: BundledRuntime, current: URL) async throws {
+        for directory in [runtime.sqliteLibrary.deletingLastPathComponent(), runtime.packageRoot] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: runtime.bun)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.bun.path)
+        try Data("#!/bin/sh\nprintf '%s\\n' '2026.9.1'\n".utf8).write(to: runtime.executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.executable.path)
         try Data().write(to: runtime.sqliteLibrary)
-        try Data().write(to: runtime.packageRoot.appendingPathComponent("openclaw.mjs"))
         try JSONSerialization.data(withJSONObject: [
-            "version": "2026.9.1", "commit": "fixture", "builtAt": "fixture", "buildId": runtime.root.lastPathComponent,
-        ]).write(to: runtime.packageRoot.appendingPathComponent("dist/build-info.json"))
+            "schemaVersion": 1, "mode": "jit", "buildId": runtime.root.lastPathComponent,
+            "openclaw": ["version": "2026.9.1", "commit": String(repeating: "a", count: 40)],
+            "executable": [
+                "path": "openclaw", "sizeBytes": Data(contentsOf: runtime.executable).count,
+                "sha256": SHA256.hash(data: Data(contentsOf: runtime.executable))
+                    .map { String(format: "%02x", $0) }.joined(),
+            ],
+            "runtime": ["path": "runtime", "sizeBytes": 0],
+        ]).write(to: runtime.root.appendingPathComponent("manifest.json"))
+        try await runtime.warm(version: "2026.9.1")
+        try runtime.recordWarmed(buildID: runtime.root.lastPathComponent)
         try FileManager.default.createSymbolicLink(
             atPath: current.path,
             withDestinationPath: runtime.root.lastPathComponent)

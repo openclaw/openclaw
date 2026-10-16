@@ -13,6 +13,9 @@ source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/mac-disk-image.sh"
 source "$ROOT_DIR/scripts/lib/mac-signing-identity.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
+source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
+BUILD_ARCHS="$(resolve_mac_build_architecture)"
+export BUILD_ARCHS
 RECOVERY_DIR="$ROOT_DIR/dist/macos-notarization-recovery"
 RECOVERY_HELPER="$ROOT_DIR/scripts/lib/mac-notarization-recovery.py"
 RESUME_NOTARIZATION=0
@@ -58,15 +61,8 @@ if [[ "$CHECKPOINT_ONLY" == "1" && "$BUILD_CONFIG" != "release" ]]; then
   exit 1
 fi
 
-# Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
-export BUILD_ARCHS="${BUILD_ARCHS:-all}"
 export BUILD_CONFIG
 export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1
-DSYM_ARCHS_VALUE="$BUILD_ARCHS"
-if [[ "$DSYM_ARCHS_VALUE" == "all" ]]; then
-  DSYM_ARCHS_VALUE="arm64 x86_64"
-fi
-IFS=' ' read -r -a DSYM_ARCHS <<< "$DSYM_ARCHS_VALUE"
 
 # Use release bundle ID (not .debug) so Sparkle auto-update works.
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
@@ -337,58 +333,22 @@ fi
 if [[ "$RESUME_NOTARIZATION" == "1" && "$SKIP_DSYM" != "1" ]]; then
   cp "$RECOVERY_DIR/symbols.zip" "$DSYM_ZIP"
 elif [[ "$SKIP_DSYM" != "1" ]]; then
-  DSYM_PATHS=()
-  MISSING_DSYM_ARCHS=()
-  for arch in "${DSYM_ARCHS[@]}"; do
-    # Use the same SwiftPM output link as package-mac-app.sh; Xcode builds
-    # place products under out/Products/Release rather than a lowercase directory.
-    DSYM_FOR_ARCH="$BUILD_ROOT/$arch/$BUILD_CONFIG/$PRODUCT.dSYM"
-    if [[ -d "$DSYM_FOR_ARCH" ]]; then
-      DSYM_PATHS+=("$DSYM_FOR_ARCH")
-    else
-      MISSING_DSYM_ARCHS+=("$arch")
-    fi
-  done
-
-  if [[ "${#MISSING_DSYM_ARCHS[@]}" -gt 0 ]]; then
-    echo "Error: dSYM not found for architecture(s): ${MISSING_DSYM_ARCHS[*]} (set SKIP_DSYM=1 to skip symbols)" >&2
+  # Match the selected app architecture through the SwiftPM output link.
+  DSYM_FOR_ARCH="$BUILD_ROOT/$BUILD_ARCHS/$BUILD_CONFIG/$PRODUCT.dSYM"
+  if [[ ! -d "$DSYM_FOR_ARCH" ]]; then
+    echo "Error: dSYM not found for architecture: $BUILD_ARCHS (set SKIP_DSYM=1 to skip symbols)" >&2
     exit 1
   fi
-
-  if [[ "${#DSYM_PATHS[@]}" -gt 0 ]]; then
-    TMP_DSYM="$ROOT_DIR/dist/$PRODUCT.dSYM"
-    rm -rf "$TMP_DSYM"
-    if [[ "${#DSYM_PATHS[@]}" -gt 1 ]]; then
-      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
-      DWARF_OUT="$TMP_DSYM/Contents/Resources/DWARF/$PRODUCT"
-      DWARF_INPUTS=()
-      for dsym in "${DSYM_PATHS[@]}"; do
-        DWARF_INPUT="$dsym/Contents/Resources/DWARF/$PRODUCT"
-        if [[ ! -f "$DWARF_INPUT" ]]; then
-          echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
-          cleanup_tmp_dsym
-          exit 1
-        fi
-        DWARF_INPUTS+=("$DWARF_INPUT")
-      done
-      if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then
-        cleanup_tmp_dsym
-        exit 1
-      fi
-    else
-      copy_dsym_to_tmp "${DSYM_PATHS[0]}"
-    fi
-    echo "🧩 dSYM: $DSYM_ZIP"
-    rm -f "$DSYM_ZIP"
-    if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then
-      rm -rf "$TMP_DSYM"
-      exit 1
-    fi
-    rm -rf "$TMP_DSYM"
-  else
-    echo "Error: dSYM not found (set SKIP_DSYM=1 to skip symbols)" >&2
+  TMP_DSYM="$ROOT_DIR/dist/$PRODUCT.dSYM"
+  rm -rf "$TMP_DSYM"
+  copy_dsym_to_tmp "$DSYM_FOR_ARCH"
+  echo "🧩 dSYM: $DSYM_ZIP"
+  rm -f "$DSYM_ZIP"
+  if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then
+    cleanup_tmp_dsym
     exit 1
   fi
+  cleanup_tmp_dsym
 fi
 
 RETAINED_DMG="$RECOVERY_DIR/app.dmg"

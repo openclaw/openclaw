@@ -75,7 +75,7 @@ struct GatewayLaunchAgentManagerTests {
                     arguments + restoration + ["--expected-runtime-pin", expected],
                 ])
                 let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
-                #expect(commands.allSatisfy { Array($0.prefix(2)) == runtime.cliCommand })
+                #expect(commands.allSatisfy { Array($0.prefix(1)) == runtime.cliCommand })
             }
         }
     }

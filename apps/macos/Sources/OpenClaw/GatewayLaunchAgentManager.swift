@@ -20,15 +20,9 @@ enum GatewayLaunchAgentManager {
         /// Flags remain exact invocation custody; bundle identity uses its concrete packaged files.
         func matchesBundledRuntime(_ runtime: BundledRuntime) -> Bool {
             let concrete = GatewayLaunchAgentManager.concreteServicePrefix(self.prefix)
-            guard concrete.first == runtime.bun.resolvingSymlinksInPath().path,
-                  let entry = GatewayLaunchAgentManager.serviceCLIEntrypoint(concrete),
-                  let sqliteLibrary,
-                  URL(fileURLWithPath: sqliteLibrary).resolvingSymlinksInPath() ==
-                  runtime.sqliteLibrary.resolvingSymlinksInPath()
-            else { return false }
-            return GatewayLaunchAgentManager.serviceCLIEntrypoints.contains {
-                runtime.packageRoot.appendingPathComponent($0).resolvingSymlinksInPath() == entry
-            }
+            return concrete == GatewayLaunchAgentManager.concreteServicePrefix(runtime.cliCommand)
+                && self.sqliteLibrary.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() } ==
+                runtime.sqliteLibraryOverride.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
         }
     }
 
@@ -241,7 +235,7 @@ enum GatewayLaunchAgentManager {
                 if let runtime {
                     installedCLI = try InstalledServiceCLI(
                         prefix: runtime.cliCommand,
-                        sqliteLibrary: runtime.sqliteLibrary.path,
+                        sqliteLibrary: runtime.sqliteLibraryOverride,
                         environment: self
                             .retainedServiceEnvironment(stateDirectory: AppProfile.current.stateDirectoryURL()))
                 }
@@ -266,9 +260,11 @@ enum GatewayLaunchAgentManager {
                 launchAgentExists: existed)
             if !existed, let preserved = whenMissingCLI {
                 guard let executable = preserved.prefix.first, executable.hasPrefix("/"),
-                      ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
+                      self.serviceCLIEntrypoint(preserved.prefix) != nil
                 else { return "The retained Gateway runtime could not be inspected." }
-                arguments += ["--runtime", URL(fileURLWithPath: executable).lastPathComponent]
+                let runtimeName = preserved.prefix.count == 1 ? "bun" : URL(fileURLWithPath: executable)
+                    .lastPathComponent
+                arguments += ["--runtime", runtimeName]
                 // The historical app-tools Node install remains unpinned so it can migrate later.
                 if preserved.hadRuntimePin ||
                     !self.isManagedNode(executable, stateDirectory: AppProfile.current.stateDirectoryURL())
@@ -305,7 +301,7 @@ enum GatewayLaunchAgentManager {
         whenMissingCLI: InstalledServiceCLI?) throws -> InstalledServiceCLI?
     {
         guard BundledRuntime.isBundledApp, serviceExists else {
-            // Pause removes the plist. Resume retains the existing Node version owner.
+            // Pause removes the plist. Resume retains the recorded runtime owner.
             return try serviceExists ? nil : whenMissingCLI.map { try self.resumedServiceCLI($0) }
         }
         let artifacts = self.generatedEnvironmentArtifacts(
@@ -338,7 +334,7 @@ enum GatewayLaunchAgentManager {
         if allowUnconfigured { arguments.append("--allow-unconfigured") }
         // Existing services retain core's saved runtime intent unless the app update or migration owns replacement.
         if let runtime, !launchAgentExists || replaceRuntime {
-            arguments += ["--runtime", "bun", "--runtime-path", runtime.bun.path]
+            arguments += ["--runtime", "bun", "--runtime-path", runtime.executable.path]
         }
         return arguments
     }
@@ -451,7 +447,7 @@ enum GatewayLaunchAgentManager {
             installedCLI: environment.map {
                 InstalledServiceCLI(
                     prefix: runtime.cliCommand,
-                    sqliteLibrary: runtime.sqliteLibrary.path,
+                    sqliteLibrary: runtime.sqliteLibraryOverride,
                     environment: $0)
             },
             expectedServiceAuthority: custody,
@@ -495,7 +491,7 @@ enum GatewayLaunchAgentManager {
             programArguments: snapshot.programArguments,
             environmentFile: environmentFile,
             environmentWrapper: environmentWrapper),
-            let service = command.firstIndex(of: subcommand), service >= 2
+            let service = command.firstIndex(of: subcommand), service >= 1
         else { return nil }
         let prefix = Array(command[..<service])
         guard self.serviceCLIEntrypoint(prefix) != nil else { return nil }
@@ -509,6 +505,9 @@ enum GatewayLaunchAgentManager {
     }
 
     private static func serviceCLIEntrypoint(_ prefix: [String]) -> URL? {
+        if prefix.count == 1, let executable = prefix.first, executable.hasPrefix("/"),
+           URL(fileURLWithPath: executable).lastPathComponent == "openclaw"
+        { return URL(fileURLWithPath: executable) }
         guard let executable = prefix.first,
               ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
         else { return nil }
@@ -755,7 +754,7 @@ extension GatewayLaunchAgentManager {
             }
             selectedCLI = InstalledServiceCLI(
                 prefix: runtime.cliCommand,
-                sqliteLibrary: runtime.sqliteLibrary.path,
+                sqliteLibrary: runtime.sqliteLibraryOverride,
                 environment: restoring.environment)
             if args.first == "install" { arguments += ["--restore-service-cli", restoration] }
         } else {
@@ -906,8 +905,8 @@ extension GatewayLaunchAgentManager {
         let installedPaths = installedCLI?.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
         var paths = installedPaths + searchPaths
         if let runtime {
-            paths.insert(runtime.bun.deletingLastPathComponent().path, at: 0)
-            result["OPENCLAW_SQLITE_LIBRARY"] = runtime.sqliteLibrary.path
+            paths.insert(runtime.executable.deletingLastPathComponent().path, at: 0)
+            result["OPENCLAW_SQLITE_LIBRARY"] = runtime.sqliteLibraryOverride
         }
         if let installedCLI {
             if let executable = installedCLI.prefix.first {

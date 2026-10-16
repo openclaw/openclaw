@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
 import {
   formatServiceInspectionReason,
@@ -432,7 +432,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     return plan;
   }
   const executable = command?.programArguments[0];
-  const serviceBun = executable && isBunRuntime(executable);
+  const serviceBun = executable && resolveGatewayDaemonRuntime(command?.programArguments) === "bun";
   const serviceNode = serviceBun
     ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected?.env ?? process.env)
     : resolveManagedServiceNodeRunner(command);

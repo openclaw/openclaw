@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
@@ -64,6 +65,16 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   const devMode = params.devMode ?? resolveGatewayDevMode();
   if (params.wrapperPath?.trim()) {
     return { devMode, runtime: params.runtime, runtimePath: params.runtimePath };
+  }
+  if (
+    !params.runtimeExplicit &&
+    params.pinnedRuntimePath === undefined &&
+    params.runtimePath === undefined &&
+    isStandaloneRuntimeExecutable()
+  ) {
+    // A compiled payload has no script entrypoint for a discovered host interpreter.
+    const runtimePath = await resolvePinnedDaemonRuntimePath(process.execPath, "bun", params.env);
+    return { devMode: false, runtime: "bun", runtimePath };
   }
   const pinnedRuntimePath =
     params.pinnedRuntimePath === undefined

@@ -310,7 +310,10 @@ describe("packaged worker freshness", () => {
       );
       const script = readFileSync(scriptPath, "utf8");
       const allocationStart = script.indexOf("# pnpm build owns the Control UI");
-      const allocationEnd = script.indexOf('echo "🔨 Building $PRODUCT', allocationStart);
+      const allocationEnd = script.indexOf(
+        'echo "📦 Provisioning the matching standalone runtime',
+        allocationStart,
+      );
       expect(allocationStart).toBeGreaterThanOrEqual(0);
       expect(allocationEnd).toBeGreaterThan(allocationStart);
       const allocated = spawnSync(
@@ -464,14 +467,7 @@ function scriptBlock(startMarker: string, endMarker: string, file = scriptPath):
 }
 
 function getPackageManagerHelperBlock(): string {
-  return scriptBlock("PNPM_CMD=()", "merge_framework_machos()");
-}
-
-function getMergeFrameworkMachOsBlock(): string {
-  return scriptBlock(
-    "merge_framework_machos()",
-    'PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"',
-  );
+  return scriptBlock("PNPM_CMD=()", 'PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
 }
 
 function runSwiftToolchainHarness(options: {
@@ -1128,130 +1124,6 @@ describe("package-mac-app plist stamping", () => {
     expect(installBlock).not.toContain("--no-frozen-lockfile");
   });
 
-  it.each(["primary", "secondary"])(
-    "merges framework architectures when %s file output exceeds the pipe buffer",
-    (verboseFramework) => {
-      const root = tempDirs.make("openclaw-package-framework-pipe-");
-      const primary = path.join(root, "primary.framework");
-      const secondary = path.join(root, "secondary.framework");
-      const destination = path.join(root, "destination.framework");
-      for (const framework of [primary, secondary, destination]) {
-        mkdirSync(framework);
-        writeFileSync(
-          path.join(framework, "Fixture"),
-          framework === secondary ? "arm64 x86_64\n" : "arm64\n",
-        );
-        writeFileSync(path.join(framework, "Info.plist"), "resource\n");
-      }
-      const description = path.join(root, "file-output");
-      // A matching first line followed by more than a pipe can buffer makes an
-      // early-exiting grep kill the producer, without depending on scheduling.
-      writeFileSync(
-        description,
-        "Mach-O universal binary with 2 architectures\n" + "architecture detail\n".repeat(65536),
-      );
-      const helper = getMergeFrameworkMachOsBlock()
-        .replaceAll("/usr/bin/file", "fixture_file")
-        .replaceAll("/usr/bin/lipo", "fixture_lipo");
-      const result = runHelper(`
-        set -euo pipefail
-        fixture_file() {
-          if [[ "$1" == */Info.plist ]]; then
-            printf 'XML document\\n'
-          elif [[ "$1" == */${verboseFramework}.framework/Fixture ]]; then
-            cat ${JSON.stringify(description)}
-          else
-            printf 'Mach-O 64-bit executable\\n'
-          fi
-        }
-        fixture_lipo() {
-          case "$1" in
-            -info) printf 'Architectures in the fat file: %s are: %s\\n' "$2" "$(cat "$2")" ;;
-            -thin)
-              [[ "$2" == x86_64 && "$4" == -output ]] || return 2
-              printf '%s\\n' "$2" > "$5" ;;
-            -create)
-              [[ "$4" == -output ]] || return 2
-              cat "$2" "$3" > "$5" ;;
-            *) return 2 ;;
-          esac
-        }
-        ${helper}
-        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
-      `);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(path.join(destination, "Fixture"), "utf8")).toBe("arm64\nx86_64\n");
-      expect(readFileSync(path.join(destination, "Info.plist"), "utf8")).toBe("resource\n");
-    },
-  );
-
-  it.runIf(process.platform === "darwin").each(["arm64e"] as const)(
-    "merges framework Mach-O binaries with %s slices and glob metacharacters in the checkout path",
-    (secondaryArchitecture) => {
-      const root = tempDirs.make("openclaw-package-framework-[fixture]-");
-      const primary = path.join(root, "Primary.framework");
-      const secondary = path.join(root, "Secondary.framework");
-      const destination = path.join(root, "Destination.framework");
-      const relativeBinary = path.join("Versions", "A", "OpenClawFixture");
-
-      for (const framework of [primary, secondary, destination]) {
-        mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
-      }
-
-      // Inert mach_header_64 dylibs (mach-o/loader.h and mach/machine.h).
-      // Own the CPU/subtype bytes so host executables and compiler SDKs cannot
-      // change this fixture's slice set; real file/lipo still classify and merge it.
-      const thinMachO = (cpu: number, subtype: number) => {
-        const bytes = Buffer.alloc(32);
-        [0xfeedfacf, cpu, subtype, 6, 0, 0, 0, 0].forEach((value, index) =>
-          bytes.writeUInt32LE(value, index * 4),
-        );
-        return bytes;
-      };
-      const intel = thinMachO(0x01000007, 3);
-      const arm = thinMachO(0x0100000c, 2);
-      const primaryBinary = path.join(primary, relativeBinary);
-      const secondaryBinary = path.join(secondary, relativeBinary);
-      const destinationBinary = path.join(destination, relativeBinary);
-      const armBinary = path.join(root, "arm-slice");
-      writeFileSync(primaryBinary, intel);
-      writeFileSync(armBinary, arm);
-      const universal = spawnSync(
-        "/usr/bin/lipo",
-        ["-create", primaryBinary, armBinary, "-output", secondaryBinary],
-        { encoding: "utf8" },
-      );
-      expect(universal.status, universal.stderr).toBe(0);
-      writeFileSync(destinationBinary, intel);
-
-      const result = runHelper(`
-        set -euo pipefail
-        ${getMergeFrameworkMachOsBlock()}
-        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
-        /usr/bin/lipo -archs ${JSON.stringify(destinationBinary)}
-      `);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim().split(/\s+/u).toSorted()).toEqual(
-        ["x86_64", secondaryArchitecture].toSorted(),
-      );
-      for (const [arch, bytes] of [
-        ["x86_64", intel],
-        [secondaryArchitecture, arm],
-      ] as const) {
-        const extracted = path.join(root, `merged-${arch}`);
-        const slice = spawnSync(
-          "/usr/bin/lipo",
-          ["-thin", arch, destinationBinary, "-output", extracted],
-          { encoding: "utf8" },
-        );
-        expect(slice.status, slice.stderr).toBe(0);
-        expect(readFileSync(extracted)).toEqual(bytes);
-      }
-    },
-  );
-
   it("builds and locates the MLX helper with SwiftBuild without a legacy output alias", () => {
     const arch = "arm64";
     const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
@@ -1531,15 +1403,9 @@ describe("package-mac-app plist stamping", () => {
         '#!/bin/bash\nset -euo pipefail\n[[ -d "$1" ]]\nprintf "identity=%s\\n" "${SIGN_IDENTITY-<unset>}"\nprintf "sign\\n" >> "${0%/*}/../events"\n',
       );
       chmodSync(signerPath, 0o755);
-      {
-        const node = path.join(appRoot, "Contents/Resources/runtime/bin/bun");
-        mkdirSync(path.dirname(node), { recursive: true });
-        writeFileSync(
-          node,
-          `#!/bin/bash\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`,
-        );
-        chmodSync(node, 0o755);
-      }
+      const tools = path.join(tempRoot, "bin");
+      mkdirSync(tools);
+      symlinkSync(process.execPath, path.join(tools, "node"));
       writeFileSync(
         path.join(scriptsDir, "verify-mac-runtime.mjs"),
         `import fs from 'node:fs';
@@ -1587,7 +1453,7 @@ try {
           encoding: "utf8",
           env: {
             HOME: callerHome,
-            PATH: "/usr/bin:/bin",
+            PATH: `${tools}:/usr/bin:/bin`,
             OPENCLAW_TEST_CALLER_CANARY: "must-not-reach-worker",
             ...(tempMode === "configured" ? { TMPDIR: callerTemp } : {}),
           },

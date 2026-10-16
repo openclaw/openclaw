@@ -14,6 +14,244 @@ struct GatewayProcessManagerTests {
     /// unit test owns its manager so readiness state cannot leak into their requests.
     private let manager = GatewayProcessManager()
 
+    @Test func `terminal runtime publication preserves a pending migration`() async throws {
+        try await self.withLaunchAgentEnvironment(statusPayload:
+            #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+        {
+            await #expect(throws: BundledRuntime.SeedError.self) {
+                try await CLIInstaller.prepareBundledTerminalRuntime()
+            }
+        }
+    }
+
+    @Test func `pending pin migration defers background preparation without error`() async throws {
+        try await self.withLaunchAgentEnvironment(statusPayload:
+            #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+        {
+            let manager = self.manager
+            manager.preparePersistentRuntimeAfterHealth()
+            await manager.runtimePreparationTask?.value
+
+            #expect(manager.log.contains("runtime preparation deferred until pin migration completes"))
+            #expect(!manager.log.contains("preparing the persistent runtime"))
+            #expect(!manager.log.contains("warning:"))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `moving a live bundle drains its child before launching from the seed or new path`(
+        warmed: Bool) async throws
+    {
+        guard BundledRuntime.isBundledApp else { return }
+        let root = try makeFirstRunTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let port = try self.availableGatewayPort()
+        try await self.withLaunchAgentEnvironment(port: port, homeDirectory: root, defaults: [
+            GatewayHosting.defaultsKey: GatewayHosting.app.rawValue,
+        ]) {
+            let app = root.appendingPathComponent("Original.app")
+            let buildID = "move-" + UUID().uuidString.lowercased()
+            _ = try makeBundledRuntimeTestBundle(
+                at: app, builtAt: "2026-08-27T00:00:00.000Z", buildID: buildID, command: "unused")
+            let original = app.appendingPathComponent("Contents/Resources/runtime/openclaw")
+            let directory = AppProfile.current.stateDirectoryURL().appendingPathComponent("runtime")
+            let current = directory.appendingPathComponent("current")
+            let seed = directory.appendingPathComponent(buildID)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let previous = try? FileManager.default.destinationOfSymbolicLink(atPath: current.path)
+            try #require(previous != nil || !FileManager.default.fileExists(atPath: current.path))
+            defer {
+                try? FileManager.default.removeItem(at: current)
+                if let previous {
+                    try? FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: previous)
+                }
+                try? FileManager.default.removeItem(at: seed)
+            }
+            if previous != nil { try FileManager.default.removeItem(at: current) }
+            if warmed {
+                try FileManager.default.copyItem(at: original.deletingLastPathComponent(), to: seed)
+                try BundledRuntime(root: seed).recordWarmed(buildID: buildID)
+                try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: buildID)
+            }
+            let exited = AsyncTestGate()
+            var launches: [URL] = []
+            let supervisor = GatewayChildSupervisor { configuration in
+                launches.append(configuration.executable)
+                if launches.count > 1 {
+                    // Stop at the child-launch boundary; existing readiness fixtures cover health.
+                    throw GatewayHostingError(message: "Fixture reached relocated child launch")
+                }
+                return .init(
+                    waitUntilStarted: { 4242 },
+                    wait: { await exited.wait()
+                        return "fixture stopped"
+                    },
+                    terminate: { exited.open() })
+            }
+            let manager = GatewayProcessManager(childSupervisor: supervisor)
+            let paused = AppStateStore.shared.isPaused
+            AppStateStore.shared.isPaused = false
+            defer { AppStateStore.shared.isPaused = paused }
+            manager.desiredActive = true
+            manager.repairedAppHostedRuntimeBuildID = buildID
+            _ = try await supervisor.start(configuration: .init(
+                executable: original, environment: [:], logPath: root.appendingPathComponent("gateway.log").path,
+                port: port, allowUnconfigured: false), onEvent: { _ in })
+            let moved = root.appendingPathComponent("Renamed.app")
+            try FileManager.default.moveItem(at: app, to: moved)
+            let movedBundle = try #require(Bundle(url: moved))
+            await manager.restartRelocatedBundledGatewayIfNeeded(bundle: movedBundle)
+
+            #expect(launches.map { $0.resolvingSymlinksInPath() } == [
+                original,
+                warmed
+                    ? seed.appendingPathComponent("openclaw")
+                    : moved.appendingPathComponent("Contents/Resources/runtime/openclaw"),
+            ].map { $0.resolvingSymlinksInPath() })
+            #expect(manager.lastFailureReason == "Fixture reached relocated child launch")
+            #expect(manager.desiredActive)
+            #expect(!supervisor.isActive)
+            #expect(manager.bundleRelocationStatus?.contains("App moved.") == true)
+            #expect(!manager.hostingChangeInProgress)
+            manager.desiredActive = false
+            await supervisor.stop()
+            await manager.waitForStartupAttempt()
+        }
+    }
+
+    @Test(arguments: ["unmoved", "seed", "paused", "stopped"])
+    func `bundle relocation leaves unrelated or inactive children alone`(scenario: String) async throws {
+        guard BundledRuntime.isBundledApp else { return }
+        let root = try makeFirstRunTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("Current.app")
+        _ = try makeBundledRuntimeTestBundle(
+            at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+        let bundle = try #require(Bundle(url: app))
+        try await self.withLaunchAgentEnvironment(defaults: [GatewayHosting.defaultsKey: GatewayHosting.app.rawValue]) {
+            let exited = AsyncTestGate()
+            let supervisor = GatewayChildSupervisor { _ in
+                .init(
+                    waitUntilStarted: { 4242 },
+                    wait: { await exited.wait()
+                        return "fixture stopped"
+                    },
+                    terminate: { exited.open() })
+            }
+            let manager = GatewayProcessManager(childSupervisor: supervisor)
+            let original = scenario == "unmoved"
+                ? BundledRuntime.currentBundleURL(bundle).appendingPathComponent("Contents/Resources/runtime/openclaw")
+                : URL(fileURLWithPath: scenario == "seed" ? "/fixture/runtime/build/openclaw"
+                    : "/fixture/Original.app/Contents/Resources/runtime/openclaw")
+            _ = try await supervisor.start(configuration: .init(
+                executable: original, environment: [:], logPath: "/unused/gateway.log", port: 29871,
+                allowUnconfigured: false), onEvent: { _ in })
+            let paused = AppStateStore.shared.isPaused
+            AppStateStore.shared.isPaused = scenario == "paused"
+            defer { AppStateStore.shared.isPaused = paused }
+            manager.desiredActive = scenario != "stopped"
+            await manager.restartRelocatedBundledGatewayIfNeeded(bundle: bundle)
+            #expect(supervisor.processIdentifier == 4242)
+            #expect(supervisor.configuration?.executable == original)
+            #expect(manager.bundleRelocationStatus == nil)
+            await supervisor.stop()
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `new bundle completes Doctor before its first child launch`(
+        doctorFails: Bool, seedExists: Bool) async throws
+    {
+        let root = try makeFirstRunTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let port = try self.availableGatewayPort()
+        try await self.withLaunchAgentEnvironment(port: port, homeDirectory: root, defaults: [
+            lastLaunchedAppVersionKey: nil,
+            "openclaw.lastLaunchedRuntimeBuildID": nil,
+            postAppUpdateReceiptKey: nil,
+        ]) {
+            let state = AppProfile.current.stateDirectoryURL()
+            let runtimeDirectory = state.appendingPathComponent("runtime")
+            let current = runtimeDirectory.appendingPathComponent("current")
+            let oldBuild = "startup-old-" + UUID().uuidString.lowercased()
+            let oldRoot = runtimeDirectory.appendingPathComponent(oldBuild)
+            let oldApp = root.appendingPathComponent("Old.app")
+            _ = try makeBundledRuntimeTestBundle(
+                at: oldApp, builtAt: "2026-08-27T00:00:00.000Z", buildID: oldBuild, command: "unused")
+            try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+            let previous = try? FileManager.default.destinationOfSymbolicLink(atPath: current.path)
+            try #require(previous != nil || !FileManager.default.fileExists(atPath: current.path))
+            let config = state.appendingPathComponent("openclaw.json")
+            let priorConfig = try? Data(contentsOf: config)
+            let receipt = state.appendingPathComponent("startup-doctor-" + UUID().uuidString)
+            defer {
+                try? FileManager.default.removeItem(at: current)
+                if let previous {
+                    try? FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: previous)
+                }
+                try? FileManager.default.removeItem(at: oldRoot)
+                try? FileManager.default.removeItem(at: receipt)
+                if let priorConfig { try? priorConfig.write(to: config) } else {
+                    try? FileManager.default.removeItem(at: config)
+                }
+            }
+            if previous != nil { try FileManager.default.removeItem(at: current) }
+            if seedExists {
+                try FileManager.default.copyItem(
+                    at: oldApp.appendingPathComponent("Contents/Resources/runtime"), to: oldRoot)
+                try FileManager.default.createSymbolicLink(atPath: current.path, withDestinationPath: oldBuild)
+            } else {
+                #expect(try BundledRuntime.seeded() == nil)
+            }
+            #expect(PostAppUpdateReceiptStore.pendingForLaunch(
+                currentVersion: "2026.8.1", currentRuntimeBuildID: oldBuild, onboardingSeen: false) == nil)
+            let app = root.appendingPathComponent("New.app")
+            let doctorScript = """
+            [ "$2" = --fix ] && [ "$3" = --non-interactive ] || exit 92
+            printf '%s\\n' "$0" > '\(receipt.path)'
+            \(doctorFails ? "echo 'Plugin repair failed. Retry the update.' >&2" : ":")
+            printf '%s\\n' 'OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH={"status":"\(doctorFails ? "error" : "ok")"}'
+            exit \(doctorFails ? 1 : 0)
+            """
+            // Both bundles have the same version and commit; only the runtime build identity changes.
+            _ = try makeBundledRuntimeTestBundle(
+                at: app, builtAt: "2026-08-27T00:00:01.000Z", buildID: "startup-new",
+                command: "unused", doctorScript: doctorScript)
+            let runtime = try BundledRuntime.resolve(bundle: #require(Bundle(url: app)))
+            var launches = 0
+            var repairedBeforeLaunch = false
+            let supervisor = GatewayChildSupervisor { _ in
+                launches += 1
+                repairedBeforeLaunch = (try? String(contentsOf: receipt, encoding: .utf8)) ==
+                    runtime.executable.path + "\n"
+                // Stop at the process-launch boundary: readiness is covered by the existing transport fixtures.
+                throw GatewayHostingError(message: "Fixture reached child launch")
+            }
+            let manager = GatewayProcessManager(childSupervisor: supervisor)
+            let appState = AppStateStore.shared
+            let paused = appState.isPaused
+            let onboarded = appState.onboardingSeen
+            appState.isPaused = false
+            // A completed seed and the prior launch marker independently identify the upgrade.
+            appState.onboardingSeen = !seedExists
+            defer {
+                appState.isPaused = paused
+                appState.onboardingSeen = onboarded
+            }
+            manager.desiredActive = true
+            await manager.startAppHostedGateway(startGeneration: manager.gatewayStartGeneration, runtime: runtime)
+            #expect((try? String(contentsOf: receipt, encoding: .utf8)) == runtime.executable.path + "\n")
+            #expect(launches == (doctorFails ? 0 : 1))
+            if doctorFails {
+                #expect(manager.lastFailureReason?.contains("Plugin repair failed. Retry the update.") == true)
+            } else {
+                #expect(repairedBeforeLaunch)
+                #expect(manager.lastFailureReason == "Fixture reached child launch")
+            }
+            #expect(!supervisor.isActive)
+        }
+    }
+
     @Test func `colliding profile ports cannot attach another profile gateway`() {
         let first = AppProfile(environment: ["OPENCLAW_PROFILE": "p1402"])
         let second = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
@@ -379,6 +617,7 @@ struct GatewayProcessManagerTests {
         mode: String,
         port: Int? = nil,
         homeDirectory: URL? = nil,
+        defaults: [String: Any?] = [:],
         _ body: () async throws -> T) async throws -> T
     {
         let isolatedHome = try homeDirectory ?? makeTempDirForTests()
@@ -397,7 +636,8 @@ struct GatewayProcessManagerTests {
         ]
         return try await TestIsolation.withIsolatedState(
             launchAgentHomeDirectory: isolatedHome,
-            env: environment)
+            env: environment,
+            defaults: defaults)
         {
             // Service ownership reads must stay inside this fixture's home, even without an explicit plist.
             try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == isolatedHome
@@ -410,6 +650,7 @@ struct GatewayProcessManagerTests {
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
+        defaults: [String: Any?] = [:],
         statusPayload: String? =
             #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
         statusPayloads: [String]? = nil,
@@ -419,7 +660,9 @@ struct GatewayProcessManagerTests {
     {
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        return try await self.withGatewayConfig(mode: mode, port: port, homeDirectory: homeDirectory) {
+        return try await self.withGatewayConfig(
+            mode: mode, port: port, homeDirectory: homeDirectory, defaults: defaults)
+        {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
                 if commandDelayNanoseconds > 0 {
@@ -775,7 +1018,7 @@ struct GatewayProcessManagerTests {
                 at: plist.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             let prefix = definition == "unsupported-command"
-                ? [state.appendingPathComponent("bin/openclaw").path]
+                ? [state.appendingPathComponent("bin/unsupported-cli").path]
                 : [
                     state.appendingPathComponent("tools/node-version/bin/node").path,
                     definition.hasSuffix("runtime-intent")
@@ -929,7 +1172,10 @@ struct GatewayProcessManagerTests {
             let old = BundledRuntime(root: state.appendingPathComponent("runtime/previous-build"))
             let replacement = BundledRuntime(root: state.appendingPathComponent("runtime/new-build"))
             let original = GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: [operatorRuntime ? "/operator/bun" : old.bun.path, old.cliCommand[1]],
+                prefix: operatorRuntime ? [
+                    "/operator/bun",
+                    old.packageRoot.appendingPathComponent("openclaw.mjs").path,
+                ] : old.cliCommand,
                 sqliteLibrary: old.sqliteLibrary.path,
                 environment: ["FIXTURE_SERVICE": "retained", "OPENCLAW_SQLITE_LIBRARY": old.sqliteLibrary.path],
                 usesGeneratedEnvironment: true,
@@ -971,12 +1217,17 @@ struct GatewayProcessManagerTests {
                 ["status", "--runtime-intent-only", "--json"],
             ])
             let resumed = GatewayProcessManager()
-            #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
+            let enabled = await resumed.enableLaunchAgentIfNeeded(port: 29871)
+            try #require(enabled.installed, "\(enabled.error ?? "Service installation was skipped")")
             let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .first { $0.contains("install") })
             let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: replacement.cliCommand, sqliteLibrary: replacement.sqliteLibrary.path)
-            #expect(Array(command.prefix(2)) == expected.prefix)
+                prefix: replacement.cliCommand, sqliteLibrary: nil)
+            #expect(Array(command.prefix(expected.prefix.count)) == expected.prefix)
+            let runtime = try #require(command.firstIndex(of: "--runtime"))
+            #expect(command.dropFirst(runtime + 1).first == "bun")
+            let runtimePath = try #require(command.firstIndex(of: "--runtime-path"))
+            #expect(command.dropFirst(runtimePath + 1).first == expected.prefix.first)
             #expect(resumed.retainedServiceCLI?.sqliteLibrary == expected.sqliteLibrary)
             #expect(resumed.retainedServiceCLI?.environment["OPENCLAW_SQLITE_LIBRARY"] == expected.sqliteLibrary)
         }
@@ -1041,11 +1292,13 @@ struct GatewayProcessManagerTests {
         try await self.withLaunchAgentEnvironment(homeDirectory: root) {
             let manager = self.manager
             defer { manager.retainedServiceCLI = nil }
-            try "trap 'exit 0' TERM\nIFS= read -r value\n".write(
-                to: root.appendingPathComponent("openclaw.mjs"), atomically: true, encoding: .utf8)
+            try "#!/bin/sh\ntrap 'exit 0' TERM\nIFS= read -r value\n".write(
+                to: root.appendingPathComponent("openclaw"), atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: root.appendingPathComponent("openclaw").path)
             let pid = try await manager.childSupervisor.start(configuration: .init(
-                bun: URL(fileURLWithPath: "/bin/sh"),
-                packageRoot: root,
+                executable: root.appendingPathComponent("openclaw"),
                 environment: [:],
                 logPath: root.appendingPathComponent("gateway.log").path,
                 port: 29871,
@@ -1329,7 +1582,7 @@ struct GatewayProcessManagerTests {
                 return
             }
             let install = try #require(commands.first { $0.contains("install") })
-            #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+            #expect(commands.allSatisfy { Array($0.prefix(1)) == installer.cliCommand })
             let runtimeIndex = try #require(install.firstIndex(of: "--runtime"))
             let pathIndex = try #require(install.firstIndex(of: "--runtime-path"))
             #expect(install[runtimeIndex + 1] == "bun")
@@ -1425,7 +1678,7 @@ struct GatewayProcessManagerTests {
             }
             let previous = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/previous-build"))
             let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
-                prefix: [previous.bun.path, previous.packageRoot.appendingPathComponent("dist/index.js").path],
+                prefix: previous.cliCommand,
                 sqliteLibrary: previous.sqliteLibrary.path,
                 environment: ["CHANNEL_FIXTURE": "synthetic"])
             let installer = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
@@ -1467,16 +1720,16 @@ struct GatewayProcessManagerTests {
                     "--runtime",
                     "bun",
                     "--runtime-path",
-                    previous.bun.path,
+                    previous.executable.path,
                     "--restore-service-cli",
-                    #"{"entrypoint":"/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js","executable":"/fixture/runtime/previous-build/bin/bun","sqliteLibrary":"/fixture/runtime/previous-build/lib/libsqlite3.dylib"}"#,
+                    #"{"entrypoint":"/fixture/runtime/previous-build/openclaw","executable":"/fixture/runtime/previous-build/openclaw","sqliteLibrary":"/fixture/runtime/previous-build/runtime/lib/libsqlite3.dylib"}"#,
                     "--expected-runtime-pin",
                     #"{"definition":"failed-service","revision":"before-restore"}"#,
                 ],
             ])
             #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .filter { $0.contains("install") }
-                .allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+                .allSatisfy { Array($0.prefix(1)) == installer.cliCommand })
         }
     }
 
@@ -2408,8 +2661,7 @@ struct GatewayProcessManagerTests {
                 let generation = manager.gatewayStartGeneration
                 var restartCount = 0
                 _ = try await supervisor.start(configuration: .init(
-                    bun: URL(fileURLWithPath: "/fixture/bun"),
-                    packageRoot: URL(fileURLWithPath: "/fixture/package"), environment: [:],
+                    executable: URL(fileURLWithPath: "/fixture/openclaw"), environment: [:],
                     logPath: "/unused/gateway.log", port: GatewayEnvironment.gatewayPort(),
                     allowUnconfigured: false))
                 { event in

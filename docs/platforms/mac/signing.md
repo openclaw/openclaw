@@ -10,18 +10,18 @@ title: "macOS signing"
 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) builds a staged app, calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh), and verifies the signed runtime before replacing `dist/OpenClaw.app`. macOS ties TCC permissions to the bundle ID and code signature. Keep both stable across rebuilds, and keep the app at a fixed path. macOS then keeps its TCC grants (notifications, accessibility, screen recording, mic, speech).
 
 - Debug bundle identifier defaults to `ai.openclaw.mac.debug` (override with `BUNDLE_ID=...`).
-- Build-time Node: `>=24.16.0 <25` or `>=26.1.0` (repo `package.json` `engines`). The app bundles the pinned OpenClaw Bun fork instead of Node, plus the OpenClaw package and Control UI (`pnpm ui:build`).
+- Build-time Node: `>=24.16.0 <25` or `>=26.1.0` (repo `package.json` `engines`). The app compiles the pinned OpenClaw Bun fork and same-commit core/plugins into a standalone executable, with a loose resource sidecar and Control UI.
 - Requires a real signing identity by default. The codesign script exits with an error if it finds no identity and `ALLOW_ADHOC_SIGNING` is not set. Ad-hoc signing (`SIGN_IDENTITY="-"`) is explicit opt-in and does not persist TCC permissions across rebuilds. See [macOS permissions](/platforms/mac/permissions).
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity. The order is Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
 - `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps for Developer ID Application signatures selected by name or certificate hash. Set `on`/`off` to force either way.
 - Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC), `OpenClawGitCommit`, and `OpenClawRuntimeBuildID`. The commit value is the full 40-character hexadecimal commit, or `unknown` for local builds when it is unavailable. The native **About** tab shows the build timestamp and git commit. The private runtime's package metadata must match the app's version, commit, timestamp, and runtime build ID before launch.
 - Audits native-signature format and Team IDs after signing. Metadata failures, non-native signatures, missing Team IDs, and mismatched Team IDs fail by default. `SKIP_TEAM_ID_CHECK=1` skips only the Team ID comparison. Native-signature format checks still run.
-- Signs the private runtime's native code before sealing the app. JIT memory entitlements (`com.apple.security.cs.allow-jit` and `com.apple.security.cs.allow-unsigned-executable-memory`) go only to `runtime/bin/bun` and to Claude Agent SDK `claude` executables when a bundled plugin includes them. Only `runtime/bin/bun` additionally receives `com.apple.security.cs.disable-library-validation`. The signer plain-signs other native helpers, `.node` modules, and libraries, including `runtime/lib/libsqlite3.dylib`. All bundled native code uses the app's signing identity. The bundled Anthropic plugin uses the separately installed Claude Code executable. Packaging verifies native capabilities and worker readiness in temporary state before and after signing for each architecture it can execute; it reports an x86_64 verification skip when Rosetta is unavailable.
+- Signs the standalone executable with hardened runtime and exactly `manifest.json`'s `macos.entitlements`: JIT and bytecode currently require `com.apple.security.cs.allow-jit` and `com.apple.security.cs.disable-library-validation`. They do not receive `allow-unsigned-executable-memory`. Claude Agent SDK executables retain their separate JIT signing policy. Other helpers, native addons, and SQLite are plain-signed with the app's identity. The signer refreshes the executable and sidecar hashes before sealing the app.
 
-The private Bun runtime can load native addons from npm plugins installed at runtime, whose binaries are not signed by the app's Team ID. Disabling library validation on this executable matches the official Node and Bun macOS binaries and the external Gateway's previous Node runtime. The runtime already executes arbitrary plugin JavaScript and spawns processes, so library validation on it is not a meaningful security boundary. Bundled natives remain Team-signed, and the app's executables, Claude SDK CLI, and other helpers retain library validation. This exception does not change the app's development override or the Cloud Worker's refusal of that override.
+The standalone runtime can load native addons from npm plugins installed at runtime, whose binaries are not signed by the app's Team ID. Disabling library validation on this executable matches the official Node and Bun macOS binaries and the external Gateway's previous Node runtime. The runtime already executes arbitrary plugin JavaScript and spawns processes, so library validation on it is not a meaningful security boundary. Bundled natives remain Team-signed, and the app's executables, Claude SDK CLI, and other helpers retain library validation. This exception does not change the app's development override or the Cloud Worker's refusal of that override.
 
-Signing uses `/usr/bin/python3` to scan file headers and batches candidates through `/usr/bin/file`. Apple's `/usr/bin/otool` then checks native headers for every architecture, including fat64 containers that `file` reports as data. Mixed signing categories and malformed native headers stop signing. Java classes, static archives, and Mach-O linker, debug, and core artifacts are resource-sealed rather than directly signed. Discovery opens directories without following symlinks and classifies opened file descriptors rather than redirectable paths. It does not run the bundled Bun to sign itself. Before publishing, the scan checks every observed input, including directory namespaces and resources omitted from the native list. It rejects incomplete traversal and observed changes. This is not an atomic filesystem snapshot.
+Signing uses `/usr/bin/python3` to scan file headers and batches candidates through `/usr/bin/file`. Apple's `/usr/bin/otool` then checks native headers for every architecture, including fat64 containers that `file` reports as data. Mixed signing categories and malformed native headers stop signing. Java classes, static archives, and Mach-O linker, debug, and core artifacts are resource-sealed rather than directly signed. Discovery opens directories without following symlinks and classifies opened file descriptors rather than redirectable paths. It does not execute the bundled runtime to sign itself. Before publishing, the scan checks every observed input, including directory namespaces and resources omitted from the native list. It rejects incomplete traversal and observed changes. This is not an atomic filesystem snapshot.
 
 The signature audit also requires a native Mach-O signature. Some Apple toolchains return success while signing raw fat64 as generic data, without native entitlements. The audit rejects that result. The signer does not thin or convert input containers. Rebuild unsupported native payloads as codesign-compatible code before packaging rather than relying on generic-signature verification.
 
@@ -29,18 +29,17 @@ The signer seals App and Sparkle bundle owners once, after their nested code. A 
 
 Sign a private staged copy that no other process modifies. The signer rejects hardlinked files and special files such as FIFOs before attribute cleanup. Copy or rebuild the bundle if this check fails. Attribute cleanup and signing use macOS `/usr/bin/sandbox-exec`. It restricts filesystem writes to the fixed app and temporary signing directories. Extra inherited file descriptors are closed. Signing fails if this mutation boundary cannot start. There is no unrestricted fallback.
 
-Before signing, release and development builds remove TypeScript declarations,
-declaration maps, and audited dependency source/test/example files through
-`scripts/lib/desktop-runtime-prune.mjs`. All Markdown documentation, licenses,
-package manifests, executable source maps, native addons, and plugin-owned trees
-remain available. Dependency source pruning is version-specific; new versions
-keep their sources until audited. Tauri uses the same pruning owner when staging
-its bundled OpenClaw package, before hashing and encoding resources.
+The standalone builder owns sidecar pruning. Packaging verifies the builder's
+complete inventory before adding the macOS install-owner marker. SQLite comes
+from that inventory and is signed with the app. The compiler and old loose
+interpreter layout are not packaged.
+Use `OPENCLAW_MAC_RUNTIME_MODE=jit` (default) or `bytecode`; both use the exact
+manifest entitlement map. See [standalone builds](/install/standalone).
 
-For a [standalone executable](/install/standalone#macos-signing), use the
-mode-specific `macos.entitlements` map in its `manifest.json` instead of applying
-the separate Bun runtime's entitlement list. Sign and verify the complete
-executable-plus-sidecar output, then refresh the executable hash in the manifest.
+Package ARM64 and Intel apps separately with `BUILD_ARCHS=arm64` or
+`BUILD_ARCHS=x86_64`, using the matching runtime output. Universal builds are not
+supported. The release publisher must provide architecture-matched ZIPs, DMGs,
+and Sparkle updates, including updates from existing universal apps.
 
 ## Permission evidence
 
@@ -60,19 +59,10 @@ SIGN_IDENTITY="-" scripts/package-mac-app.sh                                    
 DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh                          # dev-only Sparkle Team ID mismatch workaround
 ```
 
-Runtime packaging honors the existing `OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS`,
-`OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS`, and
-`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Inventory and
-tarball checks default to five minutes; package creation defaults to fifteen
-minutes. Set a positive integer in milliseconds when packaging needs more time.
-These budgets pass through the runtime's isolated environment without exposing
-operator credentials or state. The tarball-check budget covers the whole check,
-including extraction and validation.
-
 The `DISABLE_LIBRARY_VALIDATION=1` development override applies to the app's
 Sparkle workaround, not its private runtime. `OpenClawCloudWorker.app` rejects
 that override entirely; its elevation-host app executables always retain
-library validation. The private Bun runtime's plugin-loading exception applies
+library validation. The standalone runtime's plugin-loading exception applies
 independently of that development flag.
 
 ### Ad-hoc signing note

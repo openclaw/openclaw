@@ -1,6 +1,10 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
@@ -173,27 +177,36 @@ async function resolveCliProgramArguments(params: {
   }
   const runtimePath = params.runtimePath;
 
+  if (params.runtime === "bun" && isStandaloneRuntimeExecutable(runtimePath)) {
+    const invocation = resolveOpenClawCliInvocation({ execPath: runtimePath, args: params.args });
+    return { programArguments: [invocation.command, ...invocation.args] };
+  }
+
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();
     const devCliPath = path.join(repoRoot, "src", "entry.ts");
     await fs.access(devCliPath);
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: runtimePath,
+      entryPath: devCliPath,
+      args: params.args,
+      execArgv: params.runtime === "bun" ? resolveRuntimeArgs(params.runtime) : ["--import", "tsx"],
+    });
     return {
-      programArguments:
-        params.runtime === "bun"
-          ? [runtimePath, ...resolveRuntimeArgs(params.runtime), devCliPath, ...params.args]
-          : [runtimePath, "--import", "tsx", devCliPath, ...params.args],
+      programArguments: [invocation.command, ...invocation.args],
       workingDirectory: repoRoot,
     };
   }
 
   const cliEntrypointPath = await resolveCliEntrypointPathForService(params.cliEntrypoint);
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: runtimePath,
+    entryPath: (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
+    args: params.args,
+    execArgv: resolveRuntimeArgs(params.runtime),
+  });
   return {
-    programArguments: [
-      runtimePath,
-      ...resolveRuntimeArgs(params.runtime),
-      (await resolveBrewOpenClawPath(cliEntrypointPath)) ?? cliEntrypointPath,
-      ...params.args,
-    ],
+    programArguments: [invocation.command, ...invocation.args],
   };
 }
 

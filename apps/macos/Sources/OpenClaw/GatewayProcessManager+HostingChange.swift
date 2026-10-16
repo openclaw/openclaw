@@ -110,7 +110,9 @@ extension GatewayProcessManager {
         do {
             try await Self.changeHosting(operations: .init(
                 prepare: {
-                    change.runtime = try await BundledRuntime.seed()
+                    change.runtime = hosting == .service
+                        ? try await BundledRuntime.seed()
+                        : try BundledRuntime.forAppHosting()
                     _ = try GatewayLaunchAgentManager.retainedServiceEnvironment(
                         stateDirectory: AppProfile.current.stateDirectoryURL())
                     try await self.checkHostingChange(change)
@@ -122,7 +124,7 @@ extension GatewayProcessManager {
                         if hosting == .service, let runtime = change.runtime {
                             self.retainedServiceCLI = try GatewayLaunchAgentManager.InstalledServiceCLI(
                                 prefix: runtime.cliCommand,
-                                sqliteLibrary: runtime.sqliteLibrary.path,
+                                sqliteLibrary: runtime.sqliteLibraryOverride,
                                 environment: self.appHostedEnvironment(runtime: runtime),
                                 usesGeneratedEnvironment: change.expectedService.definition.environment != nil &&
                                     change.expectedService.definition.wrapper != nil)
@@ -196,6 +198,9 @@ extension GatewayProcessManager {
                         },
                         statusHandler: { self.appendLog("[gateway] \($0)\n") })
                     if !output.isEmpty { self.appendLog("[gateway] recovery diagnostics: \(output.suffix(4000))\n") }
+                    if change.previous == .app, preservedRuntime == nil {
+                        self.repairedAppHostedRuntimeBuildID = try runtime.manifest().buildId
+                    }
                     if preservedRuntime != nil, change.previous == .service {
                         if let error = try await GatewayLaunchAgentManager.runDaemonCommand(
                             ["start"],
@@ -318,9 +323,12 @@ extension GatewayProcessManager {
         change.generation = self.gatewayStartGeneration
         self.status = .starting
         let cli = restoring ? change.previousCLI : nil
-        let selectedRuntime = cli?.prefix.first.map {
-            BundledRuntime(root: URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent())
-        } ?? runtime
+        let selectedRuntime: BundledRuntime = if let cli {
+            BundledRuntime(retainedCLI: cli)
+        } else {
+            try await BundledRuntime.seed()
+        }
+        try await self.checkHostingChange(change, requiresActive: true)
         let result = try await self.enableLaunchAgentIfNeeded(
             port: change.port,
             generation: change.generation,
@@ -350,12 +358,11 @@ extension GatewayProcessManager {
     }
 
     private func requireDurableAppHostingEnvironment(_ cli: GatewayLaunchAgentManager.InstalledServiceCLI?) throws {
-        guard let cli, let executable = cli.prefix.first else { return }
+        guard let cli else { return }
         let profile = AppProfile.current
         let retained = try GatewayLaunchAgentManager.retainedServiceEnvironment(
             stateDirectory: profile.stateDirectoryURL(), profile: profile)
-        let runtime = BundledRuntime(root: URL(fileURLWithPath: executable)
-            .deletingLastPathComponent().deletingLastPathComponent())
+        let runtime = BundledRuntime(retainedCLI: cli)
         func projected(_ environment: [String: String]) -> [String: String] {
             GatewayChildSupervisor.environmentWithoutSupervisorMarkers(Self.appHostedEnvironment(
                 runtime: runtime,

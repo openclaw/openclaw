@@ -1,11 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   desktopRuntimeReleaseTag,
   planDesktopRuntimePlugins,
+  planDesktopStandalonePlugins,
   stampDesktopRuntimePlugins,
 } from "../../scripts/lib/desktop-runtime-plugins.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -258,41 +267,6 @@ describe("desktop runtime source plugins", () => {
     expect(planDesktopRuntimePlugins(root, { pluginIds: ["codex"] }).pluginIds).toEqual([]);
   });
 
-  it("counts additional transitive dependencies and falls back to first-run Codex above 300 MiB", () => {
-    const { root } = fixture();
-    writeJson(root, "extensions/extra/package.json", {
-      name: "@openclaw/extra",
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "node_modules/large/package.json", { name: "large", version: "1.0.0" });
-    const payload = path.join(root, "node_modules/large/payload");
-    writeFileSync(payload, "");
-    truncateSync(payload, 301 * 1024 * 1024);
-    expect(planDesktopRuntimePlugins(root)).toMatchObject({
-      pluginIds: ["codex"],
-      releaseTag: null,
-    });
-  });
-
-  it("does not count dependencies already shipped by core against the extra payload", () => {
-    const { root } = fixture();
-    writeJson(root, "package.json", {
-      name: "openclaw",
-      version: "2026.10.2",
-      files: ["!dist/extensions/codex/**", "!dist/extensions/extra/**"],
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "extensions/extra/package.json", {
-      name: "@openclaw/extra",
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "node_modules/large/package.json", { name: "large", version: "1.0.0" });
-    const payload = path.join(root, "node_modules/large/payload");
-    writeFileSync(payload, "");
-    truncateSync(payload, 301 * 1024 * 1024);
-    expect(planDesktopRuntimePlugins(root).pluginIds).toEqual(["codex", "extra"]);
-  });
-
   it("keeps exact release artifacts unchanged without requiring source dependencies", () => {
     const { root } = fixture();
     git(root, "tag", "v2026.10.2");
@@ -307,5 +281,92 @@ describe("desktop runtime source plugins", () => {
     const { root } = fixture();
     writeJson(root, "dist/build-info.json", { commit: "0".repeat(40) });
     expect(() => planDesktopRuntimePlugins(root)).toThrow("current source commit");
+  });
+});
+
+describe("standalone desktop plugin selection", () => {
+  const published = ["codex", "discord", "imessage", "slack", "sms", "voice-call", "whatsapp"];
+
+  function sourceFixture() {
+    const root = temps.make("desktop-plugin-selection-");
+    for (const id of [
+      ...published,
+      "cloudflare",
+      "core-only",
+      "crabbox",
+      "imap",
+      "logbook",
+      "memory-wiki",
+      "onepassword",
+      "qa-channel",
+      "qa-lab",
+    ]) {
+      writeJson(root, `dist/extensions/${id}/openclaw.plugin.json`, { id });
+    }
+    writeJson(root, "dist/extensions/test-support/package.json", { private: true });
+    return root;
+  }
+
+  it("embeds core and selected published plugins while excluding QA and other published plugins", async () => {
+    const root = sourceFixture();
+    expect(await planDesktopStandalonePlugins(root)).toEqual({
+      embedded: [
+        "codex",
+        "core-only",
+        "crabbox",
+        "discord",
+        "imap",
+        "imessage",
+        "logbook",
+        "memory-wiki",
+        "onepassword",
+        "slack",
+        "sms",
+        "voice-call",
+        "whatsapp",
+      ],
+      omitted: ["cloudflare", "qa-channel", "qa-lab"],
+    });
+  });
+
+  it("automatically embeds a newly added core plugin by its manifest ID", async () => {
+    const root = sourceFixture();
+    writeJson(root, "dist/extensions/new-directory/openclaw.plugin.json", { id: "new-core" });
+    expect((await planDesktopStandalonePlugins(root)).embedded).toContain("new-core");
+  });
+
+  it("keeps the repository desktop set closed over required plugins", async () => {
+    const { planStandalonePlugins } = await import("../../scripts/lib/bun-standalone-plugins.mjs");
+    const root = temps.make("desktop-plugin-closure-");
+    for (const entry of readdirSync("extensions", { withFileTypes: true })) {
+      const manifest = path.join("extensions", entry.name, "openclaw.plugin.json");
+      if (!entry.isDirectory() || !existsSync(manifest)) {
+        continue;
+      }
+      const destination = path.join(root, "dist/extensions", entry.name);
+      mkdirSync(destination, { recursive: true });
+      copyFileSync(manifest, path.join(destination, "openclaw.plugin.json"));
+    }
+    const selected = await planDesktopStandalonePlugins(root);
+    expect(() => planStandalonePlugins(root, selected.embedded)).not.toThrow();
+  });
+
+  it("keeps required plugins together and lets the builder reject an unclosed selection", async () => {
+    const { planStandalonePlugins } = await import("../../scripts/lib/bun-standalone-plugins.mjs");
+    const root = sourceFixture();
+    writeJson(root, "dist/extensions/core-only/openclaw.plugin.json", {
+      id: "core-only",
+      requiresPlugins: ["codex"],
+    });
+    const selected = await planDesktopStandalonePlugins(root);
+    expect(() => planStandalonePlugins(root, selected.embedded)).not.toThrow();
+    writeJson(root, "dist/extensions/core-only/openclaw.plugin.json", {
+      id: "core-only",
+      requiresPlugins: ["cloudflare"],
+    });
+    const unclosed = await planDesktopStandalonePlugins(root);
+    expect(() => planStandalonePlugins(root, unclosed.embedded)).toThrow(
+      "core-only requires plugin cloudflare",
+    );
   });
 });

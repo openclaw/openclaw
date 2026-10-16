@@ -1,3 +1,4 @@
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -31,12 +32,12 @@ export async function auditGatewayRuntime(
     return undefined;
   }
 
-  const bun = isBunRuntime(execPath);
+  const bun = isBunRuntime(execPath) || isStandaloneRuntimeExecutable(execPath);
   if (!bun && !isNodeRuntime(execPath)) {
     return undefined;
   }
   const runtime = bun
-    ? await resolveBunRuntimeInfo(execPath)
+    ? await resolveBunRuntimeInfo(execPath, undefined, env)
     : await resolveNodeRuntimeInfo(execPath, env, timeoutMs);
   if (runtime.status !== "supported") {
     issues.push({

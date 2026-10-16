@@ -996,8 +996,7 @@ extension PostUpdateController {
         let manager = GatewayProcessManager.shared
         guard manager.usesSeededGateway, manager.desiredActive,
               !AppStateStore.shared.isPaused, !manager.isTerminating,
-              let runtime = try? BundledRuntime.seeded(),
-              (try? BundledRuntime.resolve(root: runtime.root, bundle: .main)) != nil
+              let runtime = try? BundledRuntime.forAppHosting()
         else { return false }
         switch manager.status {
         case .running, .attachedExisting:
@@ -1005,10 +1004,15 @@ extension PostUpdateController {
         default:
             return false
         }
-        // App-owned children were seeded by this launch. Services can still pin an
-        // older concrete build even when runtime/current already points at this app.
-        return manager.hasAppHostedGateway ||
-            GatewayLaunchAgentManager.installedServiceCLI()?.matchesBundledRuntime(runtime) == true
+        if let pid = manager.childSupervisor.processIdentifier,
+           let path = ProcessIdentity.executablePath(pid: pid)
+        {
+            return (try? BundledRuntime.resolve(
+                root: URL(fileURLWithPath: path).deletingLastPathComponent(), bundle: .main)) != nil
+        }
+        // Services can still pin an older build while the new app starts in place.
+        guard (try? BundledRuntime.readySeed()) != nil else { return false }
+        return GatewayLaunchAgentManager.installedServiceCLI()?.matchesBundledRuntime(runtime) == true
     }
 
     static func captureRuntimeContext(

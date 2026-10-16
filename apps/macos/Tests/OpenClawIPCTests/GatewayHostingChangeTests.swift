@@ -75,7 +75,7 @@ struct GatewayHostingChangeTests {
         #expect(environment["FIXTURE_API_KEY"] == "synthetic-service-key")
         #expect(environment["HTTPS_PROXY"] == "http://fixture.invalid:8080")
         #expect(environment["PATH"]?.contains("/fixture/service/bin") == true)
-        #expect(environment["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path)
+        #expect(environment["OPENCLAW_SQLITE_LIBRARY"] == nil)
         #expect(environment["OPENCLAW_STATE_DIR"] == profile.stateDirectoryURL().path)
         #expect(environment["OPENCLAW_CONFIG_PATH"] == profile.stateDirectoryURL()
             .appendingPathComponent("openclaw.json").path)
@@ -185,7 +185,7 @@ struct GatewayHostingChangeTests {
     }
 
     @Test func `retained service environment reaches child relaunch and service install without supervisor markers`() throws {
-        let directory = try makeTempDirForTests()
+        let directory = try makeFirstRunTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "hosting-environment"])
         let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
@@ -221,12 +221,13 @@ struct GatewayHostingChangeTests {
                 retainedEnvironment: retained,
                 searchPaths: ["/usr/bin"])
             let child = GatewayChildSupervisor.Configuration(
-                bun: runtime.bun, packageRoot: runtime.packageRoot, environment: environment,
+                executable: runtime.executable, environment: environment,
                 logPath: directory.appendingPathComponent("gateway.log").path, port: 29871, allowUnconfigured: false)
                 .childEnvironment
             #expect(child["FIXTURE_CHANNEL_SETTING"] == "service-value")
-            #expect(child["PATH"] == "\(runtime.bun.deletingLastPathComponent().path):/fixture/custom/bin:/usr/bin")
-            #expect(child["OPENCLAW_SQLITE_LIBRARY"] == runtime.sqliteLibrary.path)
+            #expect(child["PATH"] ==
+                "\(runtime.executable.deletingLastPathComponent().path):/fixture/custom/bin:/usr/bin")
+            #expect(child["OPENCLAW_SQLITE_LIBRARY"] == nil)
             #expect(child["OPENCLAW_PROFILE"] == "hosting-environment")
             #expect(child["OPENCLAW_STATE_DIR"] == profile.stateDirectoryURL().path)
             #expect(child["OPENCLAW_LAUNCHD_LABEL"] == nil)
@@ -236,7 +237,7 @@ struct GatewayHostingChangeTests {
             let installer = GatewayLaunchAgentManager.daemonEnvironment(
                 runtime: runtime,
                 installedCLI: .init(
-                    prefix: runtime.cliCommand, sqliteLibrary: runtime.sqliteLibrary.path, environment: environment),
+                    prefix: runtime.cliCommand, sqliteLibrary: nil, environment: environment),
                 environment: [:], profile: profile, searchPaths: ["/usr/bin"])
             #expect(installer["FIXTURE_CHANNEL_SETTING"] == "service-value")
             #expect(installer["PATH"]?.contains("/fixture/custom/bin") == true)
@@ -260,7 +261,7 @@ struct GatewayHostingChangeTests {
     }
 
     @Test func `uninstalled service custody still rejects environment and wrapper replacement`() async throws {
-        let directory = try makeTempDirForTests()
+        let directory = try makeFirstRunTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "custody-" + UUID().uuidString.lowercased()])
         try #require(profile.isActive)

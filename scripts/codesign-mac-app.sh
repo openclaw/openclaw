@@ -152,7 +152,7 @@ trap cleanup EXIT
 ENT_TMP_DIR="$(cd -P -- "$ENT_TMP_DIR" && pwd -P)"
 ENT_TMP_APP="$ENT_TMP_DIR/app.plist"
 ENT_TMP_JIT="$ENT_TMP_DIR/jit.plist"
-ENT_TMP_BUN="$ENT_TMP_DIR/bun.plist"
+ENT_TMP_STANDALONE="$ENT_TMP_DIR/standalone.plist"
 CODESIGN_OUTPUT="$ENT_TMP_DIR/codesign-output"
 NATIVE_INVENTORY="$ENT_TMP_DIR/native-inventory"
 INVENTORY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-native-inventory.py"
@@ -209,17 +209,11 @@ cat > "$ENT_TMP_JIT" <<'PLIST'
 </dict></plist>
 PLIST
 
-# Bun executes arbitrary plugin JS and must load its non-Team-signed native addons.
-# Keep this exception on the private runtime; bundled natives are still Team-signed.
-cat > "$ENT_TMP_BUN" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>com.apple.security.cs.allow-jit</key><true/>
-  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-  <key>com.apple.security.cs.disable-library-validation</key><true/>
-</dict></plist>
-PLIST
+RUNTIME_ROOT="$APP_BUNDLE/Contents/Resources/runtime"
+STANDALONE_MANIFEST_TOOL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-standalone-runtime.mjs"
+if [[ -f "$RUNTIME_ROOT/openclaw" ]]; then
+  node "$STANDALONE_MANIFEST_TOOL" entitlements "$RUNTIME_ROOT" "$ENT_TMP_STANDALONE"
+fi
 
 run_bundle_mutation() {
   /usr/bin/python3 "$MUTATION_SCRIPT" "$APP_MUTATION_ROOT" "$ENT_TMP_DIR" "$@"
@@ -412,14 +406,13 @@ done < "$NATIVE_INVENTORY"
 
 # Seal all native payloads before the enclosing app; npm packages can carry
 # standalone executables and addons below arbitrarily nested dependency roots.
-RUNTIME_ROOT="$APP_BUNDLE/Contents/Resources/runtime"
 while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
   [[ "$runtime_kind" == "executable" || "$runtime_kind" == "library" ]] || continue
   [[ "$runtime_file" == "$RUNTIME_ROOT/"* ]] || continue
   runtime_relative="${runtime_file#"$RUNTIME_ROOT"/}"
-  # Only the private Bun runtime hosts arbitrary installed plugin native addons.
-  if [[ "$runtime_kind" == "executable" && "$runtime_relative" == bin/bun ]]; then
-    sign_item "$runtime_file" "$ENT_TMP_BUN"
+  # Only the standalone executable hosts arbitrary installed plugin native addons.
+  if [[ "$runtime_kind" == "executable" && "$runtime_relative" == openclaw ]]; then
+    sign_item "$runtime_file" "$ENT_TMP_STANDALONE"
   elif [[ "$runtime_kind" == "executable" && (
     "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude ||
     "$runtime_relative" == */node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/claude
@@ -430,6 +423,10 @@ while IFS= read -r -d '' runtime_kind && IFS= read -r -d '' runtime_file; do
   fi
   codesign --verify --strict "$runtime_file"
 done < "$NATIVE_INVENTORY"
+if [[ -f "$RUNTIME_ROOT/openclaw" ]]; then
+  # Signing changes native bytes. Record those final bytes before the app seals the manifest.
+  run_bundle_mutation node "$STANDALONE_MANIFEST_TOOL" seal "$RUNTIME_ROOT"
+fi
 
 SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 if [ -d "$SPARKLE" ]; then

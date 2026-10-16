@@ -8,8 +8,7 @@ final class GatewayChildSupervisor {
     nonisolated static let shutdownTimeoutSeconds: TimeInterval = 330
 
     struct Configuration: Sendable {
-        let bun: URL
-        let packageRoot: URL
+        let executable: URL
         let environment: [String: String]
         let logPath: String
         let port: Int
@@ -17,7 +16,6 @@ final class GatewayChildSupervisor {
 
         var arguments: [String] {
             [
-                self.packageRoot.appendingPathComponent("openclaw.mjs").path,
                 "gateway",
                 "run",
                 "--port",
@@ -61,6 +59,7 @@ final class GatewayChildSupervisor {
     typealias Launcher = @MainActor (Configuration) throws -> Child
 
     private(set) var processIdentifier: Int32?
+    private(set) var configuration: Configuration?
     var isActive: Bool {
         self.child != nil || self.monitorTask != nil || self.stopTask != nil
     }
@@ -90,6 +89,7 @@ final class GatewayChildSupervisor {
 
     func start(
         configuration: Configuration,
+        configurationForRestart: (@MainActor () async throws -> Configuration)? = nil,
         onEvent: @escaping @MainActor (Event) -> Void) async throws -> Int32
     {
         if let stopTask { await stopTask.value }
@@ -109,8 +109,14 @@ final class GatewayChildSupervisor {
         }
         guard self.generation == generation else { throw CancellationError() }
         self.processIdentifier = pid
+        self.configuration = configuration
         self.monitorTask = Task { [weak self] in
-            await self?.monitor(child, configuration: configuration, generation: generation, onEvent: onEvent)
+            await self?.monitor(
+                child,
+                configuration: configuration,
+                configurationForRestart: configurationForRestart,
+                generation: generation,
+                onEvent: onEvent)
         }
         return pid
     }
@@ -131,6 +137,7 @@ final class GatewayChildSupervisor {
         self.monitorTask = nil
         self.healthySince = nil
         self.processIdentifier = nil
+        self.configuration = nil
         let child = self.child
         self.child = nil
         let stopTask = Task {
@@ -145,6 +152,7 @@ final class GatewayChildSupervisor {
     private func monitor(
         _ firstChild: Child,
         configuration: Configuration,
+        configurationForRestart: (@MainActor () async throws -> Configuration)?,
         generation: UInt64,
         onEvent: @escaping @MainActor (Event) -> Void) async
     {
@@ -154,6 +162,7 @@ final class GatewayChildSupervisor {
         while self.generation == generation, !Task.isCancelled {
             self.child = nil
             self.processIdentifier = nil
+            self.configuration = nil
             if let healthySince, self.elapsedTime() - healthySince >= .seconds(60) {
                 fastFailures = 0
             }
@@ -171,11 +180,14 @@ final class GatewayChildSupervisor {
             do { try await self.clock.sleep(for: delay) } catch { return }
             guard self.generation == generation, !Task.isCancelled else { return }
             do {
-                child = try self.launcher(configuration)
+                let nextConfiguration = try await configurationForRestart?() ?? configuration
+                guard self.generation == generation, !Task.isCancelled else { return }
+                child = try self.launcher(nextConfiguration)
                 self.child = child
                 let pid = try await child.waitUntilStarted()
                 guard self.generation == generation, !Task.isCancelled else { return }
                 self.processIdentifier = pid
+                self.configuration = nextConfiguration
                 onEvent(.started(pid))
                 failure = await child.wait()
             } catch {
@@ -212,7 +224,7 @@ final class GatewayChildSupervisor {
         let lifeline = Pipe()
         let process = ManagedProcess.launch(
             configuration: Subprocess.Configuration(
-                executable: .path(.init(configuration.bun.path)),
+                executable: .path(.init(configuration.executable.path)),
                 arguments: Arguments(configuration.arguments),
                 environment: ManagedProcess.environment(from: configuration.childEnvironment)),
             input: .fileDescriptor(

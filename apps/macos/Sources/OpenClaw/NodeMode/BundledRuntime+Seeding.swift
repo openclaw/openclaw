@@ -1,17 +1,21 @@
 import Darwin
 import Foundation
+import OSLog
 
 extension BundledRuntime {
     enum SeedError: LocalizedError {
         case invalidBuildID
         case invalidCurrent
-        case runtimeProbe(String)
+        case migrationRequired
+        case warmFailed(String)
 
         var errorDescription: String? {
             switch self {
             case .invalidBuildID: "The app's runtime build ID is invalid. Reinstall OpenClaw.app."
             case .invalidCurrent: "The seeded runtime link is invalid. Retry OpenClaw setup."
-            case let .runtimeProbe(detail): "The bundled Bun runtime could not start: \(detail)"
+            case .migrationRequired:
+                "Stop this profile's Gateway, run the bundled openclaw doctor --fix, then restart OpenClaw."
+            case let .warmFailed(reason): "The background runtime preparation failed. " + reason
             }
         }
     }
@@ -24,7 +28,14 @@ extension BundledRuntime {
         try await BundledRuntimeSeeder.shared.seed(bundle: bundle, profile: profile, homeDirectory: homeDirectory)
     }
 
-    /// Read-only resolution never executes Bun or selects a checkout/PATH fallback.
+    static func cancelSeeding(
+        profile: AppProfile = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) async
+    {
+        await BundledRuntimeSeeder.shared.cancel(profile: profile, homeDirectory: homeDirectory)
+    }
+
+    /// Read-only resolution never executes OpenClaw or selects a checkout/PATH fallback.
     static func seeded(
         profile: AppProfile = .current,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> Self?
@@ -32,21 +43,21 @@ extension BundledRuntime {
         let directory = profile.stateDirectoryURL(homeDirectory: homeDirectory).appendingPathComponent("runtime")
         guard let buildID = try self.buildLink("current", in: directory) else { return nil }
         let runtime = Self(root: directory.appendingPathComponent(buildID))
-        let build = try JSONDecoder().decode(
-            BuildInfo.self, from: Data(contentsOf: runtime.packageRoot.appendingPathComponent("dist/build-info.json")))
-        guard build.buildId == buildID,
-              FileManager.default.isExecutableFile(atPath: runtime.bun.path),
-              FileManager.default.isReadableFile(atPath: runtime.sqliteLibrary.path),
-              FileManager.default
-                  .isReadableFile(atPath: runtime.packageRoot.appendingPathComponent("openclaw.mjs").path)
+        // A loose-runtime seed is an upgrade input, never a runnable current payload.
+        guard FileManager.default.fileExists(atPath: runtime.root.appendingPathComponent("manifest.json").path)
+        else { throw SeedError.migrationRequired }
+        let manifest = try runtime.validatedManifest()
+        guard manifest.buildId == buildID
         else { throw SeedError.invalidCurrent }
-        // A newly updated app must still recognize the old seed so PostUpdate can reseed it.
+        // Ownership and rollback must still recognize seeds from earlier app versions.
         return runtime
     }
 
     @concurrent
     fileprivate static func prepareSeed(bundle: Bundle, profile: AppProfile, homeDirectory: URL) async throws -> Self {
+        try Task.checkCancellation()
         let source = try self.resolve(bundle: bundle)
+        let expectedManifest = try source.manifest()
         guard let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
               self.isBuildDirectoryName(buildID)
         else { throw SeedError.invalidBuildID }
@@ -59,20 +70,28 @@ extension BundledRuntime {
             let partial = directory.appendingPathComponent("\(buildID).partial-\(UUID().uuidString)")
             defer { try? fileManager.removeItem(at: partial) }
             try self.cloneRuntimeTree(from: source.root, to: partial)
-            let staged = try self.resolve(root: partial, bundle: bundle)
-            let result = await ShellExecutor.runDetailed(
-                command: [staged.bun.path, "--version"],
-                cwd: nil,
-                env: staged.environment,
-                timeout: CommandResolver.versionProbeTimeout)
-            guard result.success, !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw SeedError.runtimeProbe(result.errorMessage ?? result.stderr)
+            guard try Self(root: partial).validatedManifest(verifyExecutable: true) == expectedManifest else {
+                throw ValidationError.invalidManifest
             }
             try Task.checkCancellation()
             try fileManager.moveItem(at: partial, to: target)
         } else {
-            _ = try self.resolve(root: target, bundle: bundle)
+            let manifest = try Self(root: target).validatedManifest(verifyExecutable: true)
+            // Re-signing the same build changes payload hashes but preserves its seed identity.
+            guard manifest.buildId == expectedManifest.buildId,
+                  manifest.openclaw == expectedManifest.openclaw,
+                  manifest.mode == expectedManifest.mode
+            else {
+                throw ValidationError.invalidManifest
+            }
         }
+        let runtime = Self(root: target)
+        if !runtime.isWarmed(buildID: buildID) {
+            try await runtime.warm(version: expectedManifest.openclaw.version)
+            try Task.checkCancellation()
+            try runtime.recordWarmed(buildID: buildID)
+        }
+        try Task.checkCancellation()
         if previous != buildID {
             if let previous {
                 try self.replaceBuildLink("previous", target: previous, in: directory)
@@ -82,7 +101,6 @@ extension BundledRuntime {
             }
             try self.replaceBuildLink("current", target: buildID, in: directory)
         }
-        let runtime = Self(root: target)
         let allowsPersistentIntegration = await ApplicationRelocator.currentBundleAllowsPersistentIntegration(
             bundle: bundle)
         runtime.installCLI(
@@ -90,6 +108,11 @@ extension BundledRuntime {
             profile: profile,
             homeDirectory: homeDirectory,
             allowsPersistentIntegration: allowsPersistentIntegration)
+        Logger(subsystem: "ai.openclaw", category: "bundled-runtime.seed").notice(
+            """
+            runtime seeded and warmed build=\(buildID, privacy: .public) \
+            executable=\(runtime.executable.path, privacy: .public)
+            """)
         return runtime
     }
 
@@ -108,11 +131,14 @@ extension BundledRuntime {
     }
 
     /// Call only after readiness confirms the replacement Gateway is healthy.
-    @concurrent
     static func garbageCollectAfterHealthy(
         profile: AppProfile = .current,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) async throws
     {
+        try await BundledRuntimeSeeder.shared.collect(profile: profile, homeDirectory: homeDirectory)
+    }
+
+    fileprivate static func collect(profile: AppProfile, homeDirectory: URL) throws {
         let directory = profile.stateDirectoryURL(homeDirectory: homeDirectory).appendingPathComponent("runtime")
         // A recovered missing current link needs one successful update cycle to reestablish retention.
         guard let current = try self.buildLink("current", in: directory),
@@ -127,14 +153,22 @@ extension BundledRuntime {
             guard self.isBuildDirectoryName(name), !retained.contains(name),
                   let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isSymbolicLink != true,
-                  let data = try? Data(contentsOf: entry
-                      .appendingPathComponent("lib/node_modules/openclaw/dist/build-info.json")),
-                  let build = try? JSONDecoder().decode(BuildInfo.self, from: data), build.buildId == name
+                  self.recordedBuildID(at: entry) == name
             else { continue }
             let prefix = entry.resolvingSymlinksInPath().path + "/"
             guard !liveExecutables.contains(where: { $0.hasPrefix(prefix) }) else { continue }
             try FileManager.default.removeItem(at: entry)
         }
+    }
+
+    private static func recordedBuildID(at root: URL) -> String? {
+        if let manifest = try? Self(root: root).manifest() { return manifest.buildId }
+        // Retire pre-standalone seeds only after a healthy replacement, with previous/live retention intact.
+        struct LegacyBuild: Decodable { let buildId: String }
+        guard let data = try? Data(contentsOf: root
+            .appendingPathComponent("lib/node_modules/openclaw/dist/build-info.json"))
+        else { return nil }
+        return try? JSONDecoder().decode(LegacyBuild.self, from: data).buildId
     }
 
     private static func isBuildDirectoryName(_ name: String) -> Bool {
@@ -202,12 +236,26 @@ private actor BundledRuntimeSeeder {
     private var pending: [String: Task<BundledRuntime, Error>] = [:]
 
     func seed(bundle: Bundle, profile: AppProfile, homeDirectory: URL) async throws -> BundledRuntime {
+        try Task.checkCancellation()
         let key = profile.stateDirectoryURL(homeDirectory: homeDirectory).path
         if let task = self.pending[key] { return try await task.value }
-        let task = Task { try await BundledRuntime.prepareSeed(
+        let task = Task(priority: .utility) { try await BundledRuntime.prepareSeed(
             bundle: bundle, profile: profile, homeDirectory: homeDirectory) }
         self.pending[key] = task
         defer { self.pending[key] = nil }
         return try await task.value
+    }
+
+    func collect(profile: AppProfile, homeDirectory: URL) throws {
+        // An unpublished final directory can already contain an executable being warmed.
+        guard self.pending[profile.stateDirectoryURL(homeDirectory: homeDirectory).path] == nil else { return }
+        try BundledRuntime.collect(profile: profile, homeDirectory: homeDirectory)
+    }
+
+    func cancel(profile: AppProfile, homeDirectory: URL) async {
+        let key = profile.stateDirectoryURL(homeDirectory: homeDirectory).path
+        guard let task = self.pending[key] else { return }
+        task.cancel()
+        _ = try? await task.value
     }
 }

@@ -588,7 +588,7 @@ enum ManagedNodeGatewayMigration {
                     runtime: runtime,
                     installedCLI: candidate.snapshot == nil ? .init(
                         prefix: runtime.cliCommand,
-                        sqliteLibrary: runtime.sqliteLibrary.path,
+                        sqliteLibrary: runtime.sqliteLibraryOverride,
                         environment: candidate.cli.environment) : nil,
                     legacyAuthority: candidate.cli,
                     expectedServiceAuthority: expectedAuthority,

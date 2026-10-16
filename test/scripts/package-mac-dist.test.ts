@@ -31,6 +31,7 @@ function makeCheckpointFixture() {
     "package-mac-dist.sh",
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
+    "lib/mac-app-bundle.sh",
     "lib/plistbuddy.sh",
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
@@ -340,6 +341,7 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
     "lib/swift-toolchain.sh",
+    "lib/mac-app-bundle.sh",
   ]) {
     copyFileSync(path.join("scripts", file), path.join(scripts, file));
   }
@@ -423,7 +425,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
             APP_VERSION: "2026.8.2",
             APP_BUILD: "2608000290",
             BUILD_CONFIG: "release",
-            BUILD_ARCHS: options.archs ?? "all",
+            BUILD_ARCHS: options.archs ?? "arm64",
             SKIP_NOTARIZE: options.notarize ? "0" : "1",
             ALLOW_ADHOC_SIGNING: "1",
             SIGN_IDENTITY: "-",
@@ -834,31 +836,6 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
     },
   );
 
-  it("fails closed when required dSYM outputs are missing", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const dsymBlock = script.slice(script.indexOf('if [[ "$SKIP_DSYM" != "1" ]]'));
-
-    expect(dsymBlock).toContain('for arch in "${DSYM_ARCHS[@]}"');
-    expect(dsymBlock).toContain('MISSING_DSYM_ARCHS+=("$arch")');
-    expect(dsymBlock).toContain("Error: dSYM not found for architecture(s):");
-    expect(dsymBlock).not.toContain('find "$BUILD_ROOT/arm64"');
-    expect(dsymBlock).not.toContain('find "$BUILD_ROOT/x86_64"');
-    expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
-    expect(dsymBlock).toContain("Error: dSYM not found");
-    expect(dsymBlock).toContain("exit 1");
-    expect(script).toContain('if ! cp -R "$1" "$TMP_DSYM"; then');
-    expect(dsymBlock).toContain("cleanup_tmp_dsym");
-    expect(dsymBlock).toContain('copy_dsym_to_tmp "${DSYM_PATHS[0]}"');
-    expect(dsymBlock).not.toContain('cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"');
-    expect(dsymBlock).toContain(
-      'if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then',
-    );
-    expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
-    expect(dsymBlock).toContain('rm -rf "$TMP_DSYM"');
-    expect(dsymBlock).not.toContain("WARN:");
-    expect(dsymBlock).not.toContain("continuing");
-  });
-
   it.runIf(process.platform === "darwin")(
     "prints required plist keys and fails when a key is missing",
     () => {
@@ -879,7 +856,7 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
 
 describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives", () => {
   it.each(["native", "xcode"] as const)(
-    "archives matching universal symbols from the %s build output",
+    "archives matching arm64 symbols from the %s build output",
     (layout) => {
       const fixture = makeDistributionFixture(layout);
       const result = fixture.run();
@@ -903,7 +880,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
           .split("\n")
           .map((line) => line.split(" ").slice(0, 3).join(" "))
           .toSorted(),
-      ).toEqual(fixture.expectedUUIDs.toSorted());
+      ).toEqual(fixture.expectedUUIDs.filter((line) => line.includes("(arm64)")));
       expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
     },
   );
@@ -955,11 +932,18 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     expect(result.stderr).toContain("Async frame audit not applicable: x86_64-only build");
   });
 
-  it("refuses a universal archive when one architecture has no symbols", () => {
-    const fixture = makeDistributionFixture("xcode", "x86_64");
-    const result = fixture.run();
+  it("refuses an archive when the selected architecture has no symbols", () => {
+    const fixture = makeDistributionFixture("xcode");
+    copyFileSync(
+      path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw"),
+      path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+    );
+    rmSync(path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw.dSYM"), {
+      recursive: true,
+    });
+    const result = fixture.run({ archs: "x86_64" });
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("dSYM not found for architecture(s): x86_64");
+    expect(result.stderr).toContain("dSYM not found for architecture: x86_64");
     expect(existsSync(path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip"))).toBe(false);
   });
 });

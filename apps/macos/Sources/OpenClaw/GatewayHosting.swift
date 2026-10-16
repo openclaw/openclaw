@@ -32,7 +32,8 @@ enum GatewayHosting: String, Sendable {
         guard let cli = hasService ? installedCLI : retainedCLI else {
             return !hasService && !hasRetainedMetadata
         }
-        guard let executable = cli.prefix.first, URL(fileURLWithPath: executable).lastPathComponent == "bun",
+        guard let executable = cli.prefix.first,
+              ["bun", "openclaw"].contains(URL(fileURLWithPath: executable).lastPathComponent),
               self.usesSeededGateway(
                   hasService: true, installedCLI: cli, hasCurrentSeed: false, stateDirectory: stateDirectory)
         else { return false }

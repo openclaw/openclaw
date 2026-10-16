@@ -83,7 +83,7 @@ struct CLIInstallerTests {
 
     @Test func `installed location finds executable`() throws {
         let fm = FileManager()
-        let root = fm.temporaryDirectory.appendingPathComponent(
+        let root = testTemporaryDirectory().appendingPathComponent(
             "openclaw-cli-installer-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }
 
@@ -216,9 +216,11 @@ struct CLIInstallerTests {
     }
 
     @Test func `managed update uses the canonical updater without accepting downgrades`() {
+        let defaultProfile = AppProfile(environment: [:])
         let command = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",
-            targetVersion: "2026.7.4")
+            targetVersion: "2026.7.4",
+            profile: defaultProfile)
 
         #expect(command == [
             "/Users/Test User/.openclaw/bin/openclaw",
@@ -234,14 +236,16 @@ struct CLIInstallerTests {
         let withoutRestart = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",
             targetVersion: "2026.7.4",
-            restartGateway: false)
+            restartGateway: false,
+            profile: defaultProfile)
         #expect(withoutRestart == command + ["--no-restart"])
 
         let repair = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",
             targetVersion: "2026.7.4",
             restartGateway: false,
-            repair: true)
+            repair: true,
+            profile: defaultProfile)
         #expect(repair == [
             "/Users/Test User/.openclaw/bin/openclaw",
             "update",
@@ -273,8 +277,8 @@ struct CLIInstallerTests {
 
     @Test(arguments: [false, true])
     func `stale managed update preserves a runtime advanced by the CLI`(advancesDuringDispatch: Bool) async throws {
-        let root = FileManager().temporaryDirectory.appendingPathComponent(
-            "openclaw-update-ahead-\(UUID().uuidString)")
+        let root = testTemporaryDirectory().appendingPathComponent(
+            "openclaw-update-ahead-\(UUID().uuidString)").resolvingSymlinksInPath()
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let executable = root.appendingPathComponent("openclaw")
@@ -309,7 +313,7 @@ struct CLIInstallerTests {
             let outcome = await CLIInstaller.updateManaged(
                 targetVersion: "2026.9.8",
                 installedCLI: .init(
-                    prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
+                    prefix: [executable.resolvingSymlinksInPath().path], sqliteLibrary: nil, serviceAuthority: authority),
                 onDispatch: { dispatchedReceipt = true },
                 statusHandler: { _ in })
 
@@ -500,7 +504,7 @@ struct CLIInstallerTests {
     }
 
     @Test func `compatible external CLI satisfies setup`() async throws {
-        let root = FileManager().temporaryDirectory.appendingPathComponent(
+        let root = testTemporaryDirectory().appendingPathComponent(
             "openclaw-compatible-cli-\(UUID().uuidString)")
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
@@ -527,7 +531,7 @@ struct CLIInstallerTests {
         version: String,
         exitCode: Int) async throws
     {
-        let root = FileManager().temporaryDirectory.appendingPathComponent(
+        let root = testTemporaryDirectory().appendingPathComponent(
             "openclaw-old-node-cli-\(UUID().uuidString)")
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)

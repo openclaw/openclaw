@@ -62,6 +62,7 @@ extension CLIInstaller {
                 "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH": "-",
             ]) { _, policy in policy },
             timeout: self.managedUpdateTimeout,
+            cancellationPolicy: .waitForSignalCleanup,
             beforeSpawn: { expectedServiceAuthority.currentError() })
         try await checkCurrent()
         return try self.bundledDoctorDiagnostics(response)
@@ -107,6 +108,13 @@ extension CLIInstaller {
             .joined(separator: "\n")
     }
 
+    static func prepareBundledTerminalRuntime() async throws {
+        guard try await GatewayLaunchAgentManager.runtimePinRecord(
+            stateDirectory: AppProfile.current.stateDirectoryURL(), profile: .current)?.status != .migrationPending
+        else { throw BundledRuntime.SeedError.migrationRequired }
+        _ = try await BundledRuntime.seed()
+    }
+
     static func prepareBundledGateway(
         targetVersion: String? = GatewayEnvironment.appVersionString(),
         restartGateway: Bool = !AppStateStore.shared.isPaused,
@@ -129,7 +137,9 @@ extension CLIInstaller {
             if try await GatewayLaunchAgentManager.runtimePinRecord(
                 stateDirectory: state, profile: .current)?.status == .migrationPending
             { return try await manager.currentBundledRuntime().packageRoot.path }
-            return try await BundledRuntime.seed().packageRoot.path
+            return manager.gatewayHosting == .app
+                ? try BundledRuntime.forAppHosting().packageRoot.path
+                : try await BundledRuntime.seed().packageRoot.path
         }
         if GatewayLaunchAgentManager.bundledRuntimeReplacementError(
             appManaged: true, installedRuntimePath: cli.prefix.last, stateDirectory: state) == nil
@@ -148,6 +158,7 @@ extension CLIInstaller {
             if case let .failed(reason) = activation {
                 throw GatewayHostingError(message: reason ?? "The updated Gateway did not become ready.")
             }
+            if manager.gatewayHosting == .app { return try BundledRuntime.forAppHosting().packageRoot.path }
             guard let runtime = try BundledRuntime.seeded() else {
                 throw GatewayHostingError(message: "The prepared Gateway runtime is unavailable. Retry setup.")
             }

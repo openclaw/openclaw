@@ -77,9 +77,9 @@ Where does the **Gateway** run?
 </Tip>
 </Step>
 <Step title="CLI">
-  Local setup reuses a compatible CLI installation or uses the bundled installer
-  to install `openclaw` and Node in a private managed runtime. It does not require
-  a global npm, pnpm, or bun install.
+  Local setup reuses a compatible CLI installation or installs the bundled
+  OpenClaw executable and its resources in a private managed runtime. It does
+  not require a global npm, pnpm, or bun install.
 
 Attaching to an independently managed local Gateway skips CLI installation
 and proceeds to AI checks without taking over its CLI or service installation.

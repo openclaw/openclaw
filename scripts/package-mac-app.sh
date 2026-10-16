@@ -9,6 +9,8 @@ source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
+PRIMARY_ARCH="$(resolve_mac_build_architecture)"
+BUILD_ARCHS=("$PRIMARY_ARCH")
 CLOUD_WORKER_HOST="${OPENCLAW_MAC_CLOUD_WORKER_HOST:-0}"
 case "$CLOUD_WORKER_HOST" in
   0 | 1) ;;
@@ -98,19 +100,6 @@ fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-if [[ -n "${BUILD_ARCHS:-}" ]]; then
-  BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
-elif [[ "$BUILD_CONFIG" == "release" ]]; then
-  # Release packaging should be universal unless explicitly overridden.
-  BUILD_ARCHS_VALUE="all"
-else
-  BUILD_ARCHS_VALUE="$(uname -m)"
-fi
-if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
-  BUILD_ARCHS_VALUE="arm64 x86_64"
-fi
-IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
-PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml}"
 AUTO_CHECKS=true
@@ -217,67 +206,6 @@ run_pnpm() {
   (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
 }
 
-merge_framework_machos() {
-  local primary="$1"
-  local dest="$2"
-  shift 2
-  local others=("$@")
-
-  archs_for() {
-    /usr/bin/lipo -info "$1" | /usr/bin/sed -E 's/.*are: //; s/.*architecture: //'
-  }
-
-  arch_in_list() {
-    local needle="$1"
-    shift
-    for item in "$@"; do
-      if [[ "$item" == "$needle" ]]; then
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  while IFS= read -r -d '' file; do
-    if /usr/bin/file "$file" | /usr/bin/grep "Mach-O" >/dev/null; then
-      local rel="${file#"$primary"/}"
-      local primary_archs
-      primary_archs=$(archs_for "$file")
-      IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
-
-      local missing_files=()
-      local tmp_dir
-      tmp_dir=$(mktemp -d)
-      for fw in "${others[@]}"; do
-        local other_file="$fw/$rel"
-        if [[ ! -f "$other_file" ]]; then
-          echo "ERROR: Missing $rel in $fw" >&2
-          rm -rf "$tmp_dir"
-          exit 1
-        fi
-        if /usr/bin/file "$other_file" | /usr/bin/grep "Mach-O" >/dev/null; then
-          local other_archs
-          other_archs=$(archs_for "$other_file")
-          IFS=' ' read -r -a other_arch_array <<< "$other_archs"
-          for arch in "${other_arch_array[@]}"; do
-            if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
-              local thin_file="$tmp_dir/${rel//\//_}-$arch"
-              /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
-              missing_files+=("$thin_file")
-              primary_arch_array+=("$arch")
-            fi
-          done
-        fi
-      done
-
-      if [[ "${#missing_files[@]}" -gt 0 ]]; then
-        /usr/bin/lipo -create "$file" "${missing_files[@]}" -output "$dest/$rel"
-      fi
-      rm -rf "$tmp_dir"
-    fi
-  done < <(find "$primary" -type f -print0)
-}
-
 PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
 PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
 
@@ -331,6 +259,9 @@ mkdir -p "$(dirname "$APP_DESTINATION")" "$ROOT_DIR/.artifacts"
 APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/.artifacts/.openclaw-package.XXXXXX")"
 APP_ROOT="$APP_STAGE_DIR/$APP_BUNDLE_NAME"
 
+echo "📦 Provisioning the matching standalone runtime [${BUILD_ARCHS[*]}]"
+/bin/bash "$ROOT_DIR/scripts/stage-mac-runtime.sh" "$APP_STAGE_DIR/runtime" "${BUILD_ARCHS[@]}"
+
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
 node "$ROOT_DIR/scripts/build-mac-swift.mts" "$ROOT_DIR" "$BUILD_CONFIG" \
@@ -375,8 +306,6 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionSt
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
-RUNTIME_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
-plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawRuntimeBuildID "$RUNTIME_BUILD_ID"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
 if [[ "$BUILD_CONFIG" == "release" ]]; then
   EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
@@ -396,26 +325,12 @@ plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$
 
 echo "🚚 Copying binary"
 cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    BIN_INPUTS+=("$(bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/OpenClaw"
-fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
 echo "🚚 Copying macOS control CLI"
 cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  MAC_CLI_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    MAC_CLI_BIN_INPUTS+=("$(mac_cli_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/openclaw-mac"
-fi
 chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac" 2>/dev/null || true
 
@@ -424,13 +339,6 @@ if [[ "$SKIP_MLX_TTS" == "1" ]]; then
 else
   echo "🚚 Copying MLX TTS helper"
   cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-    HELPER_BIN_INPUTS=()
-    for arch in "${BUILD_ARCHS[@]}"; do
-      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-    done
-    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-  fi
   chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
   /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 fi
@@ -439,16 +347,6 @@ SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
   echo "✨ Embedding Sparkle.framework"
   cp -R "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/"
-  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-    OTHER_FRAMEWORKS=()
-    for arch in "${BUILD_ARCHS[@]}"; do
-      if [[ "$arch" == "$PRIMARY_ARCH" ]]; then
-        continue
-      fi
-      OTHER_FRAMEWORKS+=("$(sparkle_framework_for_arch "$arch")")
-    done
-    merge_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "${OTHER_FRAMEWORKS[@]}"
-  fi
   chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
 fi
 
@@ -495,18 +393,16 @@ else
   echo "🖥  Staging embedded CUA driver"
   CUA_DRIVER="$APP_ROOT/Contents/Resources/cua-driver"
   "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"
-  if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]; then
-    CUA_ARCH="${BUILD_ARCHS[0]}"
-    CUA_DRIVER_THIN="${CUA_DRIVER}.thin"
-    echo "🖥  Thinning embedded CUA driver [$CUA_ARCH]"
-    lipo "$CUA_DRIVER" -thin "$CUA_ARCH" -output "$CUA_DRIVER_THIN"
-    chmod 0755 "$CUA_DRIVER_THIN"
-    mv "$CUA_DRIVER_THIN" "$CUA_DRIVER"
-    [[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]] || {
-      echo "ERROR: CUA driver architecture did not match requested build: $CUA_ARCH" >&2
-      exit 1
-    }
-  fi
+  CUA_ARCH="${BUILD_ARCHS[0]}"
+  CUA_DRIVER_THIN="${CUA_DRIVER}.thin"
+  echo "🖥  Thinning embedded CUA driver [$CUA_ARCH]"
+  lipo "$CUA_DRIVER" -thin "$CUA_ARCH" -output "$CUA_DRIVER_THIN"
+  chmod 0755 "$CUA_DRIVER_THIN"
+  mv "$CUA_DRIVER_THIN" "$CUA_DRIVER"
+  [[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]] || {
+    echo "ERROR: CUA driver architecture did not match requested build: $CUA_ARCH" >&2
+    exit 1
+  }
 fi
 
 echo "📦 Staging browser sign-in helper"
@@ -524,8 +420,9 @@ fi
 cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
-echo "📦 Provisioning the matching private Bun runtime [${BUILD_ARCHS[*]}]"
-/bin/bash "$ROOT_DIR/scripts/stage-mac-runtime.sh" "$APP_ROOT/Contents/Resources/runtime" "${BUILD_ARCHS[@]}"
+mv "$APP_STAGE_DIR/runtime" "$APP_ROOT/Contents/Resources/runtime"
+RUNTIME_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$APP_ROOT/Contents/Resources/runtime/manifest.json")"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawRuntimeBuildID "$RUNTIME_BUILD_ID"
 
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
@@ -638,11 +535,9 @@ if [[ "${CLOUD_WORKER_HOST:-0}" == "1" ]]; then
 fi
 for arch in "${BUILD_ARCHS[@]}"; do
   if /usr/bin/arch -"$arch" /usr/bin/true 2>/dev/null; then
-    env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
-      OPENCLAW_SQLITE_LIBRARY="$APP_ROOT/Contents/Resources/runtime/lib/libsqlite3.dylib" \
-      /usr/bin/arch -"$arch" "$APP_ROOT/Contents/Resources/runtime/bin/bun" \
-      "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
-      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT"
+    env -i HOME="$APP_STAGE_DIR" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" \
+      node "$ROOT_DIR/scripts/verify-mac-runtime.mjs" \
+      "$APP_ROOT/Contents/Resources/runtime" "$ROOT_DIR/dist/build-info.json" "$APP_ROOT" "$arch"
   else
     echo "WARN: Signed runtime $arch verification skipped; install Rosetta to verify this architecture" >&2
   fi

@@ -82,6 +82,14 @@ enum PostAppUpdateReceiptStore {
     static let notificationRetryLimit = 2
     private static let lastLaunchedRuntimeBuildIDKey = "openclaw.lastLaunchedRuntimeBuildID"
 
+    static func hasUnseenRuntimeBuild(
+        _ buildID: String,
+        onboardingSeen: Bool,
+        defaults: UserDefaults = AppDefaults.standard) -> Bool
+    {
+        onboardingSeen && defaults.string(forKey: self.lastLaunchedRuntimeBuildIDKey)?.nonEmpty != buildID
+    }
+
     static func record(
         fromVersion: String,
         toVersion: String,

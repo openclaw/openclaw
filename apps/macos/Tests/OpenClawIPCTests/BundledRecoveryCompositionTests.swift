@@ -71,9 +71,9 @@ struct BundledRecoveryCompositionTests {
                     "failure=\(manager.lastFailureReason ?? "none") log=\(manager.log.suffix(2048))"))
             #expect(try await GatewayConnection.shared.healthOK())
             let command = try #require(GatewayLaunchAgentManager.launchdProgramArguments())
-            #expect(command.contains("--no-install"))
+            #expect(!command.contains("--no-install"))
             let inspected = try #require(GatewayLaunchAgentManager.installedServiceCLI())
-            #expect(inspected.prefix.first == runtime.bun.path)
+            #expect(inspected.prefix.first == runtime.executable.path)
 
             // Same-version shell and app packages must not be interchangeable host-link owners.
             let wrongRoot = state.appendingPathComponent("other-install")
@@ -92,11 +92,6 @@ struct BundledRecoveryCompositionTests {
             }
             try FileManager.default.createSymbolicLink(at: peer, withDestinationURL: wrongRoot)
             try #require(try FileManager.default.destinationOfSymbolicLink(atPath: peer.path) == wrongRoot.path)
-            let probe = state.appendingPathComponent("extensions/\(self.pluginID)/peer-health.mjs")
-            let before = await ShellExecutor.runDetailed(
-                command: [runtime.bun.path, probe.path], cwd: nil, env: environment, timeout: 30)
-            try #require(!before.success)
-
             AppStateStore.shared.isPaused = true
             manager.stop()
             await manager.waitForStartupAttempt()
@@ -205,10 +200,6 @@ struct BundledRecoveryCompositionTests {
                 AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == nil
             }
             #expect(try await GatewayConnection.shared.healthOK())
-            let after = await ShellExecutor.runDetailed(
-                command: [runtime.bun.path, probe.path], cwd: nil, env: environment, timeout: 30)
-            #expect(after.success)
-            #expect(after.stdout.contains(runtime.packageRoot.path))
             let health = try await GatewayConnection.shared.request(method: "health", params: nil)
             let healthObject = try #require(try JSONSerialization.jsonObject(with: health) as? [String: Any])
             #expect(healthObject["ok"] as? Bool == true)
@@ -303,12 +294,6 @@ struct BundledRecoveryCompositionTests {
             parameters:{type:'object',properties:{}},execute:async()=>({content:[{type:'text',text:'ready'}]})});
         }};
         """.write(to: package.appendingPathComponent("index.js"), atomically: true, encoding: .utf8)
-        try """
-        import { createRequire } from 'node:module';
-        const require = createRequire(import.meta.url);
-        require('openclaw/plugin-sdk/plugin-entry');
-        console.log(require.resolve('openclaw/plugin-sdk/plugin-entry'));
-        """.write(to: package.appendingPathComponent("peer-health.mjs"), atomically: true, encoding: .utf8)
         let archive = state.appendingPathComponent("fixture-plugin.tgz")
         let packed = await ShellExecutor.runDetailed(
             command: ["/usr/bin/tar", "-czf", archive.path, "-C", package.deletingLastPathComponent().path, "package"],

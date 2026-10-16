@@ -152,6 +152,8 @@ final class HealthStore {
         self.loopTask = Task { [weak self] in
             repeat {
                 guard let self else { return }
+                // Moving an ancestor need not emit an event in the watched installation directory.
+                await GatewayProcessManager.shared.restartRelocatedBundledGatewayIfNeeded()
                 await self.refresh()
             } while await SimpleTaskSupport.waitForNextOperation(interval: interval)
         }

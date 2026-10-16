@@ -230,6 +230,12 @@ enum CLIInstaller {
     {
         let location = self.managedExecutableLocation()
         if let installedCLI {
+            if installedCLI.prefix.count == 1,
+               let executable = installedCLI.prefix.first,
+               let status = self.standaloneStatus(location: executable, expectedVersion: expectedVersion)
+            {
+                return status
+            }
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
                 installedCLI: installedCLI,
                 profile: serviceProfile)
@@ -273,10 +279,9 @@ enum CLIInstaller {
     private static func bundledStatus() -> Status {
         let location = self.managedExecutableLocation()
         do {
-            guard let runtime = try BundledRuntime.seeded() else { return .missing(location: location) }
-            _ = try BundledRuntime.resolve(root: runtime.root, bundle: .main)
+            let runtime = try BundledRuntime.forAppHosting()
             let version = GatewayEnvironment.appVersionString() ?? "unknown"
-            return .ready(location: runtime.packageRoot.appendingPathComponent("openclaw.mjs").path, version: version)
+            return .ready(location: runtime.executable.path, version: version)
         } catch {
             return .unusable(location: location)
         }
@@ -287,6 +292,9 @@ enum CLIInstaller {
         expectedVersion: String?,
         preferredPaths: [String]) async -> Status
     {
+        if let status = self.standaloneStatus(location: location, expectedVersion: expectedVersion) {
+            return status
+        }
         let environment = self.probeEnvironment(
             location: location,
             preferredPaths: preferredPaths)
@@ -308,6 +316,31 @@ enum CLIInstaller {
             return .unusable(location: location)
         }
         return versionStatus
+    }
+
+    private static func standaloneStatus(location: String, expectedVersion: String?) -> Status? {
+        do {
+            let executable = URL(fileURLWithPath: location)
+            if let manifest = try BundledRuntime.validatedStandaloneManifest(executable: executable) {
+                return self.classifyVersion(
+                    location: location, output: manifest.openclaw.version, expectedVersion: expectedVersion)
+            }
+            // The app's terminal shim follows runtime/current; inspect that payload without
+            // launching the wrapper and assessing a freshly seeded executable a second time.
+            guard location == self.managedExecutableLocation(),
+                  let text = try? String(contentsOf: executable, encoding: .utf8),
+                  text == BundledRuntime.cliShim(
+                      profile: .current,
+                      homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+            else { return nil }
+            guard let runtime = try BundledRuntime.seeded(),
+                  let manifest = try BundledRuntime.validatedStandaloneManifest(executable: runtime.executable)
+            else { return .unusable(location: location) }
+            return self.classifyVersion(
+                location: location, output: manifest.openclaw.version, expectedVersion: expectedVersion)
+        } catch {
+            return .unusable(location: location)
+        }
     }
 
     static func classifyVersion(
@@ -369,6 +402,8 @@ enum CLIInstaller {
             await statusHandler("Preparing OpenClaw…")
             do {
                 _ = try await self.prepareBundledGateway(statusHandler: statusHandler)
+                await statusHandler("Preparing the terminal runtime…")
+                try await self.prepareBundledTerminalRuntime()
                 NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
                 await statusHandler("OpenClaw is ready.")
                 return true

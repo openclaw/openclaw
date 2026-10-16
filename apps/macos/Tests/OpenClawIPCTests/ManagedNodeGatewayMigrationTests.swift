@@ -291,7 +291,7 @@ struct ManagedNodeGatewayMigrationTests {
             var operations = fixture.operations
             operations.install = { _, runtime in
                 let error = await GatewayLaunchAgentManager.runDaemonCommand(
-                    ["install", "--force", "--runtime", "bun", "--runtime-path", runtime.bun.path],
+                    ["install", "--force", "--runtime", "bun", "--runtime-path", runtime.executable.path],
                     runtime: runtime, checkCurrent: {
                         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count == 1)
                     })
@@ -945,7 +945,7 @@ struct ManagedNodeGatewayMigrationTests {
             } else {
                 #expect(result == nil)
                 #expect(dispatched.count == 1)
-                #expect(dispatched.first.map { Array($0.prefix(2)) } == runtime.cliCommand)
+                #expect(dispatched.first.map { Array($0.prefix(1)) } == runtime.cliCommand)
             }
         }
     }
@@ -1151,9 +1151,9 @@ struct ManagedNodeGatewayMigrationTests {
         #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
             nil, runtime: runtime, allowMissing: true))
         for (path, kind, accepted) in [
-            (runtime.bun.path, "bun", true),
+            (runtime.executable.path, "bun", true),
             ("/operator/bin/bun", "bun", false),
-            (runtime.bun.path, "node", false),
+            (runtime.executable.path, "node", false),
         ] {
             let record = Self.runtimeIntent(revision: "installed", runtime: kind, path: path)
             #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
@@ -1510,7 +1510,7 @@ extension AppStateIsolationTests {
                 let earlier = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot().dropLast()
                 if args.contains("--runtime-intent-only"),
                    earlier.last?.contains("--no-probe") == true,
-                   earlier.contains(where: { Array($0.prefix(2)) == installer.cliCommand })
+                   earlier.contains(where: { $0.starts(with: installer.cliCommand) })
                 {
                     // The final custody read still sees the admitted pin; the daemon rejects
                     // the operator repin at the installation boundary immediately afterward.
@@ -1560,7 +1560,7 @@ extension AppStateIsolationTests {
             let installsResolved = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .filter { $0.contains("install") }
             #expect(installsResolved.count == 1)
-            #expect(installsResolved.map { Array($0.prefix(2)) } == [installer.cliCommand])
+            #expect(installsResolved.map { Array($0.prefix(1)) } == [installer.cliCommand])
         }
     }
 
@@ -1629,7 +1629,7 @@ extension AppStateIsolationTests {
             let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .filter { $0.contains("install") }
             #expect(commands.count == (ownershipChange == "unchanged" ? 1 : 0))
-            #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+            #expect(commands.allSatisfy { Array($0.prefix(1)) == installer.cliCommand })
             #expect(healthChecks == (ownershipChange == "unchanged" ? 1 : 0))
         }
     }

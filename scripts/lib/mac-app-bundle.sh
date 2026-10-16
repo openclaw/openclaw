@@ -1,5 +1,16 @@
 #!/bin/bash
 
+resolve_mac_build_architecture() {
+  local architecture="${BUILD_ARCHS:-$(uname -m)}"
+  case "$architecture" in
+    arm64 | x86_64) printf '%s\n' "$architecture" ;;
+    *)
+      echo "ERROR: Build per-architecture artifacts: set BUILD_ARCHS=arm64 or BUILD_ARCHS=x86_64. Universal and multi-architecture apps are not supported." >&2
+      return 1
+      ;;
+  esac
+}
+
 # Both direct packaging and restart publish only a completely verified bundle.
 replace_mac_app_bundle() {
   local staged="$1" target="$2" previous

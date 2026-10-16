@@ -71,6 +71,77 @@ struct ShellExecutorTimeoutTests {
         #expect(result.stderr == "problem\n")
     }
 
+    @Test(arguments: [false, true])
+    @MainActor
+    func `bundled repair cancellation waits for Doctor cleanup`(bundledRepair: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-shell-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let readyURL = directory.appendingPathComponent("ready")
+        let waitURL = directory.appendingPathComponent("wait")
+        let pidURL = directory.appendingPathComponent("pid")
+        let settledURL = directory.appendingPathComponent("settled")
+        let ready = try self.makeFIFO(at: readyURL)
+        let wait = try self.makeFIFO(at: waitURL)
+        defer {
+            try? ready.close()
+            try? wait.close()
+        }
+
+        let script = """
+        /bin/cat "$WAIT" >/dev/null &
+        worker=$!
+        trap 'wait "$worker" || :; printf settled > "$SETTLED"; exit 0' TERM
+        printf '%s\\n' "$$" > "$PID"
+        printf R > "$READY"
+        wait "$worker"
+        """
+        let runtime: BundledRuntime?
+        if bundledRepair {
+            let app = directory.appendingPathComponent("OpenClaw.app")
+            _ = try makeBundledRuntimeTestBundle(
+                at: app, builtAt: "2026-10-16T00:00:00.000Z", command: "unused", doctorScript: script)
+            runtime = try BundledRuntime.resolve(bundle: #require(Bundle(url: app)))
+        } else {
+            runtime = nil
+        }
+        let environment = [
+            "READY": readyURL.path, "WAIT": waitURL.path, "PID": pidURL.path, "SETTLED": settledURL.path,
+        ]
+        let task = Task {
+            if let runtime {
+                let absent = directory.appendingPathComponent("absent-service")
+                let authority = GatewayLaunchAgentManager.ServiceAuthority(
+                    plist: absent, environment: absent, wrapper: absent,
+                    definition: .init(plist: nil, environment: nil, wrapper: nil),
+                    isLocalGateway: false,
+                    updateSelection: .init(installPolicy: nil, gatewayUpdateChannel: nil))
+                _ = try? await CLIInstaller.repairBundledGateway(
+                    runtime: runtime, environment: environment, expectedServiceAuthority: authority,
+                    checkCurrent: {}, statusHandler: { _ in })
+            } else {
+                _ = await ShellExecutor.runDetailed(
+                    command: ["/bin/sh", "-c", script], cwd: nil, env: environment, timeout: 30)
+            }
+        }
+        let readyData = try await Task.detached { try ready.read(upToCount: 1) }.value
+        try #require(readyData == Data("R".utf8))
+        let pid = try self.readPID(from: pidURL)
+        defer {
+            if kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+        }
+
+        task.cancel()
+        _ = await task.value
+
+        #expect(FileManager.default.fileExists(atPath: settledURL.path) == bundledRepair)
+        if bundledRepair {
+            #expect(try String(contentsOf: settledURL, encoding: .utf8) == "settled")
+        }
+        #expect(kill(pid, 0) == -1 && errno == ESRCH)
+    }
+
     @Test func `timeout kills and reaps a TERM-ignoring command`() async throws {
         try await self.assertTimeoutKillsAndReaps(streaming: false)
     }
@@ -179,6 +250,13 @@ struct ShellExecutorTimeoutTests {
         let value = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(value))
+    }
+
+    private func makeFIFO(at url: URL) throws -> FileHandle {
+        try #require(mkfifo(url.path, 0o600) == 0)
+        let descriptor = open(url.path, O_RDWR | O_CLOEXEC)
+        try #require(descriptor >= 0)
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     private func waitUntilGone(_ pid: pid_t) async -> Bool {

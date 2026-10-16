@@ -226,9 +226,7 @@ struct AppHostedGatewayAuthTests {
 }
 
 func makeFirstRunTempDirForTests() throws -> URL {
-    // Foundation's Darwin temp directory ignores the native sandbox launcher's TMPDIR.
-    let base = ProcessInfo.processInfo.environment["TMPDIR"].map { URL(fileURLWithPath: $0) }
-        ?? FileManager.default.temporaryDirectory
+    let base = testTemporaryDirectory()
     let directory = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory

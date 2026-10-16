@@ -93,6 +93,11 @@ enum ExecutableVersionProbe {
     static func read(binary: String, pathEnv: String, logger: Logger, label: String) async -> String? {
         let start = Date()
         do {
+            if let manifest = try BundledRuntime.validatedStandaloneManifest(
+                executable: URL(fileURLWithPath: binary))
+            {
+                return manifest.openclaw.version
+            }
             let result = try await BoundedProcess.run(
                 path: binary,
                 arguments: ["--version"],
@@ -112,7 +117,7 @@ enum ExecutableVersionProbe {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             logger.error(
                 """
-                \(label, privacy: .public) --version failed (\(elapsedMs, privacy: .public)ms) \
+                \(label, privacy: .public) version lookup failed (\(elapsedMs, privacy: .public)ms) \
                 bin=\(binary, privacy: .public) \
                 err=\(error.localizedDescription, privacy: .public)
                 """)

@@ -237,6 +237,10 @@ struct ConnectionSettingsView: View {
                 }
             }
             self.healthRow
+            if let relocationStatus = self.gatewayManager.bundleRelocationStatus {
+                Text(relocationStatus)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Local Gateway")
         } footer: {

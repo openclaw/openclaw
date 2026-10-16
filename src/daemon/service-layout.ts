@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isStandaloneRuntimeExecutable,
+  readStandaloneRuntimeManifest,
+} from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -47,6 +51,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     !root ||
     !command ||
     isBunRuntime(command.programArguments[0] ?? "") ||
+    isStandaloneRuntimeExecutable(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
     (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
@@ -240,11 +245,17 @@ export async function summarizeGatewayServiceLayout(
     tryRealpath(sourcePath),
     tryRealpath(entrypoint),
   ]);
-  const packageRoot = entrypointReal ? await resolveOpenClawPackageRoot(entrypointReal) : undefined;
+  const standalone = entrypointReal ? readStandaloneRuntimeManifest(entrypointReal) : undefined;
+  const packageRoot =
+    standalone && entrypointReal
+      ? path.resolve(path.dirname(entrypointReal), standalone.runtime.path)
+      : entrypointReal
+        ? await resolveOpenClawPackageRoot(entrypointReal)
+        : undefined;
   const packageRootReal = await tryRealpath(packageRoot);
-  const packageVersion = packageRoot
-    ? ((await readPackageVersion(packageRoot)) ?? undefined)
-    : undefined;
+  const packageVersion =
+    standalone?.openclaw.version ??
+    (packageRoot ? ((await readPackageVersion(packageRoot)) ?? undefined) : undefined);
   const entrypointSourceCheckout = packageRootReal
     ? await isGatewayServiceSourceCheckoutRoot(packageRootReal)
     : undefined;

@@ -1,7 +1,15 @@
 import Foundation
 
+func testTemporaryDirectory() -> URL {
+    // Foundation's Darwin temp directory can ignore the native sandbox launcher's TMPDIR.
+    if let path = ProcessInfo.processInfo.environment["TMPDIR"] {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    return FileManager.default.temporaryDirectory
+}
+
 func makeTempDirForTests() throws -> URL {
-    let base = FileManager.default.temporaryDirectory
+    let base = testTemporaryDirectory()
     let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
     return dir

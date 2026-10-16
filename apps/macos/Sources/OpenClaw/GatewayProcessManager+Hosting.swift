@@ -292,8 +292,9 @@ extension GatewayProcessManager {
             .merging(capturedServiceEnvironment) { _, captured in captured }
         let servicePaths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
         environment.merge(runtime.environment) { _, runtimeValue in runtimeValue }
+        environment["OPENCLAW_SQLITE_LIBRARY"] = runtime.sqliteLibraryOverride
         var seen = Set<String>()
-        environment["PATH"] = ([runtime.bun.deletingLastPathComponent().path] + servicePaths + searchPaths)
+        environment["PATH"] = ([runtime.executable.deletingLastPathComponent().path] + servicePaths + searchPaths)
             .filter { seen.insert($0).inserted }.joined(separator: ":")
         environment["OPENCLAW_PROFILE"] = profile.name ?? "default"
         environment["OPENCLAW_STATE_DIR"] = profile.stateDirectoryURL().path
@@ -304,15 +305,13 @@ extension GatewayProcessManager {
     func currentBundledRuntime() async throws -> BundledRuntime {
         self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
         if self.gatewayHosting == .service,
-           let cli = GatewayLaunchAgentManager.installedServiceCLI() ?? self.retainedServiceCLI,
-           let executable = cli.prefix.first
+           let cli = GatewayLaunchAgentManager.installedServiceCLI() ?? self.retainedServiceCLI
         {
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: executable)
-                .deletingLastPathComponent().deletingLastPathComponent())
+            let runtime = BundledRuntime(retainedCLI: cli)
             if cli.matchesBundledRuntime(runtime) { return runtime }
         }
         if let runtime = try BundledRuntime.seeded() { return runtime }
-        return try await BundledRuntime.seed()
+        return try BundledRuntime.forAppHosting()
     }
 
     func startAppHostedGateway(startGeneration: UInt64, runtime selectedRuntime: BundledRuntime? = nil) async {
@@ -332,7 +331,7 @@ extension GatewayProcessManager {
             } else if pin?.status == .migrationPending {
                 try await self.currentBundledRuntime()
             } else {
-                try await BundledRuntime.seed()
+                try BundledRuntime.forAppHosting()
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let port = GatewayEnvironment.gatewayPort()
@@ -342,17 +341,32 @@ extension GatewayProcessManager {
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let environment = try self.appHostedEnvironment(runtime: runtime)
+            try await self.repairAppHostedRuntimeBeforeStart(
+                runtime: runtime, pin: pin, generation: startGeneration, environment: environment)
             try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
-            let pid = try await self.childSupervisor.start(configuration: .init(
-                bun: runtime.bun,
-                packageRoot: runtime.packageRoot,
-                environment: environment,
-                logPath: GatewayLaunchAgentManager.launchdGatewayLogPath(),
-                port: port,
-                allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary))
-            { [weak self] event in
-                self?.handleChildEvent(event, port: port)
-            }
+            let pid = try await self.childSupervisor.start(
+                configuration: .init(
+                    executable: runtime.executable,
+                    environment: environment,
+                    logPath: GatewayLaunchAgentManager.launchdGatewayLogPath(),
+                    port: port,
+                    allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary),
+                configurationForRestart: { [weak self] in
+                    guard let self, !self.isTerminating else { throw CancellationError() }
+                    let currentPin = try await GatewayLaunchAgentManager.runtimePinRecord(
+                        stateDirectory: AppProfile.current.stateDirectoryURL(), profile: .current)
+                    let nextRuntime = currentPin?.status == .migrationPending
+                        ? runtime : try BundledRuntime.forAppHosting()
+                    return try .init(
+                        executable: nextRuntime.executable,
+                        environment: self.appHostedEnvironment(runtime: nextRuntime),
+                        logPath: GatewayLaunchAgentManager.launchdGatewayLogPath(),
+                        port: port,
+                        allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary)
+                },
+                onEvent: { [weak self] event in
+                    self?.handleChildEvent(event, port: port)
+                })
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             await self.observeChildReadiness(pid: pid, port: port, generation: startGeneration)
         } catch {
@@ -421,15 +435,15 @@ extension GatewayProcessManager {
             context: context,
             deadlinePolicy: .startup(timeout: GatewayLaunchAgentManager.startupMigrationTolerance),
             clock: self.readinessClock)
-        if await self.publishGatewayReadinessTerminal(terminal, context: context) {
-            do { try await BundledRuntime.garbageCollectAfterHealthy() } catch {
-                self.appendLog("[gateway] old runtime cleanup deferred: \(error.localizedDescription)\n")
-            }
-        }
+        _ = await self.publishGatewayReadinessTerminal(terminal, context: context)
     }
 
     func shutdownAppHostedGateway() async {
         self.isTerminating = true
+        self.runtimePreparationTask?.cancel()
+        await BundledRuntime.cancelSeeding()
+        await self.runtimePreparationTask?.value
+        self.runtimePreparationTask = nil
         self.canonicalUpdateStage = nil
         _ = try? await self.hostingChangeTask?.value
         // Already-admitted service writes and a pending pause settle before app exit.
@@ -577,7 +591,9 @@ extension GatewayProcessManager {
         let pausedUpdate = AppStateStore.shared.isPaused ? try self.preparePausedServiceUpdate() : nil
         self.hostingChangeInProgress = true
         defer { self.hostingChangeInProgress = false }
-        let runtime = try await BundledRuntime.seed()
+        let runtime = hosting == .app
+            ? try BundledRuntime.forAppHosting()
+            : try await BundledRuntime.seed()
         if try self.bundledRuntimeUpdateIsPaused(generation: updateGeneration) {
             if self.gatewayStartGeneration == updateGeneration {
                 try await self.completePausedServiceUpdate(pausedUpdate, runtime: runtime) {
@@ -596,6 +612,19 @@ extension GatewayProcessManager {
             generation: updateGeneration,
             selection: (hosting, port, allowUnconfigured),
             expectedService: custody) { return completion(activation) }
+        if source == .recovery, hosting == .app, preservedRuntime == nil,
+           self.desiredActive, case .running = self.status,
+           let buildID = self.repairedAppHostedRuntimeBuildID,
+           self.childSupervisor.processIdentifier != nil,
+           let child = self.childSupervisor.configuration,
+           child.port == port, child.allowUnconfigured == allowUnconfigured,
+           try runtime.manifest().buildId == buildID,
+           (try? BundledRuntime(root: child.executable.deletingLastPathComponent()).manifest().buildId) == buildID
+        {
+            // First startup already joined Doctor and this build's health. Explicit Retry
+            // still reaches repair, while automatic reconciliation keeps the healthy child.
+            return completion(.ready)
+        }
         return try await self.repairPreparedBundledRuntime(
             runtime: runtime, source: source, expectedService: custody, preservedRuntime: preservedRuntime)
     }

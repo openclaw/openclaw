@@ -10,6 +10,7 @@ import { resolveNodeService } from "./node-service.js";
 import {
   commitDaemonRuntimePin,
   readDaemonRuntimePin,
+  readDaemonRuntimePinForInstall,
   readDaemonRuntimePinMigrationPending,
   withDaemonRuntimePinMigration,
 } from "./runtime-pin-state.js";
@@ -150,6 +151,33 @@ describe("native service runtime pin persistence", () => {
     },
   );
 
+  it("reinstalls an app-owned Bun service as standalone and can roll back to Bun", async () => {
+    await withDarwinRuntimePinState({ label: "pin-native-app-upgrade" }, async (state) => {
+      await withDaemonRuntimePinMigration(state.env, () => undefined);
+      const scope = { kind: "gateway" as const, env: state.env };
+      const service = resolveGatewayService();
+      const bun = "/app/runtime/old/bin/bun";
+      const standalone = "/app/runtime/new/openclaw";
+      for (const programArguments of [
+        [bun, "/app/runtime/old/openclaw.mjs", "gateway"],
+        [standalone, "gateway"],
+        [bun, "/app/runtime/old/openclaw.mjs", "gateway"],
+      ]) {
+        const pin = { runtime: "bun" as const, path: programArguments[0]! };
+        await service.install({
+          env: state.env,
+          stdout: process.stdout,
+          programArguments,
+          runtimePinUpdate: {
+            expected: readDaemonRuntimePinForInstall(scope, native.command, true),
+            pin,
+          },
+        });
+        expect(native.command?.programArguments).toEqual(programArguments);
+        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
+      }
+    });
+  });
   it("keeps pin-unaware default writes read-only for runtime metadata", async () => {
     await withDarwinRuntimePinState({ label: "pin-native-default" }, async (state) => {
       const service = resolveGatewayService();

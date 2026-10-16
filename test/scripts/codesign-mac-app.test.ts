@@ -25,6 +25,7 @@ const codesignArgs = process.platform === "win32" ? [scriptPath] : [];
 // Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
 const macIt = it.runIf(process.platform === "darwin");
 const developerIdentity = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
+const bunPin = JSON.parse(readFileSync("scripts/lib/openclaw-bun.json", "utf8"));
 
 function runCodesign(
   mac: MacScriptFixture,
@@ -458,16 +459,16 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     { arch: "arm64", sdkArch: "arm64", cpuType: 0x0100000c, elevation: true },
     { arch: "x86_64", sdkArch: "x64", cpuType: 0x01000007, elevation: true },
   ])(
-    "limits plugin library loading to bundled Bun on $arch (elevation: $elevation)",
+    "uses manifest entitlements only for the standalone executable on $arch (elevation: $elevation)",
     ({ sdkArch, cpuType, elevation }, { mac, expect }) =>
       mac.lifetime.run(async () => {
         const fixture = await signingFixture(mac, "inventory-jit");
-        const modules = "lib/node_modules/openclaw/node_modules";
+        const modules = "runtime/node_modules";
         const sdkRuntime = `node_modules/@anthropic-ai/claude-agent-sdk-darwin-${sdkArch}/claude`;
         const expected = new Map<string, "plugins" | "jit" | "plain">();
         for (const [relative, fileType, policy] of [
-          ["bin/bun", 2, "plugins"],
-          [`lib/node_modules/openclaw/${sdkRuntime}`, 2, "jit"],
+          ["openclaw", 2, "plugins"],
+          [`runtime/${sdkRuntime}`, 2, "jit"],
           [`${modules}/nested/${sdkRuntime}`, 2, "jit"],
           [
             `${modules}/@lydell/node-pty-darwin-${sdkArch}/prebuilds/darwin-${sdkArch}/spawn-helper`,
@@ -485,6 +486,32 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           const filename = await fixture.put(`${runtimePath}${relative}`, bytes);
           expected.set(filename, policy);
         }
+        await mkdir(path.join(fixture.runtime, "runtime"), { recursive: true });
+        await symlink(process.execPath, path.join(path.dirname(fixture.app), "bin/node"));
+        await writeFile(
+          path.join(fixture.runtime, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            mode: "jit",
+            target: { platform: "darwin", arch: sdkArch },
+            bun: {
+              version: "1.4.3",
+              revision: bunPin.revision,
+              commit: bunPin.commit,
+              executableSha256: bunPin.artifacts[`darwin-${sdkArch}`].executableSha256,
+            },
+            openclaw: { version: "2026.10.14", commit: "a".repeat(40) },
+            executable: { path: "openclaw", sha256: "b".repeat(64) },
+            runtime: { path: "runtime", sha256: "c".repeat(64) },
+            macos: {
+              hardenedRuntime: true,
+              entitlements: {
+                "com.apple.security.cs.allow-jit": true,
+                "com.apple.security.cs.disable-library-validation": true,
+              },
+            },
+          }),
+        );
         await fixture.put("Contents/MacOS/OpenClaw");
         const result = await fixture.run({}, elevation);
         expect(result.status, result.stderr).toBe(0);
@@ -511,10 +538,9 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
               ? []
               : [
                   "com.apple.security.cs.allow-jit",
-                  "com.apple.security.cs.allow-unsigned-executable-memory",
                   ...(policy === "plugins"
                     ? ["com.apple.security.cs.disable-library-validation"]
-                    : []),
+                    : ["com.apple.security.cs.allow-unsigned-executable-memory"]),
                 ];
           expect(keys.toSorted(), filename).toEqual(expectedKeys.toSorted());
           expect(signed.args).toEqual(
@@ -625,7 +651,9 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
     (mixed, { mac, expect }) =>
       mac.lifetime.run(async () => {
         const fixture = await signingFixture(mac, "inventory-real-fat64");
-        const native = await fixture.put(runtimePath + "bin/bun");
+        const native = await fixture.put(
+          runtimePath + "runtime/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+        );
         const bytes = await writeFat64Fixture(native, mac);
         expect(bytes.readUInt32BE(0)).toBe(0xcafebabf);
         expect(bytes.readUInt32BE(4)).toBeGreaterThanOrEqual(2);

@@ -646,6 +646,8 @@ extension ApplicationRelocator {
                 }
             }
 
+            await GatewayProcessManager.shared.restartRelocatedBundledGatewayIfNeeded()
+
             // Atomic replacements can briefly remove the bundle or expose it before
             // code-signature validation is complete. Keep the old process alive until
             // the complete replacement is present and trusted.
