@@ -239,7 +239,7 @@ describe("plugin conversation approval worker lifetime", () => {
       const result = pending
         ? resolvePluginConversationBindingApproval(resolutionParams)
         : requestPluginConversationBinding(input);
-      const observed = observe(result);
+      const observed = observe<Awaited<typeof result>>(result);
       try {
         await expectHeld(entered.promise, observed);
         if (mode === "decision") {

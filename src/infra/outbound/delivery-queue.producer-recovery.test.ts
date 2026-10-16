@@ -122,7 +122,7 @@ describe("exhausted delivery producer recovery", () => {
   it("preserves an active producer even when its attempt budget is exhausted", async () => {
     const producerClaimId = await reserveProducer("active-producer");
     await recover("startup");
-    expect(await queueStorage.loadPendingDelivery("active-producer", tmpDir())).toMatchObject({
+    expect(await queue.loadPendingDelivery("active-producer", tmpDir())).toMatchObject({
       producerClaimId,
       recoveryState: "producer_claimed",
       attemptCount: 1,

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
@@ -52,7 +53,9 @@ async function rejectedPayload(error: Error, surfaceIndex?: number) {
       sessionCtx:
         surfaceIndex === undefined
           ? createDirectFailureSessionCtx()
-          : createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[surfaceIndex]),
+          : createNonDirectFailureSessionCtx(
+              expectDefined(NON_DIRECT_FAILURE_SURFACE_CASES[surfaceIndex], "failure surface"),
+            ),
     }),
   );
 }

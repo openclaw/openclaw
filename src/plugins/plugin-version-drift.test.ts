@@ -68,7 +68,13 @@ function expectNoRepair(entry: ReturnType<typeof firstDrift>) {
   expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
 }
 
-it.each([
+const driftCases: Array<
+  Omit<Parameters<typeof detectDrift>[0], "gatewayVersion"> & {
+    name: string;
+    gatewayVersion?: string;
+    expected: unknown[];
+  }
+> = [
   {
     name: "treats build qualifiers as matching",
     gatewayVersion: "2026.5.4-1",
@@ -118,7 +124,8 @@ it.each([
       expect.objectContaining({ pluginId }),
     ),
   },
-])("detectPluginVersionDrift: $name", ({ expected, ...input }) => {
+];
+it.each(driftCases)("detectPluginVersionDrift: $name", ({ expected, ...input }) => {
   expect(detectDrift({ gatewayVersion: "2026.5.4", ...input }).drifts).toEqual(expected);
 });
 describe("resolvePluginVersionDriftTargets", () => {

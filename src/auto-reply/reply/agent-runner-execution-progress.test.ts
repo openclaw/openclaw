@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -79,10 +80,11 @@ function terminalEventsForRun(runId: string) {
 function terminalData(runId: string, sessionKey?: string) {
   const events = terminalEventsForRun(runId);
   expect(events).toHaveLength(1);
+  const event = expectDefined(events[0], "terminal event");
   if (sessionKey) {
-    expectRecordFields(events[0], { sessionKey });
+    expectRecordFields(event, { sessionKey });
   }
-  return events[0].data;
+  return event.data;
 }
 
 beforeEach(() => {
@@ -451,7 +453,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
     const terminalEvents = terminalEventsForRun("run-deferred-diagnostic");
     expect(terminalEvents).toHaveLength(1);
-    const lifecycleEvent = terminalEvents[0];
+    const lifecycleEvent = expectDefined(terminalEvents[0], "terminal lifecycle event");
     expectRecordFields(lifecycleEvent.data, {
       phase: "error",
       error: deferredError,

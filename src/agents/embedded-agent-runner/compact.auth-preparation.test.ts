@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { afterAll, expect, it, onTestFinished, vi } from "vitest";
-import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
@@ -36,8 +35,6 @@ const [
   import("../../config/runtime-snapshot.js"),
 ]);
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-auth-");
-const primaryModel = { provider: "openai", model: "gpt-primary" };
-const configFor = (defaults: AgentDefaultsConfig) => ({ agents: { defaults } });
 
 async function prepareCompactionParams() {
   const workspaceDir = tempDirs.make();
@@ -48,21 +45,17 @@ async function prepareCompactionParams() {
     sessionKey: "agent:main:compaction-auth",
     storePath: join(workspaceDir, "sessions.sqlite"),
   };
-  await upsertSessionEntryCore(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    updatedAt: 1,
+  });
   return { ...sessionTarget, sessionTarget, sessionFile: sessionTarget.sessionKey, workspaceDir };
 }
 
-async function runOwnedCompaction(
-  params: Parameters<typeof compactEmbeddedAgentSession>[0],
-  mode: "direct" | "queued" = "direct",
-) {
+async function runOwnedCompaction(run: () => ReturnType<typeof compactEmbeddedAgentSessionDirect>) {
   const parent = new AsyncWorkScope();
   try {
-    return await parent.run(() =>
-      mode === "direct"
-        ? compactEmbeddedAgentSessionDirect(params)
-        : compactEmbeddedAgentSession(params),
-    );
+    return await parent.run(run);
   } finally {
     await AsyncWorkScope.runWhenAllIdle(
       () => [parent],
@@ -103,13 +96,16 @@ it.each(["lookup", "hook", "allowed"] as const)(
       }
       return { apiKey: "prepared-fixture-key" };
     });
-    const result = await runOwnedCompaction({
-      ...baseParams,
-      ...primaryModel,
-      trigger: "budget",
-      abortSignal: controller.signal,
-      config: configFor({ compaction: { model: "openai/gpt-primary" } }),
-    });
+    const result = await runOwnedCompaction(() =>
+      compactEmbeddedAgentSessionDirect({
+        ...baseParams,
+        provider: "openai",
+        model: "gpt-primary",
+        trigger: "budget",
+        abortSignal: controller.signal,
+        config: { agents: { defaults: { compaction: { model: "openai/gpt-primary" } } } },
+      }),
+    );
     expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(prepareAuth).toHaveBeenCalledTimes(stage === "lookup" ? 0 : 1);
     expect(result.ok).toBe(stage === "allowed");
@@ -133,7 +129,7 @@ it.each([false, true])(
     const baseParams = await prepareCompactionParams();
     let revoked = false;
     const dispose = vi.fn();
-    const uninstall = installSessionPlacementAdmissionProvider({
+    const provider = {
       async prepareSandbox() {
         return {
           sandbox: null,
@@ -145,6 +141,9 @@ it.each([false, true])(
           [Symbol.dispose]: dispose,
         };
       },
+    };
+    const uninstall = installSessionPlacementAdmissionProvider({
+      ...provider,
       assertCompactionSuccessorAllowed() {},
       executeLocalTurn: async (_claim, run) => await run(),
       executeTurn: async (_claim, _params, run) => await run(),
@@ -155,14 +154,14 @@ it.each([false, true])(
     });
     setRuntimeConfigSnapshot({});
     try {
-      const operation = runOwnedCompaction(
-        {
+      const operation = runOwnedCompaction(() =>
+        compactEmbeddedAgentSession({
           ...baseParams,
-          ...primaryModel,
+          provider: "openai",
+          model: "gpt-primary",
           trigger: "manual",
           enqueue: async (task) => await task(),
-        },
-        "queued",
+        }),
       );
       if (revoke) {
         await expect(operation).rejects.toThrow("placement revoked during engine preparation");
@@ -180,82 +179,107 @@ it.each([false, true])(
   },
 );
 
-it.each(["direct", "queued", "fallback"] as const)(
-  "handles a cooldowned auth profile in %s compaction",
+it.each(["direct", "queued"] as const)(
+  "returns a compaction failure when %s auth preparation is cooldowned",
   async (mode) => {
     const baseParams = await prepareCompactionParams();
-    const fallback = mode === "fallback";
-    const provider = fallback ? "primary" : "summary";
-    const agentDir = join(baseParams.workspaceDir, "agent");
     const authStore = {
-      version: 1 as const,
-      profiles: Object.fromEntries(
-        (fallback ? [provider, "backup"] : [provider]).map(
-          (id) => [`${id}:default`, createApiKeyCredential(id, `test-${id}-key`)] as const,
-        ),
-      ),
-      ...(!fallback ? { order: { summary: ["summary:default"] } } : {}),
-      usageStats: {
-        [`${provider}:default`]: {
-          cooldownUntil: Date.now() + (fallback ? 3_600_000 : 60_000),
-          ...(fallback ? { cooldownReason: "rate_limit" as const } : {}),
-        },
+      version: 1,
+      profiles: {
+        "summary:default": createApiKeyCredential("summary", "test-summary-key"),
       },
+      order: { summary: ["summary:default"] },
+      usageStats: { "summary:default": { cooldownUntil: Date.now() + 60_000 } },
     };
     const originalAuthStore = structuredClone(authStore);
     vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
-    if (fallback) {
-      prepareSharedAuthStoreOwnershipForNative();
-      setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
-      onTestFinished(() => clearRuntimeAuthProfileStoreSnapshotCore(agentDir));
-      resolveContextEngineMock.mockResolvedValue({
-        info: { ownsCompaction: false },
-        compact: vi.fn(delegateCompactionToRuntime),
-      });
-    }
-    const result = await runOwnedCompaction(
-      {
-        ...baseParams,
-        ...(fallback ? { agentDir, provider, model: "model" } : primaryModel),
-        trigger: "budget",
-        forcePreflight: true,
-        preflightRequired: true,
-        ...(fallback
-          ? { preflightCompactionTrigger: "transcript_bytes" as const }
-          : {
-              enqueue: async <T>(task: () => Promise<T> | T) => await task(),
-            }),
-        config: configFor(
-          fallback
-            ? { model: { primary: "primary/model", fallbacks: ["backup/model"] } }
-            : {
-                model: { primary: "openai/gpt-primary", fallbacks: ["openai/gpt-fallback"] },
-                compaction: { model: "summary/compact-model" },
-              },
-        ),
+    const params = {
+      ...baseParams,
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "budget" as const,
+      forcePreflight: true,
+      preflightRequired: true,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-primary", fallbacks: ["openai/gpt-fallback"] },
+            compaction: { model: "summary/compact-model" },
+          },
+        },
       },
-      fallback ? "queued" : mode,
+      enqueue: async <T>(task: () => Promise<T> | T) => await task(),
+    };
+
+    const result = await runOwnedCompaction(() =>
+      mode === "direct"
+        ? compactEmbeddedAgentSessionDirect(params)
+        : compactEmbeddedAgentSession(params),
     );
 
-    if (fallback) {
-      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
-      expect(sessionCompactImpl).toHaveBeenCalledOnce();
-      expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-        expect.objectContaining({ profileId: "backup:default" }),
-      );
-    } else {
-      expect(result).toMatchObject({
-        ok: false,
-        compacted: false,
-        reason:
-          'Auth profile "summary:default" is temporarily unavailable for summary/compact-model.',
-      });
-      expect(resolveModelMock).toHaveBeenCalledTimes(1);
-      expect(resolveModelMock.mock.calls[0]?.slice(0, 2)).toEqual(["summary", "compact-model"]);
-      for (const mock of [contextEngineCompactMock, sessionCompactImpl, getApiKeyForModelMock]) {
-        expect(mock).not.toHaveBeenCalled();
-      }
-      expect(authStore).toEqual(originalAuthStore);
-    }
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason:
+        'Auth profile "summary:default" is temporarily unavailable for summary/compact-model.',
+    });
+    expect(resolveModelMock).toHaveBeenCalledTimes(1);
+    expect(resolveModelMock.mock.calls[0]?.slice(0, 2)).toEqual(["summary", "compact-model"]);
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(authStore).toEqual(originalAuthStore);
   },
 );
+
+it("compacts through the configured fallback when the primary profile is cooling down", async () => {
+  const baseParams = await prepareCompactionParams();
+  const agentDir = join(baseParams.workspaceDir, "agent");
+  const authStore = {
+    version: 1 as const,
+    profiles: {
+      "primary:default": createApiKeyCredential("primary", "test-primary-key"),
+      "backup:default": createApiKeyCredential("backup", "test-backup-key"),
+    },
+    usageStats: {
+      "primary:default": {
+        cooldownUntil: Date.now() + 3_600_000,
+        cooldownReason: "rate_limit" as const,
+      },
+    },
+  };
+  prepareSharedAuthStoreOwnershipForNative();
+  setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
+  onTestFinished(() => {
+    clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+  });
+  vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
+  resolveContextEngineMock.mockResolvedValue({
+    info: { ownsCompaction: false },
+    compact: vi.fn(delegateCompactionToRuntime),
+  });
+
+  const result = await runOwnedCompaction(() =>
+    compactEmbeddedAgentSession({
+      ...baseParams,
+      agentDir,
+      provider: "primary",
+      model: "model",
+      trigger: "budget",
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "transcript_bytes",
+      config: {
+        agents: {
+          defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
+        },
+      },
+    }),
+  );
+
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+  expect(sessionCompactImpl).toHaveBeenCalledOnce();
+  expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+    expect.objectContaining({ profileId: "backup:default" }),
+  );
+});

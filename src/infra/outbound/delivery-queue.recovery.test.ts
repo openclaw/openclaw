@@ -55,10 +55,10 @@ const COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const;
-const adapterMock = vi.hoisted(() => vi.fn());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 vi.mock("./channel-resolution.js", () => ({
-  resolveOutboundChannelMessageAdapter: adapterMock,
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 function mockCallRecord(mock: { mock: { calls: unknown[][] } }) {
@@ -185,7 +185,7 @@ describe("delivery-queue recovery", () => {
     durableFinal: Record<string, unknown> = {},
     adapter: Record<string, unknown> = {},
   ) {
-    adapterMock.mockReturnValue({
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       ...adapter,
       durableFinal: {
         capabilities: { reconcileUnknownSend: true },
@@ -267,7 +267,7 @@ describe("delivery-queue recovery", () => {
   }
   beforeEach(() => {
     deliver = vi.fn().mockResolvedValue([]);
-    adapterMock.mockReset();
+    resolveOutboundChannelMessageAdapterMock.mockReset();
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
@@ -581,7 +581,7 @@ describe("delivery-queue recovery", () => {
       platformSendStartedAt: Date.now(),
     });
     const reconcileUnknownSend = vi.fn();
-    adapterMock.mockReturnValue({
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: {
         admitDeferredDelivery: () => ({
           status: "permanent_rejection",
@@ -598,7 +598,7 @@ describe("delivery-queue recovery", () => {
     expectPayloadAudits(auditEvents, id, [
       { status: "unknown", outcome: "unknown", failureStage: "queue" },
     ]);
-    adapterMock.mockReturnValue({
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
       durableFinal: { admitDeferredDelivery: () => ({ status: "allowed" }) },
     });
     await recover({ deliver });

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -8,7 +7,6 @@ import { FailoverError } from "../../agents/failover-error.js";
 import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
-import type { ChannelThreadingContext } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -32,54 +30,6 @@ import {
 } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
-const executeAgentTurn = await getExecuteAgentTurnForTest();
-type TurnOverrides = Partial<Parameters<typeof executeAgentTurn>[0]>;
-
-function runCliTurn(
-  followupRun: ReturnType<typeof createFollowupRun>,
-  overrides: TurnOverrides = {},
-) {
-  return executeAgentTurn({ ...createMinimalRunAgentTurnParams({ followupRun }), ...overrides });
-}
-
-async function runSuccessfulCliTurn(
-  followupRun: ReturnType<typeof createFollowupRun>,
-  overrides: TurnOverrides = {},
-) {
-  const result = await runCliTurn(followupRun, overrides);
-  expect(result.kind).toBe("success");
-  if (result.kind !== "success") {
-    throw new Error("expected success");
-  }
-  return result.runResult;
-}
-
-function roomTurn() {
-  const followupRun = createCliRun("codex-cli", "gpt-5.4");
-  followupRun.currentInboundEventKind = "room_event";
-  const sessionEntry = {
-    cliSessionBindings: { "codex-cli": { sessionId: "existing-cli-session" } },
-  } as unknown as SessionEntry;
-  const activeSessionStore = { main: sessionEntry };
-  return {
-    followupRun,
-    sessionEntry,
-    overrides: {
-      activeSessionStore,
-      getActiveSessionEntry: () => sessionEntry,
-    },
-  };
-}
-
-function expectDroppedBinding(
-  result: Awaited<ReturnType<typeof runSuccessfulCliTurn>>,
-  entry: SessionEntry,
-) {
-  expect(result.meta?.agentMeta?.sessionId).toBe("");
-  expect(result.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
-  expect(result.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-  expect(entry.cliSessionBindings?.["codex-cli"]).toBeUndefined();
-}
 
 function createCliRun(provider: string, model: string) {
   state.isCliProviderMock.mockReturnValue(true);
@@ -133,16 +83,21 @@ describe("executeAgentTurn: CLI session routing", () => {
         },
       ];
 
-      await runSuccessfulCliTurn(followupRun, {
-        sessionCtx: {
-          Provider: provider,
-          OriginatingChannel: "telegram",
-          OriginatingTo: "12345",
-          MessageSid: messageId,
-          MessageThreadId: "stale-topic",
-        } as unknown as TemplateContext,
-      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: provider,
+            OriginatingChannel: "telegram",
+            OriginatingTo: "12345",
+            MessageSid: messageId,
+            MessageThreadId: "stale-topic",
+          } as unknown as TemplateContext,
+        }),
+      );
 
+      expect(result.kind).toBe("success");
       expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
         modelContextWindow: 400_000,
         modelContextTokens: 321_000,
@@ -166,7 +121,16 @@ describe("executeAgentTurn: CLI session routing", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "slack" }),
             threading: {
-              buildToolContext: ({ context }: { context: ChannelThreadingContext }) => {
+              buildToolContext: ({
+                context,
+              }: {
+                context: {
+                  To?: string;
+                  CurrentMessageId?: string | number;
+                  MessageThreadId?: string | number;
+                  ReplyToMode?: string;
+                };
+              }) => {
                 const threadTs =
                   context.MessageThreadId != null ? String(context.MessageThreadId) : undefined;
                 return {
@@ -188,17 +152,22 @@ describe("executeAgentTurn: CLI session routing", () => {
         payloads: [{ text: "done" }],
         meta: {},
       });
-      await runSuccessfulCliTurn(followupRun, {
-        sessionCtx: {
-          Provider: "slack",
-          OriginatingChannel: "slack",
-          OriginatingTo: "channel:C123",
-          ChatType: "channel",
-          MessageSid: "1700000000.000200",
-          ReplyToMode: "off",
-          ...sessionCtx,
-        } as unknown as TemplateContext,
-      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "slack",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            ChatType: "channel",
+            MessageSid: "1700000000.000200",
+            ReplyToMode: "off",
+            ...sessionCtx,
+          } as unknown as TemplateContext,
+        }),
+      );
+      expect(result.kind).toBe("success");
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -270,20 +239,29 @@ describe("executeAgentTurn: CLI session routing", () => {
         input: ["text", "image"],
       },
     ];
-    followupRun.currentTurnImagesPrepared = true;
-    followupRun.mediaImageLayout = mediaImageLayout;
+    const preparedFollowupRun = followupRun as typeof followupRun & {
+      currentTurnImagesPrepared?: true;
+      mediaImageLayout?: typeof mediaImageLayout;
+    };
+    preparedFollowupRun.currentTurnImagesPrepared = true;
+    preparedFollowupRun.mediaImageLayout = mediaImageLayout;
     followupRun.images = images;
     followupRun.imageOrder = imageOrder;
     followupRun.media = media;
 
-    await runSuccessfulCliTurn(followupRun, {
-      sessionCtx: {
-        Provider: "telegram",
-        MessageSid: "msg",
-        media,
-      } as unknown as TemplateContext,
-    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+          media,
+        } as unknown as TemplateContext,
+      }),
+    );
 
+    expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       images,
       imageOrder,
@@ -299,6 +277,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       meta: {},
     });
 
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const preparedUserTurnMessage = {
       role: "user",
       content: "describe this",
@@ -318,7 +297,8 @@ describe("executeAgentTurn: CLI session routing", () => {
     const activeSessionStore = { main: sessionEntry };
 
     await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);
-    await runSuccessfulCliTurn(followupRun, {
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
       commandBody: "runtime prompt",
       transcriptCommandBody: "display prompt",
       activeSessionStore,
@@ -326,6 +306,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       getActiveSessionEntry: () => activeSessionStore.main,
     });
 
+    expect(result.kind).toBe("success");
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
       sessionKey: "main",
@@ -351,7 +332,7 @@ describe("executeAgentTurn: CLI session routing", () => {
   });
 
   it("reuses CLI sessions for room-event turns", async () => {
-    const { followupRun, overrides } = roomTurn();
+    const followupRun = createCliRun("codex-cli", "gpt-5.4");
     state.runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ambient" }],
       meta: {
@@ -365,8 +346,22 @@ describe("executeAgentTurn: CLI session routing", () => {
       },
     });
 
-    const result = await runSuccessfulCliTurn(followupRun, overrides);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    followupRun.currentInboundEventKind = "room_event";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
 
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
       persistAssistantTranscript: false,
@@ -375,15 +370,18 @@ describe("executeAgentTurn: CLI session routing", () => {
         sessionId: "existing-cli-session",
       },
     });
-    expect(result.meta?.agentMeta?.sessionId).toBe("existing-cli-session");
-    expect(result.meta?.agentMeta?.cliSessionBinding).toEqual({
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("existing-cli-session");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
       sessionId: "existing-cli-session",
       authProfileId: "profile",
     });
   });
 
   it("drops replacement room-event CLI sessions when reuse fails", async () => {
-    const { followupRun, sessionEntry, overrides } = roomTurn();
+    const followupRun = createCliRun("codex-cli", "gpt-5.4");
     state.runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ambient" }],
       meta: {
@@ -398,25 +396,38 @@ describe("executeAgentTurn: CLI session routing", () => {
       },
     });
 
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    followupRun.currentInboundEventKind = "room_event";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
     let cleanupObservedBeforePlacementRelease = false;
     const restoreAdmission = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         const resultLocal = await runLocal();
-        expect(overrides.activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
         cleanupObservedBeforePlacementRelease = true;
         return resultLocal;
       },
       executeTurn: async (_claim, _params, runLocal) => await runLocal(),
     });
 
-    let result: Awaited<ReturnType<typeof runSuccessfulCliTurn>>;
+    let result: Awaited<ReturnType<typeof executeAgentTurn>>;
     try {
-      result = await runSuccessfulCliTurn(followupRun, overrides);
+      result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        activeSessionStore,
+        getActiveSessionEntry: () => sessionEntry,
+      });
     } finally {
       restoreAdmission();
     }
 
+    expect(result.kind).toBe("success");
     expect(cleanupObservedBeforePlacementRelease).toBe(true);
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
@@ -425,11 +436,17 @@ describe("executeAgentTurn: CLI session routing", () => {
         sessionId: "existing-cli-session",
       },
     });
-    expectDroppedBinding(result, sessionEntry);
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
   });
 
   it("clears room-event CLI bindings when an unflushed replacement is dropped", async () => {
-    const { followupRun, sessionEntry, overrides } = roomTurn();
+    const followupRun = createCliRun("codex-cli", "gpt-5.4");
     state.runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "handled" }],
       meta: {
@@ -442,17 +459,51 @@ describe("executeAgentTurn: CLI session routing", () => {
       },
     });
 
-    const result = await runSuccessfulCliTurn(followupRun, overrides);
-    expectDroppedBinding(result, sessionEntry);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    followupRun.currentInboundEventKind = "room_event";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
+
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
   });
 
   it("preserves a reused binding after an operator aborts a channel turn", async () => {
     const sessionKey = "agent:main:direct:aborted-run";
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-8");
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-8",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      attempts: [],
+    }));
     state.runCliAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
     );
 
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-8";
     const sessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: 1,
@@ -461,7 +512,10 @@ describe("executeAgentTurn: CLI session routing", () => {
       claudeCliSessionId: "aborted-session",
     } as SessionEntry;
     const activeSessionStore = { [sessionKey]: sessionEntry };
-    await runCliTurn(followupRun, {
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
       sessionKey,
       activeSessionStore,
       getActiveSessionEntry: () => sessionEntry,
@@ -483,13 +537,19 @@ describe("executeAgentTurn: CLI session routing", () => {
       }),
     );
 
-    const admissionGate = createDeferred();
-    const admissionWait = createDeferred();
+    let releaseAdmission!: () => void;
+    const admissionGate = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    let notifyAdmissionWait!: () => void;
+    const admissionWait = new Promise<void>((resolve) => {
+      notifyAdmissionWait = resolve;
+    });
     const restoreAdmission = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
-        admissionWait.resolve();
-        await admissionGate.promise;
+        notifyAdmissionWait();
+        await admissionGate;
         return await runLocal();
       },
       executeTurn: async (_claim, _params, runLocal) => await runLocal(),
@@ -503,15 +563,18 @@ describe("executeAgentTurn: CLI session routing", () => {
       claudeCliSessionId: "queued-stale-session",
     } as SessionEntry;
     const activeSessionStore = { [sessionKey]: sessionEntry };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+
     try {
-      const runPromise = runCliTurn(followupRun, {
+      const runPromise = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
         sessionKey,
         activeSessionStore,
         getActiveSessionEntry: () => sessionEntry,
       });
-      await admissionWait.promise;
+      await admissionWait;
       registerGeneratedMediaTaskActivity("tool:image_generate:earlier-turn", sessionKey);
-      admissionGate.resolve();
+      releaseAdmission();
       const result = await runPromise;
 
       expect(result.kind).toBe("final");
@@ -522,7 +585,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(sessionEntry.claudeCliSessionId).toBeUndefined();
     } finally {
-      admissionGate.resolve();
+      releaseAdmission();
       restoreAdmission();
     }
   });

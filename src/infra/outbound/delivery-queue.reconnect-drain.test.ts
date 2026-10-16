@@ -23,16 +23,16 @@ const RECOVERY_REPLAY_SPACING_MS = 250;
 const stubCfg = {};
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const migrateLegacyPendingOutboundDeliveriesMock = vi.hoisted(() =>
+  vi.fn(async () => ({ moved: 0, skipped: 0, remaining: 0 })),
+);
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 vi.mock("./channel-resolution.js", () => ({
-  resolveOutboundChannelMessageAdapter: vi.fn(),
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 vi.mock("./delivery-queue-migration.js", () => ({
-  migrateLegacyPendingOutboundDeliveries: vi.fn(async () => ({
-    moved: 0,
-    skipped: 0,
-    remaining: 0,
-  })),
+  migrateLegacyPendingOutboundDeliveries: migrateLegacyPendingOutboundDeliveriesMock,
 }));
 
 describe("drainPendingDeliveriesCore for reconnect", () => {
