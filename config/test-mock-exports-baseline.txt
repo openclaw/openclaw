@@ -6421,7 +6421,6 @@
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-memory-recall.js","cac8eb6d6fb459cb845d8a188402673f327acddd2cadc047db953fd65f6b30b3",1]
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-memory-search.js","f2f30135fb2adcb6755d52358450f9443cad19569e124492399f030f73186927",1]
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-model-catalog-credentials.js","8b1bb344e7e4f835acc48b786b366ec1303cdaef176a0729623228f627ada727",1]
-["src/flows/doctor-health-contributions.test.ts","../commands/doctor-plugin-manifests.js","aa019fab9ec80c6e5dfa06b6bbf86551ca40e23a12c73f519bb6e983fe035e62",1]
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-plugin-model-catalog.js","6a5392d741d3e5bb075048298e0ab9182e622eea3657425594a4d55c6ad3e59c",1]
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-tools-md-migration.js","cfba89804b9f28fe7e98fd72c512b4e27a504847dd0098e0deb792f38afe690f",1]
 ["src/flows/doctor-health-contributions.test.ts","../commands/doctor-web-fetch-proxy.js","bf08f184cc1ffaf17b30066fa23c212d5188920a716ecc38fbee10396bf58e23",1]

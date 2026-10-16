@@ -356,7 +356,8 @@ vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
   repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
-vi.mock("../commands/doctor-plugin-manifests.js", () => ({
+vi.mock("../commands/doctor-plugin-manifests.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-plugin-manifests.js")>()),
   collectLegacyPluginManifestContractMigrations:
     mocks.collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding:
