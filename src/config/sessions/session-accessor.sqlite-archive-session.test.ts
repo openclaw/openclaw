@@ -34,7 +34,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { withSqliteTranscriptArchiveSession as withArchiveSession } from "./session-accessor.sqlite-archive-session.js";
-import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
+import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import type {
   TranscriptArchivePublishWorkerMessage,
   TranscriptArchiveWorkerMessage,
@@ -61,41 +61,6 @@ const fault = useSqliteWorkerFault([
   },
 ]);
 
-const archiveScopeHooks = vi.hoisted(() => ({
-  afterMaterializeQueued: undefined as (() => void) | undefined,
-  beforePublish: undefined as ((sessionIds: string[]) => Promise<void>) | undefined,
-}));
-
-vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
-  return {
-    ...actual,
-    materializeSessionStateDeletePlans: (
-      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
-    ) => {
-      const operation = actual.materializeSessionStateDeletePlans(...args);
-      archiveScopeHooks.afterMaterializeQueued?.();
-      return operation;
-    },
-  };
-});
-
-vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./session-accessor.sqlite-archive-store.js")>();
-  return {
-    ...actual,
-    publishSessionStateArchives: async (
-      ...args: Parameters<typeof actual.publishSessionStateArchives>
-    ) => {
-      if (archiveScopeHooks.beforePublish) {
-        await archiveScopeHooks.beforePublish(args[1].map((archive) => archive.sessionId));
-      }
-      return actual.publishSessionStateArchives(...args);
-    },
-  };
-});
-
 describe("SQLite transcript archive sessions", () => {
   let testState: OpenClawTestState;
   let tempDir: string;
@@ -111,8 +76,6 @@ describe("SQLite transcript archive sessions", () => {
   });
 
   afterEach(async () => {
-    archiveScopeHooks.afterMaterializeQueued = undefined;
-    archiveScopeHooks.beforePublish = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await waitForReconciliation(tempDir);
@@ -283,7 +246,7 @@ describe("SQLite transcript archive sessions", () => {
     vi.spyOn(sessionDeletion, "hasPreparedNativeSessionDeletion").mockReturnValue(true);
     using statements = vi.spyOn(database.db, "prepare");
     await expect(
-      publishSessionStateArchives(
+      archiveStore.publishSessionStateArchives(
         { agentId: "main", path: database.path, env: testState.env },
         deleted.archivedTranscripts,
       ),
@@ -373,12 +336,14 @@ describe("SQLite transcript archive sessions", () => {
     await waitForReconciliation(tempDir);
     const publicationEntered = createDeferred();
     const releasePublication = createDeferred();
-    archiveScopeHooks.beforePublish = async (sessionIds) => {
-      if (sessionIds.includes(first.sessionId)) {
+    const publish = archiveStore.publishSessionStateArchives;
+    vi.spyOn(archiveStore, "publishSessionStateArchives").mockImplementation(async (...args) => {
+      if (args[1].some(({ sessionId }) => sessionId === first.sessionId)) {
         publicationEntered.resolve();
         await releasePublication.promise;
       }
-    };
+      return publish(...args);
+    });
     const activeWorkersAtReply: number[] = [];
     const observedWorkers = new Set<Worker>();
     using archiveWorkers = observeArchiveSessionWorkers((_message, worker) => {
@@ -480,7 +445,12 @@ describe("SQLite transcript archive sessions", () => {
       await blockerEntered.promise;
       return result;
     });
-    archiveScopeHooks.afterMaterializeQueued = () => materializationQueued.resolve();
+    const materialize = archiveWorker.materializeSessionStateDeletePlans;
+    vi.spyOn(archiveWorker, "materializeSessionStateDeletePlans").mockImplementation((...args) => {
+      const operation = materialize(...args);
+      materializationQueued.resolve();
+      return operation;
+    });
     using archiveWorkers = observeArchiveSessionWorkers();
     const deletion = deleteArchivedSession(sessionKey);
     let retirement: Promise<boolean> | undefined;
@@ -737,7 +707,7 @@ describe("SQLite transcript archive sessions", () => {
       if (!target.path) {
         throw new Error("Expected a durable archive target");
       }
-      await expect(publishSessionStateArchives(options, [])).resolves.toEqual([]);
+      await expect(archiveStore.publishSessionStateArchives(options, [])).resolves.toEqual([]);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       expect(fs.existsSync(target.path)).toBe(exists);
       if (exists) {

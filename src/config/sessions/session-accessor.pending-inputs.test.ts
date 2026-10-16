@@ -116,17 +116,26 @@ const pendingInputs = (options?: Parameters<typeof listSessionPendingInputs>[1])
   listSessionPendingInputs(scope(), options);
 const readPending = (id: string) => readSessionPendingInput(scope(), id);
 const submitted = (id: string) => readSessionSubmittedInput(scope(), id);
-const append = (input: PersistedUserTurnMessage) => appendMessage(scope(), { message: input });
+type AppendOptions = Omit<Parameters<typeof appendMessage<PersistedUserTurnMessage>>[1], "message">;
+const append = (input: PersistedUserTurnMessage, options: AppendOptions = {}) =>
+  appendMessage(scope(), { message: input, ...options });
+const appendSync = (input: PersistedUserTurnMessage, options: AppendOptions = {}) =>
+  appendMessageSync(scope(), { message: input, ...options });
 const promote = (receipt: SessionPendingInputReceipt) => receipt.run(() => append(receipt.message));
 const promoteSync = (receipt: SessionPendingInputReceipt) =>
-  receipt.run(() => appendMessageSync(scope(), { message: receipt.message }));
+  receipt.run(() => appendSync(receipt.message));
+const anchor = (entryId: string) => readActiveAnchor({ ...scope(), entryId });
+const bind = (sources: SessionPendingInputReceipt[], runId: string) => {
+  const receipt = bindSessionPendingInputSources(sources, message(runId))!;
+  receipts.push(receipt);
+  return receipt;
+};
 const createRelocation = (receipt: SessionPendingInputReceipt) => {
   const copy = (sourceInputId: string, eventId: string) =>
     withSessionPendingInputRelocation(sourceInputId, receipt.message, () =>
-      appendMessageSync(scope(), {
+      appendSync(receipt.message, {
         eventId,
         idempotencyLookup: "caller-checked",
-        message: receipt.message,
         parentId: null,
       }),
     );
@@ -151,7 +160,7 @@ afterEach(async () => {
 });
 
 it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
-  await appendMessage(scope(), { message: message("active", "First task") });
+  await append(message("active", "First task"));
   expect(await submitted("active:user")).toEqual(message("active", "First task"));
   const before = await readTranscript();
   const prepare = vi.fn((input: PersistedUserTurnMessage) => ({
@@ -175,17 +184,10 @@ it("keeps accepted input outside the active transcript and applies its hook once
   await expect(append(receipt.message)).rejects.toThrow("outside its admitted turn");
   const secondHook = vi.fn(() => undefined);
   const appended = await receipt.run(() =>
-    appendMessage(scope(), {
-      message: receipt.message,
-      prepareMessageAfterIdempotencyCheck: secondHook,
-    }),
+    append(receipt.message, { prepareMessageAfterIdempotencyCheck: secondHook }),
   );
   expect(secondHook).not.toHaveBeenCalled();
-  expect(appended).toMatchObject({
-    appended: true,
-    messageId: receipt.inputId,
-    message: receipt.message,
-  });
+  expect(appended).toMatchObject({ ...appendResult(receipt.inputId), message: receipt.message });
   expect(await pendingInputs()).toEqual({ total: 0, items: [] });
   expect(await submitted("queued:user")).toEqual(receipt.message);
   const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
@@ -219,7 +221,7 @@ it("mirrors a correlated input to another session without borrowing or consuming
   await expect(append(receipt.message)).rejects.toThrow("outside its admitted turn");
 
   expect(await promote(receipt)).toMatchObject(appendResult(receipt.inputId));
-  expect(await pendingInputs()).toEqual({ items: [], total: 0 });
+  expect(await pendingInputs()).toEqual({ total: 0, items: [] });
   const targetTranscript = await loadTranscriptEvents(target);
   expect(
     await receipt.run(() => appendMessage(target, { message: receipt.message })),
@@ -234,9 +236,7 @@ it.each(["interrupted", "collected-consumed"] as const)(
     const requestFingerprint = "f".repeat(64);
     const receipt = await stage(runId, { requestFingerprint });
     if (disposition === "collected-consumed") {
-      const aggregate = bindSessionPendingInputSources([receipt], message("versioned-collect"))!;
-      receipts.push(aggregate);
-      await promote(aggregate);
+      await promote(bind([receipt], "versioned-collect"));
     }
     receipt.finish("interrupted");
     await receipt.settled?.();
@@ -253,8 +253,7 @@ it.each(["interrupted", "collected-consumed"] as const)(
     const transcript = await readTranscript();
     const prepare = vi.fn((input: PersistedUserTurnMessage) => input);
     const execute = vi.fn();
-    // v2026.9.2 always computes this unprefixed message hash and compares it
-    // before consumed-receipt handling. No legacy execution owner is minted.
+    // v2026.9.2 compares the unprefixed hash before consumed-receipt handling.
     await expect(stage(runId, { prepareMessageAfterIdempotencyCheck: prepare })).rejects.toThrow(
       "idempotency key conflicts",
     );
@@ -282,8 +281,7 @@ it.each(["interrupted", "collected-consumed"] as const)(
         return append(renewed.message);
       });
       expect(appended).toMatchObject({
-        appended: true,
-        messageId: receipt.inputId,
+        ...appendResult(receipt.inputId),
         message: receipt.message,
       });
       const committed = await readTranscript();
@@ -323,10 +321,9 @@ it("moves transcript custody only after an authorized relocation commits", async
 
   expect(
     receipt.run(() =>
-      appendMessageSync(scope(), {
+      appendSync(receipt.message, {
         eventId: "unauthorized-copy",
         idempotencyLookup: "caller-checked",
-        message: receipt.message,
       }),
     ),
   ).toMatchObject(nativeResult(receipt.inputId, false));
@@ -427,9 +424,7 @@ it("stages repeated relocation through savepoints and restores it on rollback", 
 });
 
 it("rejects a split-cursor replay before and after projection reconciliation", async () => {
-  const visible = await appendMessage(scope(), {
-    message: message("visible", "Visible history"),
-  });
+  const visible = await append(message("visible", "Visible history"));
   const receipt = await stage("split-cursor");
   await promote(receipt);
   expect(
@@ -443,18 +438,17 @@ it("rejects a split-cursor replay before and after projection reconciliation", a
     }),
   ).toMatchObject({ ok: true, value: true });
   expect(
-    appendMessageSync(scope(), {
+    appendSync(message("continued", "Continued visible history"), {
       eventId: "continued",
-      message: message("continued", "Continued visible history"),
       parentId: receipt.inputId,
     }),
   ).toMatchObject(nativeResult("continued"));
 
   const replay = () => promoteSync(receipt);
-  expect(readActiveAnchor({ ...scope(), entryId: receipt.inputId })).toBeUndefined();
+  expect(anchor(receipt.inputId)).toBeUndefined();
   expect(replay).toThrow("no longer active");
   await waitForSessionTranscriptProjection(scope());
-  expect(readActiveAnchor({ ...scope(), entryId: receipt.inputId })).toBeUndefined();
+  expect(anchor(receipt.inputId)).toBeUndefined();
   expect(replay).toThrow("no longer active");
 });
 
@@ -480,8 +474,7 @@ it("promotes a queued input with its own custody after another receipt releases 
 it("rolls aggregate append and every source consumption back as one transaction", async () => {
   const first = await stage("atomic-a");
   const second = await stage("atomic-b");
-  const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
-  receipts.push(aggregate);
+  const aggregate = bind([first, second], "atomic-c");
   const before = await readTranscript();
   custodyFault.enable(1);
   await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
@@ -501,8 +494,7 @@ it("rolls aggregate append and every source consumption back as one transaction"
 it("revalidates every collected source after an await and rejects copied receipt fields", async () => {
   const first = await stage("fence-a");
   const second = await stage("fence-b");
-  const aggregate = bindSessionPendingInputSources([first, second], message("fence-c"))!;
-  receipts.push(aggregate);
+  const aggregate = bind([first, second], "fence-c");
   expect(bindSessionPendingInputSources([{ ...first }], message("forged-c"))).toBeUndefined();
   const promotion = aggregate.run(async () => {
     await Promise.resolve();
@@ -687,7 +679,7 @@ it.each(["deleted", "rebound", "replaced"] as const)(
             message: receipt.message,
           },
         ]);
-        expect(readActiveAnchor({ ...scope(), entryId: "rewritten-user" })).toMatchObject({
+        expect(anchor("rewritten-user")).toMatchObject({
           entryId: "rewritten-user",
         });
       }
@@ -717,20 +709,17 @@ it.each([false, true])(
     let replacementId: string;
     await receipt.run(async () => {
       await append(receipt.message);
-      const replacement = await appendMessage(scope(), {
-        message: message("replacement"),
-        parentId: null,
-      });
+      const replacement = await append(message("replacement"), { parentId: null });
       replacementId = replacement.messageId;
       expect(replacement.effectiveParentId).toBeNull();
-      expect(readActiveAnchor({ ...scope(), entryId: receipt.inputId })).toBeUndefined();
-      expect(readActiveAnchor({ ...scope(), entryId: replacementId })).toBeUndefined();
+      expect(anchor(receipt.inputId)).toBeUndefined();
+      expect(anchor(replacementId)).toBeUndefined();
       receipt.finish("cancelled");
       await expect(append(receipt.message)).rejects.toThrow("no longer active");
     });
     await waitForSessionTranscriptProjection(scope());
-    expect(readActiveAnchor({ ...scope(), entryId: receipt.inputId })).toBeUndefined();
-    expect(readActiveAnchor({ ...scope(), entryId: replacementId! })).toMatchObject({
+    expect(anchor(receipt.inputId)).toBeUndefined();
+    expect(anchor(replacementId!)).toMatchObject({
       entryId: replacementId!,
     });
     expect(await append(receipt.message)).toMatchObject({ appended: false });
@@ -747,8 +736,7 @@ it.each([
     const receipt = await stage("repair");
     let aggregate: SessionPendingInputReceipt | undefined;
     if (consumed) {
-      aggregate = bindSessionPendingInputSources([receipt], message("repair-aggregate"))!;
-      receipts.push(aggregate);
+      aggregate = bind([receipt], "repair-aggregate");
       await promote(aggregate);
     }
     const source = database();
