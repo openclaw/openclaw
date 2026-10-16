@@ -38,7 +38,9 @@ if (fault === 'rejected') {
   throw new Error('Expected Git to refuse a branch already owned by a sibling');
 }
 if (command >= 0) {
-  run(args.toSpliced(command + 2, 0, '--no-checkout'));
+  const register = [...args];
+  register.splice(command + 2, 0, '--no-checkout');
+  run(register);
 }
 mkdirSync(join(destination, 'src'), { recursive: true });
 writeFileSync(join(destination, 'src', 'file-0.txt'), 'checkout progress\\n');
@@ -83,10 +85,10 @@ progressing = awaitRelease('checkout-release', 'FIXTURE_CHECKOUT_READY:', () => 
     `import childProcess from 'node:child_process';
 import { readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-import { createInterface } from 'node:readline';
 const external = ${fault === "external-cancel"};
 const allocatorPid = ${JSON.stringify(join(f.root, "allocator.pid"))};
-function captureTimers(tracked) {
+if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
+  const spawn = childProcess.spawn;
   const schedule = globalThis.setTimeout;
   const cancel = globalThis.clearTimeout;
   const timers = new Map();
@@ -95,29 +97,27 @@ function captureTimers(tracked) {
       timers.delete(timer);
       callback(...args);
     }, milliseconds);
-    if (tracked(milliseconds)) timers.set(timer, { callback, milliseconds, args });
+    if (milliseconds >= 5000) timers.set(timer, { callback, milliseconds, args });
     return timer;
   };
   globalThis.clearTimeout = timer => {
     timers.delete(timer);
     return cancel(timer);
   };
-  const fire = (timer, deadline) => {
-    globalThis.clearTimeout(timer);
-    deadline.callback(...deadline.args);
-  };
-  return { timers, fire };
-}
-if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
-  const spawn = childProcess.spawn;
-  const { timers, fire } = captureTimers(milliseconds => milliseconds >= 5000);
   childProcess.spawn = (command, args, options) => {
     const child = spawn(command, args, options);
+    let output = '';
     let sideEffects = 0;
-    createInterface({ input: child.stdio[3] }).on('line', line => {
-      if (line === 'phase\\tside-effects-started' && ++sideEffects === 2) {
-        // The production consumer runs synchronously after this observer.
-        queueMicrotask(() => process.kill(Number(readFileSync(allocatorPid, 'utf8')), 'SIGUSR2'));
+    child.stdio[3].on('data', chunk => {
+      output += chunk.toString();
+      let newline;
+      while ((newline = output.indexOf('\\n')) >= 0) {
+        const line = output.slice(0, newline);
+        output = output.slice(newline + 1);
+        if (line === 'phase\\tside-effects-started' && ++sideEffects === 2) {
+          // The production consumer runs synchronously after this observer.
+          queueMicrotask(() => process.kill(Number(readFileSync(allocatorPid, 'utf8')), 'SIGUSR2'));
+        }
       }
     });
     return child;
@@ -129,7 +129,9 @@ if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
     writeFileSync(${JSON.stringify(join(f.root, "supervisor-grace.json"))},
       JSON.stringify({ elapsed: 5001, grace: deadline.milliseconds }));
     if (deadline.milliseconds <= 5001) {
-      fire(timer, deadline);
+      cancel(timer);
+      timers.delete(timer);
+      deadline.callback(...deadline.args);
       return;
     }
     try {
@@ -141,15 +143,34 @@ if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
 }
 if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
   const spawn = childProcess.spawn;
+  const schedule = globalThis.setTimeout;
+  const cancel = globalThis.clearTimeout;
   const now = Date.now;
   const kill = process.kill;
+  const timers = new Map();
   const evidence = { signals: [] };
   let checkoutChild;
-  const { timers, fire } = captureTimers(() => checkoutChild);
   let advanced = 0;
   let frozenNow;
   Date.now = () => frozenNow ?? now() + advanced;
   const save = () => writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(evidence));
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    const timer = schedule(() => {
+      timers.delete(timer);
+      callback(...args);
+    }, milliseconds);
+    if (checkoutChild) timers.set(timer, { callback, milliseconds, args });
+    return timer;
+  };
+  globalThis.clearTimeout = timer => {
+    timers.delete(timer);
+    return cancel(timer);
+  };
+  function fire(timer, deadline) {
+    cancel(timer);
+    timers.delete(timer);
+    deadline.callback(...deadline.args);
+  }
   process.kill = (pid, signal) => {
     if (checkoutChild && pid === -checkoutChild.pid && signal !== 0) {
       evidence.signals.push(signal);
@@ -207,7 +228,13 @@ if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
       checkoutChild = undefined;
       process.off('SIGUSR2', releaseCleanup);
     });
-    createInterface({ input: child.stderr }).on('line', line => {
+    let output = '';
+    child.stderr.on('data', chunk => {
+      output += chunk.toString();
+      let newline;
+      while ((newline = output.indexOf('\\n')) >= 0) {
+        const line = output.slice(0, newline);
+        output = output.slice(newline + 1);
         const ready = /^FIXTURE_CHECKOUT_READY:(\\d+)$/.exec(line);
         if (ready) {
           const deadlines = [...timers].filter(([, value]) => value.milliseconds >= 300000);
@@ -227,7 +254,7 @@ if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
           if (external) {
             cleaning = true;
             process.kill(Number(process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID), 'SIGUSR2');
-            return;
+            continue;
           }
           // Cross the former 300 ms cleanup grace at an acknowledged live
           // cleanup barrier, then drive its already-scheduled liveness poll.
@@ -239,6 +266,7 @@ if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
           save();
           release('cleanup-release');
         }
+      }
     });
     return child;
   };
