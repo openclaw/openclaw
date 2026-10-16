@@ -6,7 +6,6 @@ import type {
   ThemesGetResult,
   ThemesListResult,
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
-import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import {
   BUILTIN_THEMES,
   resolveThemeBranding,
@@ -38,32 +37,14 @@ const descriptor: ThemeDescriptor = {
   modes: ["dark"],
   pluginId: "space-pack",
 };
-const definition = createThemeDefinitionFixture({
-  name: descriptor.name,
-  description: descriptor.description,
-  dark: createThemePaletteFixture({ background: "#111122" }),
-});
-
 function paletteWithBackground(background: string) {
   return createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background }) });
 }
+const definition = paletteWithBackground("#111122");
 const waitForTheme = (id: string) => vi.waitFor(() => expect(themeId()).toBe(id));
-
-function selfProfile(id: string): UsersSelfResult {
-  return {
-    profile: {
-      id,
-      displayName: null,
-      emails: [],
-      avatarMime: null,
-      hasAvatar: false,
-      githubIdentity: null,
-      mergedInto: null,
-      createdAt: 1,
-      updatedAt: 2,
-    },
-  };
-}
+const selfProfile = (id: string) => ({
+  profile: { id, displayName: null, emails: [], updatedAt: 2 },
+});
 
 function catalog(themeDefinition = definition): ThemesListResult {
   return {
@@ -104,18 +85,18 @@ function createThemeHarness(start = true) {
   return {
     ...fixture,
     applicationTheme,
-    hello: (user?: string, readOnly = false) =>
-      fixture.current().opts.onHello?.({
-        ...GATEWAY_STORE_TEST_HELLO,
-        ...(readOnly ? { auth: { role: "operator", scopes: ["operator.read"] } } : {}),
-        ...(user
-          ? {
-              snapshot: {
-                presence: [{ instanceId: fixture.current().instanceId, user: { id: user } }],
-              },
-            }
-          : {}),
-      }),
+    hello: (user?: string, readOnly = false) => {
+      const hello = { ...GATEWAY_STORE_TEST_HELLO };
+      if (readOnly) {
+        hello.auth = { role: "operator", scopes: ["operator.read"] };
+      }
+      if (user) {
+        hello.snapshot = {
+          presence: [{ instanceId: fixture.current().instanceId, user: { id: user } }],
+        };
+      }
+      fixture.current().opts.onHello?.(hello);
+    },
     requests: (routes: Record<string, (params: unknown) => Promise<unknown>>) =>
       fixture.current().request.mockImplementation((method, params) => {
         if (!routes[method]) {
@@ -155,7 +136,6 @@ afterEach(() => {
   localStorage.clear();
   document.getElementById("openclaw-custom-theme")?.remove();
   document.documentElement.removeAttribute("style");
-  vi.unstubAllGlobals();
 });
 
 it("resolves built-in branding before the palette and catalog load", () => {
@@ -336,11 +316,6 @@ it("does not report a previous palette failure after a local theme switch", asyn
     id: "space-pack/afterglow",
     name: "Afterglow",
   };
-  const replacementDefinition = {
-    ...paletteWithBackground("#332211"),
-    name: replacement.name,
-    description: replacement.description,
-  };
   const selected = builtinCatalog([descriptor, replacement]);
   const retired = createDeferred<ThemesGetResult>();
   const { current, applicationTheme, hello, requests } = createThemeHarness();
@@ -348,7 +323,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
     .fn(async (_params: unknown): Promise<ThemesGetResult> => ({
       current: selected.current,
       theme: replacement,
-      definition: replacementDefinition,
+      definition: paletteWithBackground("#332211"),
     }))
     .mockReturnValueOnce(retired.promise);
   requests({ "themes.list": async () => selected, "themes.get": get });

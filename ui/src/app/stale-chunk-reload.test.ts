@@ -4,6 +4,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
 import * as storageAccess from "../local-storage.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   cancelStaleChunkRecovery,
@@ -85,11 +86,11 @@ function stubHangingDocumentFetch() {
 }
 
 function memoryStorage(initial: Record<string, string> = {}) {
-  const store = new Map(Object.entries(initial));
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
+  const storage = createStorageMock();
+  for (const [key, value] of Object.entries(initial)) {
+    storage.setItem(key, value);
+  }
+  return storage;
 }
 
 function stubDocumentNavigation() {
