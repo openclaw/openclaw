@@ -16,6 +16,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -28,6 +29,7 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const DSN_ENV = "OPENCLAW_PGPREP_BOOTSTRAP_DSN";
 const PREFIX = "pgprep_boot";
+const PREFS_PATH = "/synthetic/postgres-bootstrap";
 
 type Anchor = { storeId: string; namespace: string };
 
@@ -96,6 +98,19 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   beforeAll(() => client.connect());
   afterAll(() => client.end());
 
+  async function queryRows(sql: string, values: unknown[]) {
+    return (await client.query(sql, values)).rows;
+  }
+  async function bootstrapped() {
+    const current = await fixture();
+    const snapshot = await bootstrap();
+    await closeStateDatabaseForTest();
+    const anchor = await readAnchor(current);
+    if (!anchor) {
+      throw new Error("Gateway bootstrap did not open shared state");
+    }
+    return { current, snapshot, anchor };
+  }
   afterEach(async () => {
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
@@ -153,40 +168,29 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   }
 
   it("opens PostgreSQL through preflight and bootstrap, captures workers' input, and reuses the anchor on restart", async () => {
-    const current = await fixture();
-    const snapshot = await bootstrap();
-    await closeStateDatabaseForTest();
-    const anchor = await readAnchor(current);
-    expect(anchor?.namespace).toMatch(/^pgprep_boot_state_[a-f0-9]{16}$/u);
-    if (!anchor) {
-      throw new Error("Gateway bootstrap did not open shared state");
-    }
-    const metadata = await client.query(
+    const { current, snapshot, anchor } = await bootstrapped();
+    expect(anchor.namespace).toMatch(/^pgprep_boot_state_[a-f0-9]{16}$/u);
+    const metadata = await queryRows(
       `SELECT store_id FROM ${quoteIdentifier(anchor.namespace)}.openclaw_schema_meta WHERE store = $1`,
       ["state"],
     );
-    expect(metadata.rows).toEqual([{ store_id: anchor.storeId }]);
+    expect(metadata).toEqual([{ store_id: anchor.storeId }]);
 
     await installGatewayDatabaseEngine(snapshot);
-    {
-      const context = captureOpenClawStateWorkerContext({ env: current.env });
-      // A captured lifetime must not re-resolve its SecretRef when a worker opens later.
-      process.env[DSN_ENV] = "postgresql://127.0.0.1:1/unreachable";
-      try {
-        await executeOpenClawStateWorker(context, {
-          type: "machineState.write",
-          input: { key: "tts.prefsPath", value: "/synthetic/postgres-bootstrap" },
-        });
-        const read = await executeExistingOpenClawStateRead(
-          { env: current.env },
-          { type: "tts.prefsPath" },
-          { context },
-        );
-        expect(read?.row?.value_json).toBe(JSON.stringify("/synthetic/postgres-bootstrap"));
-      } finally {
-        process.env[DSN_ENV] = connection;
-      }
-    }
+    const context = captureOpenClawStateWorkerContext({ env: current.env });
+    // A captured lifetime must not re-resolve its SecretRef when a worker opens later.
+    await withEnvAsync({ [DSN_ENV]: "postgresql://127.0.0.1:1/unreachable" }, async () => {
+      await executeOpenClawStateWorker(context, {
+        type: "machineState.write",
+        input: { key: "tts.prefsPath", value: PREFS_PATH },
+      });
+      const read = await executeExistingOpenClawStateRead(
+        { env: current.env },
+        { type: "tts.prefsPath" },
+        { context },
+      );
+      expect(read?.row?.value_json).toBe(JSON.stringify(PREFS_PATH));
+    });
     await closeStateDatabaseForTest();
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
@@ -194,13 +198,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     await bootstrap();
     await closeStateDatabaseForTest();
     expect(await readAnchor(current)).toEqual(anchor);
-    const persisted = await client.query(
+    const persisted = await queryRows(
       `SELECT value_json FROM ${quoteIdentifier(anchor.namespace)}.config_machine_state WHERE state_key = $1`,
       ["tts.prefsPath"],
     );
-    expect(persisted.rows).toEqual([
-      { value_json: JSON.stringify("/synthetic/postgres-bootstrap") },
-    ]);
+    expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
   });
 
   it("refuses existing SQLite data and directs the operator to the port command", async () => {
@@ -223,13 +225,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   });
 
   it("acquires, renews, publishes, and releases Gateway ownership in PostgreSQL", async () => {
-    const current = await fixture();
-    const snapshot = await bootstrap();
-    await closeStateDatabaseForTest();
-    const anchor = await readAnchor(current);
-    if (!anchor) {
-      throw new Error("Gateway bootstrap did not open shared state");
-    }
+    const { current, snapshot, anchor } = await bootstrapped();
     const claim = await acquireTestPortBlock({ offsets: [0] });
     try {
       await installGatewayDatabaseEngine(snapshot);
@@ -266,11 +262,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         } finally {
           await lock.release();
         }
-        const released = await client.query(
+        const released = await queryRows(
           `SELECT owner FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
           ["gateway-owner", "global"],
         );
-        expect(released.rows).toEqual([]);
+        expect(released).toEqual([]);
       }
     } finally {
       await claim.release();

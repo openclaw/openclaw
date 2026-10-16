@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-// Hook HTTP delivery tests prove target binding before detached work is accepted.
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -227,12 +226,6 @@ describe("hook request delivery normalization", () => {
   });
 });
 
-function expectRetryAfterHeader(setHeader: ReturnType<typeof vi.fn>): void {
-  const retryAfterValue = setHeader.mock.calls.find(([name]) => name === "Retry-After")?.[1];
-  expect(typeof retryAfterValue).toBe("string");
-  expect(Number.parseInt(String(retryAfterValue), 10)).toBeGreaterThan(0);
-}
-
 async function expectAuthFailure(
   handler: ReturnType<typeof createHooksHandler>,
   request: Parameters<typeof createHookRequest>[0],
@@ -244,7 +237,9 @@ async function expectAuthFailure(
   ).toBe(true);
   expect(response.res.statusCode).toBe(status);
   if (status === 429) {
-    expectRetryAfterHeader(response.setHeader);
+    const value = response.setHeader.mock.calls.find(([name]) => name === "Retry-After")?.[1];
+    expect(typeof value).toBe("string");
+    expect(Number.parseInt(String(value), 10)).toBeGreaterThan(0);
   }
 }
 
@@ -311,49 +306,36 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     },
   );
 
-  test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {
-    const handler = createHooksHandler({ bindHost: "127.0.0.1" });
-    for (let i = 0; i < 20; i++) {
-      await expectAuthFailure(handler, { remoteAddress: "1.2.3.4" }, 401);
-    }
-    await expectAuthFailure(handler, { remoteAddress: "::ffff:1.2.3.4" }, 429);
-  });
-
-  test("uses trusted proxy forwarded client ip for hook auth throttling", async () => {
-    const handler = createHooksHandler({
-      getClientIpConfig: () => ({ trustedProxies: ["10.0.0.1"] }),
-    });
-    for (let i = 0; i < 20; i++) {
-      await expectAuthFailure(
-        handler,
-        {
-          remoteAddress: "10.0.0.1",
-          headers: { "x-forwarded-for": "1.2.3.4" },
-        },
-        401,
+  test.each(["mapped-ipv6", "trusted-proxy"])(
+    "shares the hook auth bucket for %s",
+    async (form) => {
+      const proxy = form === "trusted-proxy";
+      const handler = createHooksHandler(
+        proxy
+          ? { getClientIpConfig: () => ({ trustedProxies: ["10.0.0.1"] }) }
+          : { bindHost: "127.0.0.1" },
       );
-    }
-    await expectAuthFailure(
-      handler,
-      {
-        remoteAddress: "10.0.0.1",
-        headers: { "x-forwarded-for": "1.2.3.4, 10.0.0.1" },
-      },
-      429,
-    );
-  });
-
-  test.each(["::"])(
-    "returns unhandled when bindHost=%s sees a non-hook request URL",
-    async (bindHost) => {
-      const handler = createHooksHandler({ bindHost });
-      const req = createHookRequest({ url: "/" });
-      const { res, end } = createResponse();
-
-      const handled = await handler(req, res);
-
-      expect(handled).toBe(false);
-      expect(end).not.toHaveBeenCalled();
+      const first = proxy
+        ? { remoteAddress: "10.0.0.1", headers: { "x-forwarded-for": "1.2.3.4" } }
+        : { remoteAddress: "1.2.3.4" };
+      const next = proxy
+        ? { remoteAddress: "10.0.0.1", headers: { "x-forwarded-for": "1.2.3.4, 10.0.0.1" } }
+        : { remoteAddress: "::ffff:1.2.3.4" };
+      for (let i = 0; i < 20; i++) {
+        await expectAuthFailure(handler, first, 401);
+      }
+      await expectAuthFailure(handler, next, 429);
     },
   );
+
+  test("returns unhandled for a non-hook URL on an IPv6 listener", async () => {
+    const handler = createHooksHandler({ bindHost: "::" });
+    const req = createHookRequest({ url: "/" });
+    const { res, end } = createResponse();
+
+    const handled = await handler(req, res);
+
+    expect(handled).toBe(false);
+    expect(end).not.toHaveBeenCalled();
+  });
 });
