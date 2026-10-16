@@ -33,6 +33,11 @@ type Run = ReturnType<typeof createRun>;
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-ledger-") } };
 }
+function setupRun() {
+  const options = isolatedOptions();
+  const created = createRun({ trigger: "cli" }, options);
+  return { options, created, db: openState(options).db, filename: statePath(options.env) };
+}
 
 function readers(runId: string, options: Options, run?: Run) {
   const list = run ? [run] : [];
@@ -100,13 +105,13 @@ it("creates the ledger only on write, preserving older schema", async () => {
   await expectAsyncReads(readers(runId, options));
   expect(snapshot(filename)).toEqual(before);
 
-  const initial = openState(options);
+  const { db } = openState(options);
   const hasLedger = () =>
-    initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
+    db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
   expect(hasLedger()).toBeUndefined();
-  const version = initial.db.prepare("PRAGMA user_version").get();
-  const metadata = initial.db.prepare("SELECT * FROM schema_meta").all();
-  const previousSchema = initial.db
+  const version = db.prepare("PRAGMA user_version").get();
+  const metadata = db.prepare("SELECT * FROM schema_meta").all();
+  const previousSchema = db
     .prepare(
       "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY rowid",
     )
@@ -141,9 +146,7 @@ it.each([
   { reader: "get", retainedWal: false },
   { reader: "get-async", retainedWal: false },
 ])("preserves cold artifacts ($reader/WAL=$retainedWal)", async ({ reader, retainedWal }) => {
-  const sourceOptions = isolatedOptions();
-  const created = createRun({ trigger: "cli" }, sourceOptions);
-  const sourcePath = statePath(sourceOptions.env);
+  const { options: sourceOptions, created, filename: sourcePath } = setupRun();
   let options = sourceOptions;
   let expected = created;
   if (retainedWal) {
@@ -179,23 +182,20 @@ it.each([
 });
 
 it("reads retired inferenceProbe verification facts", () => {
-  const options = isolatedOptions();
-  const run = createRun({ trigger: "cli" }, options);
+  const { options, created: run, db } = setupRun();
   recordVerification(run.runId, { serviceRunning: true }, options);
   // Rows written before verification stopped recording inference keep the key;
   // the non-strict record schema drops it instead of rejecting the run.
-  openState(options)
-    .db.prepare("UPDATE update_runs SET verification_json = ? WHERE run_id = ?")
-    .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
+  db.prepare("UPDATE update_runs SET verification_json = ? WHERE run_id = ?").run(
+    JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }),
+    run.runId,
+  );
 
   expect(getRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
 });
 
 it("keeps idle writer usable after history reads", () => {
-  const options = isolatedOptions();
-  const created = createRun({ trigger: "cli" }, options);
-  const { db } = openState(options);
-  const filename = statePath(options.env);
+  const { options, created, db, filename } = setupRun();
   const before = snapshot(filename);
   expectReads(readers(created.runId, options, created));
   expect(snapshot(filename)).toEqual(before);
@@ -204,8 +204,7 @@ it("keeps idle writer usable after history reads", () => {
 });
 
 it("async reads inherit the snapshot", async () => {
-  const options = isolatedOptions();
-  const created = createRun({ trigger: "cli" }, options);
+  const { options, created } = setupRun();
   await withSnapshot(async () => {
     recordPhase(created.runId, "staging", {}, options);
     await expectAsyncReads(readers(created.runId, options, created));
@@ -214,18 +213,13 @@ it("async reads inherit the snapshot", async () => {
 });
 
 it("separates committed reads from native transactions", async () => {
-  const options = isolatedOptions();
-  const created = createRun({ trigger: "cli" }, options);
-  const { db } = openState(options);
+  const { options, created, db } = setupRun();
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare("UPDATE update_runs SET phase = 'staging' WHERE run_id = ?").run(created.runId);
-    expectReads(readers(created.runId, options, created));
-    for (const read of [
-      () => getRunAsync(created.runId, options),
-      () => listRunsAsync({}, options),
-      () => getStatus(options),
-    ]) {
+    const cases = readers(created.runId, options, created);
+    expectReads(cases);
+    for (const [read] of [cases["get-async"], cases["list-async"], cases.status]) {
       await expect(read()).rejects.toThrow(
         "Asynchronous shared-state reads cannot run inside a native transaction",
       );

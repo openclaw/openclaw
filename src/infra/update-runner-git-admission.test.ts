@@ -29,6 +29,9 @@ const write = (root: string, file: string, content: string) =>
   fs.writeFileSync(path.join(root, file), content);
 const matchingStep = (name: string, details: object) =>
   expect.objectContaining({ name, ...details });
+const forbidden = (operation: string) => async () => {
+  throw new Error(`Refused transport must not ${operation}`);
+};
 afterEach(() => vi.restoreAllMocks());
 
 function fixture(...options: Parameters<typeof createFixture>) {
@@ -204,6 +207,7 @@ it.each([
     }
     const admission = vi.fn(async () => {
       // Activation must consume staged objects, even if upstream goes offline.
+      expect(fs.existsSync(published)).toBe(false);
       fs.renameSync(state.source, `${state.source}.offline`);
     });
     let stagedRoot: string | undefined;
@@ -224,6 +228,9 @@ it.each([
               expect(fs.statSync(candidateRoot).dev).toBe(fs.statSync(artifacts).dev);
             },
             publishGitCheckout: async () => {
+              expect(state.installedGit("show", `${state.target}:package.json`)).toContain(
+                '"agent":14',
+              );
               fs.renameSync(state.install, published);
               assert(stagedRoot);
               expect(fs.statSync(path.join(stagedRoot, "dist", "entry.js")).isFile()).toBe(true);
@@ -242,6 +249,9 @@ it.each([
     }
     const installed = publish ? published : state.install;
     expect(state.git(installed, "rev-parse", "HEAD")).toBe(target);
+    if (publish) {
+      expect([result.root, result.after?.sha]).toEqual([published, target]);
+    }
     expect(JSON.parse(read(installed, "package.json"))).toMatchObject({
       version: downgrade ? "2026.7.2-beta.1" : "2026.7.2",
     });
@@ -501,18 +511,14 @@ it("records a warning when inspection cleanup fails", async () => {
     const onStepComplete = vi.fn();
     const result = await state.run({ progress: { onStepComplete } });
     state.expectUpdated(result);
-    expect(onStepComplete).toHaveBeenCalledWith(
-      matchingStep("git-target-inspection-cleanup", {
-        advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+    const warning = matchingStep("git-target-inspection-cleanup", {
+      advisory: expect.objectContaining({
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining("synthetic inspection cleanup denied"),
       }),
-    );
-    expect(result.steps).toContainEqual(
-      matchingStep("git-target-inspection-cleanup", {
-        advisory: expect.objectContaining({
-          message: expect.stringContaining("synthetic inspection cleanup denied"),
-        }),
-      }),
-    );
+    });
+    expect(onStepComplete).toHaveBeenCalledWith(warning);
+    expect(result.steps).toContainEqual(warning);
     expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
       "inspection cleanup",
     );
@@ -528,20 +534,8 @@ it("restores dev upstream from cold tracking refs", async () => {
   state.installedGit("checkout", "-b", "maintenance");
   state.installedGit("branch", "-D", "main");
   state.installedGit("update-ref", "-d", "refs/remotes/upstream.with.dots/main");
-  let restoredUpstream = false;
-  const command: CommandRunner = async (argv, options) => {
-    const result = await state.runCommand(argv, options);
-    if (argv[2] === state.install && argv[3] === "branch" && argv[4] === "--set-upstream-to") {
-      expect(result.code, result.stderr).toBe(0);
-      expect(state.head()).toBe(state.target);
-      expect(state.installedGit("rev-parse", "main@{upstream}")).toBe(state.target);
-      restoredUpstream = true;
-    }
-    return result;
-  };
-  const result = await state.run({ channel: "dev" }, command);
-  expect(result.status, JSON.stringify(result)).toBe("ok");
-  expect(restoredUpstream).toBe(true);
+  state.expectUpdated(await state.run({ channel: "dev" }));
+  expect(state.installedGit("rev-parse", "main@{upstream}")).toBe(state.target);
 });
 
 it.each(["stable", "dev"] as const)(
@@ -631,15 +625,9 @@ it.each([
       opts: {
         channel: "stable",
         inspectGitTarget: admission,
-        validateCandidate: async () => {
-          throw new Error("Refused transport must not validate a candidate");
-        },
-        beforeGitMutation: async () => {
-          throw new Error("Refused transport must not mutate the installed checkout");
-        },
-        runGitDoctor: async () => {
-          throw new Error("Refused transport must not run Doctor");
-        },
+        validateCandidate: forbidden("validate a candidate"),
+        beforeGitMutation: forbidden("mutate the installed checkout"),
+        runGitDoctor: forbidden("run Doctor"),
       },
     });
     if (configured) {
@@ -658,6 +646,9 @@ it.each([false, true])("checks dev admission before scripts (%s)", async (refuse
   const newest = state.commit("2026.7.3", 15);
   const before = snapshotTree(state.install);
   const refused = new Error("fallback database refusal");
+  const publish = vi.fn(async () => {
+    throw new Error("Refused target must not be published");
+  });
   const builds: string[] = [];
   const inspected: number[] = [];
   const runCommand: CommandRunner = async (argv, options) => {
@@ -677,6 +668,8 @@ it.each([false, true])("checks dev admission before scripts (%s)", async (refuse
     state.run(
       {
         channel: "dev",
+        gitArtifactStorageRoot: state.root,
+        publishGitCheckout: publish,
         inspectGitTarget: async (target) => {
           inspected.push(target.schemaVersions!.agent);
           if (refuseFirst) {
@@ -694,6 +687,8 @@ it.each([false, true])("checks dev admission before scripts (%s)", async (refuse
   ).rejects.toBe(refused);
   expect(builds).toEqual(refuseFirst ? [] : ["2026.7.3", "2026.7.2"]);
   expect([...new Set(inspected)]).toEqual(refuseFirst ? [15] : [15, 14]);
+  expect(publish).not.toHaveBeenCalled();
+  expect(fs.existsSync(path.join(state.root, "published"))).toBe(false);
   expect(snapshotTree(state.install)).toEqual(before);
 });
 
@@ -742,38 +737,6 @@ process.exit(result.status ?? 93);
   expect(snapshotTree(state.install)).toEqual(before);
 });
 
-it.each([false, true])("publishes only an admitted checkout (refuse=%s)", async (refuse) => {
-  const state = fixture();
-  const published = path.join(state.root, "published");
-  const complete = new Error("refuse publication");
-  const publish = vi.fn(async () => {
-    expect(state.installedGit("show", `${state.target}:package.json`)).toContain('"agent":14');
-    fs.renameSync(state.install, published);
-    return published;
-  });
-  const result = state.run({
-    beforeGitMutation: async (target) => {
-      expect(fs.existsSync(published)).toBe(false);
-      expect(target).toEqual(targetDescriptor(state.target));
-      if (refuse) {
-        throw complete;
-      }
-    },
-    publishGitCheckout: publish,
-    gitArtifactStorageRoot: state.root,
-  });
-  if (refuse) {
-    await expect(result).rejects.toBe(complete);
-  } else {
-    await expect(result).resolves.toMatchObject({
-      status: "ok",
-      root: published,
-      after: { sha: state.target },
-    });
-  }
-  expect(publish).toHaveBeenCalledTimes(refuse ? 0 : 1);
-  expect(fs.existsSync(published)).toBe(!refuse);
-});
 it.each([
   { relative: true, shallow: false },
   { relative: false, shallow: true },

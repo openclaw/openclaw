@@ -39,33 +39,29 @@ const driver = (pid: number, startedAt = repairStart) => ({
   pid,
   startIdentity: String(startedAt),
 });
-type ProcessRef = Parameters<typeof identity>;
-const doctor: ProcessRef = [process.pid, repairPid, doctorStart];
-const repair: ProcessRef = [repairPid, updaterPid, repairStart];
-const lineage = (pid: number, parent = 0): ProcessRef[] => [
-  [process.pid, pid, doctorStart],
-  [pid, parent, repairStart],
-];
 function ancestry(
-  refs: ProcessRef[],
+  pids: number[],
   stoppedBy: NonNullable<ReturnType<typeof readProcessAncestry>>["stoppedBy"] = "root",
-  complete = true,
+  finalParent = 0,
 ) {
-  return { chain: refs.map((ref) => identity(...ref)), complete, stoppedBy };
+  const starts = [doctorStart, repairStart, originalStart];
+  return {
+    chain: pids.map((pid, index) => identity(pid, pids[index + 1] ?? finalParent, starts[index]!)),
+    complete: stoppedBy !== "unreadable-parent",
+    stoppedBy,
+  };
 }
 function admit(run: UpdateRunRecord) {
   return inspectUpdateRepairDriverAdmission([run], runId);
 }
 function mockIdentities(updaterStart = originalStart) {
-  readProcessIdentity.mockImplementation((pid) =>
-    pid === repairPid
-      ? identity(repairPid, updaterPid, repairStart)
-      : pid === updaterPid
-        ? identity(updaterPid, 0, updaterStart)
-        : null,
-  );
+  const identities = new Map([
+    [repairPid, identity(repairPid, updaterPid, repairStart)],
+    [updaterPid, identity(updaterPid, 0, updaterStart)],
+  ]);
+  readProcessIdentity.mockImplementation((pid) => identities.get(pid) ?? null);
 }
-function updateRun(updaterStart = originalStart): UpdateRunRecord {
+function updateRun(pid: number, start = repairStart, previous?: [number, number]): UpdateRunRecord {
   return {
     runId,
     createdAtMs: originalStart,
@@ -75,8 +71,8 @@ function updateRun(updaterStart = originalStart): UpdateRunRecord {
     status: "running",
     reason: null,
     origin: {
-      driver: driver(repairPid),
-      previousDrivers: [driver(updaterPid, updaterStart)],
+      driver: driver(pid, start),
+      ...(previous ? { previousDrivers: [driver(...previous)] } : {}),
     },
     target: {},
     before: {},
@@ -90,14 +86,8 @@ function updateRun(updaterStart = originalStart): UpdateRunRecord {
   };
 }
 
-// Verified ancestry is retained for the process, so tests of an unverified
-// driver use an identity no earlier test has verified.
+// Keep unverified fixtures outside identities cached by earlier cases.
 const unverifiedPid = repairPid + 100;
-function singleDriverRun(pid: number, start = repairStart): UpdateRunRecord {
-  const run = updateRun();
-  run.origin = { driver: driver(pid, start) };
-  return run;
-}
 
 beforeEach(() => {
   readProcessAncestry.mockReset().mockReturnValue(null);
@@ -110,21 +100,23 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { name: "original updater", updaterStart: originalStart, expected: true },
-  { name: "reused updater PID", updaterStart: repairStart + 1, expected: false },
-])("admits Doctor only beneath the live $name", ({ updaterStart, expected }) => {
-  mockIdentities(updaterStart);
-  readProcessAncestry.mockReturnValue(
-    ancestry(
-      updaterStart > repairStart
-        ? [doctor, repair]
-        : [doctor, repair, [updaterPid, 0, updaterStart]],
-      updaterStart > repairStart ? "recycled-parent" : "root",
-    ),
-  );
-  expect(admit(updateRun(updaterStart)).kind).toBe(expected ? "continuation" : "conflict");
-});
+it.each([originalStart, repairStart + 1])(
+  "checks original updater birth time %s",
+  (updaterStart) => {
+    const reused = updaterStart > repairStart;
+    mockIdentities(updaterStart);
+    readProcessAncestry.mockReturnValue(
+      ancestry(
+        reused ? [process.pid, repairPid] : [process.pid, repairPid, updaterPid],
+        reused ? "recycled-parent" : "root",
+        reused ? updaterPid : 0,
+      ),
+    );
+    expect(admit(updateRun(repairPid, repairStart, [updaterPid, updaterStart])).kind).toBe(
+      reused ? "conflict" : "continuation",
+    );
+  },
+);
 
 it("keeps self and direct parent when transitive ancestry cannot be inspected", () => {
   expect(ancestorPids()).toEqual(new Set([process.pid, repairPid]));
@@ -135,29 +127,31 @@ it.each([true, false])("rejects unverified driver ancestry (reused direct parent
   const start = reused ? doctorStart + 1000 : repairStart;
   readProcessAncestry.mockReturnValue(
     reused
-      ? ancestry([doctor], "recycled-parent")
-      : ancestry(lineage(pid, updaterPid), "unreadable-parent", false),
+      ? ancestry([process.pid], "recycled-parent", repairPid)
+      : ancestry([process.pid, pid], "unreadable-parent", updaterPid),
   );
   readProcessIdentity.mockImplementation((current) => identity(reused ? pid : current, 0, start));
   expect(ancestorPids().has(pid)).toBe(true);
-  expect(admit(singleDriverRun(pid, start)).kind).toBe("conflict");
+  expect(admit(updateRun(pid, start)).kind).toBe("conflict");
 });
 
 it("keeps a verified continuation when a later ancestry read fails", () => {
   const retainedPid = repairPid + 200;
-  readProcessAncestry.mockReturnValueOnce(ancestry(lineage(retainedPid))).mockImplementation(() => {
-    throw new Error("process snapshot timed out");
-  });
+  readProcessAncestry
+    .mockReturnValueOnce(ancestry([process.pid, retainedPid]))
+    .mockImplementation(() => {
+      throw new Error("process snapshot timed out");
+    });
   readProcessIdentity.mockImplementation((pid) => identity(pid, 0, repairStart));
 
-  expect(admit(singleDriverRun(retainedPid)).kind).toBe("continuation");
+  expect(admit(updateRun(retainedPid)).kind).toBe("continuation");
   expect(readProcessAncestry).toHaveBeenCalledTimes(1);
-  expect(admit(singleDriverRun(retainedPid)).kind).toBe("continuation");
+  expect(admit(updateRun(retainedPid)).kind).toBe("continuation");
 
   // Retained proof is bound to the verified identity, never to a reused PID.
   const reusedStart = doctorStart + 1000;
   readProcessIdentity.mockImplementation((pid) => identity(pid, 0, reusedStart));
-  expect(admit(singleDriverRun(retainedPid, reusedStart))).toMatchObject({
+  expect(admit(updateRun(retainedPid, reusedStart))).toMatchObject({
     kind: "conflict",
     message: expect.stringContaining("could not read this process's ancestry"),
   });
@@ -168,14 +162,12 @@ it("requires readable ancestry through every live driver", () => {
   const previousPid = updaterPid + 500;
   readProcessAncestry.mockImplementation((_pid, options) =>
     ancestry(
-      lineage(currentPid, previousPid),
+      [process.pid, currentPid],
       options?.throughPid === currentPid ? "through-pid" : "unreadable-parent",
-      options?.throughPid === currentPid,
+      previousPid,
     ),
   );
-  const run = updateRun();
-  run.origin.driver = driver(currentPid);
-  run.origin.previousDrivers = [driver(previousPid, originalStart)];
+  const run = updateRun(currentPid, repairStart, [previousPid, originalStart]);
   readProcessIdentity.mockImplementation((pid) =>
     identity(pid, 0, pid === currentPid ? repairStart : originalStart),
   );
@@ -206,18 +198,14 @@ it.each(["current", "unreadable-helper", "reused-helper", "replaced-row"] as con
     readProcessAncestry.mockImplementation((_pid, options) =>
       ancestry(
         fault === "unreadable-helper"
-          ? [doctor, repair]
-          : [doctor, repair, [updaterPid, updaterPid + 1, originalStart]],
+          ? [process.pid, repairPid]
+          : [process.pid, repairPid, updaterPid],
         readable(options?.throughPid) ? "through-pid" : "unreadable-parent",
-        readable(options?.throughPid),
+        fault === "unreadable-helper" ? updaterPid : updaterPid + 1,
       ),
     );
     if (fault === "reused-helper") {
-      readProcessIdentity.mockImplementation((pid) =>
-        pid === repairPid
-          ? identity(repairPid, updaterPid, repairStart)
-          : identity(updaterPid, 0, originalStart + 1),
-      );
+      mockIdentities(originalStart + 1);
     }
     const current = fault === "replaced-row" ? { ...row, owner: "replacement" } : row;
     expect(isParentCurrent(parent, () => current, processReader({ env: {} }))).toBe(

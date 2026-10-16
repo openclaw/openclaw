@@ -60,74 +60,57 @@ function mutate(command: UpdateRunWriteCommand = retentionCommand(), admit: Admi
   return recordMutation(command, options, admit, () => writer);
 }
 
+const throwError = (error: Error) => () => {
+  throw error;
+};
 function failRun(error = busyError()) {
-  return vi.spyOn(writer, "run").mockImplementationOnce(() => {
-    throw error;
-  });
+  return vi.spyOn(writer, "run").mockImplementationOnce(throwError(error));
 }
 
 function stepCommand(step: StepCommand["input"]["step"]): StepCommand {
   return {
     type: "updateRuns.recordStep",
-    input: {
-      runId,
-      redactionFacts: redactionFacts(options.env),
-      step,
-    },
+    input: { runId, redactionFacts: redactionFacts(options.env), step },
   };
 }
 
 function failNextWrite() {
   return vi
     .spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction")
-    .mockImplementationOnce(() => {
-      throw busyError();
-    });
+    .mockImplementationOnce(throwError(busyError()));
 }
 
+const retainedStep = { step: "updater-runtime-retention", status: "completed" } as const;
 function retentionCommand(handedOff = true): StepCommand {
   const guards = executionGuards({ run: { runId, env: options.env } }, options.env.HOME);
   if (handedOff) {
     guards.onStateHandoff();
   }
-  const captured = guards.captureWriteOptions();
-  const command = stepCommand({ step: "updater-runtime-retention", status: "completed" });
-  Object.assign(command.input, {
-    requireNoRecovery: captured.requireNoRecovery,
-    busyTimeoutMs: captured.busyTimeoutMs,
-  });
+  const { requireNoRecovery, busyTimeoutMs } = guards.captureWriteOptions();
+  const command = stepCommand({ ...retainedStep });
+  Object.assign(command.input, { requireNoRecovery, busyTimeoutMs });
   return command;
 }
 
-it("warns on contended bookkeeping and still records the required outcome", () => {
+it.each(["bookkeeping", "verification"] as const)("uses the %s contention policy", (kind) => {
   const write = failNextWrite();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  expect(
-    recordStep(
-      runId,
-      { step: "updater-runtime-retention", status: "completed" },
-      { ...options, busyTimeoutMs: 120_000 },
-    ),
-  ).toBeUndefined();
-  expect(write).toHaveBeenCalledWith(
-    expect.any(Function),
-    expect.objectContaining({ busyTimeoutMs: 1_000 }),
-    expect.objectContaining({ busyTimeoutMs: 1_000 }),
-  );
-  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("The update will continue"));
-  expect(getRun(runId, options)?.steps).toHaveLength(1);
-  expect(finishRun(runId, { status: "succeeded" }, options).status).toBe("succeeded");
-});
-
-it("keeps Gateway verification at the ordinary writer budget", () => {
-  const write = failNextWrite();
-  expect(() => recordVerification(runId, { booted: true }, options)).toThrow("database is locked");
-  expect(write).toHaveBeenCalledWith(
-    expect.any(Function),
-    options,
-    expect.objectContaining({ busyTimeoutMs: undefined }),
-  );
-  expect(getRun(runId, options)?.verification.booted).toBeUndefined();
+  const required = kind === "verification";
+  if (required) {
+    expect(() => recordVerification(runId, { booted: true }, options)).toThrow(
+      "database is locked",
+    );
+    expect(getRun(runId, options)?.verification.booted).toBeUndefined();
+  } else {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(recordStep(runId, retainedStep, { ...options, busyTimeoutMs: 120_000 })).toBeUndefined();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("The update will continue"),
+    );
+    expect(getRun(runId, options)?.steps).toHaveLength(1);
+    expect(finishRun(runId, { status: "succeeded" }, options).status).toBe("succeeded");
+  }
+  const budget = expect.objectContaining({ busyTimeoutMs: required ? undefined : 1_000 });
+  expect(write).toHaveBeenCalledWith(expect.any(Function), required ? options : budget, budget);
 });
 
 it.each([true, false])("uses the required recovery budget (critical step=%s)", (critical) => {
@@ -158,16 +141,11 @@ it.each([true, false])("uses the required recovery budget (critical step=%s)", (
 it("skips a real SQLite writer lock without waiting or creating a receipt", () => {
   const command = retentionCommand();
   command.input.busyTimeoutMs = 0;
-  const blocker = new DatabaseSync(databasePath(options.env));
-  try {
+  {
+    using blocker = new DatabaseSync(databasePath(options.env));
     blocker.exec("BEGIN IMMEDIATE");
     expect(mutate(command)).toEqual({ kind: "bookkeeping-skipped" });
     expect(blocker.isTransaction).toBe(true);
-  } finally {
-    if (blocker.isTransaction) {
-      blocker.exec("ROLLBACK");
-    }
-    blocker.close();
   }
   expect(getRun(runId, options)?.steps).toHaveLength(1);
 });
@@ -202,7 +180,7 @@ it("restores the ordinary transaction wait after driver admission", () => {
 it.each(["progress step", "run creation", "reconciliation", "interruption settlement"] as const)(
   "leaves the writer free while the host decides %s admission",
   (operation) => {
-    const competitor = new DatabaseSync(databasePath(options.env));
+    using competitor = new DatabaseSync(databasePath(options.env));
     competitor.exec("PRAGMA busy_timeout = 0");
     const observed: string[] = [];
     const admit: Admission = (stage) => {
@@ -229,11 +207,7 @@ it.each(["progress step", "run creation", "reconciliation", "interruption settle
           admit,
         ),
     };
-    try {
-      writes[operation]();
-    } finally {
-      competitor.close();
-    }
+    writes[operation]();
     expect(observed).toEqual(
       operation === "interruption settlement"
         ? ["transaction:free"]
