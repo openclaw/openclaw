@@ -3,7 +3,7 @@ import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibili
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 
 type ChatPositionMarker = {
   id: string;

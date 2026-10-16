@@ -55,11 +55,11 @@ import {
   type ChatPaneHeaderProps,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspaceIcon,
-} from "./components/chat-pane-header.tsx";
+} from "./components/chat-pane-header.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingProps,
-} from "./components/chat-session-sharing.solid.tsx";
+} from "./components/chat-session-sharing.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
