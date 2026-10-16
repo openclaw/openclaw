@@ -1,7 +1,7 @@
 import type { DatabasePortRecoveryIntent } from "./database-port-recovery.js";
 import type { GatewayLockRole } from "./gateway-lock-payload.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
-import type { GatewayStateProjection } from "./gateway-state-owner.js";
+import type { GatewayStateProjection } from "./gateway-state-projection.js";
 
 export type GatewayLockHandle = {
   lockPath: string;

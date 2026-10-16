@@ -6,7 +6,10 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  getStateDatabaseMaintenanceDeferral,
+} from "../infra/gateway-state-owner.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -18,6 +21,7 @@ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { summarizeSqliteWalHealth } from "../infra/sqlite-wal-checkpoint.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
@@ -220,8 +224,9 @@ function openNativeStateDatabase(
                 stateDbLog.warn("Shared-state WAL maintenance failed", {
                   error: formatErrorMessage(error),
                   path: params.pathname,
-                  checkpoint: walMaintenance?.health,
+                  checkpoint: summarizeSqliteWalHealth(walMaintenance?.health),
                 }),
+              deferPeriodic: () => getStateDatabaseMaintenanceDeferral(params.pathname),
               runMaintenance: (operation) => {
                 try {
                   assertStateDatabaseAccessAllowed(params.pathname);

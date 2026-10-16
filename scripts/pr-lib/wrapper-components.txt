@@ -967,6 +967,7 @@ src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
+src/infra/gateway-state-projection.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
@@ -1842,6 +1843,7 @@ src/state/openclaw-agent-db-schema.ts
 src/state/openclaw-agent-db-session-migrations.ts
 src/state/openclaw-agent-db-session-nodes-migration.ts
 src/state/openclaw-agent-db-session-provenance.ts
+src/state/openclaw-agent-db-storage-migration.ts
 src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts

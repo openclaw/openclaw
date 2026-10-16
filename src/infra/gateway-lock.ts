@@ -49,11 +49,11 @@ import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
   acquireGatewayStateOwner,
   createGatewayStateProjection,
-  type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import type { GatewayStateProjection } from "./gateway-state-projection.js";
 
 export type { GatewayLockHandle, GatewayLockOptions } from "./gateway-lock.types.js";
 

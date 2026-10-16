@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -12,16 +14,69 @@ import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { hashSqliteSchema } from "./sqlite-schema-shape.test-support.js";
 
+const fixtures = createFixtureLifetime();
+afterAll(() => fixtures.cleanup());
+
 describe("fresh agent schema admission", () => {
   it("also creates the canonical schema on an independently managed connection", () => {
     const { DatabaseSync } = requireNodeSqlite();
     using database = new DatabaseSync(":memory:");
     using canonical = openNodeSqliteDatabase(":memory:");
     canonical.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    database.exec("PRAGMA foreign_keys = OFF;");
     ensureOpenClawAgentSchema(database, "fresh", ":memory:");
+    expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
     expect(hashSqliteSchema(database)).toBe(hashSqliteSchema(canonical));
     expect(() => assertCanonicalSessionValidationSchema(database)).not.toThrow();
   });
+
+  it.each(["owner", "newer version"] as const)(
+    "refuses a concurrent %s committed before the initial writer lock",
+    (change) => {
+      const databasePath = path.join(fixtures.createTempDir("agent-schema-claim-"), "agent.sqlite");
+      using database = openNodeSqliteDatabase(databasePath);
+      using concurrent = openNodeSqliteDatabase(databasePath);
+      database.exec("PRAGMA foreign_keys = ON;");
+      const nativeExec = database.exec.bind(database);
+      let changed = false;
+      let foreignKeysAtBegin: unknown;
+      const exec = vi.spyOn(database, "exec").mockImplementation((sql) => {
+        if (!changed && sql.trimStart().startsWith("BEGIN IMMEDIATE")) {
+          // Commit the competing write exactly after preparation but before lock acquisition.
+          changed = true;
+          foreignKeysAtBegin = database.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+          if (change === "owner") {
+            ensureOpenClawAgentSchema(concurrent, "winner", databasePath);
+          } else {
+            concurrent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+          }
+        }
+        return nativeExec(sql);
+      });
+      try {
+        expect(() => ensureOpenClawAgentSchema(database, "loser", databasePath)).toThrow(
+          change === "owner"
+            ? "belongs to agent winner"
+            : `newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
+        );
+        expect(changed).toBe(true);
+        expect(foreignKeysAtBegin).toBe(0);
+        expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
+        if (change === "owner") {
+          expect(concurrent.prepare("SELECT agent_id FROM schema_meta").get()?.agent_id).toBe(
+            "winner",
+          );
+        } else {
+          expect(concurrent.prepare("PRAGMA user_version").get()?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+          );
+          expect(concurrent.prepare("SELECT name FROM sqlite_schema").all()).toEqual([]);
+        }
+      } finally {
+        exec.mockRestore();
+      }
+    },
+  );
 
   it("installs the complete canonical schema once and invalidates its proof after DDL", () => {
     using database = openNodeSqliteDatabase(":memory:");
@@ -67,6 +122,35 @@ describe("fresh agent schema admission", () => {
     } finally {
       exec.mockRestore();
     }
+  });
+
+  it("rolls back cold creation and its facts when the outer commit guard refuses", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    database.exec("PRAGMA foreign_keys = OFF;");
+    admitSqliteSchema(database);
+    let allowed = true;
+    const withMutation = <T>(run: () => T): T => {
+      if (!allowed) {
+        throw new Error("creation authority revoked");
+      }
+      const result = run();
+      allowed = false;
+      return result;
+    };
+    expect(() =>
+      ensureOpenClawAgentSchema(
+        database,
+        "fresh",
+        ":memory:",
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+        withMutation,
+      ),
+    ).toThrow("creation authority revoked");
+    expect(database.isTransaction).toBe(false);
+    expect(database.prepare("SELECT name FROM sqlite_schema").all()).toEqual([]);
+    expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(0);
+    expect(getAdmittedSqliteSchemaFacts(database)?.tables.size).toBe(0);
+    expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
   });
 
   it("does not retain creation facts after the containing transaction rolls back", () => {

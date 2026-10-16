@@ -784,7 +784,11 @@ does not wait on a separate coordination database. Explicit synchronous
 checkpoint and close operations retain their synchronous contract. These changes
 require no state migration.
 
-The warning includes observed WAL and database sizes, checkpointed and total WAL
+Background WAL maintenance waits while the same process owns offline maintenance
+and resumes when that maintenance finishes. Cancellation stops the wait. Repeated
+reader/busy warnings use a compact summary; real storage errors are still reported.
+
+WAL health details include observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,
 the observation time, and up to eight process-local active reader owners when
 the blocking connection uses OpenClaw's tracked query helpers. Reader diagnostics

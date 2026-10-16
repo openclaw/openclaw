@@ -3,9 +3,7 @@ import {
   ensureMemoryChunkProvenance,
   ensureMemoryRecallMetadataSchema,
   migrateMemoryIndexSourcesIdentity,
-  migrateMemoryIndexStorage,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import {
@@ -54,7 +52,6 @@ import {
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
   type OpenClawAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
@@ -92,6 +89,7 @@ import {
   migrateSessionTranscriptGenerations,
 } from "./openclaw-agent-db-session-migrations.js";
 import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes-migration.js";
+import { migrateAgentStorageInTransaction } from "./openclaw-agent-db-storage-migration.js";
 import {
   hasRevokedOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -111,8 +109,6 @@ import {
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
-import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
-import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -229,46 +225,21 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   return hasPendingCurrentVersionMigration;
 }
 
-function migrateAgentStorageInTransaction(
-  db: DatabaseSync,
-  schemaSql: string,
-  previousVersion: number,
-  warnings: string[],
-): void {
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  if (previousVersion === TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
-    migrateDeployedTranscriptFtsRowsInTransaction(db, schemaSql);
-  } else if (
-    db.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get("session_transcript_fts_rows")
-  ) {
-    throw new Error(
-      "Transcript FTS row map already exists before the schema-23 storage migration.",
-    );
-  }
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateTranscriptPayloadStorageInTransaction(db);
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateMemoryIndexStorage(db, {
-    renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
-    onWarning: (warning) => warnings.push(warning),
-  });
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateSessionCostUsageRollupStorage(
-    db,
-    maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
-  );
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  db.exec(schemaSql);
-  // Keep native 64-bit rowids, duplicate message IDs and FTS tie ordering intact.
-  if (previousVersion !== TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
-    db.exec(`
-    INSERT INTO session_transcript_fts_rows (id, session_id, message_id)
-    SELECT rowid, session_id, message_id FROM session_transcript_fts;
-  `);
+type AgentSchemaMutationGuard = <T>(run: () => T) => T;
+
+function withAgentSchemaForeignKeysDisabled<T>(db: DatabaseSync, run: () => T): T {
+  // Unlike staging scopes, agent schema work restores enforcement even if the
+  // connection entered with it disabled. Call before the owning BEGIN: these
+  // PRAGMAs cannot change enforcement inside a caller-owned transaction.
+  db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
+  try {
+    return run();
+  } finally {
+    if (db.isOpen) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
   }
 }
-
-type AgentSchemaMutationGuard = <T>(run: () => T) => T;
 
 function ensureAgentSchema(
   db: DatabaseSync,
@@ -279,9 +250,62 @@ function ensureAgentSchema(
   onMigrationWarning?: (warning: string) => void,
   versionMigrationOnly = false,
 ): void {
+  // A cold claim owns an outer transaction; admit creation facts and report
+  // warnings only after that owner has committed, not after its nested savepoint.
+  const { created, warnings } = applyAgentSchema(
+    db,
+    agentId,
+    pathname,
+    targetVersion,
+    withMutation,
+    versionMigrationOnly,
+  );
+  if (created && (isSqliteSchemaAdmissionCold(db) || getAdmittedSqliteSchemaFacts(db))) {
+    // Tracked handles retain creator facts; DDL and transaction rollback invalidate them.
+    admitSqliteSchema(db);
+    adoptCanonicalSessionValidationSchema(db);
+  }
+  for (const warning of warnings) {
+    const message = `Agent ${agentId}: ${warning}`;
+    agentDbLog.warn(message);
+    onMigrationWarning?.(message);
+  }
+}
+
+function applyAgentSchema(
+  db: DatabaseSync,
+  agentId: string,
+  pathname: string,
+  targetVersion: number,
+  withMutation: AgentSchemaMutationGuard,
+  versionMigrationOnly: boolean,
+): { created: boolean; warnings: string[] } {
   const warnings: string[] = [];
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
   const metadata = readExistingAgentSchemaMeta(db);
+  if (metadata === null && !db.isTransaction && !hasAgentDatabaseApplicationSchema(db)) {
+    // An unclaimed store has no owner yet. Plan its first write only after the
+    // native writer lock, discarding any empty-store facts captured while waiting.
+    // FK policy must surround this outer transaction; the recursive scope can
+    // discover a competing schema, and its PRAGMAs cannot change policy inside BEGIN.
+    return withAgentSchemaForeignKeysDisabled(db, () =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          revokeSqliteDatabaseAdmissions(db);
+          return applyAgentSchema(
+            db,
+            agentId,
+            pathname,
+            targetVersion,
+            withMutation,
+            versionMigrationOnly,
+          );
+        },
+        { databaseLabel: pathname, operationLabel: "agent.schema.claim", withCommit: withMutation },
+      ),
+    );
+  }
   assertExistingAgentSchemaOwner(metadata, agentId, pathname);
   const originalVersion = assertSupportedAgentSchemaVersion(db, pathname);
   const isEmptyDatabase = originalVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
@@ -318,10 +342,9 @@ function ensureAgentSchema(
   assertMigration();
   // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
   // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
-  // cascade-delete their children. Steady-state enforcement is restored below.
-  db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
+  // cascade-delete their children. The scope restores steady-state enforcement.
   let created = false;
-  try {
+  withAgentSchemaForeignKeysDisabled(db, () => {
     const mutate = () => {
       // Gateway or offline maintenance owns this store throughout schema preparation.
       const previousVersion = originalVersion;
@@ -534,21 +557,8 @@ function ensureAgentSchema(
       operationLabel: "agent.schema.ensure",
       withCommit: withMutation,
     });
-  } finally {
-    if (db.isOpen) {
-      db.exec("PRAGMA foreign_keys = ON;");
-    }
-  }
-  if (created && (isSqliteSchemaAdmissionCold(db) || getAdmittedSqliteSchemaFacts(db))) {
-    // Tracked handles retain creator facts; DDL and transaction rollback invalidate them.
-    admitSqliteSchema(db);
-    adoptCanonicalSessionValidationSchema(db);
-  }
-  for (const warning of warnings) {
-    const message = `Agent ${agentId}: ${warning}`;
-    agentDbLog.warn(message);
-    onMigrationWarning?.(message);
-  }
+  });
+  return { created, warnings };
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */
