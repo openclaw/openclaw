@@ -62,6 +62,14 @@ extension OpenClawChatViewModel {
             })
     }
 
+    /// Session opt-in; hosts also apply their local trace preference.
+    public var currentSessionReasoningVisible: Bool {
+        if let entry = self.currentSessionEntry() {
+            return entry.reasoningLevel == "on"
+        }
+        return self.retainedActiveSessionReasoningLevel == "on"
+    }
+
     static func preferredLiveUsageRunID(
         localRunIDs: Set<String>,
         sessionActiveRunIDs: [String]) -> String?
@@ -119,8 +127,12 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func syncActiveSessionRunIDsFromCurrentSession() {
-        self.updateActiveSessionRunIDs(self.currentSessionEntry()?.activeRunIds ?? [])
+    func syncActiveSessionMetadata() {
+        let entry = self.currentSessionEntry()
+        if let entry {
+            self.retainedActiveSessionReasoningLevel = entry.reasoningLevel
+        }
+        self.updateActiveSessionRunIDs(entry?.activeRunIds ?? [])
     }
 
     func ownsLiveTelemetryRun(_ runID: String) -> Bool {

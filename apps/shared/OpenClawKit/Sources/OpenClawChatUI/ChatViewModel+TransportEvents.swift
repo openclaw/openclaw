@@ -147,6 +147,11 @@ extension OpenClawChatViewModel {
             key.map { self.matchesCurrentSessionKey(incoming: $0, agentId: change.agentId, current: self.sessionKey) }
                 ?? false
         }
+        if matchesCurrentSession(eventSessionKey), self.currentSessionEntry() == nil,
+           let reasoningLevel = change.session?.reasoningLevel
+        {
+            self.retainedActiveSessionReasoningLevel = reasoningLevel
+        }
         let swarmEvent = self.observeSwarmEvent(change)
         let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
 
@@ -373,6 +378,9 @@ extension OpenClawChatViewModel {
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
         merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun
+        if let reasoningLevel = snapshot.reasoningLevel {
+            merged.reasoningLevel = reasoningLevel
+        }
         if phase == "start" || phase == "end" {
             merged.lastRunError = snapshot.lastRunError
         } else {

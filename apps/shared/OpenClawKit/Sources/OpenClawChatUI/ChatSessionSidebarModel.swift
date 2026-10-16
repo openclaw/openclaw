@@ -573,6 +573,9 @@ public enum ChatSessionSidebarModel {
         if change.activeRunIdsPresent {
             session.activeRunIds = change.activeRunIds
         }
+        if let reasoningLevel = change.session?.reasoningLevel {
+            session.reasoningLevel = reasoningLevel
+        }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
         }
