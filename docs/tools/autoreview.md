@@ -42,22 +42,30 @@ the installation. Do not substitute host shell access or a reviewer child.
 
 ## Inputs and results
 
-`model` (an explicit `provider/model`) and `thinking` are required. The model must
-remain allowed by the initiating user's policy. `mode`, `base`, `commit`,
-`maxPriority`, `passes`, `prompt`, `promptFiles`, `datasets`, `sourceContext`, and
-`sourceContextFiles` map to the canonical helper's matching options. File inputs
-are relative to the current sandbox repository. `timeoutSeconds` sets each
-reviewer pass's wall-clock limit, from 1 to 600 seconds, and defaults to 600.
-The operation allows at most eight planned passes; `passes` can lower that cap.
-Preparation and validation share one additional pass-sized allowance within the
-total deadline. The original session deadline and cancellation still apply.
+Supply the review target and only explicitly requested overrides. The installed
+canonical helper owns model, thinking, severity, prompts, pass planning, and
+review timeout settings. Updating that helper updates its defaults without an
+OpenClaw release. `mode`, `base`, `commit`, `model`, `thinking`, `maxPriority`,
+`passes`, `timeoutSeconds`, `prompt`, `promptFiles`, `datasets`, `sourceContext`,
+and `sourceContextFiles` map to its matching options. File inputs are relative
+to the current sandbox repository. The original session deadline and cancellation
+still apply.
 
-The operation fixes the helper, engine, interpreter, executable, restricted
-configuration, current sandbox working directory, and private exchange paths.
-The reviewer gets an empty private workspace and home, no tools, no selected
-skills, and no injected workspace context. Provider credentials stay on the host.
-No host Git operation substitutes for the sandbox's staged, unstaged, or untracked
-state.
+An allowed configured reviewer model is preserved. If the caller cannot use that
+configured preference, the Gateway selects the caller's existing permitted
+default before execution and the helper records the effective model. An explicit
+prohibited model override is rejected; an empty permitted selection is an error.
+There is no model substitution after reviewer execution fails.
+
+The operation fixes the protected helper, engine, interpreter, executable,
+current sandbox working directory, and private exchange paths. Native
+`openclaw agent exec` inherits normal configuration and authentication; per-run
+overrides enforce the actual sandbox caller's host-execution restrictions
+without rewriting saved configuration. Sandbox output cannot supply host
+configuration, credentials, executable paths, or runtime grants. The reviewer gets an empty
+private workspace, no host tools, no selected skills, and no injected workspace
+context. Provider credentials stay on the host. No host Git operation substitutes
+for the sandbox's staged, unstaged, or untracked state.
 
 The result contains the helper-validated report and status. Findings are a
 completed review. A failed, interrupted, oversized, mismatched, or incomplete

@@ -35,13 +35,14 @@ export type OpenClawPluginToolSandbox = {
 export type OpenClawPluginToolModelExecution = {
   /** Published CLI entry in the running host installation, never resolved from guest input. */
   readonly cliEntryPath: string;
-  /** Checks the original caller's current model policy and cancels work on revocation. */
+  /** Admits explicit choices or permitted defaults, retaining the caller through execution. */
   run: <T>(
-    model: string,
+    selection: { model: string | null; explicit: boolean },
     action: (scope: {
       signal: AbortSignal;
       assertCurrent: () => void;
-      model: import("../llm/types.js").Model;
+      model: string;
+      agentId: string;
     }) => Promise<T>,
     signal?: AbortSignal,
   ) => Promise<T>;

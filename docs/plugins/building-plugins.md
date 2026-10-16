@@ -287,9 +287,12 @@ Version 2 factories can also receive `toolContext.sandbox` and
 vectors in the actual prepared sandbox and exposes only selected host-installed
 skill roots protected by its owner. Its working directory is a sandbox path,
 not a host repository mirror. Commands retain invocation, cancellation, and
-process-cleanup ownership. The model capability binds an explicit model to the
-original caller's current policy, resolves it through the model owner, and
-provides an abort signal plus a final-effect assertion for the operation. Its
+process-cleanup ownership. The model capability admits
+a selection through the original caller's current model policy, preserving
+explicit override denial and using the existing permitted-default owner for
+configured preferences. It supplies the effective model, captured agent, abort
+signal, and final-effect assertion; native CLI execution retains configuration
+and credential ownership. Its
 `cliEntryPath` identifies the running host installation through the package-root
 owner; plugins do not infer it from guest paths or package self-resolution.
 `assertCompleteResult(text)` refuses output that would exceed the initiating

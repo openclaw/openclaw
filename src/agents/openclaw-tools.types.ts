@@ -116,6 +116,8 @@ export type OpenClawToolsOptions = {
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Captured installation identities, independent of prompt-facing sandbox paths. */
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
   /** Host-projected default sandbox surface; cannot execute other session actions. */
   sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */

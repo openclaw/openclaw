@@ -149,6 +149,7 @@ export type OpenClawCodingToolsOptions = {
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   assertInvocationCurrent?: () => void;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Policy-approved publication unavailable in this workspace, retained for new children. */
   inheritedPublicationToolRef?: { current?: AnyAgentTool };

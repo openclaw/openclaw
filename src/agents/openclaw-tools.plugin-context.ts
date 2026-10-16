@@ -49,7 +49,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "toolBindings"
   | "sandbox"
   | "abortSignal"
-  | "skillsSnapshot"
+  | "pluginExecutionSkillsSnapshot"
   | "pluginExecutionAuthority"
 > & { activeProjectKeys?: readonly string[]; approvalReviewerDeviceId?: string };
 

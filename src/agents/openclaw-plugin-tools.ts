@@ -343,13 +343,12 @@ function* resolveOpenClawPluginToolSteps(
     ...pluginToolInputs,
     bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
       sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
-      skillsSnapshot: params.options?.skillsSnapshot,
+      skillsSnapshot: params.options?.pluginExecutionSkillsSnapshot,
       signal: params.options?.abortSignal,
       authority: params.options?.pluginExecutionAuthority,
       modelContextWindowTokens: params.options?.modelContextWindowTokens,
       preparedModelRuntime,
       config: availabilityConfig,
-      agentDir: params.options?.agentDir,
       agentId: pluginToolInputs.context.agentId,
     }),
     context: {

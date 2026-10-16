@@ -9,7 +9,6 @@ import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
-import { parseModelRef } from "./model-selection-normalize.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
 import { resolveProtectedSandboxDirectory } from "./sandbox/fs-paths.js";
@@ -32,7 +31,6 @@ export function preparePluginToolExecutionCapabilities(params: {
   authority?: AdmittedRunOperatorAuthority;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   config?: OpenClawConfig;
-  agentDir?: string;
   agentId?: string;
   modelContextWindowTokens?: number;
 }): (assertInvocationCurrent: () => void, signal?: AbortSignal) => PluginToolExecutionCapabilities {
@@ -48,16 +46,23 @@ export function preparePluginToolExecutionCapabilities(params: {
     : null;
   const installedSkillRoots: Record<string, string> = {};
   if (sandbox && backend?.capabilities?.readOnlyResourceMounts) {
-    for (const skill of params.skillsSnapshot?.resolvedSkills ?? []) {
+    const snapshot = params.skillsSnapshot;
+    for (const skill of snapshot?.discoverySkills ?? snapshot?.resolvedSkills ?? []) {
       if (
         !["openclaw-managed", "openclaw-library", "openclaw-bundled"].includes(skill.source) ||
+        skill.disableModelInvocation ||
         skill.fileHost === "workspace"
       ) {
         continue;
       }
+      // Prompt preparation remaps filePath; selection retains the canonical source identity.
+      const source = snapshot?.skills.find((entry) => entry.name === skill.name)?.source;
+      if (source?.fileHost === "workspace") {
+        continue;
+      }
+      const sourceFile = canonicalizePath(source?.filePath ?? skill.filePath);
       const usage = sandbox.skillUsagePaths?.find(
-        (entry) =>
-          entry.skillName === skill.name && entry.skillFile === canonicalizePath(skill.filePath),
+        (entry) => entry.skillName === skill.name && entry.skillFile === sourceFile,
       );
       if (!usage) {
         continue;
@@ -78,48 +83,90 @@ export function preparePluginToolExecutionCapabilities(params: {
       ? {
           modelExecution: {
             cliEntryPath: path.join(hostRoot, "openclaw.mjs"),
-            async run(model, action, signal) {
-              assertInvocationCurrent();
-              const selected = parseModelRef(model, "openai");
-              if (!selected || !model.includes("/")) {
-                throw new Error("A provider/model selection is required.");
-              }
-              const scope = bindOperatorModelExecution(authority, selected)!;
-              const combined = AbortSignal.any(
-                [scope.signal, params.signal, pluginSignal, signal].filter(
+            async run(selection, action, signal) {
+              const callerSignal = AbortSignal.any(
+                [params.signal, pluginSignal, signal, authority.signal].filter(
                   (value): value is AbortSignal => Boolean(value),
                 ),
               );
+              const assertCallerCurrent = () => {
+                callerSignal.throwIfAborted();
+                assertInvocationCurrent();
+                authority.assertCurrent();
+              };
+              assertCallerCurrent();
+              const [
+                { resolveAmbientOwnerAgentId },
+                { resolveDefaultModelForAgent },
+                { resolveModelRefFromString },
+                { createModelVisibilityPolicy },
+                { resolveOperatorModelDefault },
+              ] = await Promise.all([
+                import("./agent-scope-config.js"),
+                import("./model-selection-config.js"),
+                import("./model-selection-resolve.js"),
+                import("./model-visibility-policy.js"),
+                import("./operator-model-policy.js"),
+              ]);
+              assertCallerCurrent();
+              const cfg = params.config ?? {};
+              const agentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
+              const modelContext = {
+                cfg,
+                agentId,
+                manifestPlugins: params.preparedModelRuntime?.metadataSnapshot,
+              };
+              const primary = resolveDefaultModelForAgent(modelContext);
+              const visibility = createModelVisibilityPolicy({
+                ...modelContext,
+                catalog: params.preparedModelRuntime?.modelCatalog.entries ?? [],
+                defaultProvider: primary.provider,
+                defaultModel: primary,
+              });
+              const requested =
+                selection.model === null
+                  ? primary
+                  : resolveModelRefFromString({
+                      ...modelContext,
+                      raw: selection.model,
+                      defaultProvider: primary.provider,
+                      aliasIndex: visibility.selectionAliasIndex,
+                    })?.ref;
+              const allowed =
+                requested &&
+                (visibility.allows(requested)
+                  ? requested
+                  : selection.explicit
+                    ? undefined
+                    : visibility.resolveSelection({ ...primary, routeResolution: "resolved" }));
+              if (!allowed) {
+                throw new Error("No permitted reviewer model is available for this agent.");
+              }
+              const selected = selection.explicit
+                ? allowed
+                : resolveOperatorModelDefault({
+                    ...modelContext,
+                    policy: authority.modelPolicy,
+                    model: allowed,
+                    allows: visibility.allows,
+                  });
+              if (!selected) {
+                throw new Error("No permitted reviewer model is available for this caller.");
+              }
+              const scope = bindOperatorModelExecution(authority, selected)!;
+              const combined = AbortSignal.any([scope.signal, callerSignal]);
               const assertCurrent = () => {
                 combined.throwIfAborted();
-                assertInvocationCurrent();
+                assertCallerCurrent();
                 scope.assertCurrent();
               };
               try {
                 assertCurrent();
-                const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-                assertCurrent();
-                const resolved = await resolveModelAsync(
-                  selected.provider,
-                  selected.model,
-                  params.agentDir,
-                  params.config,
-                  {
-                    preparedModelRuntime: params.preparedModelRuntime,
-                    agentId: params.agentId,
-                    assertCurrent,
-                    abortSignal: combined,
-                    agentRuntimeId: "openclaw",
-                  },
-                );
-                assertCurrent();
-                if (!resolved.model) {
-                  throw new Error(resolved.error);
-                }
                 const result = await action({
                   signal: combined,
                   assertCurrent,
-                  model: resolved.model,
+                  model: `${selected.provider}/${selected.model}`,
+                  agentId,
                 });
                 assertCurrent();
                 return result;
@@ -166,26 +213,16 @@ export function preparePluginToolExecutionCapabilities(params: {
               let timedOut = false;
               await using resources = new AsyncDisposableStack();
               resources.defer(async () => {
-                try {
-                  await backend.finalizeExec?.({
-                    status: completed ? "completed" : "failed",
-                    exitCode,
-                    timedOut,
-                    token: spec.finalizeToken,
-                  });
-                } catch (error) {
-                  throw new Error("Sandbox command finalization failed.", { cause: error });
-                }
+                await backend.finalizeExec?.({
+                  status: completed ? "completed" : "failed",
+                  exitCode,
+                  timedOut,
+                  token: spec.finalizeToken,
+                });
               });
               resources.defer(async () => {
                 if (!completed) {
-                  try {
-                    await runOutsideCommandProcessScope(() => cleanup.terminate());
-                  } catch (error) {
-                    throw new Error("Sandbox process cleanup could not be confirmed.", {
-                      cause: error,
-                    });
-                  }
+                  await runOutsideCommandProcessScope(() => cleanup.terminate());
                 }
               });
               assertCurrent();
