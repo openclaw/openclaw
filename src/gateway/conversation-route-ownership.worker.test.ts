@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { beginConversationDeliveryOperation } from "../config/sessions/conversation-delivery-store.js";
 import {
   readConversation,
@@ -55,6 +56,10 @@ afterEach(() => {
 });
 afterAll(async () => state.cleanup());
 
+function installReefPlugin(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
+}
+
 it("expires plugin binding inspection when async route preparation settles", async () => {
   const conversation = {
     channel: "reef",
@@ -86,19 +91,11 @@ it("expires plugin binding inspection when async route preparation settles", asy
       );
     },
   };
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "reef",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "reef" }),
-          conversationBindings: { supportsCurrentConversationBinding: true },
-          messaging,
-        },
-      },
-    ]),
-  );
+  installReefPlugin({
+    ...createChannelTestPluginBase({ id: "reef" }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+    messaging,
+  });
   await getSessionBindingService().bind({
     conversation,
     targetSessionKey,
@@ -239,17 +236,8 @@ it.each(["final", "queued"] as const)(
 
     const effect = createDeferred<{ channel: string; messageId: string }>();
     const sendText = vi.fn(() => effect.promise);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "reef",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "reef",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
+    installReefPlugin(
+      createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
     );
     const prepareEntered = createDeferred();
     const releasePreparation = createDeferred();

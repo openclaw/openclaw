@@ -10,7 +10,6 @@ import {
   markConversationDeliveryReplied,
   markConversationDeliverySent,
 } from "../config/sessions/conversation-delivery-store.js";
-import * as deliveryStore from "../config/sessions/conversation-delivery-store.js";
 import {
   prepareConversationRegistryScope,
   registerConversationAddresses,
@@ -80,10 +79,6 @@ async function createDeps() {
   return {
     ...store,
     entry,
-    beginOperation: vi.spyOn(deliveryStore, "beginConversationDeliveryOperation"),
-    getOperation: vi.spyOn(deliveryStore, "getConversationDeliveryOperation"),
-    markSent: vi.spyOn(deliveryStore, "markConversationDeliverySent"),
-    markSuppressed: vi.spyOn(deliveryStore, "markConversationDeliverySuppressed"),
     registerPendingConversationTurn: vi.spyOn(conversationTurns, "registerPendingConversationTurn"),
     readConversation: vi
       .spyOn(conversationRegistry, "readConversation")
@@ -117,6 +112,44 @@ async function createDeps() {
 
 afterEach(() => vi.restoreAllMocks());
 
+type TurnInput = Parameters<typeof runGatewayConversationTurn>[0];
+function runTurn(
+  deps: Pick<TurnInput, "config">,
+  turnId: string,
+  overrides: Partial<TurnInput> = {},
+) {
+  return runGatewayConversationTurn({
+    config: deps.config,
+    agentId: "main",
+    senderIsOwner: true,
+    conversationRef: conversation.conversationRef,
+    message: "hello",
+    timeoutMs: 1_000,
+    turnId,
+    ...overrides,
+  });
+}
+
+function beginTurn(
+  scope: Parameters<typeof beginConversationDeliveryOperation>[0],
+  operationId: string,
+  overrides: Partial<Parameters<typeof beginConversationDeliveryOperation>[1]> = {},
+) {
+  return beginConversationDeliveryOperation(scope, {
+    operationId,
+    operationKind: "turn",
+    conversationRef: conversation.conversationRef,
+    message: "hello",
+    preparedMessageId: "reef-outbound-1",
+    ...overrides,
+  });
+}
+
+function unboundConversation() {
+  const { sessionId: _sessionId, sessionKey: _sessionKey, role: _role, ...unbound } = conversation;
+  return unbound;
+}
+
 describe("runGatewayConversationTurn", () => {
   it("replays a completed turn without inspecting its source session store", async () => {
     const deps = await createDeps();
@@ -128,12 +161,8 @@ describe("runGatewayConversationTurn", () => {
     await registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
     ]);
-    await beginConversationDeliveryOperation(scope, {
-      operationId: "turn-source-replay",
-      operationKind: "turn",
+    await beginTurn(scope, "turn-source-replay", {
       sourceSessionKey,
-      conversationRef: conversation.conversationRef,
-      message: "hello",
       preparedMessageId: "sent-id",
     });
     await markConversationDeliverySent(scope, "turn-source-replay", "sent-id");
@@ -149,14 +178,9 @@ describe("runGatewayConversationTurn", () => {
       });
     try {
       await expect(
-        runGatewayConversationTurn({
+        runTurn(deps, "turn-source-replay", {
           config: { session: { store: storePattern } },
-          agentId: "main",
-          senderIsOwner: true,
           sourceSessionKey,
-          turnId: "turn-source-replay",
-          conversationRef: conversation.conversationRef,
-          message: "hello",
           timeoutMs: 1,
         }),
       ).resolves.toMatchObject({ status: "sent", messageId: "sent-id" });
@@ -174,13 +198,7 @@ describe("runGatewayConversationTurn", () => {
     const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const writer = holdConversationWriterForTest(scope);
     await writer.entered;
-    const turn = runGatewayConversationTurn({
-      config: deps.config,
-      agentId: "main",
-      senderIsOwner: true,
-      turnId: "turn-admitted-lookup",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
+    const turn = runTurn(deps, "turn-admitted-lookup", {
       timeoutMs: 1,
     });
     const outcome = turn.then(
@@ -214,13 +232,7 @@ describe("runGatewayConversationTurn", () => {
       blocked.resolve(writer);
       return conversation;
     });
-    const turn = runGatewayConversationTurn({
-      config: deps.config,
-      agentId: "main",
-      senderIsOwner: true,
-      turnId: "turn-admitted-generation",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
+    const turn = runTurn(deps, "turn-admitted-generation", {
       timeoutMs: 1,
     });
     const outcome = turn.then(
@@ -268,12 +280,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("creates a context binding only when a discovered address starts a turn", async () => {
     const deps = await createDeps();
-    const {
-      sessionId: _sessionId,
-      sessionKey: _sessionKey,
-      role: _role,
-      ...unbound
-    } = conversation;
+    const unbound = unboundConversation();
     deps.readConversation.mockResolvedValueOnce(unbound).mockResolvedValue(conversation);
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
@@ -284,13 +291,8 @@ describe("runGatewayConversationTurn", () => {
     });
 
     await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-directory-peer",
+      runTurn(deps, "turn-directory-peer", {
         sourceSessionKey: "agent:main:dashboard:restricted-creator",
-        conversationRef: conversation.conversationRef,
         message: "hello molty",
         timeoutMs: 1,
       }),
@@ -310,12 +312,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("rejects a route-owner change at the outbound session binding commit", async () => {
     const deps = await createDeps();
-    const {
-      sessionId: _sessionId,
-      sessionKey: _sessionKey,
-      role: _role,
-      ...unbound
-    } = conversation;
+    const unbound = unboundConversation();
     deps.readConversation.mockResolvedValue(unbound);
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
@@ -336,13 +333,8 @@ describe("runGatewayConversationTurn", () => {
       });
 
     await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
+      runTurn(deps, "turn-revoked-during-bind", {
         readCurrentConfig,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-revoked-during-bind",
-        conversationRef: conversation.conversationRef,
         message: "hello molty",
         timeoutMs: 1,
       }),
@@ -378,15 +370,9 @@ describe("runGatewayConversationTurn", () => {
       return sentResult();
     });
 
-    const result = await runGatewayConversationTurn({
-      config: deps.config,
-      agentId: "main",
-      senderIsOwner: true,
+    const result = await runTurn(deps, "turn-fast-reply", {
       sourceSessionKey: "agent:main:telegram:direct:operator",
-      turnId: "turn-fast-reply",
-      conversationRef: conversation.conversationRef,
       message: "hello molty",
-      timeoutMs: 1_000,
     });
     await capture;
 
@@ -407,10 +393,7 @@ describe("runGatewayConversationTurn", () => {
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
       outbound: {
         prepareConversationTurnMessageId: () => {
-          competingOperation = beginConversationDeliveryOperation(deps.scope, {
-            operationId: "turn-raced",
-            operationKind: "turn",
-            conversationRef: conversation.conversationRef,
+          competingOperation = beginTurn(deps.scope, "turn-raced", {
             message: "hello molty",
             preparedMessageId: "reef-authoritative-a",
           });
@@ -434,14 +417,8 @@ describe("runGatewayConversationTurn", () => {
       return sentResult("reef-authoritative-a");
     });
 
-    const result = await runGatewayConversationTurn({
-      config: deps.config,
-      agentId: "main",
-      senderIsOwner: true,
-      turnId: "turn-raced",
-      conversationRef: conversation.conversationRef,
+    const result = await runTurn(deps, "turn-raced", {
       message: "hello molty",
-      timeoutMs: 1_000,
     });
     await competingOperation;
     await capture;
@@ -455,29 +432,16 @@ describe("runGatewayConversationTurn", () => {
 
   it("returns a prior durable reply without sending again", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-replied",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-outbound-1",
-    });
+    await beginTurn(deps.scope, "turn-replied");
     await markConversationDeliverySent(deps.scope, "turn-replied", "reef-outbound-1");
     await markConversationDeliveryReplied(deps.scope, {
       operationId: "turn-replied",
       reply: { messageId: "reply-1", replyToId: "reef-outbound-1", text: "ack", timestamp: 300 },
     });
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-replied",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toMatchObject({ status: "replied", reply: { text: "ack" } });
+    await expect(runTurn(deps, "turn-replied")).resolves.toMatchObject({
+      status: "replied",
+      reply: { text: "ack" },
+    });
     expect(deps.readConversation).toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
@@ -485,13 +449,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("does not reveal a completed reply after the route owner changes", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-reassigned",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-outbound-1",
-    });
+    await beginTurn(deps.scope, "turn-reassigned");
     await markConversationDeliverySent(deps.scope, "turn-reassigned", "reef-outbound-1");
     await markConversationDeliveryReplied(deps.scope, {
       operationId: "turn-reassigned",
@@ -504,7 +462,7 @@ describe("runGatewayConversationTurn", () => {
     });
 
     await expect(
-      runGatewayConversationTurn({
+      runTurn(deps, "turn-reassigned", {
         config: {
           ...deps.config,
           agents: { entries: { main: {}, finance: {} } },
@@ -516,39 +474,17 @@ describe("runGatewayConversationTurn", () => {
             },
           ],
         },
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-reassigned",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);
   });
 
   it("returns a durable permanent rejection as invalid input after restart", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-rejected",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-outbound-1",
-    });
+    await beginTurn(deps.scope, "turn-rejected");
     await markConversationDeliveryQueued(deps.scope, "turn-rejected", "queue-rejected");
     await markConversationDeliveryRejected(deps.scope, "turn-rejected", "atomic message limit");
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-rejected",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toMatchObject({
+    await expect(runTurn(deps, "turn-rejected")).rejects.toMatchObject({
       name: "ConversationInputError",
       message: "atomic message limit",
     });
@@ -558,10 +494,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("classifies durable operation-id input reuse as invalid input", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-reused",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
+    await beginTurn(deps.scope, "turn-reused", {
       message: "original",
       preparedMessageId: "reef-outbound-reused",
     });
@@ -569,14 +502,8 @@ describe("runGatewayConversationTurn", () => {
     deps.readConversation.mockResolvedValue(undefined);
 
     await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-reused",
-        conversationRef: conversation.conversationRef,
+      runTurn(deps, "turn-reused", {
         message: "different",
-        timeoutMs: 1_000,
       }),
     ).rejects.toMatchObject({
       name: "ConversationOperationConflictError",
@@ -589,26 +516,12 @@ describe("runGatewayConversationTurn", () => {
 
   it("requires a live binding before resuming an unfinished durable turn", async () => {
     const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-created",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
+    await beginTurn(deps.scope, "turn-created", {
       preparedMessageId: "reef-outbound-created",
     });
     deps.readConversation.mockResolvedValue(undefined);
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-created",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toBeInstanceOf(ConversationInputError);
+    await expect(runTurn(deps, "turn-created")).rejects.toBeInstanceOf(ConversationInputError);
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
@@ -641,42 +554,19 @@ describe("runGatewayConversationTurn", () => {
       return sentResult();
     });
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-replaced-session",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toMatchObject({ name: "ConversationInputError" });
+    await expect(runTurn(deps, "turn-replaced-session")).rejects.toMatchObject({
+      name: "ConversationInputError",
+    });
     expect(deps.runMessageAction).toHaveBeenCalledOnce();
   });
 
   it("rejects unsupported channels before registering or sending", async () => {
     const deps = await createDeps();
-    const {
-      sessionId: _sessionId,
-      sessionKey: _sessionKey,
-      role: _role,
-      ...unbound
-    } = conversation;
+    const unbound = unboundConversation();
     deps.readConversation.mockResolvedValue(unbound);
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({ outbound: {} } as never);
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-unsupported",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toBeInstanceOf(ConversationInputError);
+    await expect(runTurn(deps, "turn-unsupported")).rejects.toBeInstanceOf(ConversationInputError);
     expect(deps.resolveOutboundSessionRoute).not.toHaveBeenCalled();
     expect(deps.bindOutboundSessionEntry).not.toHaveBeenCalled();
     expect(readConversationDeliveryStateForTest(deps.scope, "turn-unsupported")).toBeUndefined();
@@ -695,14 +585,8 @@ describe("runGatewayConversationTurn", () => {
     } as never);
 
     await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-preflight-rejected",
-        conversationRef: conversation.conversationRef,
+      runTurn(deps, "turn-preflight-rejected", {
         message: "oversized",
-        timeoutMs: 1_000,
       }),
     ).rejects.toMatchObject({
       name: "ConversationInputError",
@@ -722,17 +606,7 @@ describe("runGatewayConversationTurn", () => {
       return sentResult("reef-different-id");
     });
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-wrong-id",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toMatchObject({
+    await expect(runTurn(deps, "turn-wrong-id")).resolves.toMatchObject({
       status: "sent",
       messageId: "reef-different-id",
       error: expect.stringContaining("did not preserve its prepared message id"),
@@ -749,16 +623,9 @@ describe("runGatewayConversationTurn", () => {
       };
     });
 
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-suppressed",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toMatchObject({ status: "suppressed", correlationPersisted: false });
+    await expect(runTurn(deps, "turn-suppressed")).resolves.toMatchObject({
+      status: "suppressed",
+      correlationPersisted: false,
+    });
   });
 });

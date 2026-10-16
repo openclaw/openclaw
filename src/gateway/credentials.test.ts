@@ -1,5 +1,3 @@
-// Gateway credentials tests cover config/env/secret-ref resolution for local and
-// remote gateway auth values.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
@@ -9,13 +7,9 @@ import {
   resolveGatewayCredentialsFromValues,
 } from "./credentials.js";
 
-function cfg(input: Partial<OpenClawConfig>): OpenClawConfig {
-  return input as OpenClawConfig;
-}
-
 type ResolveFromConfigInput = Parameters<typeof resolveGatewayCredentialsFromConfig>[0];
 type GatewayConfig = NonNullable<OpenClawConfig["gateway"]>;
-type ResolveFromConfigOverrides = Partial<Omit<ResolveFromConfigInput, "cfg" | "env">>;
+type ResolveFromConfigOverrides = Partial<Omit<ResolveFromConfigInput, "cfg">>;
 
 const DEFAULT_GATEWAY_AUTH = { token: "config-token", password: "config-password" }; // pragma: allowlist secret
 const DEFAULT_REMOTE_AUTH = { token: "remote-token", password: "remote-password" }; // pragma: allowlist secret
@@ -29,84 +23,50 @@ function envSecretRef(id: string) {
   return { source: "env", provider: "default", id } as const;
 }
 
-function cfgWithDefaultEnvSecretProvider(gateway: GatewayConfig): OpenClawConfig {
-  return {
-    gateway,
-    secrets: {
-      providers: {
-        default: { source: "env" },
-      },
-    },
-  } as unknown as OpenClawConfig;
-}
-
-function resolveGatewayCredentialsWithEmptyEnv(
-  config: OpenClawConfig,
-  overrides: ResolveFromConfigOverrides = {},
-) {
-  return resolveGatewayCredentialsFromConfig({
-    cfg: config,
-    env: EMPTY_GATEWAY_ENV,
-    ...overrides,
-  });
-}
-
 function resolveGatewayCredentialsFor(
   gateway: GatewayConfig,
   overrides: ResolveFromConfigOverrides = {},
+  secretProvider = false,
 ) {
   return resolveGatewayCredentialsFromConfig({
-    cfg: cfg({ gateway }),
+    cfg: {
+      gateway,
+      ...(secretProvider && { secrets: { providers: { default: { source: "env" as const } } } }),
+    },
     env: DEFAULT_GATEWAY_ENV,
     ...overrides,
   });
 }
 
 function resolveLocalGatewayCredentials(gateway: GatewayConfig) {
-  return resolveGatewayCredentialsWithEmptyEnv(cfg({ gateway: { mode: "local", ...gateway } }));
+  return resolveGatewayCredentialsFor({ mode: "local", ...gateway }, { env: EMPTY_GATEWAY_ENV });
 }
 
-function expectEnvGatewayCredentials(resolved: { token?: string; password?: string }) {
-  expect(resolved).toEqual({
-    token: "env-token",
-    password: "env-password", // pragma: allowlist secret
-  });
-}
-
-function expectNoGatewayCredentials(resolved: { token?: string; password?: string }) {
-  expect(resolved).toEqual({
-    token: undefined,
-    password: undefined,
-  });
-}
-
-function expectRemoteGatewayCredentials(resolved: { token?: string; password?: string }) {
-  expect(resolved).toEqual({
-    token: "remote-token",
-    password: "remote-password", // pragma: allowlist secret
-  });
-}
-
-function resolveGatewayCredentialsFromDefaultValues(
-  overrides: Partial<Parameters<typeof resolveGatewayCredentialsFromValues>[0]> = {},
+function resolveRemoteGatewayCredentials(
+  remote: GatewayConfig["remote"] = {},
+  overrides: ResolveFromConfigOverrides = {},
+  auth: GatewayConfig["auth"] = {},
+  secretProvider = true,
 ) {
-  return resolveGatewayCredentialsFromValues({
-    configToken: "config-token",
-    configPassword: "config-password", // pragma: allowlist secret
-    env: DEFAULT_GATEWAY_ENV,
-    ...overrides,
-  });
+  return resolveGatewayCredentialsFor(
+    { mode: "remote", remote: { url: "wss://gateway.example", ...remote }, auth },
+    { env: EMPTY_GATEWAY_ENV, ...overrides },
+    secretProvider,
+  );
 }
+
+const ENV_AUTH = { token: "env-token", password: "env-password" }; // pragma: allowlist secret
+const NO_AUTH = { token: undefined, password: undefined };
+const TRUSTED_PROXY_PASSWORD = "local-trusted-proxy-password"; // pragma: allowlist secret
 
 function resolveLocalModeWithUnresolvedPassword(mode: "none" | "trusted-proxy") {
-  return resolveGatewayCredentialsWithEmptyEnv(
-    cfgWithDefaultEnvSecretProvider({
+  return resolveGatewayCredentialsFor(
+    {
       mode: "local",
-      auth: {
-        mode,
-        password: envSecretRef("MISSING_GATEWAY_PASSWORD"),
-      },
-    }),
+      auth: { mode, password: envSecretRef("MISSING_GATEWAY_PASSWORD") },
+    },
+    { env: EMPTY_GATEWAY_ENV },
+    true,
   );
 }
 
@@ -116,24 +76,15 @@ function expectUnresolvedLocalAuthSecretRefFailure(params: {
   errorPath: "gateway.auth.token" | "gateway.auth.password";
   remote?: { token?: string; password?: string };
 }) {
-  const localAuth =
-    params.authMode === "token"
-      ? {
-          mode: "token" as const,
-          token: envSecretRef(params.secretId),
-        }
-      : {
-          mode: "password" as const,
-          password: envSecretRef(params.secretId),
-        };
-
   expect(() =>
-    resolveGatewayCredentialsWithEmptyEnv(
-      cfgWithDefaultEnvSecretProvider({
+    resolveGatewayCredentialsFor(
+      {
         mode: "local",
-        auth: localAuth,
+        auth: { mode: params.authMode, [params.authMode]: envSecretRef(params.secretId) },
         remote: params.remote,
-      }),
+      },
+      { env: EMPTY_GATEWAY_ENV },
+      true,
     ),
   ).toThrow(params.errorPath);
 }
@@ -141,9 +92,7 @@ function expectUnresolvedLocalAuthSecretRefFailure(params: {
 describe("resolveGatewayCredentialsFromConfig", () => {
   it("prefers explicit credentials over config and environment", () => {
     const resolved = resolveGatewayCredentialsFor(
-      {
-        auth: DEFAULT_GATEWAY_AUTH,
-      },
+      { auth: DEFAULT_GATEWAY_AUTH },
       {
         explicitAuth: { token: "explicit-token", password: "explicit-password" }, // pragma: allowlist secret
       },
@@ -156,27 +105,21 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
   it("returns empty credentials when url override is used without explicit auth", () => {
     const resolved = resolveGatewayCredentialsFor(
-      {
-        auth: DEFAULT_GATEWAY_AUTH,
-      },
-      {
-        urlOverride: "wss://example.com",
-      },
+      { auth: DEFAULT_GATEWAY_AUTH },
+      { urlOverride: "wss://example.com" },
     );
     expect(resolved).toStrictEqual({});
   });
 
   it("uses env credentials for env-sourced url overrides", () => {
     const resolved = resolveGatewayCredentialsFor(
-      {
-        auth: DEFAULT_GATEWAY_AUTH,
-      },
+      { auth: DEFAULT_GATEWAY_AUTH },
       {
         urlOverride: "wss://example.com",
         urlOverrideSource: "env",
       },
     );
-    expectEnvGatewayCredentials(resolved);
+    expect(resolved).toEqual(ENV_AUTH);
   });
 
   it("keeps env ahead of remote fallback when local auth is missing", () => {
@@ -185,7 +128,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       auth: {},
       remote: DEFAULT_REMOTE_AUTH,
     });
-    expectEnvGatewayCredentials(resolved);
+    expect(resolved).toEqual(ENV_AUTH);
   });
 
   it("falls back to remote credentials in local mode when local auth is missing", () => {
@@ -193,7 +136,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       remote: DEFAULT_REMOTE_AUTH,
       auth: {},
     });
-    expectRemoteGatewayCredentials(resolved);
+    expect(resolved).toEqual(DEFAULT_REMOTE_AUTH);
   });
 
   it("fails closed when local token SecretRef is unresolved and remote token fallback exists", () => {
@@ -216,26 +159,19 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
   it("fails closed on env-template local tokens in the synchronous resolver", () => {
     expect(() =>
-      resolveGatewayCredentialsFromConfig({
-        cfg: cfg({
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: "${OPENCLAW_GATEWAY_TOKEN}",
-            },
-          },
-        }),
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-        } as NodeJS.ProcessEnv,
-      }),
+      resolveGatewayCredentialsFor(
+        {
+          mode: "local",
+          auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+        },
+        { env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } },
+      ),
     ).toThrow("gateway.auth.token");
   });
 
   it("ignores unresolved local password ref when local auth mode is none", () => {
     const resolved = resolveLocalModeWithUnresolvedPassword("none");
-    expectNoGatewayCredentials(resolved);
+    expect(resolved).toEqual(NO_AUTH);
   });
 
   it("throws when trusted-proxy local password SecretRef cannot resolve", () => {
@@ -246,119 +182,74 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
   it("resolves trusted-proxy local password credentials", () => {
     const resolved = resolveLocalGatewayCredentials({
-      auth: {
-        mode: "trusted-proxy",
-        password: "local-trusted-proxy-password", // pragma: allowlist secret
-      },
+      auth: { mode: "trusted-proxy", password: TRUSTED_PROXY_PASSWORD },
     });
-
-    expect(resolved).toEqual({
-      token: undefined,
-      password: "local-trusted-proxy-password", // pragma: allowlist secret
-    });
+    expect(resolved).toEqual({ token: undefined, password: TRUSTED_PROXY_PASSWORD });
   });
 
   it("does not use remote password as trusted-proxy local fallback", () => {
     const resolved = resolveLocalGatewayCredentials({
-      auth: {
-        mode: "trusted-proxy",
-      },
-      remote: {
-        password: "remote-password", // pragma: allowlist secret
-      },
+      auth: { mode: "trusted-proxy" },
+      remote: { password: "remote-password" }, // pragma: allowlist secret
     });
 
-    expectNoGatewayCredentials(resolved);
+    expect(resolved).toEqual(NO_AUTH);
   });
 
   it("supports remote-only token fallback for strict remote override call sites", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "remote",
-          remote: { url: "wss://gateway.example" },
-          auth: { token: "local-token" },
-        },
-      }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-      } as NodeJS.ProcessEnv,
-      remoteTokenFallback: "remote-only",
-    });
+    const resolved = resolveRemoteGatewayCredentials(
+      {},
+      {
+        env: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
+        remoteTokenFallback: "remote-only",
+      },
+      { token: "local-token" },
+      false,
+    );
     expect(resolved.token).toBeUndefined();
   });
 
   it("throws when remote token auth relies on an unresolved SecretRef", () => {
     expect(() =>
-      resolveGatewayCredentialsWithEmptyEnv(
-        cfgWithDefaultEnvSecretProvider({
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example",
-            token: envSecretRef("MISSING_REMOTE_TOKEN"),
-          },
-          auth: {},
-        }),
+      resolveRemoteGatewayCredentials(
+        { token: envSecretRef("MISSING_REMOTE_TOKEN") },
         { remoteTokenFallback: "remote-only" },
       ),
     ).toThrow("gateway.remote.token");
   });
 
-  function createRemoteConfigWithMissingLocalTokenRef() {
-    return {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-        },
-        auth: {
-          mode: "token",
-          token: envSecretRef("MISSING_LOCAL_TOKEN"),
-        },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-  }
+  const missingLocalToken = { mode: "token", token: envSecretRef("MISSING_LOCAL_TOKEN") } as const;
 
   it("ignores unresolved local token ref in remote-only mode when local auth mode is token", () => {
-    const resolved = resolveGatewayCredentialsWithEmptyEnv(
-      createRemoteConfigWithMissingLocalTokenRef(),
+    const resolved = resolveRemoteGatewayCredentials(
+      {},
       {
         remoteTokenFallback: "remote-only",
         remotePasswordFallback: "remote-only", // pragma: allowlist secret
       },
+      missingLocalToken,
     );
-    expect(resolved).toEqual({
-      token: undefined,
-      password: undefined,
-    });
+    expect(resolved).toEqual(NO_AUTH);
   });
 
   it("throws for unresolved local token ref in remote mode when local fallback is enabled", () => {
     expect(() =>
-      resolveGatewayCredentialsWithEmptyEnv(createRemoteConfigWithMissingLocalTokenRef(), {
-        remoteTokenFallback: "remote-env-local",
-        remotePasswordFallback: "remote-only", // pragma: allowlist secret
-      }),
+      resolveRemoteGatewayCredentials(
+        {},
+        {
+          remoteTokenFallback: "remote-env-local",
+          remotePasswordFallback: "remote-only", // pragma: allowlist secret
+        },
+        missingLocalToken,
+      ),
     ).toThrow("gateway.auth.token");
   });
 
   it("uses remote password when remote token ref is unresolved", () => {
-    const resolved = resolveGatewayCredentialsWithEmptyEnv(
-      cfgWithDefaultEnvSecretProvider({
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example",
-          token: envSecretRef("MISSING_REMOTE_TOKEN"),
-          password: "remote-password", // pragma: allowlist secret
-        },
-        auth: {},
-      }),
-    );
+    const resolved = resolveRemoteGatewayCredentials({
+      token: envSecretRef("MISSING_REMOTE_TOKEN"),
+      password: "remote-password", // pragma: allowlist secret
+    });
     expect(resolved).toEqual({
       token: undefined,
       password: "remote-password", // pragma: allowlist secret
@@ -367,15 +258,8 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
   it("throws when remote password auth relies on an unresolved SecretRef", () => {
     expect(() =>
-      resolveGatewayCredentialsWithEmptyEnv(
-        cfgWithDefaultEnvSecretProvider({
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example",
-            password: envSecretRef("MISSING_REMOTE_PASSWORD"),
-          },
-          auth: {},
-        }),
+      resolveRemoteGatewayCredentials(
+        { password: envSecretRef("MISSING_REMOTE_PASSWORD") },
         { remotePasswordFallback: "remote-only" }, // pragma: allowlist secret
       ),
     ).toThrow("gateway.remote.password");
@@ -398,12 +282,14 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       );
       const config = read.resolvedConfigRaw as OpenClawConfig;
       setConfigResolutionFacts(config, read.resolutionFacts);
+      const resolve = () =>
+        resolveGatewayCredentialsFromConfig({ cfg: config, env: EMPTY_GATEWAY_ENV });
 
       if (expected === null) {
-        expect(() => resolveGatewayCredentialsWithEmptyEnv(config)).toThrow("gateway.auth.token");
+        expect(resolve).toThrow("gateway.auth.token");
         return;
       }
-      expect(resolveGatewayCredentialsWithEmptyEnv(config)).toEqual({
+      expect(resolve()).toEqual({
         token: expected,
         password: undefined,
       });
@@ -413,7 +299,10 @@ describe("resolveGatewayCredentialsFromConfig", () => {
 
 describe("resolveGatewayCredentialsFromValues", () => {
   it("supports config-first precedence for token/password", () => {
-    const resolved = resolveGatewayCredentialsFromDefaultValues({
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "config-token",
+      configPassword: "config-password", // pragma: allowlist secret
+      env: DEFAULT_GATEWAY_ENV,
       tokenPrecedence: "config-first",
       passwordPrecedence: "config-first", // pragma: allowlist secret
     });

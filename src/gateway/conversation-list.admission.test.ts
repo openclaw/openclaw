@@ -75,7 +75,9 @@ async function createDirectory(
       };
     },
   };
-  return { agentId, config, deps, routed, scope, stateDir, storePath };
+  const list = (overrides: Partial<Parameters<typeof runGatewayConversationList>[0]> = {}) =>
+    runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides }, deps);
+  return { config, deps, routed, scope, storePath, list };
 }
 
 describe("conversation directory write admission", () => {
@@ -105,25 +107,15 @@ describe("conversation directory write admission", () => {
           };
         },
       );
-      const result = runGatewayConversationList(
-        {
-          config: fixture.config,
-          readCurrentConfig: () => currentConfig,
-          agentId: fixture.agentId,
-          channel: "reef",
-          limit: 10,
-        },
-        fixture.deps,
-      ).then(
-        (value) => {
+      const result = fixture
+        .list({ readCurrentConfig: () => currentConfig })
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
           settled = true;
-          return { value };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { error };
-        },
-      );
+        });
       try {
         await fixture.routed.promise;
         await setImmediate();
@@ -186,10 +178,7 @@ describe("conversation directory write admission", () => {
         ...fixture.config,
         session: { store: path.relative(process.cwd(), fixture.storePath) },
       };
-      const result = runGatewayConversationList(
-        { config, agentId: fixture.agentId, channel: "reef", limit: 10 },
-        fixture.deps,
-      );
+      const result = fixture.list({ config });
       try {
         await fixture.routed.promise;
         const otherDirectory = tempDirs.make("conversation-directory-moved-");
