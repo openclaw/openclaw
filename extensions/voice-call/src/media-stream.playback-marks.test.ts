@@ -1,36 +1,19 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { MediaStreamHandler } from "./media-stream.js";
+import type { MediaStreamHandler } from "./media-stream.js";
 import {
-  connectWs,
-  startUpgradeWsServer,
-  waitForClose,
-  withTimeout,
-} from "./websocket-test-support.js";
+  createHandler,
+  sendStart,
+  startWsServer,
+  waitForAbort,
+} from "./media-stream.test-support.js";
+import { connectWs, waitForClose, withTimeout } from "./websocket-test-support.js";
 
-const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin => ({
-  createSession: () => ({
-    connect: async () => {},
-    sendAudio: () => {},
-    close: () => {},
-    isConnected: () => true,
-  }),
-  id: "openai",
-  label: "OpenAI",
-  isConfigured: () => true,
-});
-
-const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-};
-
+const requireRecord = createRequireRecord("record", "expected-label-record");
 const nextWsMessage = (ws: WebSocket): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     ws.once("message", (data) => {
@@ -49,21 +32,16 @@ async function withPlaybackStream(
 ) {
   const onConnect = vi.fn();
   const events: TalkEvent[] = [];
-  const handler = new MediaStreamHandler({
-    transcriptionProvider: createStubSttProvider(),
-    providerConfig: {},
+  const handler = createHandler({
     shouldAcceptStream: () => true,
     onConnect,
     onTalkEvent: (_callId, _streamSid, event) => events.push(event),
   });
-  const server = await startUpgradeWsServer({
-    urlPath: "/voice/stream",
-    onUpgrade: (request, socket, head) => handler.handleUpgrade(request, socket, head),
-  });
+  const server = await startWsServer(handler);
   let ws: WebSocket | undefined;
   try {
     ws = await connectWs(server.url);
-    ws.send(JSON.stringify({ event: "start", streamSid, start: { callSid } }));
+    sendStart(ws, streamSid, callSid);
     await vi.waitFor(() => expect(onConnect).toHaveBeenCalledOnce());
     await run(handler, ws, events);
     if (ws.readyState !== WebSocket.CLOSED) {
@@ -131,21 +109,6 @@ describe("MediaStreamHandler playback marks", () => {
     });
   });
 });
-
-const createHandler = (): MediaStreamHandler =>
-  new MediaStreamHandler({
-    transcriptionProvider: createStubSttProvider(),
-    providerConfig: {},
-  });
-
-const waitForAbort = (signal: AbortSignal): Promise<void> =>
-  new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 
 describe("MediaStreamHandler TTS queue", () => {
   it("bounds pending playback per stream and recovers after draining", async () => {
