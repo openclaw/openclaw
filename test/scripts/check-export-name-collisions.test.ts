@@ -6,7 +6,6 @@ import {
   collectRepositoryCollisions,
   findAliasingReExports,
   findExportNameCollisions,
-  isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
@@ -19,10 +18,6 @@ function parseFixture(content: string, fileName = "source.ts") {
 }
 
 describe("export name collision guard", () => {
-  it.each([["src/example.ts", false]])("classifies source exclusion %s", (filePath, expected) => {
-    expect(isExcludedExportCollisionSource(filePath)).toBe(expected);
-  });
-
   it("finds exported function and const definitions across modules", () => {
     expect(
       findExportNameCollisions([
@@ -84,20 +79,15 @@ describe("export name collision guard", () => {
     ).toEqual([{ name: "otherBehavior", files: paths }]);
   });
 
-  it.each([
-    {
-      name: "openExistingSqliteWorkerBackend",
-      paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
-    },
-  ])("limits $name to its approved worker modules", ({ name, paths }) => {
+  it("limits openExistingSqliteWorkerBackend to its approved worker modules", () => {
+    const name = "openExistingSqliteWorkerBackend";
+    const paths = [
+      "src/state/openclaw-state.worker.ts",
+      "src/state/openclaw-agent-execution.worker.ts",
+    ];
     const content = `export function ${name}() {}`;
     const modules = paths.map((modulePath) => ({ path: modulePath, content }));
     expect(findExportNameCollisions(modules)).toEqual([]);
-    for (const [index, module] of modules.entries()) {
-      for (const sibling of modules.slice(index + 1)) {
-        expect(findExportNameCollisions([module, sibling])).toEqual([]);
-      }
-    }
 
     const extra = { path: "src/unrelated/extra.worker.ts", content };
     expect(findExportNameCollisions([...modules, extra])).toEqual([
@@ -108,8 +98,7 @@ describe("export name collision guard", () => {
         { name, files: [module.path, extra.path].toSorted() },
       ]);
     }
-    const otherProtocol =
-      name === "bindSqliteWorkerBackend" ? "createSqliteWorkerBackend" : "bindSqliteWorkerBackend";
+    const otherProtocol = "bindSqliteWorkerBackend";
     expect(
       findExportNameCollisions(
         paths.map((modulePath) => ({
