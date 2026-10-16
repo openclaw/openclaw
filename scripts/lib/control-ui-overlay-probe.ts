@@ -19,7 +19,10 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
       reasoningStops: document.querySelectorAll(".chat-controls__reasoning-dot").length,
     };
   });
-  const firstOpen: Record<string, { readyMs: number; frameMs: number }> = {};
+  const firstOpen: Record<
+    string,
+    { readyMs: number; frameMs: number; renderOpportunityMs: number }
+  > = {};
   for (const [name, triggerSelector, contentSelector] of [
     ["reaction", "openclaw-message-reaction-picker .trigger", ".chat-reaction-picker .palette"],
     [
@@ -56,12 +59,29 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
         if (!document.querySelector<HTMLElement>(contentSelector)?.checkVisibility()) {
           throw new Error(`Overlay content is not visible: ${contentSelector}`);
         }
-        return { readyMs: readyAt - started, frameMs };
+        // A task posted after the ready rAF bounds rendering opportunity, not compositor presentation.
+        await new Promise<void>((resolve) => {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = () => {
+            channel.port1.close();
+            channel.port2.close();
+            resolve();
+          };
+          channel.port2.postMessage(null);
+        });
+        return {
+          readyMs: readyAt - started,
+          frameMs,
+          renderOpportunityMs: performance.now() - started,
+        };
       },
       { triggerSelector, contentSelector },
     );
     if (run === 0) {
-      await page.screenshot({ path: path.join(artifactDir, `overlay-${name}.png`) });
+      await page.screenshot({
+        path: path.join(artifactDir, `overlay-${name}.png`),
+        animations: "disabled",
+      });
     }
     await page.keyboard.press("Escape");
   }
