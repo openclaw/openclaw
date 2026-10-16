@@ -4,6 +4,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -17,14 +18,19 @@ const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 type SessionSuspensionRuntimeState = {
   suspensionWriteChain: Promise<void>;
+  cleanupGeneration: number;
   cleanupActive: boolean;
 };
 
-/** Bundled Gateway chunks share serialization and shutdown admission. */
+/**
+ * Bundled gateway chunks share one write queue and shutdown fence so one
+ * module copy cannot persist a suspension after another copy cleaned up.
+ */
 const suspensionState = resolveGlobalSingleton<SessionSuspensionRuntimeState>(
   Symbol.for("openclaw.sessionSuspensionRuntimeState"),
   () => ({
     suspensionWriteChain: Promise.resolve(),
+    cleanupGeneration: 0,
     cleanupActive: false,
   }),
 );
@@ -79,29 +85,33 @@ export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
 }
 
 export function fenceSessionSuspensionWritesForGatewayShutdown(): void {
+  suspensionState.cleanupGeneration += 1;
   suspensionState.cleanupActive = true;
 }
 
 export function enableSessionSuspensionWritesForGatewayStart(): void {
+  suspensionState.cleanupGeneration += 1;
   suspensionState.cleanupActive = false;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
   const state = suspensionState;
+  const queuedGeneration = state.cleanupGeneration;
   const run = state.suspensionWriteChain
-    .then(() => suspendSessionQueued(params))
+    .then(() => suspendSessionQueued(params, queuedGeneration))
     .catch((err: unknown) => {
       log.warn("failed to persist quota suspension", {
         sessionId: params.sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
     });
-  // Complete each accepted marker write before the next one begins.
+  // Suspension persistence is per-process and rare; serialize it so cleanup
+  // rollback has one winner and cannot erase another in-flight suspension.
   state.suspensionWriteChain = run;
   await run;
 }
 
-async function suspendSessionQueued(params: SessionSuspensionParams) {
+async function suspendSessionQueued(params: SessionSuspensionParams, queuedGeneration: number) {
   if (!params.cfg) {
     return;
   }
@@ -125,16 +135,18 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
   const state = suspensionState;
-  if (state.cleanupActive) {
+  if (state.cleanupActive || state.cleanupGeneration !== queuedGeneration) {
     return;
   }
-  // A committed diagnostic marker may survive a crossing restart; its TTL owns recovery.
-  await patchSessionEntryCore(
+  const suspensionGeneration = state.cleanupGeneration;
+  let previousQuotaSuspension: QuotaSuspension | undefined;
+  const patchedEntry = await patchSessionEntryCore(
     { storePath, sessionKey },
-    () => {
-      if (state.cleanupActive) {
+    (entry) => {
+      if (state.cleanupGeneration !== suspensionGeneration) {
         return null;
       }
+      previousQuotaSuspension = entry.quotaSuspension;
       return {
         quotaSuspension: {
           schemaVersion: 1,
@@ -150,10 +162,41 @@ async function suspendSessionQueued(params: SessionSuspensionParams) {
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
+  const persistedSuspension = patchedEntry !== null;
+
+  if (
+    persistedSuspension &&
+    (state.cleanupActive || suspensionGeneration !== state.cleanupGeneration)
+  ) {
+    try {
+      await patchSessionEntryCore(
+        { storePath, sessionKey },
+        (entry) =>
+          entry.quotaSuspension?.suspendedAt === now &&
+          entry.quotaSuspension.reason === params.reason &&
+          entry.quotaSuspension.failedProvider === params.failedProvider &&
+          entry.quotaSuspension.failedModel === params.failedModel
+            ? { quotaSuspension: previousQuotaSuspension }
+            : null,
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
+    } catch (err) {
+      log.warn("failed to clear quota suspension after shutdown cleanup", {
+        sessionId: params.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 function resetSessionSuspensionStateForTest(): void {
   const state = suspensionState;
+  // Invalidate in-flight writes before clearing test state. Rewinding to a
+  // reused generation lets a fire-and-forget suspension regain ownership.
+  state.cleanupGeneration += 1;
   state.suspensionWriteChain = Promise.resolve();
   state.cleanupActive = false;
 }

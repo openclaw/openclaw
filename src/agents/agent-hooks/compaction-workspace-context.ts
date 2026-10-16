@@ -14,7 +14,7 @@ export async function readWorkspaceContextForSummary(
   workspaceDir: string | undefined,
 ): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
-  if (!sectionNames?.length) {
+  if (!Array.isArray(sectionNames) || sectionNames.length === 0) {
     return "";
   }
   if (!workspaceDir) {

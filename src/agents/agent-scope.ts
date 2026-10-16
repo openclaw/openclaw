@@ -93,7 +93,7 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? AUTO_FALLBACK_PRIMARY_PROBE_MAX_KEYS));
   const staleBefore = params.now - params.minIntervalMs;
   for (const [key, lastProbeAt] of params.state) {
-    if (lastProbeAt < staleBefore) {
+    if (!Number.isFinite(lastProbeAt) || lastProbeAt < staleBefore) {
       params.state.delete(key);
     }
   }
@@ -198,7 +198,11 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     primaryModel: originModel,
   });
   const lastProbeAt = state.get(key);
-  if (lastProbeAt !== undefined && now - lastProbeAt < minIntervalMs) {
+  if (
+    typeof lastProbeAt === "number" &&
+    Number.isFinite(lastProbeAt) &&
+    now - lastProbeAt < minIntervalMs
+  ) {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);

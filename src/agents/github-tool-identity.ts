@@ -190,7 +190,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
     return undefined;
   }
   try {
-    let hosts: Record<string, unknown> | undefined;
+    let hosts: unknown;
     for (const name of ["hosts.yml", "config.yml"]) {
       const filePath = path.join(profileDir, name);
       const stat = await fs.lstat(filePath).catch((error: unknown) => {
@@ -223,7 +223,7 @@ async function readManagedGitHubToken(profileDir: string): Promise<string | unde
         hosts = value;
       }
     }
-    const host = hosts?.[GITHUB_HOST];
+    const host = isRecord(hosts) ? hosts[GITHUB_HOST] : undefined;
     // gh reads the active host token before considering the global keyring.
     // User-keyed entries alone cannot prove isolation from native auth.
     return isRecord(host) && typeof host.oauth_token === "string"

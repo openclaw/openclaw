@@ -113,9 +113,9 @@ export function handleAgentEnd(
   // reasons keep the streamed-only view because their raw text can describe an
   // interrupted generation rather than a reply (mirrors
   // resolveTerminalAssistantTexts).
-  const hasStreamedAssistantVisibleText = ctx.state.assistantTexts.some((text) =>
-    hasAssistantVisibleReply({ text }),
-  );
+  const hasStreamedAssistantVisibleText =
+    Array.isArray(ctx.state.assistantTexts) &&
+    ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
   const completedAssistantFallbackText =
     isAssistantMessage(lastAssistant) &&
     lastAssistant.stopReason !== "error" &&
@@ -236,7 +236,10 @@ export function handleAgentEnd(
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
       (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
-    const terminalAborted = ctx.state.terminalAborted ?? ctx.params.isTerminalAborted?.();
+    const terminalAborted =
+      typeof ctx.state.terminalAborted === "boolean"
+        ? ctx.state.terminalAborted
+        : ctx.params.isTerminalAborted?.();
     // Aborted validation loops lose their final tool result. Preserve only the
     // argument-free validator summary; arbitrary tool errors can contain secrets.
     const toolErrorSummary =
@@ -251,10 +254,10 @@ export function handleAgentEnd(
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
-      ...(ctx.state.providerStarted !== undefined
+      ...(typeof ctx.state.providerStarted === "boolean"
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
-      ...(terminalAborted !== undefined ? { aborted: terminalAborted } : {}),
+      ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(livenessState ? { livenessState } : {}),
       ...(replayInvalid ? { replayInvalid } : {}),

@@ -50,7 +50,7 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   const deny = expandShippedCoreToolPolicyNames(params.denylist);
   return restrictions.every(
     (allow) =>
-      allow.some((entry) => entry.trim().length > 0) &&
+      allow.some((entry) => typeof entry === "string" && entry.trim().length > 0) &&
       isToolAllowedByPolicyName(params.toolName, {
         allow: expandShippedCoreToolPolicyNames(allow),
         deny,
@@ -62,17 +62,21 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
 export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
-  const merged = lists.flatMap((list) => list ?? []);
+  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
   return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
   const allowlist = mergeFactoryPolicyList(...lists);
-  if (!allowlist?.some((entry) => entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY)) {
+  if (
+    !allowlist?.some(
+      (entry) => typeof entry === "string" && entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    )
+  ) {
     return allowlist;
   }
   const withoutDefaultPluginMarker = allowlist.filter(
-    (entry) => entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
   return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
@@ -140,11 +144,15 @@ function hasConfiguredVisionModelAuthSignal(params: {
   >["mediaUnderstandingProviders"];
 }): boolean {
   const providers = params.config?.models?.providers;
-  if (!providers) {
+  if (!providers || typeof providers !== "object") {
     return false;
   }
   for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (!providerConfig?.models?.some((model) => model.input?.includes("image"))) {
+    if (
+      !providerConfig?.models?.some(
+        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+      )
+    ) {
       continue;
     }
     const profileIds = params.authStore

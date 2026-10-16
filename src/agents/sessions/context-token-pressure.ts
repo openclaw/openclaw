@@ -194,9 +194,10 @@ export function estimateRenderedPromptTokens(params: {
   systemPrompt?: string;
   prompt: string;
 }): number {
-  const systemTokens = params.systemPrompt?.trim()
-    ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
-    : 0;
+  const systemTokens =
+    typeof params.systemPrompt === "string" && params.systemPrompt.trim().length > 0
+      ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
+      : 0;
   return (
     systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt)
   );

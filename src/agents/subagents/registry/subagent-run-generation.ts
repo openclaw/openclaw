@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
@@ -29,7 +30,7 @@ export function getSubagentRunIdentity(entry: SubagentRunIdentity): string {
   return JSON.stringify([
     entry.runId,
     entry.taskRunId ?? entry.runId,
-    entry.generation ?? 0,
+    normalizeGeneration(entry),
     entry.createdAt,
     entry.childSessionKey,
     entry.childAgentId,
@@ -91,7 +92,7 @@ export function isQueuedSubagentRunRekey(
     next.swarmRunId === alias &&
     (previous.schedulerSlotId ?? alias) === (next.schedulerSlotId ?? next.swarmRunId) &&
     (previous.taskRunId ?? alias) === (next.taskRunId ?? next.swarmRunId) &&
-    (previous.generation ?? 0) === (next.generation ?? 0) &&
+    normalizeGeneration(previous) === normalizeGeneration(next) &&
     previous.createdAt === next.createdAt &&
     previous.childSessionKey === next.childSessionKey &&
     previous.childAgentId === next.childAgentId &&
@@ -135,12 +136,16 @@ export function copySubagentRunRuntimeOwner<T extends object>(source: object, co
   return copy;
 }
 
+function normalizeGeneration(entry: ComparableSubagentRun): number {
+  return asFiniteNumber(entry.generation) ?? 0;
+}
+
 /** Orders runs that share a child session, including legacy rows without a generation. */
 export function compareSubagentRunGeneration(
   left: ComparableSubagentRun,
   right: ComparableSubagentRun,
 ): number {
-  const generationDelta = (left.generation ?? 0) - (right.generation ?? 0);
+  const generationDelta = normalizeGeneration(left) - normalizeGeneration(right);
   if (generationDelta !== 0) {
     return generationDelta;
   }
@@ -201,7 +206,7 @@ export function nextSubagentRunGeneration(
   let generation = 0;
   for (const entry of runs) {
     if (isSubagentRunGenerationCandidate(entry, childSessionKey, childAgentId)) {
-      generation = Math.max(generation, entry.generation ?? 0);
+      generation = Math.max(generation, normalizeGeneration(entry));
     }
   }
   return generation + 1;

@@ -28,16 +28,21 @@ export type ActiveProcessSessionReference = {
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
   now?: number;
+  limit?: number;
 }): ActiveProcessSessionReference[] {
   const scopeKey = params.scopeKey?.trim();
   if (!scopeKey) {
     return [];
   }
   const now = params.now ?? Date.now();
+  const limit =
+    typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0
+      ? Math.floor(params.limit)
+      : DEFAULT_ACTIVE_PROCESS_LIMIT;
   return listRunningSessions()
     .filter((session) => session.scopeKey === scopeKey)
     .toSorted(compareProcessSessionStartOrder)
-    .slice(0, DEFAULT_ACTIVE_PROCESS_LIMIT)
+    .slice(0, limit)
     .map((session) => ({
       sessionId: session.id,
       status: "running" as const,

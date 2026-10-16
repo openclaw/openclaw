@@ -54,7 +54,10 @@ function resolveLocalModelLeanAgentId(params: {
   agentId?: string;
   sessionKey?: string;
 }): string | undefined {
-  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const explicitAgentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? normalizeAgentId(params.agentId)
+      : undefined;
   if (params.config) {
     return resolveSessionAgentIds({
       config: params.config,

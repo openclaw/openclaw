@@ -50,7 +50,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
-import { failText, textResult } from "./tools/tool-results.js";
+import { textResult } from "./tools/tool-results.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
@@ -131,6 +131,10 @@ function resolvePollWaitMs(value: unknown) {
     }
   }
   return 0;
+}
+
+function failText(text: string): AgentToolResult<unknown> {
+  return textResult(text, { status: "failed", error: text });
 }
 
 function recordPollRetrySuggestion(sessionId: string, hasNewOutput: boolean): number | undefined {

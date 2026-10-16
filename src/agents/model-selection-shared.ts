@@ -324,7 +324,10 @@ export function inferUniqueProviderFromConfiguredModels(
   const matcher = collectModelMapProviders(params.cfg.agents?.defaults?.models);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(params);
   for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
-    for (const entry of providerConfig.models ?? []) {
+    if (!Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const entry of providerConfig.models) {
       const modelId = entry?.id?.trim();
       if (modelId) {
         matcher.add(providerId, modelId, normalizeModelId(providerId, modelId));
@@ -1113,7 +1116,7 @@ function hasConfiguredProviderModelRows(
   }
   return Object.entries(providers).some(
     ([providerRaw, provider]) =>
-      provider.models !== undefined &&
+      Array.isArray(provider?.models) &&
       (scope === "all" || normalizeProviderId(providerRaw) !== "openai"),
   );
 }
@@ -1175,10 +1178,10 @@ export function buildConfiguredModelCatalog(params: {
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
-    if (!providerId) {
+    if (!providerId || !Array.isArray(provider?.models)) {
       continue;
     }
-    for (const model of provider.models ?? []) {
+    for (const model of provider.models) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
       const id = rawId ? normalizeModelId(providerId, rawId) : "";
       if (!id) {
@@ -1199,9 +1202,10 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const input = model.input;
-      const modelParams = model.params;
-      const compat = model.compat;
+      const input = Array.isArray(model?.input) ? model.input : undefined;
+      const modelParams =
+        model?.params && typeof model.params === "object" ? model.params : undefined;
+      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       const reasoning =
         typeof model?.reasoning === "boolean"
           ? model.reasoning

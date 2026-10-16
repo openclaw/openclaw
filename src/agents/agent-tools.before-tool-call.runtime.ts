@@ -13,6 +13,7 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { resolveToolLoopWarningThreshold } from "./tool-loop-thresholds.js";
 
 /** Runtime seam for before_tool_call diagnostics and loop detection. */
 export const beforeToolCallRuntime = {
@@ -24,4 +25,5 @@ export const beforeToolCallRuntime = {
   reconcileToolCallExecutionParams,
   recordToolCall,
   recordToolCallOutcome,
+  resolveToolLoopWarningThreshold,
 };

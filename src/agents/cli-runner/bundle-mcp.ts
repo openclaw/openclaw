@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -35,17 +34,15 @@ import {
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
   injectClaudeWebSearchDisabledArgs,
+  writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import {
+  writeGeminiMcpCaptureSettings,
   writeGeminiSystemSettings,
   writeGeminiWebSearchDisabledSettings,
 } from "./bundle-mcp-gemini.js";
-import {
-  injectBundleMcpBackendArgs,
-  withOpenClawMcpCaptureHeader,
-  writeTemporaryBundleMcpJson,
-} from "./bundle-mcp-runtime.js";
+import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -54,10 +51,6 @@ type PreparedCliBundleMcpConfig = {
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
-  prepareCaptureAttempt?: (
-    captureKey: string,
-    env: Record<string, string> | undefined,
-  ) => Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }>;
 };
 
 /** A managed provider pin replaces native search without disabling OpenClaw's MCP tool. */
@@ -90,7 +83,8 @@ function sortJsonValue(value: unknown): unknown {
 }
 
 function normalizeOpenClawLoopbackUrl(value: string): string {
-  const match = /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])):\d+(\/mcp)$/.exec(value.trim());
+  const match =
+    /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])):\d+(\/mcp)$/.exec(value.trim()) ?? undefined;
   if (!match) {
     return value;
   }
@@ -278,7 +272,6 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       ...fingerprints,
       env: settings.env,
       cleanup: settings.cleanup,
-      prepareCaptureAttempt: settings.prepareCaptureAttempt,
     };
   }
 
@@ -300,14 +293,6 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     ...fingerprints,
     env: params.env,
     cleanup: temporary.cleanup,
-    prepareCaptureAttempt: async (captureKey, env) => {
-      await fs.writeFile(
-        temporary.filePath,
-        `${JSON.stringify(withOpenClawMcpCaptureHeader(claudeConfig, captureKey), null, 2)}\n`,
-        "utf-8",
-      );
-      return { env: { ...env, OPENCLAW_MCP_CLI_CAPTURE_KEY: captureKey } };
-    },
   };
 }
 
@@ -527,19 +512,34 @@ export async function prepareCliBundleMcpConfig(params: {
 
 /** Prepares a per-attempt capture token without changing resume compatibility hashes. */
 export async function prepareCliBundleMcpCaptureAttempt(params: {
-  preparedBackend: PreparedCliBundleMcpConfig;
+  mode?: CliBundleMcpMode;
+  backend?: CliBackendConfig;
+  env?: Record<string, string>;
   captureKey?: string;
 }): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
-  const { env, prepareCaptureAttempt } = params.preparedBackend;
   if (!params.captureKey) {
-    return { env };
+    return { env: params.env };
   }
-  if (prepareCaptureAttempt) {
-    return await prepareCaptureAttempt(params.captureKey, env);
+  if ((params.mode ?? "claude-config-file") === "gemini-system-settings") {
+    return await writeGeminiMcpCaptureSettings({
+      inheritedEnv: params.env,
+      captureKey: params.captureKey,
+    });
+  }
+  if ((params.mode ?? "claude-config-file") === "claude-config-file") {
+    const mcpConfigPath =
+      findClaudeMcpConfigPaths(params.backend?.args)[0] ??
+      findClaudeMcpConfigPaths(params.backend?.resumeArgs)[0];
+    if (mcpConfigPath) {
+      await writeClaudeMcpCaptureConfig({
+        mcpConfigPath,
+        captureKey: params.captureKey,
+      });
+    }
   }
   return {
     env: {
-      ...env,
+      ...params.env,
       OPENCLAW_MCP_CLI_CAPTURE_KEY: params.captureKey,
     },
   };

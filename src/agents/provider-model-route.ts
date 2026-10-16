@@ -92,7 +92,7 @@ function routeTupleMatches(
 ): boolean {
   return (
     source.api === route.api &&
-    source.baseUrl !== undefined &&
+    typeof source.baseUrl === "string" &&
     (normalizeCatalogRouteBaseUrl(source.baseUrl) ?? "") ===
       (normalizeCatalogRouteBaseUrl(route.baseUrl) ?? "")
   );

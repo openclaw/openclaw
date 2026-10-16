@@ -1,4 +1,4 @@
-import { countNewlines, detectLineEnding } from "../../line-endings.js";
+import { detectLineEnding } from "../../line-endings.js";
 
 export interface TextReplacement {
   matchIndex: number;
@@ -92,6 +92,10 @@ function restoreNormalizedLineEndings(
   });
 }
 
+function countLineBreaks(content: string): number {
+  return content.match(/\n/g)?.length ?? 0;
+}
+
 export function applyReplacementsPreservingLineEndings(
   originalContent: string,
   baseContent: string,
@@ -125,10 +129,10 @@ export function applyReplacementsPreservingLineEndings(
       getLineTerminator(replacementSource[0]) ??
       getLineTerminator(originalLines[startLine - 1]) ??
       fileFallback;
-    const consumedTerminatorCount = countNewlines(
+    const consumedTerminatorCount = countLineBreaks(
       baseContent.slice(replacement.matchIndex, matchEnd),
     );
-    const replacementTerminatorCount = countNewlines(replacement.newText);
+    const replacementTerminatorCount = countLineBreaks(replacement.newText);
     const terminatorSources = replacementSource.slice(0, Math.max(1, consumedTerminatorCount));
     const sourceOffset = Math.max(0, terminatorSources.length - replacementTerminatorCount);
     return {

@@ -1,28 +1,24 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
-import { makeAgentAssistantMessage } from "../../../../src/agents/test-helpers/agent-message-fixtures.js";
 
-export async function runModelCallAndCaptureTraceparent(params: {
+export function runModelCallAndCaptureTraceparent(params: {
   trace: DiagnosticTraceContext;
   runId: string;
   callId: string;
   provider: string;
   model: string;
-}): Promise<string | undefined> {
+}): string | undefined {
   let outboundTraceparent: string | undefined;
   const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-    (
+    ((
       _model: Parameters<StreamFn>[0],
       _context: Parameters<StreamFn>[1],
       options: Parameters<StreamFn>[2],
     ) => {
       outboundTraceparent = options?.headers?.traceparent;
-      const stream = createAssistantMessageEventStream();
-      stream.end(makeAgentAssistantMessage({ content: [] }));
-      return stream;
-    },
+      return undefined as never;
+    }) as StreamFn,
     {
       runId: params.runId,
       provider: params.provider,
@@ -32,7 +28,6 @@ export async function runModelCallAndCaptureTraceparent(params: {
       suppressPluginHooks: true,
     },
   );
-  const response = await wrapped({} as never, { messages: [] });
-  await response.result();
+  void wrapped({} as never, {} as never);
   return outboundTraceparent;
 }

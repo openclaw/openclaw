@@ -586,7 +586,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             `collector gateway run id already exists: ${nextRunId}`,
           );
         }
-        const entry = { ...current };
+        const entry = structuredClone(current);
         entry.swarmRunId ??= current.runId;
         entry.schedulerSlotId ??= entry.swarmRunId;
         entry.runId = nextRunId;
@@ -680,7 +680,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           if (current.collectorCompletion) {
             return { value: true };
           }
-          entry = { ...current };
+          entry = structuredClone(current);
           prepareTerminatedCollectorLaunch(
             entry,
             endedAt,

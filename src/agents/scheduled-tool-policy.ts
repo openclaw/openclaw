@@ -52,20 +52,19 @@ export function resolveScheduledToolPolicyContext(params: {
     return undefined;
   }
   const rawPolicy = params.scheduledToolPolicy;
-  const policyRecord = isRecord(rawPolicy) ? rawPolicy : undefined;
   // Already-resolved contexts carry context-only fields (ownerOrigin,
   // execTarget) that the strict persisted-policy normalizer rejects; rebuild
   // the closed policy shape for both modes before normalizing.
   const policy = normalizeCronScheduledToolPolicy(
-    policyRecord?.mode === "account"
+    isRecord(rawPolicy) && rawPolicy.mode === "account"
       ? {
-          version: policyRecord.version,
-          mode: policyRecord.mode,
-          ownerSessionKey: policyRecord.ownerSessionKey,
-          ownerAccountId: policyRecord.ownerAccountId,
+          version: rawPolicy.version,
+          mode: rawPolicy.mode,
+          ownerSessionKey: rawPolicy.ownerSessionKey,
+          ownerAccountId: rawPolicy.ownerAccountId,
         }
-      : policyRecord?.mode === "trusted"
-        ? { version: policyRecord.version, mode: policyRecord.mode }
+      : isRecord(rawPolicy) && rawPolicy.mode === "trusted"
+        ? { version: rawPolicy.version, mode: rawPolicy.mode }
         : rawPolicy,
   );
   if (!policy) {
@@ -73,7 +72,8 @@ export function resolveScheduledToolPolicyContext(params: {
   }
   // Accept the persisted `{version: 1, host}` shape and an already-resolved
   // context's bare `{host}` shape; anything else keeps the baseline (no pin).
-  const rawExecTarget = params.execTarget ?? policyRecord?.execTarget;
+  const rawExecTarget =
+    params.execTarget ?? (isRecord(rawPolicy) ? rawPolicy.execTarget : undefined);
   const pinned =
     isRecord(rawExecTarget) &&
     rawExecTarget.host === "gateway" &&
@@ -91,7 +91,7 @@ export function resolveScheduledToolPolicyContext(params: {
   return {
     ...policy,
     ownerOrigin: normalizeCronScheduledToolCallerOrigin(
-      params.callerOrigin ?? policyRecord?.ownerOrigin,
+      params.callerOrigin ?? (isRecord(rawPolicy) ? rawPolicy.ownerOrigin : undefined),
     ),
     ...pinned,
   };

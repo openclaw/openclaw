@@ -122,7 +122,7 @@ export function createPreparedAccountCatalogAccess(
     return account;
   };
   const createAccount = (identityKey: string, credential: AccountCatalogCredential) => {
-    const account: AccountCatalogObservation = { ...credential };
+    const account: AccountCatalogObservation = structuredClone(credential);
     accounts.set(identityKey, account);
     for (const key of accounts.keys()) {
       if (accounts.size <= 64) {

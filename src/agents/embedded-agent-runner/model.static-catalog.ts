@@ -410,7 +410,12 @@ async function loadBundledProviderStaticCatalogModels(
     for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
       const provider = normalizeProviderId(providerIdRaw);
       // Empty catalogs never resolve request secrets or transport settings.
-      if (!provider || !includeProvider(provider) || providerConfig.models.length === 0) {
+      if (
+        !provider ||
+        !includeProvider(provider) ||
+        !Array.isArray(providerConfig.models) ||
+        providerConfig.models.length === 0
+      ) {
         continue;
       }
       const models = modelsByProvider.get(provider) ?? [];

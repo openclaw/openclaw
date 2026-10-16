@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -73,7 +74,7 @@ type PlannedOpenClawModelsJsonSource = Readonly<{
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
     const stat = await fs.stat(pathname);
-    return stat.mtimeMs;
+    return Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : null;
   } catch {
     return null;
   }
@@ -186,10 +187,18 @@ async function prepareModelsConfigContext(
   options: EnsureOpenClawModelsJsonOptions = {},
 ): Promise<PreparedModelsConfigContext> {
   let ambientEnv = process.env;
+  let capturedOptions = options;
   let resolved: ReturnType<typeof resolveModelsConfigInput>;
   if (config) {
     resolved = resolveModelsConfigInput(config);
   } else {
+    capturedOptions = {
+      ...options,
+      ...(options.env ? { env: cloneEnvWithPlatformSemantics(options.env) } : {}),
+      ...(options.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: [...options.providerDiscoveryProviderIds] }
+        : {}),
+    };
     const captured = await captureRuntimeConfigAsyncReader({ capture: true })();
     ambientEnv = captured.env;
     const source = projectConfigOntoRuntimeSourceSnapshot(captured.config);
@@ -204,17 +213,17 @@ async function prepareModelsConfigContext(
     ? agentDirOverride.trim()
     : resolveDefaultAgentDir(cfg, ambientEnv);
   const workspaceDir =
-    options.workspaceDir ??
+    capturedOptions.workspaceDir ??
     (agentDirOverride?.trim()
       ? undefined
       : // Same ambient owner resolveDefaultAgentDir just used for agentDir; resolving it
         // on the deprecated chain here rejected explicit fleets owned by a system agent.
         resolveAgentWorkspaceDir(cfg, resolveAmbientOwnerAgentId(cfg), ambientEnv));
-  const fingerprintEnv = createConfigRuntimeEnv(cfg, options.env ?? {});
-  const env = options.env ? fingerprintEnv : createConfigRuntimeEnv(cfg, ambientEnv);
-  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
+  const fingerprintEnv = createConfigRuntimeEnv(cfg, capturedOptions.env ?? {});
+  const env = capturedOptions.env ? fingerprintEnv : createConfigRuntimeEnv(cfg, ambientEnv);
+  const providerScopedDiscovery = Boolean(capturedOptions.providerDiscoveryProviderIds?.length);
   const pluginMetadataSnapshot =
-    options.pluginMetadataSnapshot ??
+    capturedOptions.pluginMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
       config: cfg,
       env,
@@ -225,18 +234,18 @@ async function prepareModelsConfigContext(
     cfg,
     discoveryAuthConfig: resolved.discoveryAuthConfig,
     // Native readiness belongs to the captured auth inputs, not the catalog's env clone.
-    discoveryAuthEnv: options.env ?? ambientEnv,
+    discoveryAuthEnv: capturedOptions.env ?? ambientEnv,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
     env,
-    envFingerprint: options.env ? hashRuntimeConfigValue(fingerprintEnv) : fingerprintEnv,
+    envFingerprint: capturedOptions.env ? hashRuntimeConfigValue(fingerprintEnv) : fingerprintEnv,
     workspaceDir: workspaceDir || undefined,
     pluginMetadataSnapshot,
-    preparedStaticProviderCatalog: options.preparedStaticProviderCatalog,
-    providerDiscoveryProviderIds: options.providerDiscoveryProviderIds,
-    providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs,
-    providerDiscoveryEntriesOnly: options.providerDiscoveryEntriesOnly === true,
-    onProviderCatalogOutcome: options.onProviderCatalogOutcome,
+    preparedStaticProviderCatalog: capturedOptions.preparedStaticProviderCatalog,
+    providerDiscoveryProviderIds: capturedOptions.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: capturedOptions.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: capturedOptions.providerDiscoveryEntriesOnly === true,
+    onProviderCatalogOutcome: capturedOptions.onProviderCatalogOutcome,
   };
 }
 

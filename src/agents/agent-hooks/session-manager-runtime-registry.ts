@@ -3,8 +3,8 @@ export function createSessionManagerRuntimeRegistry<TValue>() {
   const registry = new WeakMap<object, TValue>();
 
   return {
-    set: (sessionManager: object | null | undefined, value: TValue | null): void => {
-      if (!sessionManager) {
+    set: (sessionManager: unknown, value: TValue | null): void => {
+      if (!sessionManager || typeof sessionManager !== "object") {
         return;
       }
       if (value === null) {
@@ -13,8 +13,10 @@ export function createSessionManagerRuntimeRegistry<TValue>() {
         registry.set(sessionManager, value);
       }
     },
-    get: (sessionManager: object | null | undefined): TValue | null => {
-      return sessionManager ? (registry.get(sessionManager) ?? null) : null;
+    get: (sessionManager: unknown): TValue | null => {
+      return sessionManager && typeof sessionManager === "object"
+        ? (registry.get(sessionManager) ?? null)
+        : null;
     },
   };
 }

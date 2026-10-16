@@ -20,7 +20,6 @@ import {
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
-import { fingerprintPreparedModelCatalogPluginContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
@@ -283,15 +282,13 @@ module.exports = {
             alternativeRuntimeSource = snapshot.sourceConfig;
           }
           setRuntimeConfigSnapshot(alternativeRuntime, alternativeRuntimeSource);
-          alternativeFingerprint = fingerprintPreparedModelCatalogPluginContext(
-            createPreparedModelCatalogWorkerInput({
-              ...params,
-              agentFacts: {
-                ...params.agentFacts,
-                input: { ...params.agentFacts.input, config: alternativeRuntime },
-              },
-            }),
-          );
+          alternativeFingerprint = createPreparedModelCatalogWorkerInput({
+            ...params,
+            agentFacts: {
+              ...params.agentFacts,
+              input: { ...params.agentFacts.input, config: alternativeRuntime },
+            },
+          }).generationFingerprint;
         }
         // Workers inherit neither the parent's source snapshot nor its WeakMap resolution facts.
         clearRuntimeConfigSnapshot();
@@ -372,9 +369,7 @@ module.exports = {
           expect(JSON.stringify(plans).includes(value)).toBe(false);
         }
         if (alternativeFingerprint !== undefined) {
-          expect(fingerprintPreparedModelCatalogPluginContext(serialized)).not.toBe(
-            alternativeFingerprint,
-          );
+          expect(serialized.generationFingerprint).not.toBe(alternativeFingerprint);
         }
         if (label === "literal bytes") {
           const { inspection: _inspection, ...failure } = await request(true);

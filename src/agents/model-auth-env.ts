@@ -146,7 +146,7 @@ export function resolveEnvApiKey(
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
   const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
-  if (candidates !== undefined) {
+  if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const apiKey = normalizeOptionalSecretInput(env[envVar]);
       if (apiKey) {
@@ -163,7 +163,7 @@ export function resolveEnvApiKey(
     return { apiKey: authEvidence.credentialMarker, source: authEvidence.source };
   }
 
-  if (candidates !== undefined || options.skipSetupProviderFallback === true) {
+  if (Array.isArray(candidates) || options.skipSetupProviderFallback === true) {
     return null;
   }
 

@@ -73,7 +73,8 @@ const WebSearchSchema = {
 } satisfies Record<string, unknown>;
 
 function isWebSearchDisabled(config?: OpenClawConfig): boolean {
-  return config?.tools?.web?.search?.enabled === false;
+  const search = config?.tools?.web?.search;
+  return Boolean(search && typeof search === "object" && search.enabled === false);
 }
 
 export function createWebSearchTool(options?: {

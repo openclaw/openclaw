@@ -82,14 +82,18 @@ export function isSilentOverflowProneModel(model: {
   modelId?: string | null;
   baseUrl?: string | null;
 }): boolean {
-  const provider = normalizeProviderId(model.provider ?? "");
+  const provider = normalizeProviderId(typeof model.provider === "string" ? model.provider : "");
   if (provider === "zai") {
     return true;
   }
-  if (model.baseUrl && resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native") {
+  if (
+    typeof model.baseUrl === "string" &&
+    model.baseUrl.length > 0 &&
+    resolveProviderEndpoint(model.baseUrl).endpointClass === "zai-native"
+  ) {
     return true;
   }
-  const normalized = model.modelId?.toLowerCase() ?? "";
+  const normalized = typeof model.modelId === "string" ? model.modelId.toLowerCase() : "";
   return (
     normalized.startsWith("z-ai/") ||
     normalized.startsWith("openrouter/z-ai/") ||

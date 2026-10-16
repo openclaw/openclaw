@@ -275,7 +275,7 @@ export const markRequesterSettleWakePending = (
 ) => {
   const existing = entry.requesterSettleWake;
   entry.requesterSettleWake = {
-    ...existing,
+    ...structuredClone(existing),
     status: existing?.status ?? "pending",
     attemptCount: existing?.attemptCount ?? 0,
     ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true

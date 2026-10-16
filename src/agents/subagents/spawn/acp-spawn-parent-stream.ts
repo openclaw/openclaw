@@ -263,6 +263,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   );
   const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
   const eventSessionKey = resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting);
+  const deliveryContext = structuredClone(params.deliveryContext);
   const emit = (text: string, contextKey: string) => {
     const cleaned = truncate(text.trim(), STREAM_BUFFER_MAX_CHARS);
     if (disposed || !cleaned) {
@@ -275,7 +276,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         sessionKey: eventSessionKey,
         source: "task",
         contextKey,
-        deliveryContext: params.deliveryContext,
+        deliveryContext,
         expectedTarget: params.expectedTarget,
       });
       void receipt.settled.then((outcome) => {

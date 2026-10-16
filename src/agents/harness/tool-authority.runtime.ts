@@ -74,6 +74,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
       senderName: attempt.senderName ?? undefined,
       senderUsername: attempt.senderUsername ?? undefined,
       senderE164: attempt.senderE164 ?? undefined,
+      messageProvider: attempt.messageProvider ?? undefined,
+      agentAccountId: attempt.agentAccountId ?? undefined,
       groupId: attempt.groupId ?? undefined,
       groupChannel: attempt.groupChannel ?? undefined,
       groupSpace: attempt.groupSpace ?? undefined,

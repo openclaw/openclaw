@@ -107,7 +107,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     sessionAgentId,
   } = runtime;
   let thinkLevel = runtime.thinkLevel;
-  let compactionSessionManager: ReturnType<typeof guardSessionManager> | null = null;
+  let compactionSessionManager: unknown = null;
 
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -201,7 +201,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       silentOverflowProneProvider: isSilentOverflowProneModel({
         provider,
         modelId,
-        baseUrl: effectiveModel.baseUrl,
+        baseUrl: effectiveModel.baseUrl ?? undefined,
       }),
     });
 

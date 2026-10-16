@@ -446,11 +446,14 @@ function createParallelToolCallsWrapper(
 
 const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
 
-function normalizeCompatibleModelId(modelId: string): string {
+function normalizeCompatibleModelId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") {
+    return undefined;
+  }
   const normalized = modelId.trim().toLowerCase();
   const suffixIndex = normalized.indexOf(":");
   const withoutSuffix = suffixIndex === -1 ? normalized : normalized.slice(0, suffixIndex);
-  return withoutSuffix.slice(withoutSuffix.lastIndexOf("/") + 1);
+  return withoutSuffix.split("/").pop();
 }
 
 function isOpenAICompletionsModel(
@@ -458,10 +461,17 @@ function isOpenAICompletionsModel(
   modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeCompatibleModelId(model.id);
-  return model.api === "openai-completions" && modelIds.has(normalizedModelId);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    modelIds.has(normalizedModelId)
+  );
 }
 
-function isMicrosoftFoundryProviderId(provider: string): boolean {
+function isMicrosoftFoundryProviderId(provider: unknown): boolean {
+  if (typeof provider !== "string") {
+    return false;
+  }
   const normalizedProvider = provider.trim().toLowerCase();
   return (
     normalizedProvider === "microsoft-foundry" ||

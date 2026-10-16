@@ -222,7 +222,8 @@ function describeLegacySessionOutcome(outcome: LegacyMainSessionMigrationOutcome
     case "no-legacy-rows":
       return "the current session-store layout has no matching completed migration ledger";
   }
-  return outcome.kind satisfies never;
+  const unreachable: never = outcome.kind;
+  return unreachable;
 }
 
 async function evaluateMainCreationGate(

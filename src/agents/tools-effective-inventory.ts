@@ -37,7 +37,7 @@ import type {
 } from "./tools-effective-inventory.types.js";
 
 function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
-  if (!list) {
+  if (!Array.isArray(list)) {
     return false;
   }
   const normalizedToolName = normalizeToolPolicyName(toolName);
@@ -99,7 +99,7 @@ function buildToolInventoryNotices(params: {
   }
 
   if (
-    params.cfg.plugins?.allow !== undefined &&
+    Array.isArray(params.cfg.plugins?.allow) &&
     !listIncludesTool(params.cfg.plugins.allow, "browser")
   ) {
     return [

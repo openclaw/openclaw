@@ -164,7 +164,7 @@ export async function withSandboxRuntimeStatusInWorker<T>(
   }
   const assertCurrent = () => {
     source.assertCurrent();
-    if (source.readSource) {
+    if (source.readSource && typeof source.readSource.databaseIdentity === "string") {
       assertCapturedSessionEntryReadSource(source.readSource);
     }
   };

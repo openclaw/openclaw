@@ -277,7 +277,7 @@ export function resolveMissingProviderApiKey(params: {
   secretRefManagedProviders?: Set<string>;
   providerApiKeyResolver?: (env: NodeJS.ProcessEnv) => string | undefined;
 }): ProviderConfig {
-  const hasModels = Boolean(params.provider.models?.length);
+  const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
   if (!hasModels || params.provider.apiKey) {
     return params.provider;
   }

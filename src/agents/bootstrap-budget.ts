@@ -123,10 +123,17 @@ export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars: number;
+  nearLimitRatio?: number;
 }): BootstrapBudgetAnalysis {
   const bootstrapMaxChars = normalizePositiveLimit(params.bootstrapMaxChars);
   const bootstrapTotalMaxChars = normalizePositiveLimit(params.bootstrapTotalMaxChars);
-  const nearLimitRatio = DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
+  const nearLimitRatio =
+    typeof params.nearLimitRatio === "number" &&
+    Number.isFinite(params.nearLimitRatio) &&
+    params.nearLimitRatio > 0 &&
+    params.nearLimitRatio < 1
+      ? params.nearLimitRatio
+      : DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
   let rawChars = 0;
   let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;

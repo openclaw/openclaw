@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
  * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
  */
 import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
-import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
@@ -155,16 +154,22 @@ export function wrapStreamFnTextTransforms(params: {
       ? ({
           ...context,
           systemPrompt:
-            params.transformSystemPrompt !== false && context.systemPrompt !== undefined
+            params.transformSystemPrompt !== false && typeof context.systemPrompt === "string"
               ? applyPluginTextReplacements(context.systemPrompt, params.input)
               : context.systemPrompt,
-          messages: context.messages.map((message) =>
-            transformContentText(message, params.input, "message"),
-          ),
+          messages: Array.isArray(context.messages)
+            ? context.messages.map((message) =>
+                transformContentText(message, params.input, "message"),
+              )
+            : context.messages,
         } as Parameters<StreamFn>[1])
       : context;
-    return mapAssistantMessageStream(params.streamFn(model, nextContext, options), (stream) =>
-      wrapStreamTextTransforms(stream, params.output),
-    );
+    const maybeStream = params.streamFn(model, nextContext, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamTextTransforms(stream, params.output),
+      );
+    }
+    return wrapStreamTextTransforms(maybeStream, params.output);
   };
 }

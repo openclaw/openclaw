@@ -16,7 +16,6 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
-import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
@@ -139,8 +138,9 @@ export async function admitToolCallBatch(
     reconcileToolCallExecutionParams,
     recordToolCall,
     recordToolCallOutcome,
+    resolveToolLoopWarningThreshold,
   } = await loadBeforeToolCallRuntime();
-  const warningThreshold = TOOL_LOOP_WARNING_THRESHOLD;
+  const warningThreshold = resolveToolLoopWarningThreshold();
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,

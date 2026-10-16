@@ -634,7 +634,7 @@ export function formatToolSearchControlError(
 }
 
 function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
-  return "details" in result ? result.details : result;
+  return isRecord(result) && "details" in result ? result.details : result;
 }
 
 /**

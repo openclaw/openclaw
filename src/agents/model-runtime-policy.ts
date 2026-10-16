@@ -256,13 +256,12 @@ function resolveModelConfig(params: {
   modelId?: string;
 }): ModelDefinitionConfig | undefined {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
-  const models = params.providerConfig?.models;
-  if (!modelId || !models) {
+  if (!modelId || !Array.isArray(params.providerConfig?.models)) {
     return undefined;
   }
   // Catalog projection resolves every row against its provider's authored rows, so this scan
   // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
-  return models.find((entry) => {
+  return params.providerConfig.models.find((entry) => {
     const entryId = entry.id.trim();
     return (
       entryId === modelId ||

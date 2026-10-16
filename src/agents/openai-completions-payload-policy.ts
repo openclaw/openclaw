@@ -11,13 +11,17 @@ function shouldStripOpenAICompletionsStore(model: Parameters<StreamFn>[0]): bool
   if (model.api !== "openai-completions") {
     return false;
   }
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? Object.fromEntries(Object.entries(model.compat))
+      : undefined;
   const capabilities =
     getModelProviderRequestRouteFacts(model)?.capabilities ??
     resolveProviderRequestPolicyConfig({
-      provider: model.provider,
+      provider: typeof model.provider === "string" ? model.provider : undefined,
       api: model.api,
       baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      compat: model.compat,
+      compat,
       capability: "llm",
       transport: "stream",
     }).capabilities;

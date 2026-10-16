@@ -17,23 +17,22 @@ export type PendingFinalRecoverySource = Readonly<
   >
 >;
 
-function projectPendingFinalRecoverySource(entry: SessionEntry): PendingFinalRecoverySource {
-  return {
-    sessionId: entry.sessionId,
-    lifecycleRevision: entry.lifecycleRevision,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryDeliveryContext: entry.restartRecoveryDeliveryContext,
-    restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion,
-  };
-}
-
 export function capturePendingFinalRecoverySource(
   entry: SessionEntry | undefined,
 ): PendingFinalRecoverySource | undefined {
-  return entry
-    ? freezeJsonSnapshot(structuredClone(projectPendingFinalRecoverySource(entry)))
-    : undefined;
+  if (!entry) {
+    return undefined;
+  }
+  return freezeJsonSnapshot(
+    structuredClone({
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
+      restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryDeliveryContext: entry.restartRecoveryDeliveryContext,
+      restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion,
+    }),
+  );
 }
 
 /** Advance only identity, through the exact committed chain; original source/route stay frozen. */
@@ -75,7 +74,7 @@ export function matchesPendingFinalRecoverySource(
   transitions: readonly SessionAdmissionTransition[] = [],
 ): boolean {
   return isDeepStrictEqual(
-    projectPendingFinalRecoverySource(current),
+    capturePendingFinalRecoverySource(current),
     advancePendingFinalRecoverySource(admitted, transitions),
   );
 }

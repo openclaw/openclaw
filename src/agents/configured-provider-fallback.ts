@@ -26,7 +26,8 @@ export function resolveConfiguredProviderFallback(params: {
   );
   const defaultModel = params.defaultModel?.trim();
   if (
-    defaultProviderConfig?.models?.some(
+    Array.isArray(defaultProviderConfig?.models) &&
+    defaultProviderConfig.models.some(
       (model) => model?.id && (!defaultModel || model.id === defaultModel),
     )
   ) {
@@ -36,7 +37,7 @@ export function resolveConfiguredProviderFallback(params: {
   // provider/model insertion order as the operator's fallback preference.
   for (const [provider, providerCfg] of Object.entries(configuredProviders)) {
     const models = providerCfg?.models;
-    if (!models?.[0]?.id) {
+    if (!Array.isArray(models) || !models[0]?.id) {
       continue;
     }
     const normalizedProvider = normalizeProviderId(provider);

@@ -13,3 +13,16 @@ export class PreparedModelCatalogAdmissionStalledError extends Error {
     this.name = "PreparedModelCatalogAdmissionStalledError";
   }
 }
+
+export class PreparedModelCatalogGenerationMismatchError extends Error {
+  constructor(
+    readonly agentDir: string,
+    readonly generationFingerprint: string,
+    readonly reconstructedFingerprint: string,
+  ) {
+    super(
+      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
+    );
+    this.name = "PreparedModelCatalogGenerationMismatchError";
+  }
+}

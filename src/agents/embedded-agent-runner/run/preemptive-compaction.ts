@@ -264,7 +264,12 @@ export function resolveProjectedRequestPressure(params: {
   replay?: CompactionReplayPressureContext;
 }) {
   const { context, previousRequest } = params;
-  const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
+  const anchor =
+    previousRequest &&
+    Number.isFinite(previousRequest.contextTokens) &&
+    previousRequest.contextTokens > 0
+      ? previousRequest
+      : undefined;
   const messages = context.messages;
   // Measured completion occupancy includes opaque reasoning. Its async fragments
   // share either identity; unrelated synthetic assistants remain fresh content.

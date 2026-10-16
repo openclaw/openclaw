@@ -6,7 +6,6 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -100,13 +99,6 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   for await (const _ of stream) {
     // drain
   }
-}
-
-function withFinalResult<T>(stream: AsyncIterable<T>) {
-  return Object.assign(stream, {
-    result: async () =>
-      makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
-  });
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -256,11 +248,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrap(
       (() =>
-        withFinalResult(
-          (async function* () {
-            yield { type: "text", text: "ok" };
-          })(),
-        )) as unknown as StreamFn,
+        (async function* () {
+          yield { type: "text", text: "ok" };
+        })()) as unknown as StreamFn,
       {
         runId: "run-timeouts",
         sessionKey: "session-key",
@@ -350,7 +340,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           },
         };
       },
-      result: async () => makeAssistantMessageFixture(),
     };
     const wrapped = wrap((() => stream) as unknown as StreamFn);
 
@@ -466,11 +455,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       date: new Date("2026-01-01T00:00:00Z"),
       custom: { toJSON: (key: string) => key.repeat(1024) },
     };
-    const messages = [{ role: "user" as const, content: "fixture", timestamp: 0, extra: value }];
-    const tools = [{ name: "fixture", description: "fixture", parameters: Type.Object({}, value) }];
+    const messages = [{ role: "user", content: value }];
     const measurePromptStats = createModelPromptStats();
     const observer = createModelObserver({
-      streamContext: { messages, tools },
+      streamContext: { messages, tools: [value] },
       capturePromptStats: true,
       measurePromptStats,
     });
@@ -478,16 +466,16 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     observer.observeResponseChunk(Date.now(), value);
 
     expect(observer.promptStats?.inputMessagesChars).toBe(JSON.stringify(messages).length);
-    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify(tools).length);
+    expect(observer.promptStats?.toolDefinitionsChars).toBe(JSON.stringify([value]).length);
     expect(observer.sizeTimingFields()).toMatchObject({
       requestPayloadBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
       responseStreamBytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
     });
     for (const text of ["changed 漢字\ud800".repeat(512), "short"]) {
       value.large = text;
-      expect(measurePromptStats({ messages, tools })).toMatchObject({
+      expect(measurePromptStats({ messages, tools: [value] })).toMatchObject({
         inputMessagesChars: JSON.stringify(messages).length,
-        toolDefinitionsChars: JSON.stringify(tools).length,
+        toolDefinitionsChars: JSON.stringify([value]).length,
       });
     }
   });
@@ -498,7 +486,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const second = { role: "user" as const, content: "append 🦞\n".repeat(512), timestamp: 2 };
     const messages = [first];
     const context = { messages, systemPrompt: "system", tools: [] };
-    const wrapped = wrap(() => createAssistantMessageEventStream());
+    const wrapped = wrap(() => ({}) as never);
     const expected: unknown[] = [];
     const events = await collectModelCallEvents(async () => {
       for (const change of [
@@ -548,9 +536,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
   it("does not assemble multi-megabyte JSON strings just to measure messages", () => {
     const messages = Array.from({ length: 128 }, (_, index) => ({
-      role: "user" as const,
+      role: "user",
       content: `${index}: ${'A "quoted" line.\n'.repeat(1024)}`,
-      timestamp: index,
     }));
     const expectedChars = JSON.stringify(messages).length;
     const expectedBytes = Buffer.byteLength(JSON.stringify({ messages }), "utf8");
@@ -646,7 +633,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         runProgressEvents.push(event);
       }
     });
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn, {
+    const wrapped = wrap((() => stream()) as unknown as StreamFn, {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "vllm",
@@ -698,7 +685,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       options: Parameters<StreamFn>[2],
     ) => {
       await options?.onPayload?.(originalPayload, model);
-      return withFinalResult(stream());
+      return stream();
     }) as unknown as StreamFn);
 
     const events = await collectModelCallEvents(async () => {
@@ -757,7 +744,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       async function* stream() {
         yield* sourceChunks;
       }
-      const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
+      const wrapped = wrap((() => stream()) as unknown as StreamFn);
       const chunks: unknown[] = [];
       const events = await collectModelCallEvents(async () => {
         for await (const chunk of wrapped(
@@ -909,7 +896,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     async function* stream() {
       yield { type: "text_delta", delta: "ok" };
     }
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
+    const wrapped = wrap((() => stream()) as unknown as StreamFn);
 
     await drain(
       wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,

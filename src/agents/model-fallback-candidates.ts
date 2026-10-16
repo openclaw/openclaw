@@ -200,11 +200,14 @@ export function resolveModelCandidateChain(
   const { cacheKey, manifestPlugins } = resolveFallbackCandidateContext(params);
   const cached = cacheKey ? fallbackCandidateCache.get(cacheKey) : undefined;
   if (cached) {
-    return cached;
+    return cached.map((candidate) => Object.assign({}, candidate));
   }
   const candidates = resolveFallbackCandidatesUncached({ ...params, manifestPlugins });
   if (cacheKey) {
-    fallbackCandidateCache.set(cacheKey, candidates);
+    fallbackCandidateCache.set(
+      cacheKey,
+      candidates.map((candidate) => Object.assign({}, candidate)),
+    );
     pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   }
   return candidates;
@@ -287,8 +290,12 @@ function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | u
   }
   return Object.entries(providers).map(([providerId, providerConfig]) => ({
     providerId,
-    api: providerConfig.api,
-    models: providerConfig.models?.map((entry) => entry.id) ?? [],
+    api: typeof providerConfig?.api === "string" ? providerConfig.api : undefined,
+    models: Array.isArray(providerConfig?.models)
+      ? providerConfig.models
+          .map((entry) => (typeof entry?.id === "string" ? entry.id : undefined))
+          .filter((id): id is string => id !== undefined)
+      : [],
   }));
 }
 

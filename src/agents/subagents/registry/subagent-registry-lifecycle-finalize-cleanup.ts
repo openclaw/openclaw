@@ -300,6 +300,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   const { reason, cleanup, cleanupGeneration, retryCount, completedAt } = giveUpParams;
   let entry = giveUpParams.entry;
   const stateContext = giveUpParams.stateContext ?? captureOpenClawStateWorkerContext();
+  const generation = entry.generation;
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     const current = getCurrentSubagentRunOwner(params.runs, entry);
@@ -308,7 +309,8 @@ export const finalizeResumedAnnounceGiveUp = async (
     }
     entry = current;
     return (
-      cleanupGeneration === undefined || context.isCleanupAttemptCurrent(entry, cleanupGeneration)
+      entry.generation === generation &&
+      (cleanupGeneration === undefined || context.isCleanupAttemptCurrent(entry, cleanupGeneration))
     );
   };
   if (!isCurrent()) {
@@ -361,6 +363,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     cleanup: cleanup ?? entry.cleanup,
     cleanupGeneration,
+    generation,
     completedAt,
     stateContext,
     isCurrent,
@@ -374,6 +377,7 @@ async function finishSubagentCleanup(
     entry: SubagentRunRecord;
     cleanup: "delete" | "keep";
     cleanupGeneration?: number;
+    generation?: number;
     completedAt?: number;
     stateContext: OpenClawStateWorkerContext;
     isCurrent: () => boolean;
@@ -419,7 +423,11 @@ async function finishSubagentCleanup(
   entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
   const endedHookOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return cleanupOwnerCurrent() && context.sessionEffectsHostCurrent(entry);
+    return (
+      (!args.giveUpReason || entry.generation === args.generation) &&
+      cleanupOwnerCurrent() &&
+      context.sessionEffectsHostCurrent(entry)
+    );
   };
   if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
     const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;

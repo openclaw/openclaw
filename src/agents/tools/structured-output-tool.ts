@@ -10,7 +10,8 @@ const states = new Map<string, SwarmStructuredOutputState>();
 const pendingExecutions = new Map<string, Promise<unknown>>();
 
 export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
-  return states.get(runId);
+  const state = states.get(runId);
+  return state ? structuredClone(state) : undefined;
 }
 
 export function consumeSwarmStructuredOutput(
@@ -29,11 +30,11 @@ export function createStructuredOutputTool(params: {
 }): AnyAgentTool {
   const requestedSchema = JSON.stringify(params.schema);
   if (params.initialState && !states.has(params.runId)) {
-    states.set(params.runId, params.initialState);
+    states.set(params.runId, structuredClone(params.initialState));
   }
   const commitState = async (next: SwarmStructuredOutputState) => {
     try {
-      await params.onStateChange?.(next);
+      await params.onStateChange?.(structuredClone(next));
     } catch (error) {
       throw new ToolInputError(
         `Failed to persist structured_output: ${error instanceof Error ? error.message : String(error)}`,
@@ -63,9 +64,7 @@ export function createStructuredOutputTool(params: {
     execute: async (_toolCallId, args) => {
       const previous = pendingExecutions.get(params.runId) ?? Promise.resolve();
       const execution = previous
-        .catch(() => {
-          // A rejected call must not block the run's permitted corrected result.
-        })
+        .catch(() => {})
         .then(async () => {
           const prior = states.get(params.runId);
           if (prior?.structured !== undefined) {

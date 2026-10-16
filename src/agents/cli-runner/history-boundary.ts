@@ -77,6 +77,7 @@ async function prepareCliHistoryBoundaryOnce(
   }
   const requested = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
   const admission = resolveSessionTranscriptReadFence(requested);
+  const capturedAdmission = admission && structuredClone(admission);
   const assertRunCurrent = createCliRunCurrentAssertion(params);
   const assertOwned = captureOwnedTranscriptWriteAssertion(requested);
   const memory = captureSessionActorStorageOwner(requested, {
@@ -92,7 +93,7 @@ async function prepareCliHistoryBoundaryOnce(
         params,
         identity,
         { ...requested, storePath: memory.path },
-        admission,
+        capturedAdmission,
         assertRunCurrent,
       )
     : await withSessionTranscriptReadSource(
@@ -108,7 +109,7 @@ async function prepareCliHistoryBoundaryOnce(
               );
             }
           };
-          return planCliHistoryBoundary(params, identity, target, admission, () => {
+          return planCliHistoryBoundary(params, identity, target, capturedAdmission, () => {
             assertReaderCurrent();
             assertRunCurrent();
           });
@@ -173,7 +174,7 @@ async function prepareCliHistoryBoundaryOnce(
       ...commitGuard,
       workerGuard: {
         ...commitGuard.workerGuard,
-        cliHistory: { sessionId: target.sessionId, admission, watermark },
+        cliHistory: { sessionId: target.sessionId, admission: capturedAdmission, watermark },
       },
     },
   );

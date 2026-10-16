@@ -335,10 +335,10 @@ export function clampModelMaxTokensToContextWindow(
   maxTokens: number | undefined,
   contextWindow: number | undefined,
 ): number | undefined {
-  if (maxTokens === undefined || !Number.isFinite(maxTokens)) {
+  if (typeof maxTokens !== "number" || !Number.isFinite(maxTokens)) {
     return undefined;
   }
-  return contextWindow !== undefined && Number.isFinite(contextWindow)
+  return typeof contextWindow === "number" && Number.isFinite(contextWindow)
     ? Math.min(maxTokens, contextWindow)
     : maxTokens;
 }

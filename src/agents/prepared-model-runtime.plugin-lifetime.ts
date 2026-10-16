@@ -6,11 +6,14 @@ import {
   retainPluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
+import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
   capturePluginRegistryLifecycleEpoch,
+  capturePluginRegistryLifecycleSignal,
   getPluginRegistryLifetime,
+  getPluginRegistryGatewayOwner,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
@@ -26,7 +29,10 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
-import { registerPreparedPluginRetirement } from "./prepared-model-runtime.lifecycle.js";
+import {
+  registerPreparedPluginRetirement,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   closeEphemeralPreparedModelRuntimeResources,
   retainPreparedModelRuntimeSnapshotResources,
@@ -226,24 +232,88 @@ export function publishPreparedPluginGeneration(
   generation: PreparedModelRuntimePluginGeneration,
 ): void {
   const previous = publications.get(owner);
-  const release = ownPreparedPluginGeneration(generation).retain();
-  const signal = getPluginCacheRetirementSignal(
+  const instances = new Set(
+    [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
+      registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
+    ),
+  );
+  const cacheSignal = getPluginCacheRetirementSignal(
     getPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot),
   );
-  const retire = () => releasePreparedPluginPublication(owner);
-  // Catalog freshness follows explicit publication; plugin calls enforce their own live authority.
+  const isCurrent = () =>
+    !cacheSignal.aborted && [...instances].every((instance) => instance.acceptingCalls);
+  if (!isCurrent()) {
+    throw new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    );
+  }
+  const release = ownPreparedPluginGeneration(generation).retain();
+  const version = owner.generation;
+  const gatewayLenders = new Set<PluginRegistry>();
+  let signal: AbortSignal | undefined;
+  const unsubscribe = () => signal?.removeEventListener("abort", observe);
+  const observe = () => {
+    unsubscribe();
+    if (!isCurrent()) {
+      // A cached publication cannot keep a closing Gateway's donor alive. Admitted
+      // leases retain the same generation independently until their work finishes.
+      if (owner.generation === version) {
+        owner.generation++;
+        retirePreparedModelRuntimeGeneration(owner);
+        owner.needsRefresh = true;
+        owner.refreshError = new PreparedModelRuntimePluginGenerationRetiredError(
+          "Prepared model runtime plugin generation retired",
+        );
+        owner.pluginGeneration = undefined;
+        const retiredGatewayLoan = [...instances].some((instance) => {
+          const registry = instance.owner?.registry;
+          return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
+        });
+        log.debug(
+          `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
+        );
+        releasePreparedPluginPublication(owner);
+        // Independent prepared instances and metadata caches retain their terminal
+        // retirement contract; only a lost Gateway loan needs process publication.
+        if (retiredGatewayLoan) {
+          owner.onPluginGenerationRetired?.();
+        }
+        return;
+      }
+      releasePreparedPluginPublication(owner);
+      return;
+    }
+    // Publication can transfer an unchanged instance before aborting its old registry
+    // epoch. Follow its new owner so a later real retirement remains observable.
+    gatewayLenders.clear();
+    signal = AbortSignal.any([
+      cacheSignal,
+      ...[...instances].flatMap((instance) => {
+        const registry = instance.owner?.registry;
+        // A turn registry can carry its admitting Gateway without being its lender.
+        // Capture physical custody while the Gateway owner still admits work.
+        if (registry && getPluginRegistryGatewayOwner(registry)?.current() === registry) {
+          gatewayLenders.add(registry);
+        }
+        const current =
+          registry &&
+          capturePluginRegistryLifecycleSignal(
+            registry,
+            capturePluginRegistryLifecycleEpoch(registry),
+            { scopedRuntime: true },
+          );
+        return current ? [current] : [];
+      }),
+    ]);
+    signal.addEventListener("abort", observe, { once: true });
+  };
   publications.set(owner, {
     release: () => {
-      signal.removeEventListener("abort", retire);
+      unsubscribe();
       return Promise.resolve(release());
     },
   });
-  if (signal.aborted) {
-    retire();
-  } else {
-    // Idle publications must not block ordinary cache retirement; active leases retain their work.
-    signal.addEventListener("abort", retire, { once: true });
-  }
+  observe();
   void previous?.release()?.catch(() => {});
 }
 

@@ -25,7 +25,11 @@ export function resolveProviderPluginLookupKey(
   ) {
     return "google";
   }
-  if (provider?.models?.some((model) => model.api === "google-generative-ai")) {
+  // Runtime plugin data can be looser than ProviderConfig; guard before .some().
+  if (
+    Array.isArray(provider?.models) &&
+    provider.models.some((model) => normalizeOptionalString(model.api) === "google-generative-ai")
+  ) {
     return "google";
   }
   if (

@@ -189,7 +189,7 @@ describe("subagent completion rejection ownership", () => {
     },
   );
 
-  it.each(["current", "replacement"] as const)(
+  it.each(["current", "replacement", "generation"] as const)(
     "defers retired-launch completion during restart and rechecks the %s owner",
     async (change) => {
       const h = createHarness();
@@ -211,6 +211,8 @@ describe("subagent completion rejection ownership", () => {
         });
         if (change === "replacement") {
           h.runs.set(h.entry.runId, { ...h.entry });
+        } else if (change === "generation") {
+          h.entry.generation = 2;
         }
         resetGatewayWorkAdmission();
         await vi.advanceTimersByTimeAsync(1_000);
@@ -292,7 +294,9 @@ describe("subagent completion rejection ownership", () => {
   });
 
   it.each(
-    [1, 2].flatMap((attempt) => ["removal", "replacement"].map((change) => ({ attempt, change }))),
+    [1, 2].flatMap((attempt) =>
+      ["removal", "replacement", "generation"].map((change) => ({ attempt, change })),
+    ),
   )(
     "retires recovery after $change during failed attempt $attempt",
     async ({ attempt, change }) => {
@@ -319,6 +323,8 @@ describe("subagent completion rejection ownership", () => {
           h.runs.delete(h.entry.runId);
         } else if (change === "replacement") {
           h.runs.set(h.entry.runId, { ...h.entry, generation: 2 });
+        } else {
+          h.entry.generation = 2;
         }
         release.resolve();
         await completion;

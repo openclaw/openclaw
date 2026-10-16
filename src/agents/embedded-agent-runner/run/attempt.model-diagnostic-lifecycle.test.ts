@@ -43,13 +43,6 @@ function wrap(
     ...context,
   });
 }
-function completedStream() {
-  const stream = createAssistantMessageEventStream();
-  stream.end(
-    makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
-  );
-  return stream;
-}
 async function drain(stream: AsyncIterable<unknown>) {
   for await (const _ of stream) {
     /* drain */
@@ -116,6 +109,7 @@ describe("model diagnostic lifecycle", () => {
     "iterator factory failure",
     "result rejection",
     "resolved stream setup failure",
+    "EOF without result",
   ] as const)(
     "finishes request activity once after %s without admitting cache usage",
     async (kind) => {
@@ -133,7 +127,6 @@ describe("model diagnostic lifecycle", () => {
         }
         if (kind === "iterator failure") {
           return {
-            result: async () => makeAssistantMessageFixture(),
             [Symbol.asyncIterator]() {
               return {
                 async next() {
@@ -145,7 +138,6 @@ describe("model diagnostic lifecycle", () => {
         }
         if (kind === "iterator factory failure") {
           return {
-            result: async () => makeAssistantMessageFixture(),
             [Symbol.asyncIterator]() {
               throw failure;
             },
@@ -166,7 +158,7 @@ describe("model diagnostic lifecycle", () => {
             },
           });
         }
-        throw new Error("Unexpected stream fixture");
+        return (async function* () {})();
       };
       const wrapped = wrap(source as unknown as StreamFn, context);
       let caught: unknown;
@@ -179,7 +171,7 @@ describe("model diagnostic lifecycle", () => {
       } catch (error) {
         caught = error;
       }
-      expect(caught).toBe(failure);
+      expect(caught).toBe(kind === "EOF without result" ? undefined : failure);
       expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
       expect(onTerminal).not.toHaveBeenCalled();
       expect(onSucceeded).not.toHaveBeenCalled();
@@ -354,30 +346,17 @@ describe("model diagnostic lifecycle", () => {
         }
       }
     }
-    const wrapped = wrap(
-      (() =>
-        Object.assign(stream(), {
-          result: async () =>
-            makeAssistantMessageFixture({
-              stopReason: "stop",
-              errorMessage: undefined,
-              content: [],
-            }),
-        })) as unknown as StreamFn,
-      {
-        config: {
-          diagnostics: {
-            get flags() {
-              return readFlags();
-            },
+    const wrapped = wrap((() => stream()) as unknown as StreamFn, {
+      config: {
+        diagnostics: {
+          get flags() {
+            return readFlags();
           },
         },
       },
-    );
+    });
     const events = await timeline(async () => {
-      const response = await wrapped({} as never, { messages: [] });
-      await drain(response);
-      await response.result();
+      await drain(await wrapped({} as never, { messages: [] }));
     });
     expect(events.map((event) => event.name)).toEqual([
       "provider.request.started",
@@ -400,19 +379,13 @@ describe("model diagnostic lifecycle", () => {
   it("records legacy HTTP metadata without inferring provider acceptance", async () => {
     const onResponse = vi.fn(async () => undefined);
     const response = { status: 200, headers: { "x-request-id": "req-1" } };
-    const wrapped = wrap(
-      async (
-        model: Parameters<StreamFn>[0],
-        _context: Parameters<StreamFn>[1],
-        options: Parameters<StreamFn>[2],
-      ) => {
-        await options?.onResponse?.(response, model);
-        return completedStream();
-      },
-    );
+    const wrapped = wrap(((
+      model: Parameters<StreamFn>[0],
+      _context: Parameters<StreamFn>[1],
+      options: Parameters<StreamFn>[2],
+    ) => options?.onResponse?.(response, model)) as unknown as StreamFn);
     const events = await timeline(async () => {
-      const stream = await wrapped({} as never, {} as never, { onResponse });
-      await stream.result();
+      await wrapped({} as never, {} as never, { onResponse });
     });
     expect(onResponse).toHaveBeenCalledWith(response, {});
     expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
@@ -421,19 +394,13 @@ describe("model diagnostic lifecycle", () => {
   });
 
   it("records SDK acceptance without HTTP metadata", async () => {
-    const wrapped = wrap(
-      (
-        _model: Parameters<StreamFn>[0],
-        _context: Parameters<StreamFn>[1],
-        options: Parameters<StreamFn>[2],
-      ) => {
-        void notifyProviderStreamOpened({ options, cancelStream: vi.fn() });
-        return completedStream();
-      },
-    );
+    const wrapped = wrap(((
+      _model: Parameters<StreamFn>[0],
+      _context: Parameters<StreamFn>[1],
+      options: Parameters<StreamFn>[2],
+    ) => notifyProviderStreamOpened({ options, cancelStream: vi.fn() })) as unknown as StreamFn);
     const events = await timeline(async () => {
-      const stream = await wrapped({} as never, {} as never, {});
-      await stream.result();
+      await wrapped({} as never, {} as never, {});
     });
     expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
       {
@@ -467,13 +434,12 @@ describe("model diagnostic lifecycle", () => {
       registerDiagnosticTracePropagationBridge({
         resolveTraceContext: () => (resolved ? trace : undefined),
       });
-      const source = vi.fn<StreamFn>().mockImplementation(completedStream);
+      const source = vi.fn<StreamFn>();
       const caller = {
         headers: { "X-Custom": "kept", TraceParent: "untrusted" },
         sessionId: "provider-session",
       };
-      const response = await wrap(source)({} as never, {} as never, caller);
-      await response.result();
+      await wrap(source)({} as never, {} as never, caller);
       expect(source.mock.calls[0]?.[2]).toMatchObject({
         sessionId: "provider-session",
         requestId: "call-1",
@@ -503,18 +469,12 @@ describe("model diagnostic lifecycle", () => {
     };
     const events = await collect(async () => {
       await drain(
-        await wrap(
-          (() =>
-            Object.assign(stream(), {
-              result: async () => makeAssistantMessageFixture({ errorMessage: secret }),
-            })) as unknown as StreamFn,
-          {
-            sessionKey: "session-key",
-            sessionId: "session-id",
-            transport: "http",
-            ...budget,
-          },
-        )({} as never, {} as never),
+        await wrap((() => stream()) as unknown as StreamFn, {
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          transport: "http",
+          ...budget,
+        })({} as never, {} as never),
       );
     });
     expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);

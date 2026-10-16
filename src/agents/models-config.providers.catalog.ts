@@ -24,7 +24,7 @@ function normalizeProviderModelsForConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
-  if (!provider.models?.length) {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return provider;
   }
 

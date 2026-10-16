@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
@@ -13,7 +13,9 @@ import {
 import {
   getPluginCache,
   getPluginCacheRetirementSignal,
+  getPluginMetadataSnapshotCache,
   resetPluginCache,
+  retirePluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
@@ -22,6 +24,7 @@ import {
   type PluginInstanceHandle,
 } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -590,3 +593,44 @@ it("retains a managed RUN source borrowed after matching standalone publication 
     expectReopened(original());
   });
 });
+
+it.each(["registry", "empty inventory"] as const)(
+  "rejects a build whose %s retires immediately before publication",
+  async (boundary) => {
+    await withRunFixture(
+      async ({ acquire, original, registrations }) => {
+        const lifetime = await import("./prepared-model-runtime.plugin-lifetime.js");
+        const publish = lifetime.publishPreparedPluginGeneration;
+        let retirement: Promise<unknown> | undefined;
+        const publication = vi
+          .spyOn(lifetime, "publishPreparedPluginGeneration")
+          .mockImplementationOnce((owner, generation) => {
+            if (boundary === "registry") {
+              quiescePluginRegistry(generation.pluginRegistry);
+            } else {
+              retirement = retirePluginCache(
+                getPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot),
+              );
+            }
+            publish(owner, generation);
+          });
+        try {
+          await expect(acquire().then(() => undefined)).rejects.toThrow(
+            "retired before publication",
+          );
+          expect(publication).toHaveBeenCalledOnce();
+          if (boundary === "registry") {
+            expect(original().database.isOpen).toBe(false);
+            expect(original().disposals).toBe(1);
+          } else {
+            expect(registrations).toHaveLength(0);
+            await retirement;
+          }
+        } finally {
+          publication.mockRestore();
+        }
+      },
+      { pluginsDisabled: boundary === "empty inventory" },
+    );
+  },
+);

@@ -6,8 +6,8 @@ function completedBeforeOrAtTimeout(params: {
 }): boolean {
   return (
     params.completed.reason === "completed" &&
-    params.completed.endedAt !== undefined &&
-    params.timeout.endedAt !== undefined &&
+    typeof params.completed.endedAt === "number" &&
+    typeof params.timeout.endedAt === "number" &&
     params.completed.endedAt <= params.timeout.endedAt
   );
 }
@@ -24,8 +24,8 @@ export function mergeAgentRunTerminalOutcome(
     // Timestamps, not callback ordering, decide whether an earlier provider timeout won.
     if (
       incoming.reason === "hard_timeout" &&
-      incoming.endedAt !== undefined &&
-      current.endedAt !== undefined &&
+      typeof incoming.endedAt === "number" &&
+      typeof current.endedAt === "number" &&
       incoming.endedAt <= current.endedAt
     ) {
       return incoming;
@@ -36,8 +36,8 @@ export function mergeAgentRunTerminalOutcome(
   if (current.reason === "hard_timeout") {
     if (
       (incoming.reason === "superseded" || incoming.reason === "cancelled") &&
-      incoming.endedAt !== undefined &&
-      current.endedAt !== undefined &&
+      typeof incoming.endedAt === "number" &&
+      typeof current.endedAt === "number" &&
       incoming.endedAt < current.endedAt
     ) {
       return incoming;

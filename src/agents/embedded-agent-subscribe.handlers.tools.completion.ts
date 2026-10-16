@@ -50,6 +50,7 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
+  isCronAddAction,
   isMiddlewareToolResultError,
   loadHookRunnerGlobal,
   readApplyPatchSummary,
@@ -82,7 +83,6 @@ import {
   readAsyncStartedTaskIds,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { isCronAddAction } from "./harness/tool-result-facts.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";

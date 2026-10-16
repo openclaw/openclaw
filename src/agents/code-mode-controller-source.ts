@@ -15,9 +15,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   let admissionError;
   const maxPending = globalThis.__openclawMaxPendingToolCalls;
   delete globalThis.__openclawMaxPendingToolCalls;
-  const catalogBindings = globalThis.__openclawCatalog;
-  const apiFiles = globalThis.__openclawApiFiles;
-  const namespaceDescriptors = globalThis.__openclawNamespaces;
+  const catalogBindings = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
+  const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
+  const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
   const hostCancelRequest = globalThis.__openclawHostCancelRequest;
   const hostTakeBridgeReply = globalThis.__openclawHostTakeBridgeReply;
@@ -176,13 +176,14 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
 
   function namespaceFunction(namespaceId, path) {
-    return (...args) => request("namespace", [namespaceId, path, args]);
+    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
+    return (...args) => request("namespace", [namespaceId, callablePath, args]);
   }
 
   function deserializeNamespaceValue(namespaceId, value) {
     if (!value || typeof value !== "object") return null;
     if (value.kind === "function") {
-      return namespaceFunction(namespaceId, value.path);
+      return namespaceFunction(namespaceId, Array.isArray(value.path) ? value.path.slice() : []);
     }
     if (value.kind === "array") {
       return Object.freeze((Array.isArray(value.items) ? value.items : []).map((item) => deserializeNamespaceValue(namespaceId, item)));
@@ -346,7 +347,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const normalizedPrefix = rawPrefix === "" ? "" : normalizeApiPath(rawPrefix);
       const files = [...apiFileMap.values(), ...[...nativeApiFiles.keys()].map(path => ({ path }))]
         .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
-        .map((file) => ({
+        .map((file) => Object.freeze({
           path: file.path,
           description: file.description,
           bytes: file.bytes,
@@ -375,7 +376,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const existing = callableHandles.get(callableName);
     if (existing) return existing;
     const isMcp = binding.source === "mcp";
-    const path = isMcp ? binding.path : undefined;
+    const path = isMcp ? Object.freeze(binding.path.slice()) : undefined;
     const handle = isMcp
       ? namespaceFunction(binding.namespaceId, path)
       : (input) => request("callValue", [callableName, input]);

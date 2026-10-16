@@ -176,6 +176,23 @@ export class SessionManager extends SessionManagerBranching {
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */
   flushPendingPersistence(): void {}
 
+  // Worker rollback instrumentation wraps the method on this public prototype.
+  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. */
+  override appendMessage(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): string {
+    return super.appendMessage(message, options);
+  }
+
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. */
+  override appendMessageWithTranscriptAnchor(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ) {
+    return super.appendMessageWithTranscriptAnchor(message, options);
+  }
+
   /** @deprecated Await prepareTranscriptRewriteAsync and its commit. Supported through 2026-12-31. */
   prepareTranscriptRewrite() {
     prepareSessionManagerSync("prepareTranscriptRewrite", this.persistenceTarget, this);
@@ -460,7 +477,9 @@ export class SessionManager extends SessionManagerBranching {
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
     const snapshot = loadTranscriptReadSnapshotSync(capturedTarget);
     const entries = snapshot.events as FileEntry[];
-    const header = findSessionTranscriptHeader(entries);
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     return new SessionManager(
       cwdOverride ?? header?.cwd ?? process.cwd(),
       capturedTarget,
@@ -484,7 +503,9 @@ export class SessionManager extends SessionManagerBranching {
     }
     // SAFETY: The accessor returns the same persisted transcript event union consumed by open().
     const entries = context.events as FileEntry[];
-    const header = findSessionTranscriptHeader(entries);
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), capturedTarget, entries, {
       ...context,
       limits,
@@ -673,7 +694,9 @@ export class SessionManager extends SessionManagerBranching {
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
     const fileEntries = structuredClone(entries) as FileEntry[];
-    const header = findSessionTranscriptHeader(fileEntries);
+    const header = fileEntries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), undefined, fileEntries);
   }
 }

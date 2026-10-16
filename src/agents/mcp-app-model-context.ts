@@ -51,7 +51,7 @@ export function getMcpAppModelContext(
     return null;
   }
   const { leased: _leased, ...state } = snapshot;
-  return state;
+  return structuredClone(state);
 }
 
 export function revokeMcpAppModelContext(runtime: SessionMcpRuntime): void {

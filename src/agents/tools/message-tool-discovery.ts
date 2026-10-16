@@ -433,7 +433,7 @@ function* buildMessageToolSchemaSteps(
     channels: resolveMessageToolDiscoveryChannels(params),
     ...buildMessageActionDiscoveryInput(
       params,
-      normalizeMessageChannel(params.currentChannelProvider),
+      normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
     resolveAccountIdForChannel: params.scheduledAccountScope
       ? (channel, contextualAccountId) =>

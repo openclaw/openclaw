@@ -626,7 +626,8 @@ export async function resolveApiKeyForProviderCore(input: {
     return syntheticLocalAuth;
   }
 
-  const hasInlineConfiguredModels = (providerConfig?.models?.length ?? 0) > 0;
+  const hasInlineConfiguredModels =
+    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
   const owningPluginIds =
     params.allowAuthProfileFallback !== false && !hasInlineConfiguredModels
       ? resolveOwningPluginIdsForProviderRef({

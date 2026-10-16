@@ -30,6 +30,10 @@ import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import {
+  fingerprintPreparedModelCatalogGeneration,
+  fingerprintPreparedModelWorkerRequest,
+} from "./prepared-model-catalog-fingerprints.js";
+import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
 } from "./prepared-model-catalog-worker.pool.js";
@@ -39,7 +43,10 @@ import type {
   PreparedModelWorkerCommand,
   PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.types.js";
-import { PreparedModelCatalogAdmissionStalledError } from "./prepared-model-catalog.errors.js";
+import {
+  PreparedModelCatalogAdmissionStalledError,
+  PreparedModelCatalogGenerationMismatchError,
+} from "./prepared-model-catalog.errors.js";
 import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
@@ -238,7 +245,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const cache = getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot);
   const index = overlayPluginNativeAdmissions(pluginMetadataSnapshot.index, cache);
   const sharedAuthStoreOwnership = getPreparedSharedAuthStoreOwnership(params.agentFacts.env);
-  return {
+  const value: Omit<PreparedModelCatalogWorkerInput, "generationFingerprint"> = {
     remoteCatalog: captureRemoteModelCatalogSnapshot(),
     input,
     sourceConfigForSecrets,
@@ -263,6 +270,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
           : overlayPluginNativeAdmissions(pluginMetadataSnapshot.registryIndex, cache),
     },
   };
+  return { ...value, generationFingerprint: fingerprintPreparedModelCatalogGeneration(value) };
 }
 
 type PreparedModelCatalogWorker = Readonly<{
@@ -298,6 +306,7 @@ export function createPreparedModelCatalogWorker(
   let observingRetirement = false;
   let stoppedError: Error | undefined;
   let releaseProcessLifetime: (() => void) | undefined;
+  let expectedFingerprint: string | undefined;
   let pendingAuth:
     | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
     | undefined;
@@ -322,9 +331,26 @@ export function createPreparedModelCatalogWorker(
   const environmentFingerprint = fingerprintPreparedRuntimeFacts(workerInput.input.env);
   let pool: CatalogPool | undefined;
   let sharedOwner: GatewayCatalogPool | undefined;
-  const validate: (message: PreparedModelWorkerResult) => void = () => {
+  const mismatch = (
+    message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
+  ) =>
+    new PreparedModelCatalogGenerationMismatchError(
+      workerInput.input.agentDir,
+      message.generationFingerprint,
+      message.reconstructedFingerprint,
+    );
+  const validate = (message: PreparedModelWorkerResult) => {
     if (!gatewayOwned) {
       assertCurrent();
+    }
+    if (message.status === "generation-mismatch") {
+      // Fence before any successor dispatches: rejecting here closes the pool, so a queued
+      // auth or catalog request never runs on the retired worker and rejects with this
+      // same typed outcome instead of a generic failure.
+      throw mismatch(message);
+    }
+    if (message.status === "ok" && message.generationFingerprint !== expectedFingerprint) {
+      throw new Error("prepared model catalog worker returned a stale generation");
     }
   };
   let receiveResult = validate;
@@ -473,6 +499,7 @@ export function createPreparedModelCatalogWorker(
             ...value,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
+          expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),
           );
@@ -537,6 +564,15 @@ export function createPreparedModelCatalogWorker(
           process.emitWarning(`Gateway catalog recovery failed: ${String(recoveryError)}`);
         });
       }
+      if (!gatewayOwned && failure instanceof PreparedModelCatalogGenerationMismatchError) {
+        // Keep the generation open, but retire only this request's pool: a delayed rejection
+        // from it must not close a replacement already serving the same lifecycle plan.
+        if (pool === requestPool) {
+          pool = undefined;
+        }
+        await requestPool?.close(failure);
+        throw failure;
+      }
       controller.abort(error);
       await stop(failure);
       throw error;
@@ -550,6 +586,10 @@ export function createPreparedModelCatalogWorker(
     }
     if (message.status === "failed") {
       throw new Error(message.error);
+    }
+    if (message.status === "generation-mismatch") {
+      // validateResult fences this reply before the pool can resolve it.
+      throw mismatch(message);
     }
     return message;
   };

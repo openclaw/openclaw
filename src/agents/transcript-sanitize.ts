@@ -230,7 +230,7 @@ export function sanitizeOpenAIReasoningSignature(
   ) {
     return undefined;
   }
-  if (!hasEncryptedContent && parsed.id === undefined) {
+  if (!hasEncryptedContent && typeof parsed.id !== "string") {
     return undefined;
   }
   const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
@@ -238,7 +238,7 @@ export function sanitizeOpenAIReasoningSignature(
     route,
   );
   return JSON.stringify({
-    ...(parsed.id !== undefined ? { id: parsed.id } : {}),
+    ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
     ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),

@@ -371,8 +371,8 @@ export async function prepareAgentCommandExecution(
       agentId: sessionAgentId,
       workspaceDir: agentWorkspaceDir,
       cwd: resolvedCwd,
-      sessionKey,
-      sessionEntry: sessionEntryRaw,
+      sessionKey: sessionKey ?? undefined,
+      sessionEntry: sessionEntryRaw ?? undefined,
     });
     await ensureAgentWorkspace({
       dir: agentWorkspaceDir,

@@ -43,7 +43,9 @@ export async function hasAvailableCodexAuth(params: {
   if (
     Object.values(params.config?.auth?.profiles ?? {}).some(
       (profile) =>
-        profile.provider === "openai" && (profile.mode === "oauth" || profile.mode === "token"),
+        isRecord(profile) &&
+        profile.provider === "openai" &&
+        (profile.mode === "oauth" || profile.mode === "token"),
     )
   ) {
     return true;
@@ -61,7 +63,7 @@ export async function hasAvailableCodexAuth(params: {
         return true;
       }
     } catch {
-      // Availability probing is advisory; execution still requires credential admission.
+      // Fall back to config-based detection below.
     }
   }
   return false;

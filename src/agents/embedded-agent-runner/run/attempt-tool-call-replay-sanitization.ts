@@ -344,7 +344,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context.messages;
+    const messages = context?.messages;
+    if (!Array.isArray(messages)) {
+      return baseFn(model, context, options);
+    }
     const modelApi = model.api;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi,

@@ -253,9 +253,11 @@ export async function stopManagedProviderLocalServices(): Promise<void> {
 }
 
 export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalServiceDiagnostics[] {
-  return [...services.values()]
-    .map((managed) => managed.diagnostics)
-    .filter((value): value is LocalServiceDiagnostics => value !== undefined);
+  return structuredClone(
+    [...services.values()]
+      .map((managed) => managed.diagnostics)
+      .filter((value): value is LocalServiceDiagnostics => value !== undefined),
+  );
 }
 
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {

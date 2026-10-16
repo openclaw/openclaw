@@ -189,10 +189,10 @@ export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SI
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
 }
 
-function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[]) {
+function readPluginDeliveryIdentity(value: unknown) {
   let primaryPlatformMessageId: string | undefined;
   const deliveredTargets = new Set<string>();
-  for (const record of records) {
+  visitPluginEnvelope(value, (record) => {
     primaryPlatformMessageId ??= [
       record.messageId,
       record.pollId,
@@ -203,7 +203,8 @@ function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[])
     for (const target of listMessageReceiptSourceTargets(record)) {
       deliveredTargets.add(target);
     }
-  }
+    return false;
+  });
   return {
     ...(primaryPlatformMessageId ? { primaryPlatformMessageId } : {}),
     ...(deliveredTargets.size ? { deliveredTargets: [...deliveredTargets] } : {}),
@@ -213,31 +214,24 @@ function readPluginDeliveryIdentity(records: readonly Record<string, unknown>[])
 export function projectPluginMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
-  const envelopes: Array<{ record: Record<string, unknown>; status: string | undefined }> = [];
-  visitPluginEnvelope(value, (record, status) => {
-    envelopes.push({ record, status });
-    return false;
-  });
-  const has = (signal: keyof typeof PLUGIN_SIGNALS) =>
-    envelopes.some(({ record, status }) => PLUGIN_SIGNALS[signal](record, status));
-  if (has("dryRun")) {
+  if (pluginEnvelopeHas(value, "dryRun")) {
     return { status: "dryRun", ...EMPTY_DELIVERY_FACT };
   }
-  if (has("partial")) {
+  if (pluginEnvelopeHas(value, "partial")) {
     return { status: "settled", partialDelivery: true, createdThreadIds: [] };
   }
-  if (has("nonDelivery")) {
+  if (pluginEnvelopeHas(value, "nonDelivery")) {
     return { status: "suppressed", ...EMPTY_DELIVERY_FACT };
   }
-  if (has("noOp") || has("failure")) {
+  if (pluginEnvelopeHas(value, "noOp") || pluginEnvelopeHas(value, "failure")) {
     return { status: "failed", ...EMPTY_DELIVERY_FACT };
   }
-  if (!has("delivery") && !has("ok")) {
+  if (!pluginEnvelopeHas(value, "delivery") && !pluginEnvelopeHas(value, "ok")) {
     return undefined;
   }
   return {
     status: "settled",
-    ...readPluginDeliveryIdentity(envelopes.map(({ record }) => record)),
+    ...readPluginDeliveryIdentity(value),
     ...EMPTY_DELIVERY_FACT,
   };
 }
@@ -293,7 +287,9 @@ export function projectEmbeddedMessageDeliveryFact(
     : projectPluginMessageDeliveryFact(result.payload);
   const partialDelivery = payloadDelivery?.partialDelivery ? payloadDelivery : undefined;
   if (currentSourceReply && result.handledBy === "plugin") {
-    return result.dryRun ? { status: "dryRun", ...EMPTY_DELIVERY_FACT } : payloadDelivery;
+    return result.dryRun
+      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
+      : projectPluginMessageDeliveryFact(result.payload);
   }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult

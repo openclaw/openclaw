@@ -47,7 +47,8 @@ export function resolveEmbeddedRunTerminalToolFailure(params: {
   ) {
     return undefined;
   }
-  const failureFirstLine = failure.error?.split(/\r?\n/, 1)[0];
+  const failureFirstLine =
+    typeof failure.error === "string" ? failure.error.split(/\r?\n/, 1)[0] : undefined;
   if (!failureFirstLine || !SAFE_MCP_CATALOG_MISS.test(failureFirstLine)) {
     return undefined;
   }

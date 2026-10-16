@@ -296,9 +296,12 @@ function resumeCheckedSubagentRun(
     return;
   }
   if (entry.killReconciliation) {
+    const generation = entry.generation;
     resumedRuns.add(getSubagentRunRuntimeKey(entry));
     const stillCurrent = () =>
-      isHostCurrent?.() !== false && isSameSubagentRunOwner(subagentRuns.get(runId), entry);
+      isHostCurrent?.() !== false &&
+      isSameSubagentRunOwner(subagentRuns.get(runId), entry) &&
+      entry.generation === generation;
     const failed = (error: unknown) => {
       log.warn("subagent settlement deferred before cleanup", { runId, error });
       if (stillCurrent()) {

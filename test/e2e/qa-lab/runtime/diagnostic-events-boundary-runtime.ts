@@ -17,9 +17,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
-import { makeAgentAssistantMessage } from "../../../../src/agents/test-helpers/agent-message-fixtures.js";
 import { onTrustedInternalDiagnosticEvent } from "../../../../src/infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
@@ -140,18 +138,16 @@ async function probeDiagnosticEventsBoundary(): Promise<DiagnosticEventsBoundary
   const rootTraceparent = formatDiagnosticTraceparent(rootTrace);
   const parsedRootTraceparent = parseDiagnosticTraceparent(rootTraceparent);
   const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-    async (
+    ((
       model: Parameters<StreamFn>[0],
       _streamContext: Parameters<StreamFn>[1],
       options: Parameters<StreamFn>[2],
     ) => {
       const header = options?.headers?.traceparent;
       propagatedTraceparent = typeof header === "string" ? header : undefined;
-      await options?.onPayload?.({ input: PRIVATE_MODEL_INPUT }, model);
-      const stream = createAssistantMessageEventStream();
-      stream.end(makeAgentAssistantMessage({ content: [] }));
-      return stream;
-    },
+      options?.onPayload?.({ input: PRIVATE_MODEL_INPUT }, model);
+      return Promise.resolve({ role: "assistant", content: [] });
+    }) as unknown as StreamFn,
     {
       runId: RUN_ID,
       provider: "openai",
@@ -179,16 +175,17 @@ async function probeDiagnosticEventsBoundary(): Promise<DiagnosticEventsBoundary
       source: "qa-diagnostic-events-boundary",
       trace: rootTrace,
     });
-    const response = await wrapped(
-      { id: "gpt-5.6-luna" } as never,
-      {
-        messages: [{ role: "user", content: PRIVATE_MODEL_INPUT }],
-      } as never,
-      {
-        headers: { TraceParent: CALLER_TRACEPARENT },
-      } as never,
+    await Promise.resolve(
+      wrapped(
+        { id: "gpt-5.6-luna" } as never,
+        {
+          messages: [{ role: "user", content: PRIVATE_MODEL_INPUT }],
+        } as never,
+        {
+          headers: { TraceParent: CALLER_TRACEPARENT },
+        } as never,
+      ),
     );
-    await response.result();
 
     const deliveredBeforeDrain = sharedEvents.length;
     const pendingBeforeDrain = hasPendingInternalDiagnosticEvent(

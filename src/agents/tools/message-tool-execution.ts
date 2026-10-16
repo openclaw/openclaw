@@ -569,7 +569,7 @@ function* createMessageToolSteps(
                   action,
                   params: actionParams,
                   actionOrigin: "message-tool",
-                  defaultAccountId: accountId,
+                  defaultAccountId: accountId ?? undefined,
                   ...messageActionTurnCapability.selectMessageActionRequesterIdentity(
                     trustedTurnContext,
                   ),

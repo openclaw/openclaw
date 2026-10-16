@@ -329,7 +329,9 @@ export async function executePreparedCliRun(
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
-            preparedBackend: context.preparedBackend,
+            mode: context.backendResolved.bundleMcpMode,
+            backend,
+            env: context.preparedBackend.env,
             captureKey: initialGatewayCaptureKey,
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;

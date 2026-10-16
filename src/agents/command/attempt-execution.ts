@@ -22,7 +22,6 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
-import { isClaudeCliProvider } from "../cli-output-records.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
@@ -73,6 +72,7 @@ import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   resolveCompletionToolPolicy,
+  isClaudeCliProvider,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,

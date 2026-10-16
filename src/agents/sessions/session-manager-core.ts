@@ -4,10 +4,7 @@ import type {
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { bindCacheTtlProjectionPrefixes } from "../../config/sessions/session-cache-ttl-prefix.js";
-import {
-  assertCurrentSessionTranscriptHeader,
-  findSessionTranscriptHeader,
-} from "../../config/sessions/session-entry-codec.js";
+import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import {
   resolveOpaqueSessionFirstKeptEntryId,
   SessionEntryNavigation,
@@ -70,6 +67,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   protected sessionId = "";
   protected transcriptVersion: SessionTranscriptContextVersion | undefined;
   private transcriptViewFailure: Error | undefined;
+  private hydrationRevision = 0;
   protected cwd: string;
   protected fileEntries: FileEntry[] = [];
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
@@ -121,6 +119,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
 
   protected setSessionTargetSync(target: SessionTranscriptRuntimeTarget): void {
     this.assertTranscriptViewAvailable();
+    this.hydrationRevision++;
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
     const prepared = readSessionManagerReload(capturedTarget, this.boundedContextLimits, false);
     const bounded = prepared.kind === "bounded" ? prepared.snapshot : undefined;
@@ -130,7 +129,9 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.persistedSuffixStartSeq = bounded?.persistedSuffixStartSeq;
     this.transcriptMutationAt =
       bounded !== undefined ? bounded.transcriptMutationAt : prepared.snapshot.version.updatedAt;
-    const header = findSessionTranscriptHeader(entries);
+    const header = entries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
     this.setLoadedSessionTarget(capturedTarget, entries, bounded, prepared.snapshot.version);
     if (header?.cwd) {
       this.cwd = header.cwd;
@@ -166,6 +167,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       return false;
     }
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
+    const revision = ++this.hydrationRevision;
     const prior = this.captureTranscriptView();
     const entryCount = this.fileEntries.length;
     const opaqueCount = this.opaqueFileEntries.length;
@@ -177,6 +179,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       this.assertTranscriptViewAvailable();
       const current = this.captureTranscriptView();
       if (
+        revision !== this.hydrationRevision ||
         this.fileEntries.length !== entryCount ||
         this.opaqueFileEntries.length !== opaqueCount ||
         Object.keys(prior).some((key) => Reflect.get(prior, key) !== Reflect.get(current, key))
@@ -188,6 +191,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       if (!preserveCwd) {
         this.cwd = this.fileEntries.find((entry) => entry.type === "session")?.cwd ?? this.cwd;
       }
+      this.hydrationRevision++;
       consumeSessionManagerReload(
         prepared,
         cohort?.consume,
