@@ -21,69 +21,69 @@ import {
 } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
 
+const sessionTarget = { cfg: baseCfg, sessionKey: "agent:codex:acp:actor-epoch-fencing" };
+const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
+
+function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: SessionAcpMeta) {
+  const runtimeState = createRuntime();
+  let ensureCount = 0;
+  let persistedMeta = initialMeta;
+  const entry = () =>
+    persistedMeta ? { sessionId: "session-1", updatedAt: 1, acp: persistedMeta } : undefined;
+  runtimeState.ensureSession.mockImplementation(async (input) => {
+    const callNumber = ++ensureCount;
+    return {
+      sessionKey: input.sessionKey,
+      backend: "acpx",
+      runtimeSessionName: `runtime-${callNumber}`,
+      backendSessionId: `backend-${callNumber}`,
+    };
+  });
+  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+    id: "acpx",
+    runtime: runtimeState.runtime,
+  });
+  hoisted.readAcpSessionEntryMock.mockImplementation(
+    ({ sessionKey: key }: { sessionKey: string }) => ({
+      sessionKey: key,
+      storeSessionKey: key,
+      entry: entry(),
+      acp: persistedMeta,
+    }),
+  );
+  hoisted.upsertAcpSessionMetaMock.mockImplementation(
+    async (input: Parameters<WriteManagerSessionMeta>[0]) => {
+      const next = input.mutate(persistedMeta, entry());
+      await beforeCommit?.();
+      input.assertCommitAllowed?.();
+      if (next !== undefined) {
+        persistedMeta = next ?? undefined;
+      }
+      return persistedMeta
+        ? {
+            sessionKey: input.sessionKey,
+            storeSessionKey: input.sessionKey,
+            entry: entry(),
+            acp: persistedMeta,
+          }
+        : null;
+    },
+  );
+  return {
+    runtimeState,
+    manager: new AcpSessionManager(),
+    get meta() {
+      return persistedMeta;
+    },
+    get ensureCount() {
+      return ensureCount;
+    },
+  };
+}
+
 describe("AcpSessionManager actor epoch fencing", () => {
   installAcpSessionManagerTestLifecycle();
-
-  const sessionKey = "agent:codex:acp:actor-epoch-fencing";
-  const sessionTarget = { cfg: baseCfg, sessionKey };
-  const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
-
-  function createFixture(beforeCommit?: () => Promise<void>) {
-    const runtimeState = createRuntime();
-    let ensureCount = 0;
-    let persistedMeta: SessionAcpMeta | undefined;
-    const entry = () =>
-      persistedMeta ? { sessionId: "session-1", updatedAt: 1, acp: persistedMeta } : undefined;
-    runtimeState.ensureSession.mockImplementation(async (input) => {
-      const callNumber = ++ensureCount;
-      return {
-        sessionKey: input.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: `runtime-${callNumber}`,
-        backendSessionId: `backend-${callNumber}`,
-      };
-    });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation(
-      ({ sessionKey: key }: { sessionKey: string }) => ({
-        sessionKey: key,
-        storeSessionKey: key,
-        entry: entry(),
-        acp: persistedMeta,
-      }),
-    );
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(
-      async (input: Parameters<WriteManagerSessionMeta>[0]) => {
-        const next = input.mutate(persistedMeta, entry());
-        await beforeCommit?.();
-        input.assertCommitAllowed?.();
-        if (next !== undefined) {
-          persistedMeta = next ?? undefined;
-        }
-        return persistedMeta
-          ? {
-              sessionKey: input.sessionKey,
-              storeSessionKey: input.sessionKey,
-              entry: entry(),
-              acp: persistedMeta,
-            }
-          : null;
-      },
-    );
-    return {
-      runtimeState,
-      manager: new AcpSessionManager(),
-      get meta() {
-        return persistedMeta;
-      },
-      get ensureCount() {
-        return ensureCount;
-      },
-    };
-  }
+  const { sessionKey } = sessionTarget;
 
   it.each([
     { operation: "option reset", retired: "actor" },
@@ -215,8 +215,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
       const revoked = new Error("status caller authority revoked");
       const manager = new AcpSessionManager();
       const pending = manager.getSessionStatus({
-        cfg: baseCfg,
-        sessionKey,
+        ...sessionTarget,
         assertActive: () => {
           if (!current) {
             throw revoked;
@@ -240,8 +239,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
         ).toBe("read");
         if (retired === "actor") {
           await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
-            cfg: baseCfg,
-            sessionKey,
+            ...sessionTarget,
             reason: "session-reset",
           });
         } else {
@@ -333,21 +331,18 @@ describe("AcpSessionManager actor epoch fencing", () => {
       const staleOperation =
         operation === "runtime mode"
           ? manager.setSessionRuntimeMode({
-              cfg: baseCfg,
-              sessionKey,
+              ...sessionTarget,
               runtimeMode: "stale",
             })
           : operation === "config option"
             ? manager.setSessionConfigOption({
-                cfg: baseCfg,
-                sessionKey,
+                ...sessionTarget,
                 key: "model",
                 value: "stale-model",
               })
             : operation === "option update"
               ? manager.updateSessionRuntimeOptions({
-                  cfg: baseCfg,
-                  sessionKey,
+                  ...sessionTarget,
                   patch: { cwd: "/workspace/stale" },
                 })
               : operation === "status reconciliation"
@@ -356,8 +351,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
       await staleOperationEntered.promise;
 
       await getAcpSessionResetControls(manager).forceDiscardSessionRuntime({
-        cfg: baseCfg,
-        sessionKey,
+        ...sessionTarget,
         reason: "session-reset",
       });
       await manager.initializeSession({
@@ -379,8 +373,7 @@ describe("AcpSessionManager actor epoch fencing", () => {
 
       await manager.runTurn({
         provenance: "system",
-        cfg: baseCfg,
-        sessionKey,
+        ...sessionTarget,
         text: "fresh follow-up",
         mode: "prompt",
         requestId: "fresh-follow-up",
@@ -502,37 +495,19 @@ describe("ACP metadata-only command authority", () => {
   it.each(["update", "reset"] as const)(
     "rechecks the admitted requester before an awaited %s commits",
     async (operation) => {
-      const sessionKey = "agent:codex:acp:requester-authority";
-      const runtime = createRuntime();
       const entered = createDeferred();
       const release = createDeferred();
       let current = true;
-      let meta = readySessionMeta({ runtimeOptions: { cwd: "/workspace/original" } });
-      const entry = () => ({ sessionId: "requester-authority", updatedAt: 1, acp: meta });
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtime.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: entry(),
-        acp: meta,
-      }));
-      hoisted.upsertAcpSessionMetaMock.mockImplementation(
-        async (input: Parameters<WriteManagerSessionMeta>[0]) => {
-          const next = input.mutate(meta, entry());
+      const fixture = createFixture(
+        async () => {
           entered.resolve();
           await release.promise;
-          input.assertCommitAllowed?.();
-          meta = next ?? meta;
-          return entry();
         },
+        readySessionMeta({ runtimeOptions: { cwd: "/workspace/original" } }),
       );
-      const manager = new AcpSessionManager();
+      const { manager, runtimeState: runtime } = fixture;
       const target = {
-        cfg: baseCfg,
-        sessionKey,
+        ...sessionTarget,
         assertActive: () => {
           if (!current) {
             throw new Error("requester authority revoked");
@@ -548,7 +523,7 @@ describe("ACP metadata-only command authority", () => {
       current = false;
       release.resolve();
       await rejected;
-      expect(meta.runtimeOptions).toEqual({ cwd: "/workspace/original" });
+      expect(fixture.meta?.runtimeOptions).toEqual({ cwd: "/workspace/original" });
       expect(runtime.ensureSession).not.toHaveBeenCalled();
       expect(runtime.close).not.toHaveBeenCalled();
     },

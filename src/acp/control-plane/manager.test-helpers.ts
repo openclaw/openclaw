@@ -207,33 +207,12 @@ export function expectNoMockCallFields(
   expect(findMockCallFields(mock, expected)).toBeUndefined();
 }
 
-export function createRuntime(): {
-  runtime: AcpRuntime;
-  ensureSession: ReturnType<typeof vi.fn<AcpRuntime["ensureSession"]>>;
-  runTurn: ReturnType<typeof vi.fn<AcpRuntime["runTurn"]>>;
-  prepareFreshSession: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>>;
-  cancel: ReturnType<typeof vi.fn<AcpRuntime["cancel"]>>;
-  close: ReturnType<typeof vi.fn<AcpRuntime["close"]>>;
-  getCapabilities: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>>;
-  getStatus: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getStatus"]>>>;
-  setMode: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setMode"]>>>;
-  setConfigOption: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>>;
-} {
-  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(
-    async (input: {
-      sessionKey: string;
-      agent: string;
-      mode: "persistent" | "oneshot";
-      model?: string;
-      thinking?: string;
-      cwd?: string;
-      resumeSessionId?: string;
-    }) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-    }),
-  );
+export function createRuntime() {
+  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
+    sessionKey: input.sessionKey,
+    backend: "acpx",
+    runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+  }));
   const runTurn = vi.fn<AcpRuntime["runTurn"]>(async function* () {
     yield { type: "done" as const };
   });
@@ -251,18 +230,7 @@ export function createRuntime(): {
   }));
   const setMode = vi.fn<NonNullable<AcpRuntime["setMode"]>>(async () => {});
   const setConfigOption = vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>(async () => {});
-  return {
-    runtime: {
-      ensureSession,
-      runTurn,
-      getCapabilities,
-      getStatus,
-      setMode,
-      setConfigOption,
-      prepareFreshSession,
-      cancel,
-      close,
-    },
+  const mocks = {
     ensureSession,
     runTurn,
     prepareFreshSession,
@@ -273,6 +241,20 @@ export function createRuntime(): {
     setMode,
     setConfigOption,
   };
+  const runtime: AcpRuntime = { ...mocks };
+  return { runtime, ...mocks };
+}
+
+export function mockMutableSession(
+  sessionKey: string,
+  state: { currentMeta: SessionAcpMeta | undefined },
+) {
+  hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    acp: state.currentMeta,
+  }));
+  installMutableAcpSessionMetaUpsert(state);
 }
 
 export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): SessionAcpMeta {

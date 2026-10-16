@@ -15,7 +15,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  installMutableAcpSessionMetaUpsert,
+  mockMutableSession,
   mockCallArg,
   mockParentedAcpSessionEntries,
   readySessionMeta,
@@ -79,12 +79,7 @@ describe("AcpSessionManager turn results", () => {
       }),
     };
     const state = setupRuntime(meta.currentMeta, sessionKey);
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: meta.currentMeta,
-    }));
-    installMutableAcpSessionMetaUpsert(meta);
+    mockMutableSession(sessionKey, meta);
     state.ensureSession.mockImplementation(async (input) => ({
       sessionKey: input.sessionKey,
       backend: "acpx",

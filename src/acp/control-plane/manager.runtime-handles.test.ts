@@ -8,7 +8,7 @@ import {
   disposeAcpSessionManagerInstance,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  installMutableAcpSessionMetaUpsert,
+  mockMutableSession,
   readySessionMeta,
   type OpenClawConfig,
   type SessionAcpMeta,
@@ -23,12 +23,7 @@ describe("AcpSessionManager runtime handles", () => {
     const persisted = { currentMeta: readySessionMeta(overrides) };
     const sessionKey = `agent:${persisted.currentMeta.agent}:acp:runtime-handles`;
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: persisted.currentMeta,
-    }));
-    installMutableAcpSessionMetaUpsert(persisted);
+    mockMutableSession(sessionKey, persisted);
     const manager = new AcpSessionManager();
     const target = { cfg, sessionKey };
     const input = {
