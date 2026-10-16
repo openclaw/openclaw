@@ -26,8 +26,12 @@ let diagnosticPort: MessagePort | undefined;
 let nextGcProfileAt = 0;
 
 /** Isolate-local diagnostics use the memory channel even while a task is parked. */
-export function publishWorkerGcStorm(gcStorm: WorkerGcStorm): void {
+export function publishWorkerGcStorm(gcStorm: WorkerGcStorm | { retireWorkerId: string }): void {
   if (!diagnosticPort) {
+    return;
+  }
+  if ("retireWorkerId" in gcStorm) {
+    diagnosticPort.postMessage(gcStorm, []);
     return;
   }
   if (performance.now() >= nextGcProfileAt) {
