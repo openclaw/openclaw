@@ -112,11 +112,19 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy", "legacy-rail"])(
+  it.each(["matching", "different", "device-token", "trusted-proxy", "legacy-rail", "large"])(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const timestamp = Date.now();
+        const olderMessages =
+          profile === "large"
+            ? Array.from({ length: 1_099 }, (_, index) => ({
+                role: index % 2 ? "assistant" : "user",
+                content: `Older history ${index + 1}`,
+                __openclaw: { id: `older-${index + 1}`, seq: index + 1 },
+              }))
+            : [];
         const currentRow = {
           key: sessionKey,
           sessionId: "warm-reload-session",
@@ -172,10 +180,11 @@ suite.define(() => {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
               messages: [
+                ...olderMessages,
                 {
                   role: "assistant",
                   content: transcriptText,
-                  __openclaw: { id: "cached-message", seq: 1 },
+                  __openclaw: { id: "cached-message", seq: olderMessages.length + 1 },
                 },
                 ...(profile === "matching"
                   ? [
@@ -195,6 +204,7 @@ suite.define(() => {
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
+              ...(profile === "large" ? { totalMessages: 1_100 } : {}),
               metadata: { models: [] },
             },
           },
@@ -466,6 +476,31 @@ suite.define(() => {
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
+        if (profile === "large") {
+          await gateway.setMethodResponse("chat.history", {
+            cases: [
+              {
+                match: { offset: 80 },
+                response: {
+                  messages: olderMessages.slice(0, 1_020),
+                  sessionId: currentRow.sessionId,
+                  totalMessages: 1_100,
+                  hasMore: false,
+                },
+              },
+            ],
+          });
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          const history = await gateway.waitForRequest("chat.history");
+          expect(history.params).toMatchObject({ offset: 80 });
+          await page
+            .getByText("Older history 1020", { exact: true })
+            .waitFor({ state: "attached" });
+          await page.mouse.wheel(0, -1_000_000);
+          await page.getByText("Older history 1", { exact: true }).waitFor();
+        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
           const connectCount = (await gateway.getRequests("connect")).length;

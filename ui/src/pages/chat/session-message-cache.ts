@@ -443,7 +443,7 @@ function serializedArrayItemWeight(value: unknown): number | null {
   }
 }
 
-function capSnapshotPagination(
+export function capSnapshotPagination(
   pagination: ChatHistoryPagination,
   messages: unknown[],
   start = 0,

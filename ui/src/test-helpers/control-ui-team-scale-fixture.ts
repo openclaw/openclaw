@@ -67,6 +67,7 @@ type FixtureOptions = {
   sessionEventChurn?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
+  largeSnapshot?: boolean;
 };
 
 function widgetHtml(index: number) {
@@ -78,7 +79,10 @@ function widgetHtml(index: number) {
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
-  const counts = TEAM_SCALE_COUNTS;
+  const counts = {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages: options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages,
+  };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
   const agentNames = ["Harbor", "Forge", "Scout", "Atlas", "Cedar", "Beacon"];
@@ -219,9 +223,20 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     { length: counts.transcriptMessages },
     (_, index) => `team-message-${index + 1}`,
   );
+  const messagesPerWidget = Math.floor(counts.transcriptMessages / counts.inlineWidgets);
   const historyMessages = messageIds.map((id, index) => ({
-    role: index % 2 ? "assistant" : "user",
+    role:
+      options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
     __openclaw: { id, seq: index + 1 },
+    ...(options.largeSnapshot
+      ? {
+          idempotencyKey: `synthetic-turn-${Math.floor(index / 4)}`,
+          toolCallId: `synthetic-tool-${Math.floor(index / 4)}`,
+          toolName: "read",
+          openclawResponsesInputReplay: { text: "Synthetic replay metadata. ".repeat(10) },
+          usage: { input: 1200, output: 400, totalTokens: 1600 },
+        }
+      : {}),
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
       ...(duplicateReads && index === counts.transcriptMessages - 1
@@ -235,9 +250,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           index % 2
             ? "The current implementation is ready for verification. Coverage includes the normal path, a recoverable failure, and the final user-visible result."
             : "Please check the current progress and keep the existing layout stable while the remaining results arrive.",
-          ...(index % 20 === 19
+          ...(options.largeSnapshot
+            ? ["Synthetic transcript detail and tool output. ".repeat(40)]
+            : []),
+          ...(index % messagesPerWidget === messagesPerWidget - 1
             ? [
-                `[embed ref="team-scale-chart-${Math.floor(index / 20) + 1}" title="Team metric ${Math.floor(index / 20) + 1}" height="220" /]`,
+                `[embed ref="team-scale-chart-${Math.floor(index / messagesPerWidget) + 1}" title="Team metric ${Math.floor(index / messagesPerWidget) + 1}" height="220" /]`,
               ]
             : []),
         ].join("\n\n"),
@@ -413,6 +431,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
+      ...(options.largeSnapshot
+        ? {
+            "chat.history": {
+              messages: historyMessages,
+              sessionId: pinnedRows[0]!.sessionId,
+              hasMore: false,
+              totalMessages: counts.transcriptMessages,
+            },
+          }
+        : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
