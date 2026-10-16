@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MCP_METADATA_TEXT_LIMIT = 1_200;
-const MCP_SERVER_INSTRUCTIONS_LIMIT = 2_048;
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -43,7 +42,7 @@ export function summarizeServerCapabilities(capabilities: ServerCapabilities | u
   };
 }
 
-function scrubMcpMetadataText(value: unknown, limit: number): string | undefined {
+function scrubMcpMetadataText(value: unknown, limit?: number): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
@@ -54,7 +53,9 @@ function scrubMcpMetadataText(value: unknown, limit: number): string | undefined
       "[redacted MCP metadata instruction]",
     )
     .replace(/system\s+prompt/gi, "system prompt");
-  return scrubbed.length > limit ? `${truncateUtf16Safe(scrubbed, limit)}...` : scrubbed;
+  return limit !== undefined && scrubbed.length > limit
+    ? `${truncateUtf16Safe(scrubbed, limit)}...`
+    : scrubbed;
 }
 
 /** Scrubs untrusted MCP metadata before exposing it to a model. */
@@ -62,7 +63,10 @@ export function sanitizeMcpMetadataText(value: string | undefined): string | und
   return scrubMcpMetadataText(value, MCP_METADATA_TEXT_LIMIT);
 }
 
-/** Scrubs a server's initialize instructions; they span tools, so they get a larger budget. */
+/**
+ * Scrubs a server's initialize instructions. They stay whole: a rule at the end
+ * (quota, confirmation) is as binding as the first line.
+ */
 export function sanitizeMcpServerInstructions(value: unknown): string | undefined {
-  return scrubMcpMetadataText(value, MCP_SERVER_INSTRUCTIONS_LIMIT);
+  return scrubMcpMetadataText(value);
 }

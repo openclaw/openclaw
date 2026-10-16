@@ -351,6 +351,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       sandboxInfo,
       capabilityToolNames: [...params.capabilityToolNames].toSorted(),
       tools: params.effectiveTools,
+      toolCatalogEntries: params.toolSearchCatalogRef?.current?.entries,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
       bootstrapTruncationNotice: buildBootstrapPromptWarningNotice(
@@ -434,6 +435,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         const embeddedSystemPrompt = {
           ...promptInputs.embeddedSystemPrompt,
           tools,
+          toolCatalogEntries: catalogEntries,
           webSearchUnconfigured: params.webSearchUnconfigured?.(),
           capabilityToolNames: capabilities,
           toolSchemaDirectoryPrompt: refreshedToolSchemaDirectoryPrompt,

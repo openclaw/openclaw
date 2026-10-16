@@ -5,6 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -18,6 +19,8 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   agentId?: string;
   preparedTtsPreferences?: PreparedTtsPreferences;
   tools?: { name: string; parameters: unknown }[];
+  /** Tools callable behind Code Mode or Tool Search controls; carries their MCP metadata. */
+  toolCatalogEntries?: readonly { mcp?: PluginToolMcpMeta }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
 
@@ -35,6 +38,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   const {
     config,
     tools,
+    toolCatalogEntries,
     agentId: explicitAgentId,
     preparedModelRuntime,
     preparedTtsPreferences,
@@ -44,7 +48,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
-    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools);
+    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools, toolCatalogEntries);
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);
