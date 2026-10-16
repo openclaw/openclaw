@@ -1,4 +1,3 @@
-// Amazon Bedrock tests cover embedding provider plugin behavior.
 import * as bedrockRuntimeSdk from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttp2Handler } from "@smithy/node-http-handler";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,101 +18,84 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+const east = "https://bedrock-runtime.us-east-1.amazonaws.com";
+const privateHost = "vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com";
+const privateUrl = `https://${privateHost}`;
+const sdkHost = "vpce-environment.bedrock-runtime.us-east-1.vpce.amazonaws.com";
+const isoHost = "bedrock-runtime.us-iso-east-1.c2s.ic.gov";
+type EndpointOptions = {
+  signingRegion?: string;
+  remoteBaseUrl?: string;
+  providerBaseUrl?: string | null;
+  sdkEndpoint?: string;
+  fips?: boolean;
+  dualstack?: boolean;
+  customEndpoint?: boolean;
+  unsupportedPartitionModes?: boolean;
+  expectedError?: string;
+};
+const euPrivate = "vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com";
+const govFips = "bedrock-runtime-fips.us-gov-west-1.amazonaws.com";
+const regional = { customEndpoint: false };
+const fipsOptions = { ...regional, fips: true };
+const dual = { ...regional, dualstack: true };
+const privateEndpoint = { remoteBaseUrl: privateUrl, providerBaseUrl: null };
+const iso = { signingRegion: "us-iso-east-1", unsupportedPartitionModes: true };
+const memoryOptions = {
+  remoteBaseUrl: `https://${euPrivate}`,
+  providerBaseUrl: "https://vpce-provider.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+  signingRegion: "eu-west-1",
+  sdkEndpoint: `https://${sdkHost}`,
+};
+const westFips = {
+  ...fipsOptions,
+  providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
+  signingRegion: "us-west-2",
+};
+const govOptions = {
+  ...regional,
+  providerBaseUrl: `https://${govFips}`,
+  signingRegion: "us-gov-west-1",
+};
+const isoPrivate = {
+  ...iso,
+  providerBaseUrl: null,
+  remoteBaseUrl: `https://vpce-memory.${isoHost}`,
+};
+const isoDual = {
+  ...iso,
+  providerBaseUrl: `https://${isoHost}`,
+  dualstack: true,
+  expectedError: "DualStack is enabled but this partition does not support DualStack",
+};
+const sdkOptions = { ...regional, sdkEndpoint: `https://${sdkHost}` };
+const rejectFips = {
+  ...privateEndpoint,
+  fips: true,
+  expectedError: "Invalid Configuration: FIPS and custom endpoint are not supported",
+};
+const rejectDual = {
+  ...privateEndpoint,
+  dualstack: true,
+  expectedError: "Invalid Configuration: Dualstack and custom endpoint are not supported",
+};
+
 describe("bedrock embedding endpoint routing", () => {
-  it.each([
-    {
-      name: "memory PrivateLink endpoint ahead of the provider endpoint",
-      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com",
-      providerBaseUrl: "https://vpce-provider.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      hostname: "vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com",
-      signingRegion: "eu-west-1",
-      sdkEndpoint: "https://vpce-environment.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-    },
-    {
-      name: "SDK FIPS endpoint for a canonical regional provider URL",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-east-1.amazonaws.com",
-      signingRegion: "us-east-1",
-      fips: true,
-      customEndpoint: false,
-    },
-    {
-      name: "SDK dual-stack endpoint for a canonical regional provider URL",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      hostname: "bedrock-runtime.us-east-1.api.aws",
-      signingRegion: "us-east-1",
-      dualstack: true,
-      customEndpoint: false,
-    },
-    {
-      name: "configured dual-stack endpoint upgraded by SDK FIPS mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
-      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      fips: true,
-      customEndpoint: false,
-    },
-    {
-      name: "configured GovCloud FIPS endpoint with partition-aware signing",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
-      signingRegion: "us-gov-west-1",
-      customEndpoint: false,
-    },
-    {
-      name: "ISO PrivateLink endpoint when speculative security modes are unsupported",
-      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.us-iso-east-1.c2s.ic.gov",
-      providerBaseUrl: undefined,
-      hostname: "vpce-memory.bedrock-runtime.us-iso-east-1.c2s.ic.gov",
-      signingRegion: "us-iso-east-1",
-      unsupportedPartitionModes: true,
-    },
-    {
-      name: "ISO regional endpoint that correctly rejects an explicitly requested unsupported mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-iso-east-1.c2s.ic.gov",
-      hostname: "bedrock-runtime.us-iso-east-1.c2s.ic.gov",
-      signingRegion: "us-iso-east-1",
-      dualstack: true,
-      unsupportedPartitionModes: true,
-      expectedError: "DualStack is enabled but this partition does not support DualStack",
-    },
-    {
-      name: "SDK PrivateLink override for a canonical regional provider URL",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      hostname: "vpce-environment.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      signingRegion: "us-east-1",
-      sdkEndpoint: "https://vpce-environment.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      customEndpoint: false,
-    },
-    {
-      name: "explicit PrivateLink endpoint that correctly rejects FIPS mode",
-      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      providerBaseUrl: undefined,
-      hostname: "vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      signingRegion: "us-east-1",
-      fips: true,
-      expectedError: "Invalid Configuration: FIPS and custom endpoint are not supported",
-    },
-    {
-      name: "explicit PrivateLink endpoint that correctly rejects dual-stack mode",
-      remoteBaseUrl: "https://vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      providerBaseUrl: undefined,
-      hostname: "vpce-memory.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      signingRegion: "us-east-1",
-      dualstack: true,
-      expectedError: "Invalid Configuration: Dualstack and custom endpoint are not supported",
-    },
-  ])("sends signed requests to the $name", async (testCase) => {
-    const { remoteBaseUrl, providerBaseUrl, hostname, signingRegion } = testCase;
-    const sdkEndpoint = "sdkEndpoint" in testCase ? testCase.sdkEndpoint : undefined;
-    const fips = "fips" in testCase && testCase.fips;
-    const dualstack = "dualstack" in testCase && testCase.dualstack;
+  it.each<[string, string, EndpointOptions]>([
+    ["memory endpoint wins", euPrivate, memoryOptions],
+    ["regional FIPS", "bedrock-runtime-fips.us-east-1.amazonaws.com", fipsOptions],
+    ["regional dual-stack", "bedrock-runtime.us-east-1.api.aws", dual],
+    ["dual-stack with FIPS", "bedrock-runtime-fips.us-west-2.api.aws", westFips],
+    ["GovCloud FIPS", govFips, govOptions],
+    ["ISO PrivateLink", `vpce-memory.${isoHost}`, isoPrivate],
+    ["ISO rejects dual-stack", isoHost, isoDual],
+    ["SDK PrivateLink", sdkHost, sdkOptions],
+    ["PrivateLink rejects FIPS", privateHost, rejectFips],
+    ["PrivateLink rejects dual-stack", privateHost, rejectDual],
+  ])("sends signed requests to %s", async (_name, hostname, testCase) => {
+    const { remoteBaseUrl, signingRegion = "us-east-1", sdkEndpoint, fips, dualstack } = testCase;
+    const providerBaseUrl =
+      testCase.providerBaseUrl === null ? undefined : (testCase.providerBaseUrl ?? east);
     vi.stubEnv("AWS_REGION", "us-east-1");
     vi.stubEnv("AWS_DEFAULT_REGION", undefined);
     vi.stubEnv("AWS_PROFILE", undefined);
@@ -126,7 +108,7 @@ describe("bedrock embedding endpoint routing", () => {
     vi.stubEnv("AWS_USE_FIPS_ENDPOINT", fips ? "true" : undefined);
     vi.stubEnv("AWS_USE_DUALSTACK_ENDPOINT", dualstack ? "true" : undefined);
 
-    if ("unsupportedPartitionModes" in testCase) {
+    if (testCase.unsupportedPartitionModes) {
       const { BedrockRuntimeClient: ActualBedrockRuntimeClient } = await vi.importActual<
         typeof import("@aws-sdk/client-bedrock-runtime")
       >("@aws-sdk/client-bedrock-runtime");
@@ -186,7 +168,7 @@ describe("bedrock embedding endpoint routing", () => {
       model: "amazon.titan-embed-text-v2:0",
     });
 
-    if ("expectedError" in testCase) {
+    if (testCase.expectedError !== undefined) {
       await expect(provider.embed("private memory", { inputType: "query" })).rejects.toThrow(
         testCase.expectedError,
       );
@@ -207,7 +189,7 @@ describe("bedrock embedding endpoint routing", () => {
     ]);
     expect(observedRequests[0]?.authorization).toContain(`/${signingRegion}/bedrock/aws4_request`);
     expect(client.region).toBe(signingRegion);
-    if ("customEndpoint" in testCase ? testCase.customEndpoint : remoteBaseUrl || providerBaseUrl) {
+    if (testCase.customEndpoint ?? (remoteBaseUrl || providerBaseUrl)) {
       expect(client).toHaveProperty("endpoint", remoteBaseUrl ?? providerBaseUrl);
     } else {
       expect(client).not.toHaveProperty("endpoint");
@@ -250,29 +232,20 @@ describe("hasAwsCredentials", () => {
 });
 
 describe("bedrock embedding response parsing", () => {
+  const titan = "amazon.titan-embed-text-v2:0";
+  const cohere = "cohere.embed-english-v3";
+  const badUtf8 = Buffer.concat([
+    Buffer.from('{"ignored":"bad'),
+    Buffer.from([0xff]),
+    Buffer.from('","embedding":[3,4]}'),
+  ]);
   it.each([
-    { name: "non-object JSON", model: "amazon.titan-embed-text-v2:0", raw: "[]" },
-    {
-      name: "invalid single vector element",
-      model: "amazon.titan-embed-text-v2:0",
-      raw: '{"embedding":[1,"bad"]}',
-    },
-    { name: "missing batch vectors", model: "cohere.embed-english-v3", raw: "{}" },
-    {
-      name: "invalid batch vector shape",
-      model: "cohere.embed-english-v3",
-      raw: '{"embeddings":[[1],{"bad":true}]}',
-    },
-    {
-      name: "invalid UTF-8",
-      model: "amazon.titan-embed-text-v2:0",
-      raw: Buffer.concat([
-        Buffer.from('{"ignored":"bad'),
-        Buffer.from([0xff]),
-        Buffer.from('","embedding":[3,4]}'),
-      ]),
-    },
-  ])("rejects $name through the provider boundary", async ({ model, raw }) => {
+    ["non-object JSON", titan, "[]"],
+    ["invalid single vector element", titan, '{"embedding":[1,"bad"]}'],
+    ["missing batch vectors", cohere, "{}"],
+    ["invalid batch vector shape", cohere, '{"embeddings":[[1],{"bad":true}]}'],
+    ["invalid UTF-8", titan, badUtf8],
+  ] as const)("rejects %s through the provider boundary", async (_name, model, raw) => {
     vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       body: typeof raw === "string" ? new TextEncoder().encode(raw) : raw,
     } as never);
@@ -288,8 +261,8 @@ describe("bedrock embedding response parsing", () => {
 });
 
 describe("bedrock embedding inference profiles", () => {
-  it.each(["global"])("uses the Cohere v4 contract for the %s profile prefix", async (prefix) => {
-    const model = `${prefix}.cohere.embed-v4:0`;
+  it("uses the Cohere v4 contract for the global profile prefix", async () => {
+    const model = "global.cohere.embed-v4:0";
     const send = vi
       .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
       .mockResolvedValue({

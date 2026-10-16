@@ -5,7 +5,6 @@ import {
   BedrockRuntimeClient,
   CacheTTL,
   ConversationRole,
-  ConverseStreamCommand,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
 import {
@@ -19,23 +18,25 @@ import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-tra
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
+import {
+  bedrockModel,
+  capturePayload,
+  closeServer,
+  collectStream,
+  expectDestroyedClient,
+  mockResponse,
+  runtimeUser,
+  listen,
+  mockStream,
+  startEvent,
+  stopEvent,
+  streamEvents,
+  streamBedrockForTest,
+  userContext,
+  toolStart as startToolEvent,
+  toolDelta as toolDeltaEvent,
+} from "./bedrock.test-support.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
-
-function bedrockModel(overrides: Record<string, unknown>) {
-  return {
-    api: "bedrock-converse-stream",
-    provider: "amazon-bedrock",
-    id: "amazon.nova-micro-v1:0",
-    name: "Nova Micro",
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-    ...overrides,
-  } as never;
-}
 
 function signedThinkingContext(
   modelId: string,
@@ -61,11 +62,6 @@ function signedThinkingContext(
   } as never;
 }
 
-const startEvent = { messageStart: { role: ConversationRole.ASSISTANT } };
-const stopEvent = { messageStop: { stopReason: BedrockStopReason.END_TURN } };
-const userContext = (content = "Hello") => ({
-  messages: [{ role: "user" as const, content, timestamp: 0 }],
-});
 const textBlock = (text: string) => ({ type: "text" as const, text });
 function toolResult(toolCallId: string, content: unknown[], toolName = "inspect", isError = false) {
   return { role: "toolResult", toolCallId, toolName, content, isError };
@@ -73,38 +69,6 @@ function toolResult(toolCallId: string, content: unknown[], toolName = "inspect"
 function wireToolResult(toolUseId: string, content: unknown[], status = "success") {
   return { toolResult: { toolUseId, status, content } };
 }
-function mockStream(events: unknown[]) {
-  return vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-    $metadata: { httpStatusCode: 200 },
-    stream: streamEvents(events),
-  } as never);
-}
-async function* streamEvents(events: unknown[]) {
-  yield* events;
-}
-
-function streamBedrockForTest(
-  model: Parameters<typeof streamSimpleBedrock>[0],
-  context: Parameters<typeof streamSimpleBedrock>[1],
-  options: BedrockOptions = {},
-) {
-  return streamSimpleBedrock(model, context, options as never);
-}
-
-async function capturePayload(
-  model: Parameters<typeof streamSimpleBedrock>[0],
-  context: Parameters<typeof streamSimpleBedrock>[1],
-  options: BedrockOptions = {},
-) {
-  const send = mockStream([startEvent, stopEvent]);
-  await streamBedrockForTest(model, context, options).result();
-  const command = send.mock.calls.at(-1)?.[0];
-  if (!(command instanceof ConverseStreamCommand)) {
-    throw new Error("expected ConverseStreamCommand");
-  }
-  return command.input;
-}
-
 async function captureMessages(
   model: Parameters<typeof streamSimpleBedrock>[0],
   context: Context,
@@ -142,9 +106,7 @@ describe("Bedrock reasoning replay", () => {
       stopEvent,
     ]);
 
-    const result = await streamBedrockForTest(model, {
-      messages: [{ role: "user", content: "Think privately", timestamp: 0 }],
-    } as never).result();
+    const result = await streamBedrockForTest(model, userContext("Think privately")).result();
 
     expect(result.content).toEqual([
       {
@@ -309,29 +271,24 @@ describe("Bedrock prompt cache ownership", () => {
     } satisfies Context["messages"][number];
     const context: Context = {
       messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "OpenClaw runtime context:\nFirst request" },
-            { type: "text", text: "Retained context one" },
+        runtimeUser(
+          [
+            textBlock("OpenClaw runtime context:\nFirst request"),
+            textBlock("Retained context one"),
           ],
-          timestamp: 0,
-          runtimeContext: {},
-        },
+          0,
+        ),
         previousAssistant,
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "OpenClaw runtime context:\nSecond request" },
-            { type: "text", text: "Retained context two" },
-            ...Array.from({ length: 21 }, (_, index) => ({
-              type: "text" as const,
-              text: `Attached document block ${index}`,
-            })),
+        runtimeUser(
+          [
+            textBlock("OpenClaw runtime context:\nSecond request"),
+            textBlock("Retained context two"),
+            ...Array.from({ length: 21 }, (_, index) =>
+              textBlock(`Attached document block ${index}`),
+            ),
           ],
-          timestamp: 2,
-          runtimeContext: {},
-        },
+          2,
+        ),
       ],
     };
     const first = await captureMessages(model, context, { cacheRetention: "short" });
@@ -472,13 +429,7 @@ describe("Bedrock token usage", () => {
       cacheWrite1h: 6,
       totalTokens: 105,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
-    });
-    expect(result.usage.cost).toMatchObject({
-      input: 20,
-      output: 10,
-      cacheRead: 35,
-      cacheWrite: 17,
-      total: 82,
+      cost: { input: 20, output: 10, cacheRead: 35, cacheWrite: 17, total: 82 },
     });
   });
 });
@@ -617,25 +568,8 @@ async function readBedrockFrames(options: {
     );
   });
   try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback address");
-    }
-    const model = {
-      id: "amazon.nova-micro-v1:0",
-      name: "Bedrock preview fixture",
-      provider: "amazon-bedrock",
-      api: "bedrock-converse-stream",
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 128_000,
-      maxTokens: 4096,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    } satisfies Model<"bedrock-converse-stream">;
+    const baseUrl = await listen(server);
+    const model = bedrockModel({ name: "Bedrock preview fixture", baseUrl, reasoning: false });
     const stream = streamSimpleBedrock(
       model,
       {
@@ -663,10 +597,7 @@ async function readBedrockFrames(options: {
     abort.abort();
     release();
     signal.removeEventListener("abort", release);
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeServer(server);
   }
 }
 
@@ -801,25 +732,9 @@ it.for([false, true])(
   },
 );
 
-function expectDestroyedClient(
-  send: ReturnType<typeof vi.spyOn>,
-  destroy: ReturnType<typeof vi.spyOn>,
-) {
-  expect(send).toHaveBeenCalledOnce();
-  expect(destroy).toHaveBeenCalledOnce();
-  expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
-  expect(destroy.mock.invocationCallOrder[0]).toBeGreaterThan(
-    send.mock.invocationCallOrder[0] ?? 0,
-  );
-}
-
 describe("Bedrock stream client lifecycle", () => {
   function streamDefaultBedrock(options: Parameters<typeof streamSimpleBedrock>[2] = {}) {
-    return streamSimpleBedrock(
-      bedrockModel({}),
-      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
-      options,
-    );
+    return streamSimpleBedrock(bedrockModel(), userContext(), options);
   }
 
   it("destroys the client after a successful stream", async () => {
@@ -831,10 +746,10 @@ describe("Bedrock stream client lifecycle", () => {
       await streamReleased.promise;
       yield { messageStop: { stopReason: BedrockStopReason.END_TURN } };
     }
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200, requestId: "bedrock-request-1" },
-      stream: successfulStream(),
-    } as never);
+    const send = mockResponse(successfulStream(), {
+      httpStatusCode: 200,
+      requestId: "bedrock-request-1",
+    });
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
     const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
@@ -869,10 +784,7 @@ describe("Bedrock stream client lifecycle", () => {
         return this;
       },
     };
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: responseIterator,
-    } as never);
+    const send = mockResponse(responseIterator);
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
     const hookError = new Error("acceptance observer failed");
     const options = withProviderAcceptanceObserver({}, () => {
@@ -889,51 +801,25 @@ describe("Bedrock stream client lifecycle", () => {
     expectDestroyedClient(send, destroy);
   });
 
-  it.each([
-    {
-      label: "tool-only output",
-      blocks: [
-        {
-          contentBlockStart: {
-            contentBlockIndex: 0,
-            start: { toolUse: { toolUseId: "call_lookup", name: "lookup" } },
-          },
-        },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { toolUse: { input: '{"query":"partial"}' } },
-          },
-        },
-        { contentBlockStop: { contentBlockIndex: 0 } },
-      ],
-      content: [],
-    },
-  ])("keeps failures after $label out of transport-drop recovery", async ({ blocks, content }) => {
+  it("keeps failures after tool-only output out of transport-drop recovery", async () => {
     async function* failingStream() {
-      yield { messageStart: { role: ConversationRole.ASSISTANT } };
-      yield* blocks;
+      yield startEvent;
+      yield startToolEvent(0, "call_lookup", "lookup");
+      yield toolDeltaEvent(0, '{"query":"partial"}');
+      yield { contentBlockStop: { contentBlockIndex: 0 } };
       throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     }
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: failingStream(),
-    } as never);
+    const send = mockResponse(failingStream());
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
 
-    const stream = streamDefaultBedrock();
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
-    const result = await stream.result();
+    const { eventTypes, result } = await collectStream(streamDefaultBedrock());
 
     expect(result).toMatchObject({
       stopReason: "error",
       errorMessage: "socket hang up",
       errorCode: "ECONNRESET",
     });
-    expect(result.content).toEqual(content);
+    expect(result.content).toEqual([]);
     expect(result.diagnostics).toBeUndefined();
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes.at(-1)).toBe("error");

@@ -6,113 +6,32 @@ import {
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
+import {
+  bedrockModel,
+  capturePayload as captureCommandInput,
+  collectStream,
+  expectDestroyedClient,
+  mockResponse,
+  mockStream,
+  startEvent as startMessage,
+  stopEvent as stopMessage,
+  streamBedrockForTest,
+  toolStart,
+  toolDelta,
+  textDelta,
+  userContext,
+} from "./bedrock.test-support.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
-
-function bedrockModel(overrides: Record<string, unknown>) {
-  return {
-    api: "bedrock-converse-stream",
-    provider: "amazon-bedrock",
-    id: "amazon.nova-micro-v1:0",
-    name: "Nova Micro",
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-    ...overrides,
-  } as never;
-}
-
-async function* streamEvents(events: unknown[]) {
-  yield* events;
-}
-
-const startMessage = { messageStart: { role: ConversationRole.ASSISTANT } };
-const stopMessage = { messageStop: { stopReason: BedrockStopReason.END_TURN } };
-const userContext = (content = "Hello") => ({
-  messages: [{ role: "user" as const, content, timestamp: 0 }],
-});
-function mockStream(events: unknown[]) {
-  return vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-    $metadata: { httpStatusCode: 200 },
-    stream: streamEvents(events),
-  } as never);
-}
-async function collectStream(stream: ReturnType<typeof streamSimpleBedrock>) {
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
-  return { eventTypes, result: await stream.result() };
-}
-const toolStart = (contentBlockIndex: number, toolUseId: string) => ({
-  contentBlockStart: { contentBlockIndex, start: { toolUse: { toolUseId, name: "read" } } },
-});
-const toolDelta = (contentBlockIndex: number, input: string) => ({
-  contentBlockDelta: { contentBlockIndex, delta: { toolUse: { input } } },
-});
-
-const textDelta = (text: string) => ({
-  contentBlockDelta: { contentBlockIndex: 0, delta: { text } },
-});
 function toolResult(toolCallId: string, toolName: string, content: unknown[]) {
   return { role: "toolResult", toolCallId, toolName, content, isError: false };
 }
 
-function streamBedrockForTest(
-  model: Parameters<typeof streamSimpleBedrock>[0],
-  context: Parameters<typeof streamSimpleBedrock>[1],
-  options: BedrockOptions = {},
-) {
-  return streamSimpleBedrock(model, context, options as never);
-}
-
-async function captureCommandInput(
-  model: Parameters<typeof streamSimpleBedrock>[0],
-  context: Parameters<typeof streamSimpleBedrock>[1],
-  options: BedrockOptions = {},
-  validateRequest?: (input: Record<string, unknown>) => void,
-): Promise<Record<string, unknown>> {
-  const response = {
-    $metadata: { httpStatusCode: 200 },
-    stream: streamEvents([startMessage, stopMessage]),
-  };
-  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
-  if (validateRequest) {
-    send.mockImplementation((command) => {
-      const input = (command as unknown as { input?: Record<string, unknown> }).input;
-      if (!input) {
-        throw new Error("expected ConverseStreamCommand input");
-      }
-      validateRequest(input);
-      return response as never;
-    });
-  } else {
-    send.mockResolvedValue(response as never);
-  }
-  const result = await streamBedrockForTest(model, context, options).result();
-  if (validateRequest && result.stopReason !== "stop") {
-    throw new Error(
-      `Bedrock request fixture rejected replay: ${result.errorMessage ?? result.stopReason}`,
-    );
-  }
-  const command = send.mock.calls.at(-1)?.[0] as { input?: Record<string, unknown> } | undefined;
-  if (!command?.input) {
-    throw new Error("expected ConverseStreamCommand input");
-  }
-  return command.input;
-}
-
-function findToolUse(input: Record<string, unknown>) {
-  const messages = input.messages as Array<{
-    content?: Array<{ toolUse?: { input?: unknown } }>;
-  }>;
-  return messages.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
+function findToolUse(input: Awaited<ReturnType<typeof captureCommandInput>>) {
+  return input.messages?.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
     ?.toolUse;
 }
 
-function expectObjectToolUseInput(input: Record<string, unknown>): void {
+function expectObjectToolUseInput(input: Awaited<ReturnType<typeof captureCommandInput>>): void {
   const toolInput = findToolUse(input)?.input;
   expect(toolInput).toEqual(expect.any(Object));
   expect(Array.isArray(toolInput)).toBe(false);
@@ -147,12 +66,7 @@ it("destroys the client after an aborted Bedrock request", async () => {
   }).result();
 
   expect(result).toMatchObject({ stopReason: "aborted", errorMessage: "synthetic abort" });
-  expect(send).toHaveBeenCalledOnce();
-  expect(destroy).toHaveBeenCalledOnce();
-  expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
-  expect(destroy.mock.invocationCallOrder[0]).toBeGreaterThan(
-    send.mock.invocationCallOrder[0] ?? 0,
-  );
+  expectDestroyedClient(send, destroy);
 });
 
 it.each([
@@ -195,18 +109,14 @@ describe("Bedrock inbound image base64", () => {
     const png =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const nodeBuffer = globalThis.Buffer;
-    let input: Record<string, unknown>;
+    let input: Awaited<ReturnType<typeof captureCommandInput>>;
     try {
       Reflect.deleteProperty(globalThis, "Buffer");
       input = await captureCommandInput(model(), userImage(png));
     } finally {
       Reflect.set(globalThis, "Buffer", nodeBuffer);
     }
-    const messages = input.messages as Array<{ content?: unknown }>;
-    const content = messages[0]?.content as Array<{
-      image?: { source?: { bytes?: Uint8Array } };
-    }>;
-    expect(content[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
+    expect(input.messages?.[0]?.content?.[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
   });
 });
 
@@ -467,7 +377,7 @@ describe("Bedrock thinking request composition", () => {
       reasoning: "off" as const,
       expectedEffort: "low",
     },
-  ])("sends $name policy in the final request", async (testCase) => {
+  ] as const)("sends $name policy in the final request", async (testCase) => {
     const options = testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning };
     const input = await captureCommandInput(
       bedrockModel({ ...testCase.modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
@@ -647,10 +557,7 @@ describe("Bedrock Fable contract", () => {
         throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
       }
     }
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: incompleteStream(),
-    } as never);
+    const send = mockResponse(incompleteStream());
     const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
 
     const { eventTypes, result } = await collectStream(
@@ -667,9 +574,7 @@ describe("Bedrock Fable contract", () => {
     } else {
       expect(result.errorMessage).toContain("ended before messageStop");
     }
-    expect(send).toHaveBeenCalledOnce();
-    expect(destroy).toHaveBeenCalledOnce();
-    expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
+    expectDestroyedClient(send, destroy);
   });
 
   it("reports activity while Fable events are buffered", async () => {

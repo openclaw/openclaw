@@ -5,6 +5,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { bedrockModel, runtimeUser } from "./bedrock.test-support.js";
 import amazonBedrockPlugin from "./index.js";
 
 type InferenceProfileResult =
@@ -66,35 +67,16 @@ const sendBedrockCommand = vi.fn(
   },
 );
 
-vi.mock("@aws-sdk/client-bedrock", () => {
-  class GetInferenceProfileCommand {
-    constructor(readonly input: { inferenceProfileIdentifier: string }) {}
-  }
-
-  class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-
-  class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-
-  class BedrockClient {
+vi.mock("@aws-sdk/client-bedrock", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@aws-sdk/client-bedrock")>()),
+  BedrockClient: class {
     constructor(config: Record<string, unknown> = {}) {
       bedrockClientConfigs.push(config);
     }
-
     send = sendBedrockCommand;
     destroy = destroyBedrockClient;
-  }
-
-  return {
-    BedrockClient,
-    GetInferenceProfileCommand,
-    ListFoundationModelsCommand,
-    ListInferenceProfilesCommand,
-  };
-});
+  },
+}));
 
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
@@ -115,17 +97,7 @@ const spyStreamFn = (_model: unknown, _context: unknown, options: Record<string,
 const ANTHROPIC_MODEL = "us.anthropic.claude-sonnet-4-6-v1";
 const NON_ANTHROPIC_MODEL = "amazon.nova-sonic-v1:0";
 
-const MODEL_DESCRIPTOR = {
-  api: "openai-completions",
-  provider: "amazon-bedrock",
-  id: NON_ANTHROPIC_MODEL,
-} as never;
-
-const ANTHROPIC_MODEL_DESCRIPTOR = {
-  api: "openai-completions",
-  provider: "amazon-bedrock",
-  id: ANTHROPIC_MODEL,
-} as never;
+const MODEL_DESCRIPTOR = makeAppInferenceProfileDescriptor(NON_ANTHROPIC_MODEL);
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
@@ -227,16 +199,6 @@ async function callBedrockConverse(
   );
 }
 
-function expectWrappedResultFields(result: unknown, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(result).toHaveProperty(key, value);
-  }
-}
-
-function expectPayloadServiceTier(result: Record<string, unknown>, type: string) {
-  expect(result).toHaveProperty("capturedPayload.serviceTier", { type });
-}
-
 describe("amazon-bedrock provider plugin", () => {
   beforeEach(() => {
     inferenceProfileGetResults.length = 0;
@@ -299,16 +261,11 @@ describe("amazon-bedrock provider plugin", () => {
       provider: "amazon-bedrock",
       modelId: "us.anthropic.claude-opus-4-6-v1",
       model: {
-        id: "us.anthropic.claude-opus-4-6-v1",
-        name: "Claude Opus 4.6",
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_000_000,
-        maxTokens: 4096,
+        ...bedrockModel({
+          id: "us.anthropic.claude-opus-4-6-v1",
+          name: "Claude Opus 4.6",
+          contextWindow: 1_000_000,
+        }),
       },
     } as never);
 
@@ -348,7 +305,7 @@ describe("amazon-bedrock provider plugin", () => {
       { temperature: 0.2, maxTokens: 10 },
       { model },
     );
-    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).toMatchObject({ maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
     expect(result).not.toHaveProperty("cacheRetention", "none");
   });
@@ -369,7 +326,7 @@ describe("amazon-bedrock provider plugin", () => {
         config: runtimePluginConfig({ discovery: { region: "eu-central-1" } }),
       },
     );
-    expectWrappedResultFields(result, { region: "eu-central-1" });
+    expect(result).toMatchObject({ region: "eu-central-1" });
   });
 
   it("preserves Bedrock Opus 4.6 max thinking in the final payload", async () => {
@@ -390,8 +347,10 @@ describe("amazon-bedrock provider plugin", () => {
     await (result?.onPayload as ((value: Record<string, unknown>) => unknown) | undefined)?.(
       payload,
     );
-    expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: "max" });
-    expect(payload.additionalModelRequestFields.thinking).toEqual({ type: "adaptive" });
+    expect(payload.additionalModelRequestFields).toEqual({
+      output_config: { effort: "max" },
+      thinking: { type: "adaptive" },
+    });
   });
 
   it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {
@@ -409,34 +368,29 @@ describe("amazon-bedrock provider plugin", () => {
 
   describe("guardrail payload injection", () => {
     it.each([
-      {
-        name: "injects guardrailConfig for Anthropic models without cacheRetention: none",
-        guardrail: {
+      [
+        ANTHROPIC_MODEL,
+        {
           guardrailIdentifier: "guardrail-anthropic",
           guardrailVersion: "2",
           streamProcessingMode: "async",
           trace: "disabled",
         },
-        anthropic: true,
-      },
-      {
-        name: "injects guardrailConfig for non-Anthropic models with cacheRetention: none",
-        guardrail: { guardrailIdentifier: "guardrail-nova", guardrailVersion: "3" },
-        anthropic: false,
-      },
-    ])("$name", async ({ guardrail, anthropic }) => {
+      ],
+      [NON_ANTHROPIC_MODEL, { guardrailIdentifier: "guardrail-nova", guardrailVersion: "3" }],
+    ] as const)("injects guardrails for %s", async (modelId, guardrail) => {
       const provider = await registerWithConfig({ guardrail });
       const result = await callWrappedStream(
         provider,
-        anthropic ? ANTHROPIC_MODEL : NON_ANTHROPIC_MODEL,
-        anthropic ? ANTHROPIC_MODEL_DESCRIPTOR : MODEL_DESCRIPTOR,
+        modelId,
+        makeAppInferenceProfileDescriptor(modelId),
       );
-
+      const anthropic = modelId === ANTHROPIC_MODEL;
       expect(result.capturedPayload).toEqual({ guardrailConfig: guardrail });
       if (anthropic) {
         expect(result).not.toHaveProperty("cacheRetention", "none");
       } else {
-        expectWrappedResultFields(result, { cacheRetention: "none" });
+        expect(result).toMatchObject({ cacheRetention: "none" });
       }
     });
 
@@ -455,61 +409,63 @@ describe("amazon-bedrock provider plugin", () => {
         expect(result.capturedPayload).toEqual(
           startupEnabled ? undefined : { guardrailConfig: guardrail },
         );
-        expectWrappedResultFields(result, { cacheRetention: "none" });
+        expect(result).toMatchObject({ cacheRetention: "none" });
       },
     );
   });
 
   describe("service tier", () => {
-    it("injects serviceTier for valid snake_case value ('priority')", async () => {
-      const result = await callBedrockConverse({ service_tier: "priority" });
-      expectPayloadServiceTier(result, "priority");
-    });
-
-    it("does not inject serviceTier when value is invalid", async () => {
-      const result = await callBedrockConverse({ serviceTier: "not-a-tier" });
-      expect(result).not.toHaveProperty("capturedPayload");
-    });
-
-    it.each(["fable", "opus", "sonnet"])(
-      "omits unsupported service tiers for Claude %s 5",
-      async (family) => {
-        const modelId = `us.anthropic.claude-${family}-5`;
-        const result = await callBedrockConverse({ serviceTier: "flex" }, {}, modelId);
+    it.each([
+      ["snake-case priority", NON_ANTHROPIC_MODEL, { service_tier: "priority" }, "priority"],
+      ["invalid value", NON_ANTHROPIC_MODEL, { serviceTier: "not-a-tier" }, undefined],
+      ["fable", "us.anthropic.claude-fable-5", { serviceTier: "flex" }, undefined],
+      ["opus", "us.anthropic.claude-opus-5", { serviceTier: "flex" }, undefined],
+      ["sonnet", "us.anthropic.claude-sonnet-5", { serviceTier: "flex" }, undefined],
+    ] as const)("handles %s", async (_name, modelId, params, tier) => {
+      const result = await callBedrockConverse(params, {}, modelId);
+      if (tier) {
+        expect(result).toHaveProperty("capturedPayload.serviceTier", { type: tier });
+      } else {
         expect(result).not.toHaveProperty("capturedPayload");
-      },
-    );
+      }
+    });
   });
 
   describe("application inference profile cache point injection", () => {
-    async function callWrappedStreamWithPayload(
-      provider: RegisteredProviderPlugin,
-      modelId: string,
-      options: Record<string, unknown>,
+    async function applyProfilePayload(
       payload: Record<string, unknown>,
-      context: Context = { messages: [] },
-      modelDescriptor: Model = makeAppInferenceProfileDescriptor(modelId),
-    ): Promise<Record<string, unknown>> {
-      const result = wrappedOptions(
+      {
         provider,
-        modelDescriptor,
+        id = APP_INFERENCE_PROFILE_ARN,
+        options = {},
+        context = { messages: [] },
+        model = makeAppInferenceProfileDescriptor(id),
+      }: {
+        provider?: RegisteredProviderPlugin;
+        id?: string;
+        options?: Record<string, unknown>;
+        context?: Context;
+        model?: Model;
+      } = {},
+    ) {
+      const result = wrappedOptions(
+        provider ?? (await registerWithConfig()),
+        model,
         options,
-        { modelId, model: modelDescriptor },
+        { modelId: id, model },
         context,
       );
-
       if (typeof result?.onPayload === "function") {
         await (
           result.onPayload as (p: Record<string, unknown>, model: unknown) => Promise<unknown>
-        )(payload, modelDescriptor);
+        )(payload, model);
       }
       return payload;
     }
 
     it("defaults to short cache retention when not explicitly set", async () => {
-      const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
-      await callWrappedStreamWithPayload(provider, APP_INFERENCE_PROFILE_ARN, {}, payload);
+      await applyProfilePayload(payload);
       expect(payload.system).toEqual([
         { text: "You are helpful." },
         { cachePoint: { type: "default" } },
@@ -521,23 +477,13 @@ describe("amazon-bedrock provider plugin", () => {
         system: [{ text: "Stable workspace" }, { text: "Dynamic suffix" }],
         messages: [{ role: "user", content: [{ text: BEDROCK_RUNTIME_CONTEXT }] }],
       };
-      await callWrappedStreamWithPayload(
-        await registerWithConfig(undefined),
-        APP_INFERENCE_PROFILE_ARN,
-        { cacheRetention: "long" },
-        payload,
-        {
+      await applyProfilePayload(payload, {
+        options: { cacheRetention: "long" },
+        context: {
           systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-          messages: [
-            {
-              role: "user",
-              content: BEDROCK_RUNTIME_CONTEXT,
-              timestamp: 0,
-              runtimeContext: {},
-            },
-          ],
+          messages: [runtimeUser(BEDROCK_RUNTIME_CONTEXT, 0)],
         },
-      );
+      });
       expect(payload.system).toEqual([
         { text: "Stable workspace" },
         { cachePoint: { type: "default", ttl: "1h" } },
@@ -547,7 +493,6 @@ describe("amazon-bedrock provider plugin", () => {
     });
 
     it("leaves canonical-profile runtime checkpoints unchanged", async () => {
-      const provider = await registerWithConfig(undefined);
       const payload = {
         system: [
           { text: "Stable workspace" },
@@ -563,41 +508,29 @@ describe("amazon-bedrock provider plugin", () => {
         ],
       };
       const expected = structuredClone(payload);
-      await callWrappedStreamWithPayload(
-        provider,
-        APP_INFERENCE_PROFILE_ARN,
-        { cacheRetention: "short" },
-        payload,
-        {
+      await applyProfilePayload(payload, {
+        options: { cacheRetention: "short" },
+        context: {
           messages: [
             { role: "user", content: "Stable request", timestamp: 0 },
-            {
-              role: "user",
-              content: BEDROCK_RUNTIME_CONTEXT,
-              timestamp: 1,
-              runtimeContext: {},
-            },
+            runtimeUser(BEDROCK_RUNTIME_CONTEXT, 1),
           ],
         },
-        {
-          id: APP_INFERENCE_PROFILE_ARN,
-          provider: "amazon-bedrock",
-          api: "bedrock-converse-stream",
-          name: "Test profile",
-          params: { canonicalModelId: "claude-haiku-4-5" },
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 200000,
-          maxTokens: 1024,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        model: {
+          ...bedrockModel({
+            id: APP_INFERENCE_PROFILE_ARN,
+            name: "Test profile",
+            params: { canonicalModelId: "claude-haiku-4-5" },
+            reasoning: false,
+            contextWindow: 200000,
+            maxTokens: 1024,
+          }),
         },
-      );
+      });
       expect(payload).toEqual(expected);
     });
 
     it("keeps the latest two user checkpoints across a large new content batch", async () => {
-      const provider = await registerWithConfig(undefined);
       const payload = {
         system: [{ text: "You are helpful." }],
         messages: [
@@ -610,12 +543,7 @@ describe("amazon-bedrock provider plugin", () => {
         ],
       };
 
-      await callWrappedStreamWithPayload(
-        provider,
-        APP_INFERENCE_PROFILE_ARN,
-        { cacheRetention: "short" },
-        payload,
-      );
+      await applyProfilePayload(payload, { options: { cacheRetention: "short" } });
 
       expect(payload.messages[0]?.content).toEqual([
         { text: "First question" },
@@ -630,10 +558,9 @@ describe("amazon-bedrock provider plugin", () => {
       const targets = ["anthropic.claude-sonnet-4-6", "anthropic.claude-3-7-sonnet-20250219-v1:0"];
       const modelId = `arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/cache-ttl-mixed`;
       queueProfileTargets(targets);
-      const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
 
-      await callWrappedStreamWithPayload(provider, modelId, { cacheRetention: "long" }, payload);
+      await applyProfilePayload(payload, { id: modelId, options: { cacheRetention: "long" } });
 
       const system = payload.system as Array<Record<string, unknown>>;
       const cachePoint = { type: "default" };
@@ -651,17 +578,18 @@ describe("amazon-bedrock provider plugin", () => {
     it("omits temperature after resolving opaque profiles without a display name", async () => {
       const modelId = `arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/opus-temperature-unnamed`;
       queueProfileTargets(["anthropic.claude-opus-4.7-v1:0"], "us-west-2");
-      const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload("Hello", {
         inferenceConfig: { temperature: 0.3, maxTokens: 10 },
       });
 
-      await callWrappedStreamWithPayload(
-        provider,
-        modelId,
-        { temperature: 0.3, maxTokens: 10, cacheRetention: "none" },
-        payload,
-      );
+      await applyProfilePayload(payload, {
+        id: modelId,
+        options: {
+          temperature: 0.3,
+          maxTokens: 10,
+          cacheRetention: "none",
+        },
+      });
 
       expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
@@ -673,10 +601,9 @@ describe("amazon-bedrock provider plugin", () => {
     it("keeps opaque profile caching disabled for a resolved Nova target", async () => {
       const modelId = `arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-nova`;
       queueProfileTargets(["anthropic.claude-sonnet-4-6-20250514-v1:0", "amazon.nova-pro-v1:0"]);
-      const provider = await registerWithConfig(undefined);
       const payload = buildBedrockCachePayload();
 
-      await callWrappedStreamWithPayload(provider, modelId, { cacheRetention: "short" }, payload);
+      await applyProfilePayload(payload, { id: modelId, options: { cacheRetention: "short" } });
 
       expect(payload.system).toEqual([{ text: "You are helpful." }]);
       expect(payload.messages).toEqual([{ role: "user", content: [{ text: "Hello" }] }]);
@@ -694,12 +621,11 @@ describe("amazon-bedrock provider plugin", () => {
         const firstPayload = buildBedrockCachePayload();
         const secondPayload = buildBedrockCachePayload("Hello again");
 
-        const firstRequest = callWrappedStreamWithPayload(
+        const firstRequest = applyProfilePayload(firstPayload, {
           provider,
-          modelId,
-          { cacheRetention: "short" },
-          firstPayload,
-        );
+          id: modelId,
+          options: { cacheRetention: "short" },
+        });
         const firstSignal = await firstStarted.promise;
         await vi.advanceTimersByTimeAsync(30_000);
         await expect(firstRequest).resolves.toBe(firstPayload);
@@ -709,12 +635,11 @@ describe("amazon-bedrock provider plugin", () => {
         expect(firstPayload.system).toEqual([{ text: "You are helpful." }]);
         expect(destroyBedrockClient).toHaveBeenCalledTimes(1);
 
-        await callWrappedStreamWithPayload(
+        await applyProfilePayload(secondPayload, {
           provider,
-          modelId,
-          { cacheRetention: "short" },
-          secondPayload,
-        );
+          id: modelId,
+          options: { cacheRetention: "short" },
+        });
 
         expect(secondPayload.system).toEqual([
           { text: "You are helpful." },
@@ -743,12 +668,15 @@ describe("amazon-bedrock provider plugin", () => {
           inferenceConfig: { temperature: 0.3 },
         });
 
-        const request = callWrappedStreamWithPayload(
+        const request = applyProfilePayload(payload, {
           provider,
-          modelId,
-          { cacheRetention: "short", temperature: 0.3, signal: controller.signal },
-          payload,
-        );
+          id: modelId,
+          options: {
+            cacheRetention: "short",
+            temperature: 0.3,
+            signal: controller.signal,
+          },
+        });
         await started.promise;
         controller.abort(reason);
 

@@ -66,6 +66,16 @@ function buildBedrockProfile(
 }
 
 const sonnetId = "anthropic.claude-sonnet-4-6";
+const opusId = "anthropic.claude-opus-4.8-v1:0";
+const fableId = "anthropic.claude-fable-5";
+function sonnetProfile(prefix: string, models = [sonnetId]) {
+  const title = prefix === "global" ? "Global" : prefix.toUpperCase();
+  return buildBedrockProfile(
+    `${prefix}.${sonnetId}`,
+    `${title} Anthropic Claude Sonnet 4.6`,
+    models,
+  );
+}
 const sonnetSummary = () =>
   buildActiveAnthropicSummary(sonnetId, "Claude Sonnet 4.6", ["TEXT", "IMAGE"]);
 function mockProfileOnly(
@@ -77,12 +87,18 @@ function mockProfileOnly(
   mockBedrockDiscovery([], [buildBedrockProfile(id, name, foundation, options)]);
 }
 
-function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSummary> = {}): void {
-  mockBedrockDiscovery([{ ...baseActiveAnthropicSummary, ...overrides }]);
-}
-
 function expectModelFields(model: unknown, expected: Record<string, unknown>): void {
   expect(model).toEqual(expect.objectContaining(expected));
+}
+function expectModel(
+  models: Awaited<ReturnType<typeof discoverBedrockModels>>,
+  id: string,
+  expected: Record<string, unknown>,
+) {
+  expectModelFields(
+    models.find((model) => model.id === id),
+    expected,
+  );
 }
 
 function discoverFreshBedrockModels(
@@ -95,6 +111,15 @@ function discoverFreshBedrockModels(
   });
 }
 
+async function discoverFixture(
+  foundations: Record<string, unknown>[],
+  profiles: Record<string, unknown>[] = [],
+  params: Parameters<typeof discoverFreshBedrockModels>[0] = { region: "us-east-1" },
+) {
+  mockBedrockDiscovery(foundations, profiles);
+  return discoverFreshBedrockModels(params);
+}
+
 describe("bedrock discovery", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
@@ -103,7 +128,7 @@ describe("bedrock discovery", () => {
   });
 
   it("filters to active streaming text models and maps modalities", async () => {
-    mockBedrockDiscovery([
+    const models = await discoverFixture([
       buildActiveAnthropicSummary(
         "anthropic.claude-3-7-sonnet-20250219-v1:0",
         "Claude 3.7 Sonnet",
@@ -125,8 +150,6 @@ describe("bedrock discovery", () => {
         outputModalities: ["EMBEDDING"],
       },
     ]);
-
-    const models = await discoverFreshBedrockModels();
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -139,14 +162,15 @@ describe("bedrock discovery", () => {
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("applies provider filter", async () => {
-    mockSingleActiveSummary();
-
-    const models = await discoverFreshBedrockModels({
+  it.each([
+    ["amazon", []],
+    ["anthropic", [`global.${sonnetId}`, sonnetId]],
+  ] as const)("applies the %s filter to foundations and profiles", async (provider, expected) => {
+    const models = await discoverFixture([sonnetSummary()], [sonnetProfile("global")], {
       region: "us-east-1",
-      config: { providerFilter: ["amazon"] },
+      config: { providerFilter: [provider] },
     });
-    expect(models).toHaveLength(0);
+    expect(models.map((model) => model.id)).toEqual(expected);
   });
 
   it("keeps the conservative fallback for unknown inference profiles", async () => {
@@ -203,71 +227,47 @@ describe("bedrock discovery", () => {
     expect(models).toEqual([]);
   });
 
-  it("uses 1M context window for dotted Claude Opus 4.8 Bedrock refs", async () => {
-    mockBedrockDiscovery(
-      [buildActiveAnthropicSummary("anthropic.claude-opus-4.8-v1:0", "Claude Opus 4.8")],
-      [
-        buildBedrockProfile("us.anthropic.claude-opus-4.8-v1:0", "US Claude Opus 4.8", [
-          "anthropic.claude-opus-4.8-v1:0",
-        ]),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels();
-
-    expectModelFields(
-      models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
+  it.each([
+    [
+      opusId,
+      "Claude Opus 4.8",
+      `us.${opusId}`,
+      "US Claude Opus 4.8",
+      ["TEXT"],
+      "SYSTEM_DEFINED",
       {
         contextWindow: 1_000_000,
         reasoning: true,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       },
-    );
-    expectModelFields(
-      models.find((model) => model.id === "us.anthropic.claude-opus-4.8-v1:0"),
+      {},
+    ],
+    [
+      fableId,
+      "Claude Fable 5",
+      "company-fable",
+      "Company Fable",
+      ["TEXT", "IMAGE"],
+      "APPLICATION",
       {
         contextWindow: 1_000_000,
         reasoning: true,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        maxTokens: 128_000,
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
       },
-    );
-  });
-
-  it("applies Fable limits and reasoning metadata to foundation and profile models", async () => {
-    mockBedrockDiscovery(
-      [
-        buildActiveAnthropicSummary("anthropic.claude-fable-5", "Claude Fable 5", [
-          "TEXT",
-          "IMAGE",
-        ]),
-      ],
-      [
-        buildBedrockProfile("company-fable", "Company Fable", ["anthropic.claude-fable-5"], {
-          type: "APPLICATION",
-        }),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels();
-    const expected = {
-      reasoning: true,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-    };
-
-    expectModelFields(
-      models.find((model) => model.id === "anthropic.claude-fable-5"),
-      expected,
-    );
-    expectModelFields(
-      models.find((model) => model.id === "company-fable"),
-      {
-        ...expected,
-        params: { canonicalModelId: "claude-fable-5" },
-      },
-    );
-  });
+      { params: { canonicalModelId: "claude-fable-5" } },
+    ],
+  ] as const)(
+    "inherits %s capabilities in foundation and profile discovery",
+    async (id, name, profileId, profileName, input, type, expected, profileFields) => {
+      const models = await discoverFixture(
+        [buildActiveAnthropicSummary(id, name, [...input])],
+        [buildBedrockProfile(profileId, profileName, [id], { type })],
+      );
+      expectModel(models, id, expected);
+      expectModel(models, profileId, { ...expected, ...profileFields });
+    },
+  );
 
   it("aborts stalled Bedrock model discovery requests", async () => {
     vi.useFakeTimers();
@@ -306,25 +306,19 @@ describe("bedrock discovery", () => {
 
   it("discovers inference profiles and inherits foundation model capabilities", async () => {
     const foundationId = "anthropic.claude-sonnet-4-6";
-    mockBedrockDiscovery(
+    const models = await discoverFixture(
       [buildActiveAnthropicSummary(foundationId, "Claude Sonnet 4.6", ["TEXT", "IMAGE"])],
       [
-        buildBedrockProfile("us.anthropic.claude-sonnet-4-6", "US Anthropic Claude Sonnet 4.6", [
+        sonnetProfile("us", [
           foundationId,
-          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-6",
+          `arn:aws:bedrock:us-west-2::foundation-model/${foundationId}`,
         ]),
-        buildBedrockProfile(
-          "global.anthropic.claude-sonnet-4-6",
-          "Global Anthropic Claude Sonnet 4.6",
-          [foundationId],
-        ),
+        sonnetProfile("global"),
         buildBedrockProfile("ap.anthropic.claude-sonnet-4-6", "AP Claude Sonnet 4.6", [], {
           status: "LEGACY",
         }),
       ],
     );
-
-    const models = await discoverFreshBedrockModels();
 
     expect(models).toHaveLength(3);
     expect(models[0]?.id).toBe("global.anthropic.claude-sonnet-4-6");
@@ -452,31 +446,8 @@ describe("bedrock discovery", () => {
     },
   );
 
-  it("keeps matching inference profiles when provider filters are enabled", async () => {
-    mockBedrockDiscovery(
-      [sonnetSummary()],
-      [
-        buildBedrockProfile(
-          "global.anthropic.claude-sonnet-4-6",
-          "Global Anthropic Claude Sonnet 4.6",
-          ["anthropic.claude-sonnet-4-6"],
-        ),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels({
-      region: "us-east-1",
-      config: { providerFilter: ["anthropic"] },
-    });
-
-    expect(models.map((model) => model.id)).toEqual([
-      "global.anthropic.claude-sonnet-4-6",
-      "anthropic.claude-sonnet-4-6",
-    ]);
-  });
-
   it("uses the plugin default when both region env overrides are blank", async () => {
-    mockSingleActiveSummary();
+    mockBedrockDiscovery([baseActiveAnthropicSummary]);
     const provider = await resolveImplicitBedrockProvider({
       pluginConfig: { discovery: { enabled: true, refreshInterval: 0 } },
       env: { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
@@ -486,31 +457,25 @@ describe("bedrock discovery", () => {
 
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
   it("resolves au. and apac. prefixes for regional inference profiles", async () => {
-    mockBedrockDiscovery(
+    const models = await discoverFixture(
       [sonnetSummary()],
       [
         // Empty model ARNs intentionally force the regional prefix fallback.
-        buildBedrockProfile("au.anthropic.claude-sonnet-4-6", "AU Anthropic Claude Sonnet 4.6"),
-        buildBedrockProfile("apac.anthropic.claude-sonnet-4-6", "APAC Anthropic Claude Sonnet 4.6"),
+        sonnetProfile("au", []),
+        sonnetProfile("apac", []),
       ],
+      { region: "ap-southeast-2" },
     );
-
-    const models = await discoverFreshBedrockModels({ region: "ap-southeast-2" });
 
     expect(models).toHaveLength(3);
 
-    const auProfile = models.find((m) => m.id === "au.anthropic.claude-sonnet-4-6");
-    expectModelFields(auProfile, {
-      id: "au.anthropic.claude-sonnet-4-6",
-      name: "AU Anthropic Claude Sonnet 4.6",
-      input: ["text", "image"],
-    });
-
-    const apacProfile = models.find((m) => m.id === "apac.anthropic.claude-sonnet-4-6");
-    expectModelFields(apacProfile, {
-      id: "apac.anthropic.claude-sonnet-4-6",
-      name: "APAC Anthropic Claude Sonnet 4.6",
-      input: ["text", "image"],
-    });
+    for (const prefix of ["au", "apac"]) {
+      const id = `${prefix}.${sonnetId}`;
+      expectModel(models, id, {
+        id,
+        name: `${prefix.toUpperCase()} Anthropic Claude Sonnet 4.6`,
+        input: ["text", "image"],
+      });
+    }
   });
 });

@@ -6,6 +6,13 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  bedrockModel,
+  closeServer,
+  listen,
+  streamEvents,
+  userContext,
+} from "./bedrock.test-support.js";
 import { loadBedrockControlPlaneSdk } from "./control-plane.js";
 import { createBedrockEmbeddingProvider } from "./embedding-provider.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
@@ -17,38 +24,44 @@ async function withAwsServer(
   endpointEnv: string,
   run: () => Promise<void>,
 ) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  vi.stubEnv(endpointEnv, await listen(server));
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected loopback listener");
-    }
-    vi.stubEnv(endpointEnv, `http://127.0.0.1:${address.port}`);
     await run();
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeServer(server);
   }
 }
 
-function captureEmbeddingCredentials() {
+function captureCredentials(embedding = true) {
   const resolved: string[] = [];
   const pending: Promise<void>[] = [];
+  const capture = (client: BedrockClient | BedrockRuntimeClient) => {
+    pending.push(
+      client.config.credentials().then(({ accessKeyId, sessionToken }) => {
+        resolved.push(embedding ? accessKeyId : `${accessKeyId}/${sessionToken}`);
+      }),
+    );
+  };
   vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
     this: BedrockRuntimeClient,
   ) {
-    pending.push(
-      this.config.credentials().then((credentials) => {
-        resolved.push(credentials.accessKeyId);
-      }),
-    );
-    return { $metadata: {}, body: new TextEncoder().encode('{"embedding":[1,0]}') };
+    capture(this);
+    return embedding
+      ? { $metadata: {}, body: new TextEncoder().encode('{"embedding":[1,0]}') }
+      : { $metadata: {}, stream: streamEvents([{ messageStop: { stopReason: "end_turn" } }]) };
   });
+  if (!embedding) {
+    vi.spyOn(BedrockClient.prototype, "send").mockImplementation(function (this: BedrockClient) {
+      capture(this);
+      return { $metadata: {}, modelSummaries: [] };
+    });
+  }
   return { resolved, settled: () => Promise.all(pending) };
+}
+
+function awsFiles(prefix: string) {
+  const dir = tempDirs.make(prefix);
+  return { credentialsFile: path.join(dir, "credentials"), configFile: path.join(dir, "config") };
 }
 
 function useAwsFiles(credentialsFile: string, configFile: string) {
@@ -60,9 +73,7 @@ function useAwsFiles(credentialsFile: string, configFile: string) {
 }
 
 it("shares role credentials across embedding batches and refreshes after expiry", async () => {
-  const dir = tempDirs.make("bedrock-embedding-role-");
-  const credentialsFile = path.join(dir, "credentials");
-  const configFile = path.join(dir, "config");
+  const { credentialsFile, configFile } = awsFiles("bedrock-embedding-role-");
   await writeFile(credentialsFile, "");
   await writeFile(configFile, "");
   useAwsFiles(credentialsFile, configFile);
@@ -89,7 +100,7 @@ it("shares role credentials across embedding batches and refreshes after expiry"
     }
   });
   await withAwsServer(server, "AWS_EC2_METADATA_SERVICE_ENDPOINT", async () => {
-    const { resolved, settled } = captureEmbeddingCredentials();
+    const { resolved, settled } = captureCredentials();
     const { provider } = await createBedrockEmbeddingProvider({ config: {}, model: "" });
     const inputs = Array.from({ length: 20 }, (_, i) => `memory ${i}`);
     expect(await provider.embedBatch(inputs)).toEqual(inputs.map(() => [1, 0]));
@@ -107,9 +118,7 @@ it("shares role credentials across embedding batches and refreshes after expiry"
 });
 
 it("refreshes an unexpired profile role while preserving the Bedrock region", async () => {
-  const dir = tempDirs.make("bedrock-embedding-role-region-");
-  const credentialsFile = path.join(dir, "credentials");
-  const configFile = path.join(dir, "config");
+  const { credentialsFile, configFile } = awsFiles("bedrock-embedding-role-region-");
   await writeFile(
     credentialsFile,
     "[source]\naws_access_key_id = TEST_SOURCE\naws_secret_access_key = synthetic-secret\n",
@@ -140,7 +149,7 @@ it("refreshes an unexpired profile role while preserving the Bedrock region", as
     });
   });
   await withAwsServer(server, "AWS_ENDPOINT_URL_STS", async () => {
-    const { resolved, settled } = captureEmbeddingCredentials();
+    const { resolved, settled } = captureCredentials();
     const { provider } = await createBedrockEmbeddingProvider({
       config: {},
       model: "",
@@ -164,26 +173,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const model = {
-  api: "bedrock-converse-stream" as const,
-  provider: "amazon-bedrock",
-  id: "amazon.nova-micro-v1:0",
-  name: "Nova Micro",
-  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-  reasoning: false,
-  input: ["text" as const],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128000,
-  maxTokens: 4096,
-};
+const model = bedrockModel({ reasoning: false });
 
 describe("Bedrock shared credential rotation", () => {
   it.each(["stream", "discovery"] as const)(
     "%s resolves rotated credentials through its own SDK chain",
     async (route) => {
-      const dir = tempDirs.make("bedrock-credential-rotation-");
-      const credentialsFile = path.join(dir, "credentials");
-      const configFile = path.join(dir, "config");
+      const { credentialsFile, configFile } = awsFiles("bedrock-credential-rotation-");
       await writeFile(configFile, "");
       for (const name of [
         "AWS_ACCESS_KEY_ID",
@@ -207,32 +203,10 @@ describe("Bedrock shared credential rotation", () => {
       await rotate("A");
       // Prime the actual SDK's file cache, independently of OpenClaw's refresh helper.
       expect((await defaultProvider()()).accessKeyId).toBe("TEST_A");
-      const resolved: string[] = [];
-      const pendingCredentials: Promise<void>[] = [];
-      const capture = async (client: BedrockClient | BedrockRuntimeClient) => {
-        const credentials = await client.config.credentials();
-        resolved.push(`${credentials.accessKeyId}/${credentials.sessionToken}`);
-      };
-      vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
-        this: BedrockRuntimeClient,
-      ) {
-        pendingCredentials.push(capture(this));
-        return {
-          $metadata: {},
-          stream: (async function* () {
-            yield { messageStop: { stopReason: "end_turn" } };
-          })(),
-        };
-      });
-      vi.spyOn(BedrockClient.prototype, "send").mockImplementation(function (this: BedrockClient) {
-        pendingCredentials.push(capture(this));
-        return { $metadata: {}, modelSummaries: [] };
-      });
+      const { resolved, settled } = captureCredentials(false);
       const invoke = async () => {
         if (route === "stream") {
-          const result = await streamSimpleBedrock(model, {
-            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
-          }).result();
+          const result = await streamSimpleBedrock(model, userContext()).result();
           expect(result.stopReason).toBe("stop");
         } else {
           const sdk = await loadBedrockControlPlaneSdk();
@@ -245,10 +219,10 @@ describe("Bedrock shared credential rotation", () => {
         }
       };
       await invoke();
-      await Promise.all(pendingCredentials);
+      await settled();
       await rotate("B");
       await invoke();
-      await Promise.all(pendingCredentials);
+      await settled();
       expect(resolved).toEqual(["TEST_A/synthetic-token-A", "TEST_B/synthetic-token-B"]);
     },
   );
@@ -265,11 +239,10 @@ describe("Bedrock credential resolution cancellation", () => {
       }
       const onPayload = vi.fn(() => controller.abort(reason));
       const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
-      const result = await streamSimpleBedrock(
-        model,
-        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
-        { signal: controller.signal, onPayload },
-      ).result();
+      const result = await streamSimpleBedrock(model, userContext(), {
+        signal: controller.signal,
+        onPayload,
+      }).result();
       expect(result.stopReason).toBe("aborted");
       expect(send).not.toHaveBeenCalled();
       expect(onPayload).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
