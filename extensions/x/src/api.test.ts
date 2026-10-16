@@ -1,11 +1,113 @@
+import { createServer, type Server } from "node:http";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XFetch } from "./api.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
+const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
+const overflowFixture = vi.hoisted(() => ({ origin: "" }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      if (!overflowFixture.origin) {
+        return actual.fetchWithSsrFGuard(params);
+      }
+      const requested = new URL(params.url);
+      return actual.fetchWithSsrFGuard({
+        ...params,
+        url: `${overflowFixture.origin}${requested.pathname}${requested.search}`,
+        requireHttps: false,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["127.0.0.1"] },
+      });
+    },
+  };
+});
+
 afterEach(() => {
+  overflowFixture.origin = "";
   vi.useRealTimers();
 });
+
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+function createOversizedMentionsServer(): { server: Server; closed: Promise<number> } {
+  let resolveClosed: (sentBytes: number) => void = () => {};
+  const closed = new Promise<number>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const server = createServer((req, res) => {
+    if (req.url?.includes("/oauth2/token")) {
+      const body = Buffer.from(JSON.stringify({ access_token: "access" }));
+      res.writeHead(200, { "content-type": "application/json", "content-length": body.length });
+      res.end(body);
+      return;
+    }
+    let sentBytes = 0;
+    let stopped = false;
+    let prefixSent = false;
+    const prefixChunk = Buffer.from('{"data":[{"id":"');
+    const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
+    const suffixChunk = Buffer.from('"}]}');
+    const writeBuffer = (buffer: Buffer) => {
+      sentBytes += buffer.length;
+      if (!res.write(buffer)) {
+        res.once("drain", writeChunks);
+        return false;
+      }
+      return true;
+    };
+    const writeChunks = () => {
+      if (!prefixSent) {
+        prefixSent = true;
+        if (!writeBuffer(prefixChunk)) {
+          return;
+        }
+      }
+      while (true) {
+        if (stopped) {
+          return;
+        }
+        if (sentBytes + bodyChunk.length + suffixChunk.length >= LOOPBACK_RESPONSE_BYTES) {
+          break;
+        }
+        if (!writeBuffer(bodyChunk)) {
+          return;
+        }
+      }
+      if (!stopped) {
+        sentBytes += suffixChunk.length;
+        res.end(suffixChunk);
+      }
+    };
+    res.writeHead(200, { connection: "close", "content-type": "application/json" });
+    res.on("close", () => {
+      stopped = true;
+      resolveClosed(sentBytes);
+    });
+    req.on("aborted", () => {
+      stopped = true;
+      res.destroy();
+    });
+    writeChunks();
+  });
+  return { server, closed };
+}
 
 describe("X API authentication", () => {
   it("lists and streams Activity with the app bearer but creates mentions with the user token", async () => {
@@ -202,6 +304,34 @@ describe("X API authentication", () => {
       /^X token refresh failed; check the account credentials and token storage$/,
     );
     expect(states).toEqual(["refreshing", "error"]);
+  });
+
+  it("rejects an oversized mentions JSON body instead of buffering it unbounded", async () => {
+    const { server, closed } = createOversizedMentionsServer();
+    const port = await listenLoopbackServer(server);
+    overflowFixture.origin = `http://127.0.0.1:${port}`;
+    const api = createXApiClient({
+      spend: createXTestSpend(),
+      clientId: "client",
+      clientSecret: "secret",
+      refreshToken: "refresh",
+      saveRefreshToken: async () => {},
+    });
+    try {
+      await expect(api.getMentions({ userId: "9" })).rejects.toThrow(
+        "X API: JSON response exceeds 16777216 bytes",
+      );
+      const sentBytes = await closed;
+      expect(sentBytes).toBeGreaterThan(16 * 1024 * 1024);
+      expect(sentBytes).toBeLessThan(LOOPBACK_RESPONSE_BYTES);
+      console.log(
+        `[x json overflow] overflow=true sent_bytes=${sentBytes} cap=16777216 loopback_budget=${LOOPBACK_RESPONSE_BYTES}`,
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it.each([
