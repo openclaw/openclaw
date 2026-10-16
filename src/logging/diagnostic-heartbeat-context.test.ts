@@ -18,6 +18,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import type { EmitDiagnosticMemorySample } from "./diagnostic-memory.js";
 import {
   diagnosticLogger,
   logSessionStateChange,
@@ -46,10 +47,7 @@ function session(label: string) {
 
 beforeAll(async () => {
   diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-  state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-heartbeat-context-",
-  });
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "heartbeat-context-" });
   setRuntimeConfigSnapshot({});
   for (const label of ["enabled", "disabled", "incognito"]) {
     const incognito = label === "incognito";
@@ -59,9 +57,8 @@ beforeAll(async () => {
       updatedAt: 1,
       ...(incognito ? { incognito: true } : {}),
     });
-    await appendTranscriptMessage(scope, {
-      message: { role: "assistant", content: incognito ? privateReply : reply },
-    });
+    const message = { role: "assistant", content: incognito ? privateReply : reply };
+    await appendTranscriptMessage(scope, { message });
   }
 });
 
@@ -96,29 +93,18 @@ async function tick() {
 }
 
 it("checks memory pressure every tick without recording idle samples", async () => {
-  const emitMemorySample = vi.fn(() => ({
-    rssBytes: 100,
-    heapTotalBytes: 80,
-    heapUsedBytes: 40,
-    externalBytes: 10,
-    arrayBuffersBytes: 5,
-  }));
-  const options = {
-    ...heartbeatOptions,
-    recoverStuckSession: () => undefined,
-    emitMemorySample,
-  };
+  const emitMemorySample = vi.fn<EmitDiagnosticMemorySample>();
+  const options = { ...heartbeatOptions, recoverStuckSession: () => undefined, emitMemorySample };
   startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: true } }, options);
 
-  await tick();
-  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
-  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
-
-  logSessionStateChange({ ...session("samples"), state: "processing" });
-  await tick();
-
-  expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
-  expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+  for (const emitSample of [false, true]) {
+    if (emitSample) {
+      logSessionStateChange({ ...session("samples"), state: "processing" });
+    }
+    await tick();
+    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample });
+    expect(emitMemorySample.mock.contexts.at(-1)).toBe(options);
+  }
 });
 
 it.each(["enabled", "disabled", "incognito"])(
@@ -134,11 +120,8 @@ it.each(["enabled", "disabled", "incognito"])(
       }
     });
     const recover = vi.fn();
-    startGatewayDiagnosticHeartbeat(
-      scheduler,
-      {},
-      { ...heartbeatOptions, recoverStuckSession: recover },
-    );
+    const options = { ...heartbeatOptions, recoverStuckSession: recover };
+    startGatewayDiagnosticHeartbeat(scheduler, {}, options);
     logSessionStateChange({ sessionId, sessionKey, state: "processing" });
     const queries = [
       ...(["prepare", "exec"] as const).map((method) => vi.spyOn(DatabaseSync.prototype, method)),
@@ -151,12 +134,12 @@ it.each(["enabled", "disabled", "incognito"])(
     expect(recover).toHaveBeenCalled();
     if (enabled) {
       await logged.promise;
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionId=${sessionId}`));
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${sessionKey}`));
-      expect(JSON.stringify(warn.mock.calls)).not.toContain(
-        label === "incognito" ? privateReply : reply,
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("lastAssistant=");
+      for (const identity of [`sessionId=${sessionId}`, `sessionKey=${sessionKey}`]) {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(identity));
+      }
+      for (const content of [label === "incognito" ? privateReply : reply, "lastAssistant="]) {
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(content);
+      }
     } else {
       expect(warn).not.toHaveBeenCalled();
     }
