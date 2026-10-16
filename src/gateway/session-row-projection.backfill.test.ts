@@ -21,7 +21,6 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import {
   clearStoredSessionRowTranscriptForTest,
   observeSessionRowBackfill,
@@ -30,15 +29,29 @@ import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { create, identity, type EntryRow } from "./session-row-projection-record.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
-import { seedRow, watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
+import {
+  seedRow,
+  watchRowFacts,
+  createTestProjection,
+  holdForeground,
+} from "./session-row-projection.read-fixture.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function appendTranscript(
+  target: Parameters<typeof persistSessionTranscriptTurn>[0],
+  ...messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"][number]["message"][]
+) {
+  return persistSessionTranscriptTurn(target, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+}
+
 async function withStreamingProjection(
   run: (fixture: {
-    projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
+    projection: Awaited<ReturnType<typeof createTestProjection>>;
     target: { agentId: string; sessionKey: string; sessionId: string };
     query: { agentId: string; key: string };
     append: (content: string) => Promise<void>;
@@ -61,8 +74,8 @@ async function withStreamingProjection(
       );
     }
     // Hold optional backfill at its real foreground gate to count invalidation work separately.
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg });
+    using release = holdForeground();
+    using projection = await createTestProjection({ cfg });
     try {
       await projection.ensureMaterialized();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -71,10 +84,7 @@ async function withStreamingProjection(
         target,
         query: { agentId: "main", key: target.sessionKey },
         async append(content) {
-          await persistSessionTranscriptTurn(target, {
-            messages: [{ message: { role: "assistant", content } }],
-            touchSessionEntry: false,
-          });
+          await appendTranscript(target, { role: "assistant", content });
           await projection.ensureMaterialized();
         },
         release,
@@ -97,23 +107,18 @@ it("refreshes streaming previews without rematerializing unchanged rows", async 
     });
     const before = projection.materializedCount;
     await append("Update 1");
-    expect(projection.materializedCount - before).toBe(0);
     for (let index = 2; index <= 10; index++) {
       await append(`Update ${index}`);
     }
-    expect(projection.materializedCount - before).toBe(0);
-    await vi.advanceTimersByTimeAsync(999);
-    await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(0);
-    await vi.advanceTimersByTimeAsync(1);
-    await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(0);
+    for (const elapsed of [999, 1]) {
+      await vi.advanceTimersByTimeAsync(elapsed);
+      await projection.ensureMaterialized();
+    }
     await append("Update 11");
-    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(1_000);
     await projection.ensureMaterialized();
-    expect(projection.materializedCount - before).toBe(0);
     await vi.advanceTimersByTimeAsync(1_000);
+    // The counter only increases: this guards every preceding append and timer checkpoint.
     expect(projection.materializedCount - before).toBe(0);
     expect(reads).toEqual([]);
     expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
@@ -135,24 +140,19 @@ it("reuses batch transcript facts across row-owner restarts", async () => {
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     for (const content of ["First batch", "Second batch"]) {
-      await persistSessionTranscriptTurn(target, {
-        messages: [
-          { message: { role: "user", content: "New request" } },
-          { message: { role: "assistant", content } },
-        ],
-        touchSessionEntry: false,
-      });
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      try {
-        await projection.ensureMaterialized();
-        expect(
-          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-        ).toBe(content);
-        await nextTurn();
-        expect(backfill).not.toHaveBeenCalled();
-      } finally {
-        projection.dispose();
-      }
+      await appendTranscript(
+        target,
+        { role: "user", content: "New request" },
+        { role: "assistant", content },
+      );
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        content,
+      );
+      await nextTurn();
+      expect(backfill).not.toHaveBeenCalled();
     }
   });
 });
@@ -186,10 +186,7 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const refreshing = projection.ensureMaterialized();
     try {
       await captured.promise;
-      await persistSessionTranscriptTurn(target, {
-        messages: [{ message: { role: "assistant", content: "Update during renewal" } }],
-        touchSessionEntry: false,
-      });
+      await appendTranscript(target, { role: "assistant", content: "Update during renewal" });
     } finally {
       resume.resolve();
       await refreshing;
@@ -279,45 +276,27 @@ it("eventually fills legacy titles and previews without waiting during startup o
     const query = { agentId: "main", key: target.sessionKey };
     const display = { includeDerivedTitles: true, includeLastMessage: true };
     replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
-    await persistSessionTranscriptTurn(target, {
-      messages: [
-        { message: { role: "user", content: "Investigate the slow session query" } },
-        { message: { role: "assistant", content: "The query is now bounded." } },
-      ],
-      touchSessionEntry: false,
-    });
+    await appendTranscript(
+      target,
+      { role: "user", content: "Investigate the slow session query" },
+      { role: "assistant", content: "The query is now bounded." },
+    );
     clearStoredSessionRowTranscriptForTest(target);
     const before = loadSessionEntry(target);
-    const prepareBackfill = async () => {
-      const release = retainSessionListForegroundWork();
-      try {
-        const projection = await createSessionRowProjection({ cfg });
-        return {
-          projection,
-          backfilled: observeSessionRowBackfill([target.sessionKey], projection),
-          release,
-        };
-      } catch (error) {
-        release();
-        throw error;
-      }
-    };
-    const { projection, backfilled, release } = await prepareBackfill();
-    try {
-      expect(loadSessionEntry(target)?.displayName).toBeUndefined();
-      release();
-      await withinTest(backfilled, signal);
-      expect(projection.snapshot(query, display).row).toMatchObject({
-        lastMessagePreview: "The query is now bounded.",
-      });
-      expect(loadSessionEntry(target)).toEqual(before);
-      expect(
-        projection.snapshot(query, { includeDerivedTitles: true }).row?.derivedTitle,
-      ).toBeUndefined();
-    } finally {
-      release();
-      projection.dispose();
-    }
+    using release = holdForeground();
+    using projection = await createTestProjection({ cfg });
+    const backfilled = observeSessionRowBackfill([target.sessionKey], projection);
+    expect(loadSessionEntry(target)?.displayName).toBeUndefined();
+    release();
+    await withinTest(backfilled, signal);
+    expect(projection.snapshot(query, display).row).toMatchObject({
+      lastMessagePreview: "The query is now bounded.",
+    });
+    expect(loadSessionEntry(target)).toEqual(before);
+    expect(
+      projection.snapshot(query, { includeDerivedTitles: true }).row?.derivedTitle,
+    ).toBeUndefined();
+    projection.dispose();
     await nextTurn();
     await noteSessionTranscriptHealth({
       cfg,
@@ -334,25 +313,22 @@ it("eventually fills legacy titles and previews without waiting during startup o
       });
       expect(loadSessionEntry(target)).toEqual(expected);
     }
-    const repairedProjection = await createSessionRowProjection({ cfg });
-    try {
-      expect(repairedProjection.snapshot(query, display).row).toMatchObject({
-        derivedTitle: "Investigate the slow session query",
-        lastMessagePreview: "The query is now bounded.",
-      });
-      replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      const replacement = await withReadySessionRows(
-        repairedProjection,
-        () => [query],
-        () => repairedProjection.snapshot(query, { includeLastMessage: true }).row,
-      );
-      expect(replacement).toMatchObject({
-        sessionId: "replacement",
-      });
-      expect(replacement?.lastMessagePreview).toBeUndefined();
-    } finally {
-      repairedProjection.dispose();
-    }
+    using repairedProjection = await createTestProjection({ cfg });
+
+    expect(repairedProjection.snapshot(query, display).row).toMatchObject({
+      derivedTitle: "Investigate the slow session query",
+      lastMessagePreview: "The query is now bounded.",
+    });
+    replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
+    const replacement = await withReadySessionRows(
+      repairedProjection,
+      () => [query],
+      () => repairedProjection.snapshot(query, { includeLastMessage: true }).row,
+    );
+    expect(replacement).toMatchObject({
+      sessionId: "replacement",
+    });
+    expect(replacement?.lastMessagePreview).toBeUndefined();
   });
 });
 
@@ -381,8 +357,8 @@ it.each([false, true])(
       ];
       const replacement = createDeferredCore<typeof initial>();
       const getModelCatalog = vi.fn().mockResolvedValue(initial);
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, getModelCatalog });
+      using _ = holdForeground();
+      using projection = await createTestProjection({ cfg, getModelCatalog });
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const client = identifiedClient("owner@example.com");
       const list = () => listSessions({ context, client, request: {} });
@@ -397,8 +373,8 @@ it.each([false, true])(
         // The actual RPC must reply before the deferred catalog is released.
         await vi.waitFor(() => expect(response).toHaveBeenCalledOnce());
         await pendingList;
-        expect(response.mock.calls[0]![0].sessions).toEqual([
-          expect.objectContaining({ key: query.key, contextTokens: 8192 }),
+        expect(response.mock.calls[0]![0].sessions).toMatchObject([
+          { key: query.key, contextTokens: 8192 },
         ]);
         expect(projection.snapshot(query).row?.contextTokens).toBe(8192);
         expect(getModelCatalog).toHaveBeenCalledTimes(modelFactsChanged ? 2 : 1);
@@ -408,17 +384,13 @@ it.each([false, true])(
           await replacement.promise;
           expect(projection.state.modelCatalog).toBe(next);
           expect(projection.dirtyRowCount).toBe(1);
-          expect((await list()).sessions).toEqual([
-            expect.objectContaining({ key: query.key, contextTokens: 16384 }),
-          ]);
+          expect((await list()).sessions).toMatchObject([{ key: query.key, contextTokens: 16384 }]);
           expect(projection.snapshot(query).row?.contextTokens).toBe(16384);
         } else {
           expect(projection.materializedCount).toBe(before);
         }
       } finally {
         replacement.resolve(initial);
-        projection.dispose();
-        release();
       }
     });
   },
@@ -452,33 +424,28 @@ it("updates one agent's catalog without rematerializing another agent's session"
       ["main", catalog(8_192)],
       ["other", catalog(8_192)],
     ]);
-    const release = retainSessionListForegroundWork();
-    let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
-    try {
-      projection = await createSessionRowProjection({ cfg, getModelCatalog: async () => catalogs });
-      await projection.ensureMaterialized();
-      const [changed, unchanged] = queries;
-      const retained = projection.describe(unchanged)?.materialized;
-      expect(retained).toBeDefined();
-      expect(projection.snapshot(changed).row?.contextTokens).toBe(8_192);
-      const before = projection.materializedCount;
-      catalogs = new Map([
-        ["main", catalog(16_384)],
-        ["other", catalog(8_192)],
-      ]);
-      notifyPreparedModelRuntimePublication({
-        phase: "catalog-published",
-        modelFactsChanged: true,
-      });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(changed).row?.contextTokens).toBe(16_384);
-      expect(projection.snapshot(unchanged).row?.contextTokens).toBe(8_192);
-      expect(projection.describe(unchanged)?.materialized).toBe(retained);
-      expect(projection.materializedCount - before).toBe(1);
-    } finally {
-      projection?.dispose();
-      release();
-    }
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, getModelCatalog: async () => catalogs });
+
+    await projection.ensureMaterialized();
+    const [changed, unchanged] = queries;
+    const retained = projection.describe(unchanged)?.materialized;
+    expect(retained).toBeDefined();
+    expect(projection.snapshot(changed).row?.contextTokens).toBe(8_192);
+    const before = projection.materializedCount;
+    catalogs = new Map([
+      ["main", catalog(16_384)],
+      ["other", catalog(8_192)],
+    ]);
+    notifyPreparedModelRuntimePublication({
+      phase: "catalog-published",
+      modelFactsChanged: true,
+    });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(changed).row?.contextTokens).toBe(16_384);
+    expect(projection.snapshot(unchanged).row?.contextTokens).toBe(8_192);
+    expect(projection.describe(unchanged)?.materialized).toBe(retained);
+    expect(projection.materializedCount - before).toBe(1);
   });
 });
 
@@ -488,7 +455,7 @@ it("waits for the first catalog before admitting session reads", async () => {
     setRuntimeConfigSnapshot(cfg);
     const catalog = createDeferredCore<[]>();
     const admitted = vi.fn();
-    const startup = createSessionRowProjection({ cfg, getModelCatalog: () => catalog.promise });
+    const startup = createTestProjection({ cfg, getModelCatalog: () => catalog.promise });
     void startup.then(admitted);
     try {
       await nextTurn();
@@ -513,7 +480,7 @@ it("does not adopt a background catalog after disposal", async () => {
       .fn()
       .mockResolvedValueOnce(initial)
       .mockReturnValueOnce(current.promise);
-    const projection = await createSessionRowProjection({ cfg, getModelCatalog });
+    using projection = await createTestProjection({ cfg, getModelCatalog });
     try {
       sessionChanges.emit({ all: true, scope: "catalog" });
       await nextTurn();
@@ -524,7 +491,6 @@ it("does not adopt a background catalog after disposal", async () => {
       expect(projection.selectEntries()).toEqual([]);
     } finally {
       current.resolve([]);
-      projection.dispose();
     }
   });
 });
@@ -613,57 +579,42 @@ it("backfills terminal fallback models and clears previews when the newest messa
         activeModel: "unit-test/fallback",
       },
     });
-    await persistSessionTranscriptTurn(target, {
-      messages: [
-        {
-          message: {
-            role: "assistant",
-            content: "Finished",
-            provider: "unit-test",
-            model: "fallback",
-            stopReason: "stop",
-            __openclaw: { runId: "terminal-run" },
-          },
-        },
-      ],
-      touchSessionEntry: false,
+    await appendTranscript(target, {
+      role: "assistant",
+      content: "Finished",
+      provider: "unit-test",
+      model: "fallback",
+      stopReason: "stop",
+      __openclaw: { runId: "terminal-run" },
     });
     const initial = observeSessionRowBackfill([target.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
-    const projection = await createSessionRowProjection({ cfg });
+    using projection = await createTestProjection({ cfg });
     const query = { agentId: "main", key: target.sessionKey };
-    try {
-      const expected = {
-        activeModelProvider: "unit-test",
-        activeModel: "fallback",
-        lastMessagePreview: "Finished",
-      };
-      await withinTest(initial, signal);
-      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
+
+    const expected = {
+      activeModelProvider: "unit-test",
+      activeModel: "fallback",
+      lastMessagePreview: "Finished",
+    };
+    await withinTest(initial, signal);
+    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
+    expect(backfill).not.toHaveBeenCalled();
+    for (const changed of [{ model: "selected" }, { modelProvider: "recorded-provider" }]) {
+      const published = observeSessionRowBackfill([target.sessionKey]);
+      replaceSessionEntrySync(target, { ...loadSessionEntry(target)!, ...changed });
+      await projection.ensureMaterialized();
+      await nextTurn();
       expect(backfill).not.toHaveBeenCalled();
-      for (const changed of [{ model: "selected" }, { modelProvider: "recorded-provider" }]) {
-        const published = observeSessionRowBackfill([target.sessionKey]);
-        replaceSessionEntrySync(target, { ...loadSessionEntry(target)!, ...changed });
-        await projection.ensureMaterialized();
-        await nextTurn();
-        expect(backfill).not.toHaveBeenCalled();
-        await withinTest(published, signal);
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(
-          expected,
-        );
-      }
-      const appended = observeSessionRowBackfill([target.sessionKey]);
-      await persistSessionTranscriptTurn(target, {
-        messages: [{ message: { role: "assistant", content: "x".repeat(70 * 1024) } }],
-        touchSessionEntry: false,
-      });
-      await withinTest(appended, signal);
-      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-        activeModel: undefined,
-        lastMessagePreview: undefined,
-      });
-    } finally {
-      projection.dispose();
+      await withinTest(published, signal);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
     }
+    const appended = observeSessionRowBackfill([target.sessionKey]);
+    await appendTranscript(target, { role: "assistant", content: "x".repeat(70 * 1024) });
+    await withinTest(appended, signal);
+    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+      activeModel: undefined,
+      lastMessagePreview: undefined,
+    });
   });
 });
