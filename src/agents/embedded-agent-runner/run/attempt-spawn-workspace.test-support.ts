@@ -354,10 +354,26 @@ vi.mock("../../docs-path.js", () => ({
 // mock-isolation: Attempt fixtures use in-memory settings without reading project or user settings.
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
+    reload: async () => {},
     getCompactionEnabled: () => true,
     getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
+    getCompactionKeepRecentTokens: () => 40_000,
+    getDefaultProvider: () => undefined,
+    getDefaultModel: () => undefined,
+    getDefaultThinkingLevel: () => undefined,
     getBlockImages: () => false,
+    getSteeringMode: () => undefined,
+    getFollowUpMode: () => undefined,
+    getTransport: () => undefined,
+    getThinkingBudgets: () => undefined,
     getProviderRetrySettings: () => ({ maxRetryDelayMs: undefined }),
+    getImageAutoResize: () => false,
+    getShellCommandPrefix: () => undefined,
+    getShellPath: () => undefined,
+    getGlobalSettings: () => ({}),
+    getProjectSettings: () => ({}),
+    applyOverrides: () => {},
+    setCompactionEnabled: () => {},
   }),
 }));
 
