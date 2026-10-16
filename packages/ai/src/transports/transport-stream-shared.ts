@@ -22,6 +22,7 @@ import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { readTransportDiagnosticLabel } from "./transport-utils.js";
 
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
 export async function* iterateSseFrames(
@@ -534,11 +535,11 @@ export function assignTransportErrorDetails(
   signal?: AbortSignal,
 ): ProviderErrorProjection {
   if (!signal?.aborted) {
-    // File diagnostics retain the cause before transcript-safe projection clips it.
-    // Select error fields only: responses can also contain generated message content.
+    // Provider prose and response bodies can echo prompts and tool results.
     try {
       const record = asOptionalRecord(error);
       const response = asOptionalRecord(record?.response);
+      const cause = asOptionalRecord(record?.cause);
       const detail =
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
@@ -546,14 +547,17 @@ export function assignTransportErrorDetails(
       getAiTransportHost().logWarn("provider-error", "Model request failed", {
         provider: output.provider,
         model: output.model,
-        status: record?.status ?? record?.statusCode ?? response?.status,
-        code: record?.errorCode ?? record?.code ?? detail?.code,
-        type: record?.errorType ?? detail?.type ?? record?.type,
-        message:
-          record?.message ?? detail?.message ?? (typeof error === "string" ? error : undefined),
-        body: record?.errorBody ?? record?.body ?? response?.body ?? response?.data ?? detail,
-        requestId: record?.request_id ?? record?.requestId,
-        responseId: record?.responseId ?? response?.id ?? output.responseId,
+        status: readTransportDiagnosticLabel(
+          record?.status ?? record?.statusCode ?? response?.status,
+        ),
+        code: readTransportDiagnosticLabel(record?.errorCode ?? record?.code ?? detail?.code),
+        type: readTransportDiagnosticLabel(record?.errorType ?? detail?.type ?? record?.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+        requestId: readTransportDiagnosticLabel(record?.request_id ?? record?.requestId),
+        responseId: readTransportDiagnosticLabel(
+          record?.responseId ?? response?.id ?? output.responseId,
+        ),
       });
     } catch {
       // Diagnostic accessors and log sinks cannot replace the original failure.
