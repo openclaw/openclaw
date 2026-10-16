@@ -1,6 +1,18 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DatabaseEngineFamily, DatabaseEngineId } from "./types.js";
 export type { DatabaseEngineId } from "./types.js";
+
+// Keep schema validation independent of the complete, schema-inferred application config.
+type DatabaseEngineConfig = {
+  database?: {
+    engine?: DatabaseEngineId;
+    families?: Partial<
+      Record<
+        Exclude<DatabaseEngineFamily, "quarantine" | "managed-update" | "package-activation">,
+        { engine: DatabaseEngineId }
+      >
+    >;
+  };
+};
 
 export type DatabaseEngineStore = {
   id: DatabaseEngineFamily;
@@ -26,7 +38,7 @@ export function listDatabaseEngineStores(): readonly DatabaseEngineStore[] {
 
 export function selectDatabaseEngine(
   store: Pick<DatabaseEngineStore, "id" | "postgres">,
-  config: Pick<OpenClawConfig, "database">,
+  config: DatabaseEngineConfig,
 ): DatabaseEngineId {
   const override =
     store.id === "quarantine" || store.id === "managed-update" || store.id === "package-activation"
@@ -40,9 +52,7 @@ export function selectDatabaseEngine(
   );
 }
 
-export function getMixedPostgresAgentError(
-  config: Pick<OpenClawConfig, "database">,
-): string | undefined {
+export function getMixedPostgresAgentError(config: DatabaseEngineConfig): string | undefined {
   if (
     (config.database?.families?.agent?.engine ?? config.database?.engine) === "postgres" &&
     stores.some((store) => store.postgres && selectDatabaseEngine(store, config) !== "postgres")
@@ -53,7 +63,7 @@ export function getMixedPostgresAgentError(
 }
 
 export function resolveDatabaseFamilyEngines(
-  config: Pick<OpenClawConfig, "database">,
+  config: DatabaseEngineConfig,
 ): Record<DatabaseEngineFamily, DatabaseEngineId> {
   const agentError = getMixedPostgresAgentError(config);
   if (agentError) {
@@ -77,7 +87,7 @@ export function resolveDatabaseFamilyEngines(
 
 /** Fixed-local stores do not turn the existing PostgreSQL default into a mixed installation. */
 export function assertHomogeneousDatabaseEngines(
-  config: Pick<OpenClawConfig, "database">,
+  config: DatabaseEngineConfig,
   operation: "port" | "backup" | "restore" | "update",
 ): void {
   const engines = new Set(
