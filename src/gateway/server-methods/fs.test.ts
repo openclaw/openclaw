@@ -272,15 +272,15 @@ describe("fs.listDir", () => {
       nodeRegistry: { get: vi.fn().mockReturnValue(node), invoke },
     };
 
-    const [, , pathError] = expectDefined(
+    const pathError = expectDefined(
       await call({ nodeId: "macbook", path: "/Users/de" }, context),
       "missing node directory response",
-    );
+    )[2];
     expect(pathError).toMatchObject({ code: "INVALID_REQUEST", message: missing });
-    const [, , transportError] = expectDefined(
+    const transportError = expectDefined(
       await call({ nodeId: "macbook" }, context),
       "node transport failure response",
-    );
+    )[2];
     expect(transportError).toMatchObject({ code: "UNAVAILABLE", message: "node timed out" });
   });
 
