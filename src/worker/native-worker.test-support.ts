@@ -4,6 +4,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { text } from "node:stream/consumers";
 import { expect } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 
@@ -70,18 +71,16 @@ export async function nativeProviderFixture(
   const send = (response: ServerResponse, value: Reply) => {
     const frame = (delta: object, finish: string | null = null) =>
       response.write(
-        "data: " +
-          JSON.stringify({
-            id: "native-response",
-            object: "chat.completion.chunk",
-            created: 1,
-            model,
-            choices: [{ index: 0, delta, finish_reason: finish }],
-            ...(finish
-              ? { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }
-              : {}),
-          }) +
-          "\n\n",
+        `data: ${JSON.stringify({
+          id: "native-response",
+          object: "chat.completion.chunk",
+          created: 1,
+          model,
+          choices: [{ index: 0, delta, finish_reason: finish }],
+          ...(finish
+            ? { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }
+            : {}),
+        })}\n\n`,
       );
     frame(
       typeof value === "string"
@@ -104,13 +103,9 @@ export async function nativeProviderFixture(
   const port = await listenNativeServer(
     createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.from(chunk));
-        }
         requests.push({
           headers: request.headers,
-          body: JSON.parse(Buffer.concat(chunks).toString()),
+          body: JSON.parse(await text(request)),
           url: request.url,
         });
         response.writeHead(200, { "content-type": "text/event-stream" });

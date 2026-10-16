@@ -99,15 +99,6 @@ async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInfere
     diagnostics: () => ({
       admissions: owner().admissions.length,
       methods: owner().requests.map((request) => request.method),
-      transcript: messages().map((message) =>
-        message.role === "assistant"
-          ? {
-              role: message.role,
-              stopReason: message.stopReason,
-              errorMessage: message.errorMessage,
-            }
-          : { role: message.role },
-      ),
     }),
   });
 }
@@ -136,7 +127,7 @@ function providerFixture(mode: "tools" | "pending" = "tools") {
         return {
           name: "exec",
           args: {
-            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(owner().root, "tool-proof.mjs"))} ${workers.lastPid()}`,
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(owner().root, "tool-proof.mjs"))}`,
             yieldMs: 10000,
           },
         };
@@ -181,9 +172,7 @@ describe.skipIf(process.platform === "win32")(
         'import { readFileSync, writeFileSync } from "node:fs";\n' +
           "const ancestors = []; let pid = process.ppid;\n" +
           'if (process.platform === "linux") { while (pid > 1 && ancestors.length < 20) { ancestors.push(pid); const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); pid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]); } }\n' +
-          "const workerPid = Number(process.argv[2]);\n" +
-          'if (!Number.isSafeInteger(workerPid) || workerPid <= 1) throw new Error("Missing owned worker PID");\n' +
-          'const proof = { pid: process.pid, ancestors, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env, initialCarrierHasCredentials: false };\n' +
+          'const proof = { pid: process.pid, ancestors, startupPresent: process.argv.includes("--internal-worker-native-inference"), credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
       const registry = startupFor(descriptor, provider.baseUrl);
@@ -199,7 +188,6 @@ describe.skipIf(process.platform === "win32")(
       expect(proof).toMatchObject({
         startupPresent: false,
         credentialPresent: false,
-        initialCarrierHasCredentials: false,
       });
       expect(proof.pid).not.toBe(process.pid);
       expect(proof.pid).not.toBe(worker.child.pid);

@@ -75,7 +75,7 @@ import {
 } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
-import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerConnection } from "./worker-connection.js";
 import {
   buildWorkerProcessTurn,
   parseWorkerProcessMessage,
@@ -167,6 +167,11 @@ function connectionFor(
   });
 }
 const RECONNECT_BACKOFF = { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 };
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+const githubProfileDir = (stateDir: string, turnId: string) =>
+  path.join(stateDir, "github-profiles", sha256(turnId).slice(0, 16));
+const workerSessions = () =>
+  listRunningSessions().filter((session) => session.scopeKey === `worker:${SESSION_ID}`);
 
 function hello(
   admission: Omit<WorkerConnectRequestFrame["params"]["admission"], "runId">,
@@ -187,6 +192,19 @@ function hello(
   };
 }
 
+type ToolCallPlan = { args: Record<string, unknown>; toolCallId: string; toolName: string };
+const toolCall = (
+  toolName: string,
+  toolCallId: string,
+  args: Record<string, unknown>,
+): ToolCallPlan => ({ toolName, toolCallId, args });
+const TOOL_PLANS = {
+  "read-image": toolCall("read", "read-attachment", { path: "attachment.png" }),
+  "session-tool": toolCall("sessions_spawn", "nested-session-spawn-call", {
+    task: "start a nested cloud child",
+  }),
+  computer: toolCall("computer", "worker-screenshot", { action: "screenshot" }),
+};
 type InferencePlan =
   | "text"
   | "read-image"
@@ -206,8 +224,12 @@ type InferencePlan =
   | "oversized-text"
   | "oversized-error"
   | "empty-terminal"
-  | { args: Record<string, unknown>; toolCallId: string; toolName: string };
+  | ToolCallPlan;
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
+type InferenceOutput = {
+  event: (event: WorkerInferenceEventFrame["payload"]["event"]) => void;
+  finish: (outcome: WorkerInferenceTerminalOutcome) => void;
+};
 const USAGE = {
   input: 2,
   output: 3,
@@ -568,17 +590,13 @@ class FakeWorkerGateway {
     this.reply(socket, frame.id, { status: "accepted" });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    const output = this.inferenceOutput(socket, frame.params);
     if (typeof plan === "object") {
-      this.sendToolCallTurn(socket, frame.params, plan);
+      this.sendToolCallTurn(output, plan);
       return;
     }
-    if (plan === "read-image") {
-      this.sendToolCallTurn(socket, frame.params, {
-        args: { path: "attachment.png" },
-        toolCallId: "read-attachment",
-        toolName: "read",
-      });
-      return;
+    if (plan === "read-image" || plan === "session-tool" || plan === "computer") {
+      return this.sendToolCallTurn(output, TOOL_PLANS[plan]);
     }
     if (plan === "hold") {
       return;
@@ -588,7 +606,7 @@ class FakeWorkerGateway {
       return;
     }
     if (plan === "error" || plan === "cancelled") {
-      this.sendTerminalOutcome(socket, frame.params, 1, {
+      output.finish({
         type: "error",
         reason: plan === "error" ? "provider-error" : "cancelled",
         message: plan === "error" ? "fixture provider failed" : "fixture inference cancelled",
@@ -596,7 +614,7 @@ class FakeWorkerGateway {
       return;
     }
     if (plan === "tool" || plan === "safe-tool" || plan === "background-tool") {
-      this.sendToolTurn(socket, frame.params, {
+      this.sendToolTurn(output, {
         background: plan === "background-tool",
         safe: plan === "safe-tool",
       });
@@ -607,7 +625,7 @@ class FakeWorkerGateway {
         (message) => message.role === "toolResult" && message.toolName === "exec",
       );
       const details = processResult?.role === "toolResult" ? processResult.details : undefined;
-      this.sendToolCallTurn(socket, frame.params, {
+      this.sendToolCallTurn(output, {
         args: {
           action: plan === "process-poll" ? "poll" : "kill",
           sessionId: isRecord(details) ? details.sessionId : undefined,
@@ -617,55 +635,43 @@ class FakeWorkerGateway {
       });
       return;
     }
-    if (plan === "session-tool") {
-      this.sendSessionToolTurn(socket, frame.params);
-      return;
-    }
-    if (plan === "computer") {
-      this.sendToolCallTurn(socket, frame.params, {
-        toolCallId: "worker-screenshot",
-        toolName: "computer",
-        args: { action: "screenshot" },
-      });
-      return;
-    }
     if (plan === "burst-text" || plan === "oversized-text" || plan === "oversized-error") {
       this.sendBurstTextTurn(
-        socket,
-        frame.params,
+        output,
         plan === "burst-text" ? 1_100 : 1_700,
         plan === "oversized-error" ? "error" : "done",
       );
       return;
     }
     if (plan === "empty-terminal") {
-      this.sendEmptyTerminalTurn(socket, frame.params);
+      this.sendEmptyTerminalTurn(output);
       return;
     }
-    this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
+    this.sendTextTurn(output, plan === "length" ? "length" : "stop");
   }
 
   private sendTurn(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
+    output: InferenceOutput,
     events: WorkerInferenceEventFrame["payload"]["event"][],
     outcome: () => WorkerInferenceTerminalOutcome,
   ): void {
-    this.startInference(socket, identity);
-    events.forEach((event, index) => this.sendInferenceEvent(socket, identity, index + 2, event));
-    this.sendTerminalOutcome(socket, identity, events.length + 2, outcome());
+    output.event({
+      type: "start",
+      resolvedModel: { api: "openai-responses", ...MODEL_REF },
+      timestamp: Date.now(),
+    });
+    events.forEach(output.event);
+    output.finish(outcome());
   }
 
   private sendBurstTextTurn(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
+    output: InferenceOutput,
     chunkCount = 1_100,
     terminal: "done" | "error" = "done",
   ): void {
     const chunk = "x".repeat(40);
     this.sendTurn(
-      socket,
-      identity,
+      output,
       [
         { type: "text_start", contentIndex: 0 },
         ...Array.from({ length: chunkCount }, () => ({
@@ -688,10 +694,9 @@ class FakeWorkerGateway {
     );
   }
 
-  private sendEmptyTerminalTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
+  private sendEmptyTerminalTurn(output: InferenceOutput): void {
     this.sendTurn(
-      socket,
-      identity,
+      output,
       [
         { type: "text_start", contentIndex: 0 },
         { type: "text_delta", contentIndex: 0, delta: "discarded draft" },
@@ -700,14 +705,9 @@ class FakeWorkerGateway {
     );
   }
 
-  private sendTextTurn(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
-    stopReason: "stop" | "length" = "stop",
-  ): void {
+  private sendTextTurn(output: InferenceOutput, stopReason: "stop" | "length" = "stop"): void {
     this.sendTurn(
-      socket,
-      identity,
+      output,
       [
         { type: "text_start", contentIndex: 0 },
         { type: "text_delta", contentIndex: 0, delta: "worker reply" },
@@ -721,8 +721,7 @@ class FakeWorkerGateway {
   }
 
   private sendToolTurn(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
+    output: InferenceOutput,
     options: { background: boolean; safe: boolean },
   ): void {
     const toolCallId = "local-exec-call";
@@ -745,31 +744,18 @@ class FakeWorkerGateway {
             this.options.execCommand ??
             (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
         };
-    this.sendToolCallTurn(socket, identity, {
+    this.sendToolCallTurn(output, {
       args,
       toolCallId,
       toolName: "exec",
     });
   }
 
-  private sendSessionToolTurn(socket: WebSocket, identity: WorkerInferenceStartParams): void {
-    this.sendToolCallTurn(socket, identity, {
-      args: { task: "start a nested cloud child" },
-      toolCallId: "nested-session-spawn-call",
-      toolName: "sessions_spawn",
-    });
-  }
-
-  private sendToolCallTurn(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
-    tool: { args: Record<string, unknown>; toolCallId: string; toolName: string },
-  ): void {
+  private sendToolCallTurn(output: InferenceOutput, tool: ToolCallPlan): void {
     const { args, toolCallId, toolName } = tool;
     const encodedArgs = JSON.stringify(args);
     this.sendTurn(
-      socket,
-      identity,
+      output,
       [
         { type: "toolcall_start", contentIndex: 0, id: toolCallId, toolName },
         { type: "toolcall_delta", contentIndex: 0, delta: encodedArgs },
@@ -785,48 +771,23 @@ class FakeWorkerGateway {
     );
   }
 
-  private sendInferenceEvent(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
-    seq: number,
-    event: WorkerInferenceEventFrame["payload"]["event"],
-  ): void {
-    const frame: WorkerInferenceEventFrame = {
-      type: "event",
-      event: "worker.inference.event",
-      payload: { ...this.identity(identity), seq, event },
-    };
-    this.send(socket, frame);
-  }
-
-  private startInference(socket: WebSocket, identity: WorkerInferenceStartParams) {
-    this.sendInferenceEvent(socket, identity, 1, {
-      type: "start",
-      resolvedModel: { api: "openai-responses", ...MODEL_REF },
-      timestamp: Date.now(),
-    });
-  }
-
-  private sendTerminalOutcome(
-    socket: WebSocket,
-    identity: WorkerInferenceStartParams,
-    seq: number,
-    outcome: WorkerInferenceTerminalOutcome,
-  ): void {
-    const frame: WorkerInferenceTerminalFrame = {
-      type: "event",
-      event: "worker.inference.terminal",
-      payload: { ...this.identity(identity), seq, outcome },
-    };
-    this.send(socket, frame);
-  }
-
-  private identity(params: WorkerInferenceStartParams) {
+  private inferenceOutput(socket: WebSocket, params: WorkerInferenceStartParams): InferenceOutput {
+    const { runEpoch, sessionId, runId, turnId } = params;
+    const identity = { runEpoch, sessionId, runId, turnId };
+    let seq = 0;
     return {
-      runEpoch: params.runEpoch,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      turnId: params.turnId,
+      event: (event) =>
+        this.send(socket, {
+          type: "event",
+          event: "worker.inference.event",
+          payload: { ...identity, seq: ++seq, event },
+        } satisfies WorkerInferenceEventFrame),
+      finish: (outcome) =>
+        this.send(socket, {
+          type: "event",
+          event: "worker.inference.terminal",
+          payload: { ...identity, seq: ++seq, outcome },
+        } satisfies WorkerInferenceTerminalFrame),
     };
   }
 
@@ -925,6 +886,23 @@ async function setup(options?: FakeGatewayOptions): Promise<{
   return { gateway, workspaceDir, launch };
 }
 
+async function withConnection(
+  options: FakeGatewayOptions,
+  run: (
+    connection: ReturnType<typeof createWorkerConnection>,
+    gateway: FakeWorkerGateway,
+  ) => Promise<void>,
+  connectionOptions: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
+) {
+  const { gateway, launch } = await setup(options);
+  const connection = connectionFor(launch, connectionOptions);
+  try {
+    await run(connection, gateway);
+  } finally {
+    await connection.stop();
+  }
+}
+
 function nextTurn(launch: WorkerLaunchDescriptor, gateway: FakeWorkerGateway, index: number) {
   const next = structuredClone(launch);
   next.assignment.runId = `worker-next-run-${index}`;
@@ -955,12 +933,21 @@ function managedCommand() {
   const scopeKey = `worker:${SESSION_ID}`;
   const supervisor = getProcessSupervisor();
   return {
-    input,
     results,
     idleReady,
     command,
     settled,
     scopeKey,
+    send(launch: WorkerLaunchDescriptor, idleRetention = false) {
+      input.write(`${JSON.stringify(buildWorkerProcessTurn(launch, idleRetention))}\n`);
+      return launch.assignment.turnId;
+    },
+    cancel(turnId: string) {
+      input.write(`${JSON.stringify({ type: "cancel", turnId })}\n`);
+    },
+    waitResults(count: number) {
+      return waitForFast(() => expect(results).toHaveLength(count), { timeout: 30_000 });
+    },
     async close() {
       input.end();
       try {
@@ -1253,54 +1240,45 @@ it.each([
 registerWorkerGatewayToolRpcTests({ setup });
 
 it.each([
-  { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
-])("replays the same durable $name operation across response loss", async (testCase) => {
-  const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
-  const connection = connectionFor(launch, { reconnectBackoff: RECONNECT_BACKOFF });
-  const states: WorkerConnectionState["kind"][] = [];
-  connection.onStateChange((state) => states.push(state.kind));
-  try {
-    await connection.start();
-    const request = {
-      generation: "runtime-surface",
-      toolCallId: `call-durable-${testCase.name}`,
-      toolId: testCase.toolId,
-      arguments: testCase.arguments,
-    };
-    const response = await connection.invokeGatewayTool(request, { replay: true });
-
-    expect(response).toMatchObject({
-      ok: true,
-      payload: { content: [{ type: "text", text: "child accepted" }] },
-    });
-    expect(gateway.connectionCount).toBe(3);
-    expect(states.filter((state) => state === "ready")).toHaveLength(3);
-    expect(gateway.gatewayToolRequests).toEqual([request, request, request]);
-  } finally {
-    await connection.stop();
-  }
-});
-
-it("never replays a portal operation after its response is lost", async () => {
-  const { gateway, launch } = await setup({ dropSessionToolResponses: 1 });
-  const connection = connectionFor(launch, { reconnectBackoff: RECONNECT_BACKOFF });
-  try {
-    await connection.start();
-    const request = {
-      generation: "runtime-surface",
-      toolId: "portal",
-      toolCallId: "call-portal-once",
-      arguments: { action: "open", port: 3000 },
-    };
-
-    await expect(connection.invokeGatewayTool(request)).rejects.toMatchObject({
-      name: "WorkerConnectionInterruptedError",
-    });
-    expect(gateway.gatewayToolRequests).toEqual([request]);
-  } finally {
-    await connection.stop();
-  }
-});
+  ["sessions_spawn", "call-durable-spawn", { task: "start a nested cloud child" }, true],
+  ["portal", "call-portal-once", { action: "open", port: 3000 }, false],
+] as const)(
+  "respects %s replay policy after response loss",
+  async (toolId, toolCallId, args, replay) => {
+    await withConnection(
+      { dropSessionToolResponses: replay ? 2 : 1 },
+      async (connection, gateway) => {
+        let readyCalls = 0;
+        connection.onStateChange((state) => {
+          if (state.kind === "ready") {
+            readyCalls += 1;
+          }
+        });
+        await connection.start();
+        const request = { generation: "runtime-surface", toolId, toolCallId, arguments: args };
+        if (replay) {
+          await expect(
+            connection.invokeGatewayTool(request, { replay: true }),
+          ).resolves.toMatchObject({
+            ok: true,
+            payload: { content: [{ type: "text", text: "child accepted" }] },
+          });
+          expect({ connections: gateway.connectionCount, readyCalls }).toEqual({
+            connections: 3,
+            readyCalls: 3,
+          });
+          expect(gateway.gatewayToolRequests).toEqual([request, request, request]);
+        } else {
+          await expect(connection.invokeGatewayTool(request)).rejects.toMatchObject({
+            name: "WorkerConnectionInterruptedError",
+          });
+          expect(gateway.gatewayToolRequests).toEqual([request]);
+        }
+      },
+      { reconnectBackoff: RECONNECT_BACKOFF },
+    );
+  },
+);
 
 it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
   const { gateway, launch } = await setup({ transcriptFailureAtRequest: 2 });
@@ -1555,20 +1533,17 @@ it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
         `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
       );
     }
-    const { input, results, settled, scopeKey, close } = managedCommand();
+    const { send, cancel, waitResults, results, settled, scopeKey, close } = managedCommand();
 
     try {
-      input.write(
-        JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch }) +
-          "\n",
-      );
-      await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
+      send(launch);
+      await waitResults(1);
       expect(results[0]).toMatchObject({
         turnId: launch.assignment.turnId,
         result: { status: "completed" },
         retainWorker: true,
       });
-      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
+      const running = workerSessions();
       expect(running).toHaveLength(1);
       const sessionId = running[0]!.id;
       const messages = gateway.messages;
@@ -1585,36 +1560,25 @@ it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
       if (processState === "completed") {
         releaseBackground.resolve();
         await waitForExecScope(scopeKey);
-        await waitForFast(() =>
-          expect(
-            listRunningSessions().filter((session) => session.scopeKey === scopeKey),
-          ).toHaveLength(0),
-        );
+        await waitForFast(() => expect(workerSessions()).toHaveLength(0));
         expect(settled).not.toHaveBeenCalled();
       }
 
-      const sendNextTurn = (index: number) => {
-        const next = nextTurn(launch, gateway, index);
-        input.write(
-          `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
-        );
-        return next.assignment.turnId;
-      };
-      const nextTurnId = sendNextTurn(2);
+      const nextTurnId = send(nextTurn(launch, gateway, 2));
       if (processState === "cancelled") {
         await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(3), {
           timeout: 30_000,
         });
-        input.write(`${JSON.stringify({ type: "cancel", turnId: nextTurnId })}\n`);
-        await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
+        cancel(nextTurnId);
+        await waitResults(2);
         expect(results[1]).toMatchObject({
           result: { status: "failed", reason: "turn-failed" },
           retainWorker: true,
         });
-        sendNextTurn(3);
+        send(nextTurn(launch, gateway, 3));
       }
       const turnCount = processState === "cancelled" ? 3 : 2;
-      await waitForFast(() => expect(results).toHaveLength(turnCount), { timeout: 30_000 });
+      await waitResults(turnCount);
       expect(gateway.connectionCount).toBe(turnCount);
       const processResults = gateway.messages.filter(
         (message) => message.role === "toolResult" && message.toolName === "process",
@@ -1645,9 +1609,7 @@ it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
         }
       }
     }
-    expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
-      0,
-    );
+    expect(workerSessions()).toHaveLength(0);
   },
 );
 
@@ -1687,14 +1649,7 @@ it("stops worker-scoped background processes when fenced", async () => {
     reason: "owner-epoch-mismatch",
   });
   expect(gateway.inferenceRequests).toHaveLength(2);
-  await waitForFast(
-    () => {
-      expect(
-        listRunningSessions().filter((session) => session.scopeKey === `worker:${SESSION_ID}`),
-      ).toHaveLength(0);
-    },
-    { timeout: 7_000 },
-  );
+  await waitForFast(() => expect(workerSessions()).toHaveLength(0), { timeout: 7_000 });
 });
 
 it("executes coding tools locally without reading the preexisting auth profile", async () => {
@@ -1781,22 +1736,14 @@ it.skipIf(process.platform === "win32")(
         .filter((message) => message.role === "toolResult")
         .find((message) => message.toolName === "exec");
       expect(toolResult).toMatchObject({ isError: false });
-      const profileDir = path.join(
-        environment.stateDir,
-        "github-profiles",
-        createHash("sha256").update(launch.assignment.turnId).digest("hex").slice(0, 16),
-      );
+      const profileDir = githubProfileDir(environment.stateDir, launch.assignment.turnId);
       const output =
         toolResult?.content
           .filter((block) => block.type === "text")
           .map((block) => block.text)
           .join("\n") ?? "";
       expect(output).toContain(
-        [
-          createHash("sha256").update(binding.token).digest("hex"),
-          "github-token=",
-          "helpers-start",
-        ].join("\n"),
+        [sha256(binding.token), "github-token=", "helpers-start"].join("\n"),
       );
       expect(output).toContain(
         [`refs/heads/${binding.branch}`, binding.remoteUrl, `profile=${profileDir}`].join("\n"),
@@ -1855,10 +1802,11 @@ it.skipIf(process.platform === "win32")(
       token: "worker-turn-a-token",
       branch: "openclaw/session-fixture",
     };
-    const { input, results, idleReady, command, settled, scopeKey, close } = managedCommand();
+    const { send, waitResults, results, idleReady, command, settled, scopeKey, close } =
+      managedCommand();
     try {
-      input.write(`${JSON.stringify(buildWorkerProcessTurn(launch, true))}\n`);
-      await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
+      send(launch, true);
+      await waitResults(1);
       expect(results[0]).toMatchObject({
         turnId: launch.assignment.turnId,
         result: { status: "completed" },
@@ -1878,8 +1826,8 @@ it.skipIf(process.platform === "win32")(
         token: "worker-turn-b-token",
         branch: "openclaw/session-fixture",
       };
-      input.write(`${JSON.stringify(buildWorkerProcessTurn(next, true))}\n`);
-      await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
+      send(next, true);
+      await waitResults(2);
       expect(results[1]).toMatchObject({
         turnId: next.assignment.turnId,
         result: { status: "completed" },
@@ -1894,11 +1842,7 @@ it.skipIf(process.platform === "win32")(
       });
       expect(settled).not.toHaveBeenCalled();
 
-      const nextProfileDir = path.join(
-        stateDir,
-        "github-profiles",
-        createHash("sha256").update(next.assignment.turnId).digest("hex").slice(0, 16),
-      );
+      const nextProfileDir = githubProfileDir(stateDir, next.assignment.turnId);
       const hosts = await readFile(path.join(nextProfileDir, "hosts.yml"), "utf8");
       expect(hosts).toContain("worker-b");
       expect(hosts).not.toContain("worker-a");
@@ -1948,37 +1892,32 @@ registerWorkerReplayWindowTests({ setup, assistantMessage, modelRef: MODEL_REF }
 
 describe("worker reconnect clients", () => {
   it("isolates ready listener failures while admitting the worker and starting heartbeats", async () => {
-    const { gateway, launch } = await setup({ heartbeatIntervalMs: 1 });
-    const connection = connectionFor(launch);
-    let healthyReadyCalls = 0;
-    connection.onReady(() => {
-      throw new Error("induced ready observer failure");
-    });
-    connection.onReady(() => {
-      healthyReadyCalls += 1;
-    });
-
-    try {
+    await withConnection({ heartbeatIntervalMs: 1 }, async (connection, gateway) => {
+      let healthyReadyCalls = 0;
+      connection.onReady(() => {
+        throw new Error("induced ready observer failure");
+      });
+      connection.onReady(() => {
+        healthyReadyCalls += 1;
+      });
       await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
       expect(healthyReadyCalls).toBe(1);
       await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
-    } finally {
-      await connection.stop();
-    }
+    });
   });
 
   it.each([
     ["admission", { ignoreFirstAdmission: true }, { admissionTimeoutMs: 25 }],
     ["heartbeat", { ignoreHeartbeat: true, heartbeatIntervalMs: 1 }, { requestTimeoutMs: 25 }],
   ] as const)("times out a silent %s and reconnects", async (_phase, gatewayOptions, options) => {
-    const { gateway, launch } = await setup(gatewayOptions);
-    const connection = connectionFor(launch, { ...options, reconnectBackoff: RECONNECT_BACKOFF });
-    try {
-      await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
-      await waitForFast(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
-    } finally {
-      await connection.stop();
-    }
+    await withConnection(
+      gatewayOptions,
+      async (connection, gateway) => {
+        await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
+        await waitForFast(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
+      },
+      { ...options, reconnectBackoff: RECONNECT_BACKOFF },
+    );
   });
 
   it("replays exact RPC payloads after silent response timeouts", async () => {
