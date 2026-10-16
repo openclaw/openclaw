@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import type { AddressInfo, Server } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { normalizeOpenAIResponsesFunctionCallId } from "./openai-responses-tool-call-id-shape.js";
 
 // Proxy backends can return noncanonical IDs; replay must restore their raw wire IDs.
@@ -18,28 +19,26 @@ class ScriptedResponsesServer {
   }
 
   async listen(): Promise<string> {
-    this.server = createServer((req, res) => {
+    this.server = createServer(async (req, res) => {
       let body = "";
       req.setEncoding("utf8");
-      req.on("data", (chunk) => {
+      for await (const chunk of req) {
         body += chunk;
-      });
-      req.on("end", () => {
-        const parsed = JSON.parse(body) as Record<string, unknown>;
-        const index = this.requests.length;
-        this.requests.push(parsed);
-        const frame = this.script[index];
-        if (!frame) {
-          res.writeHead(500, { "content-type": "application/json" });
-          res.end(
-            JSON.stringify({ error: { message: `no scripted response for request ${index}` } }),
-          );
-          return;
-        }
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-        res.write(`data: ${frame}\n\n`);
-        res.end();
-      });
+      }
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      const index = this.requests.length;
+      this.requests.push(parsed);
+      const frame = this.script[index];
+      if (!frame) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ error: { message: `no scripted response for request ${index}` } }),
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      res.write(`data: ${frame}\n\n`);
+      res.end();
     });
     await new Promise<void>((resolve) => {
       this.server?.listen(0, "127.0.0.1", resolve);
@@ -60,15 +59,9 @@ const RAW_CALL_ID = "functions.gateway:0";
 const RAW_ITEM_ID = "fc_tmp_kegospxl46";
 
 function completedFrame(responseId: string, output: unknown[]): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  });
+  return JSON.stringify(
+    fixtures.completedResponse(responseId, output, { usage: fixtures.responseUsage }),
+  );
 }
 
 function toolCallCompletedFrame(responseId: string, colliding = false): string {
@@ -81,34 +74,18 @@ function toolCallCompletedFrame(responseId: string, colliding = false): string {
   return completedFrame(
     responseId,
     calls.map((call) =>
-      Object.assign(call, {
-        type: "function_call",
-        status: "completed",
-        arguments: "{}",
-      }),
+      Object.assign(call, { type: "function_call", status: "completed", arguments: "{}" }),
     ),
   );
 }
 
 function textCompletedFrame(responseId: string, content: string): string {
-  return completedFrame(responseId, [
-    {
-      id: `msg_${responseId}`,
-      type: "message",
-      status: "completed",
-      content: [{ type: "output_text", text: content, annotations: [] }],
-      role: "assistant",
-    },
-  ]);
-}
-
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
+  return completedFrame(responseId, [fixtures.outputMessage(content, `msg_${responseId}`)]);
 }
 
 function customEndpointModel(baseUrl: string): Model<"openai-responses"> {
   return Object.assign(
-    createModel({
+    fixtures.createModel({
       id: "scripted-model",
       name: "Scripted Model",
       provider: "omniroute",
@@ -120,14 +97,7 @@ function customEndpointModel(baseUrl: string): Model<"openai-responses"> {
 }
 
 function toolResult(toolCall: { id: string; name: string }, text: string, timestamp: number) {
-  return {
-    role: "toolResult" as const,
-    toolCallId: toolCall.id,
-    toolName: toolCall.name,
-    isError: false,
-    content: [{ type: "text" as const, text }],
-    timestamp,
-  };
+  return makeTextToolResult(toolCall.id, toolCall.name, text, false, timestamp);
 }
 
 async function run(
@@ -159,13 +129,11 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     const baseUrl = await server.listen();
     const model = customEndpointModel(baseUrl);
     const sessionId = "real-sse-noncanonical-id";
-    const firstUser = userMessage("call the gateway tool", 1);
+    const firstUser = fixtures.userMessage("call the gateway tool", 1);
     const callTurn = await run(model, { messages: [firstUser], tools: [] }, sessionId);
 
     const toolCall = callTurn.content.find((block) => block.type === "toolCall");
-    if (!toolCall) {
-      throw new Error("Expected a completed tool call");
-    }
+    assert(toolCall, "Expected a completed tool call");
     expect(toolCall.id).toBe(`${RAW_CALL_ID}|${RAW_ITEM_ID}`);
 
     // Match the agent's transcript normalization without importing its wrapper.
@@ -183,11 +151,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     const secondRequest = server.requests[1];
     expect(secondRequest).toHaveProperty("previous_response_id", "resp_1");
     expect(secondRequest?.input).toEqual([
-      {
-        type: "function_call_output",
-        call_id: RAW_CALL_ID,
-        output: "recorded",
-      },
+      { type: "function_call_output", call_id: RAW_CALL_ID, output: "recorded" },
     ]);
   });
 
@@ -199,15 +163,13 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     const baseUrl = await server.listen();
     const model = customEndpointModel(baseUrl);
     const sessionId = "real-sse-ambiguous-noncanonical-ids";
-    const firstUser = userMessage("call both tools", 1);
+    const firstUser = fixtures.userMessage("call both tools", 1);
     const callTurn = await run(model, { messages: [firstUser], tools: [] }, sessionId);
     const toolCalls = callTurn.content.filter((block) => block.type === "toolCall");
 
     expect(toolCalls).toHaveLength(2);
     const replayedToolCalls = toolCalls.map((toolCall) =>
-      Object.assign({}, toolCall, {
-        id: normalizeOpenAIResponsesFunctionCallId(toolCall.id),
-      }),
+      Object.assign({}, toolCall, { id: normalizeOpenAIResponsesFunctionCallId(toolCall.id) }),
     );
     expect(replayedToolCalls[0]?.id).toBe(replayedToolCalls[1]?.id);
     const toolResults = replayedToolCalls.map((call, index) =>
@@ -254,13 +216,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
     expect(requests[1]).toMatchObject({ previous_response_id: "resp_1" });
     expect(requests[2]).toMatchObject({ previous_response_id: "resp_2" });
     expect(requests.slice(1).map((request) => request.input)).toEqual(
-      ["second question", "third question"].map((text) => [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text }],
-        },
-      ]),
+      ["second question", "third question"].map((text) => [fixtures.inputMessage(text)]),
     );
   });
 });

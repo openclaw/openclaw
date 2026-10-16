@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import OpenAI from "openai";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
@@ -17,10 +17,11 @@ const model = createModel({
   maxTokens: 4_096,
 });
 
-describe("Responses streamed recovery lifecycle", () => {
-  it.each(["streamed", "HTTP"])("closes prior streams before retry (%s)", async (secondFailure) => {
+it.each(["streamed", "HTTP"])(
+  "Responses recovery closes prior streams before retry (%s)",
+  async (secondFailure) => {
     const order: string[] = [];
-    const responses: Response[] = [];
+    let firstResponse: Response | undefined;
     const controller = new AbortController();
     const cleanupStarted = createDeferred();
     const releaseCleanup = createDeferred();
@@ -39,14 +40,10 @@ describe("Responses streamed recovery lifecycle", () => {
           type: "invalid_request_error",
         };
         if (attempt === 2 && secondFailure === "HTTP") {
-          const response = Response.json({ error }, { status: 400 });
-          responses.push(response);
-          return response;
+          return Response.json({ error }, { status: 400 });
         }
         const response = {
           id: `resp_${attempt}`,
-          object: "response",
-          model: model.id,
           output: [],
         };
         const events = [
@@ -59,7 +56,7 @@ describe("Responses streamed recovery lifecycle", () => {
         const httpResponse = new Response(body, {
           headers: { "content-type": "text/event-stream", "x-request-id": `req_${attempt}` },
         });
-        responses.push(httpResponse);
+        firstResponse ??= httpResponse;
         return httpResponse;
       },
     });
@@ -94,34 +91,32 @@ describe("Responses streamed recovery lifecycle", () => {
         canRetryStream: () => true,
         buildFullHistoryRequest,
         onCompactionRejected,
-        wrapStream: ({ stream, response }) => ({
-          async *[Symbol.asyncIterator]() {
-            try {
-              yield* withProviderResponseHook({
-                stream,
-                signal: controller.signal,
-                abort: (reason) => controller.abort(reason),
-                hook: createOpenAIProviderAcceptanceHook(
-                  {
-                    signal: controller.signal,
-                    onResponse: ({ headers }) => {
-                      order.push(`hook:${headers["x-request-id"]}`);
-                    },
+        async *wrapStream({ stream, response }) {
+          try {
+            yield* withProviderResponseHook({
+              stream,
+              signal: controller.signal,
+              abort: (reason) => controller.abort(reason),
+              hook: createOpenAIProviderAcceptanceHook(
+                {
+                  signal: controller.signal,
+                  onResponse: ({ headers }) => {
+                    order.push(`hook:${headers["x-request-id"]}`);
                   },
-                  response,
-                  model,
-                ),
-              });
-            } finally {
-              if (response === responses[0]) {
-                order.push("cleanup:req_1");
-                cleanupStarted.resolve();
-                await releaseCleanup.promise;
-              }
-              order.push(`close:${response.headers.get("x-request-id")}`);
+                },
+                response,
+                model,
+              ),
+            });
+          } finally {
+            if (response === firstResponse) {
+              order.push("cleanup:req_1");
+              cleanupStarted.resolve();
+              await releaseCleanup.promise;
             }
-          },
-        }),
+            order.push(`close:${response.headers.get("x-request-id")}`);
+          }
+        },
       });
       expect(order).toEqual(["create:1"]);
 
@@ -181,5 +176,5 @@ describe("Responses streamed recovery lifecycle", () => {
       await Promise.allSettled([consuming]);
       create.mockRestore();
     }
-  });
-});
+  },
+);

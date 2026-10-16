@@ -1,16 +1,12 @@
 import type { AssistantMessage, Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 
-const model = createModel({
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  contextWindow: 1_000_000,
-});
+const model = fixtures.createReplayModel();
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const thinking = (item: object) => ({
@@ -19,18 +15,8 @@ const thinking = (item: object) => ({
   thinkingSignature: JSON.stringify(item),
 });
 
-function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
-    timestamp: 0,
-  };
-}
+const createAssistant = (content: AssistantMessage["content"]) =>
+  fixtures.createAssistant(model, content);
 
 const responseConverters = [
   {
@@ -90,14 +76,7 @@ describe("OpenAI Responses reasoning replay", () => {
             { type: "text", text: "Between calls" },
             { ...toolCall, id: "call_two|fc_two" },
           ]),
-          {
-            role: "toolResult",
-            toolCallId: "call_one|fc_one",
-            toolName: "probe",
-            content: [{ type: "text", text: "Done" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_one|fc_one", "probe", "Done", false, 1),
           createAssistant([{ ...toolCall, id: "call_orphan|fc_orphan" }]),
           createAssistant([
             { ...reasoning, thinkingSignature: "malformed" },
@@ -139,10 +118,7 @@ describe("OpenAI Responses reasoning replay", () => {
           summary: [],
           ...(encryptedContent === undefined ? {} : { encrypted_content: encryptedContent }),
         };
-        const block = {
-          ...thinking(item),
-          openclawReasoningReplay: metadata,
-        };
+        const block = { ...thinking(item), openclawReasoningReplay: metadata };
         const input = convert({ messages: [createAssistant([block])] });
         expect(input).toEqual(encryptedContent ? [item] : []);
 
