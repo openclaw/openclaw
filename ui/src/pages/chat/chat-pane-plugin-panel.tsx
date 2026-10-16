@@ -1,6 +1,6 @@
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { PluginView } from "../../plugins/control-ui-view.solid.tsx";
-import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
 
 export function EmbeddedPluginPanel(props: {
   contributionKey: string;

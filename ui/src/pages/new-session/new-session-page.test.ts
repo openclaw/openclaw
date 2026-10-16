@@ -13,7 +13,6 @@ type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
   focusComposer(): void;
   updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -97,7 +96,7 @@ describe("new session draft route ownership", () => {
     await enterMessage(page, "later draft");
     expect(retained?.getDraft?.()).toBe("later draft");
     dictating = true;
-    page.requestUpdate();
+    document.dispatchEvent(new Event("visibilitychange"));
     await settle(page);
     expect(retained?.disabled).toBe(true);
   });
@@ -137,7 +136,6 @@ describe("new session draft route ownership", () => {
       await flushFrames(0);
       await flushFrames(206);
       expect(placeholder()).toBe(reducedMotion ? target : target.slice(0, 1));
-      page.requestUpdate();
       page.remove();
       await settle(page);
       expect(frames.size).toBe(0);
@@ -209,7 +207,7 @@ describe("new session draft route ownership", () => {
         .not.toBeNull();
       if (transition === "finish dictation") {
         dictating = true;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await settle(page);
         expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
       }
@@ -241,7 +239,7 @@ describe("new session draft route ownership", () => {
         expect(actionButtons()).toHaveLength(2);
         expect(actionButtons().every((button) => button.disabled)).toBe(true);
         dictating = false;
-        page.requestUpdate();
+        document.dispatchEvent(new Event("visibilitychange"));
         await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
       }
       if (transition === "show in composer" || transition === "finish dictation") {

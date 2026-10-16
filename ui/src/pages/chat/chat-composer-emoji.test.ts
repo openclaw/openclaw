@@ -109,7 +109,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
         submitting: false,
         messageLocked: locked,
         textareaController: controller,
-        requestUpdate: redraw,
+        onChange: redraw,
         onInput: (next) => {
           draft = next;
           redraw();

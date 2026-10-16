@@ -44,11 +44,13 @@ it("retains the plugin panel while parking and reveals it with current pane prop
   const provider = createSolidApplicationContextProvider(context);
   const view = mountSolid(
     () => (
-      <EmbeddedPluginPanel
-        contributionKey="fixture/notes"
-        props={{ sessionKey: sessionKey(), agentId: "main" }}
-        presentation={presentation()}
-      />
+      <span style={{ display: "contents" }}>
+        <EmbeddedPluginPanel
+          contributionKey="fixture/notes"
+          props={{ sessionKey: sessionKey(), agentId: "main" }}
+          presentation={presentation()}
+        />
+      </span>
     ),
     { wrapper: provider.wrapper },
   );

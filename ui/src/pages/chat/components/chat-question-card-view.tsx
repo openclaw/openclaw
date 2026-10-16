@@ -1,4 +1,4 @@
-import { createEffect, createSignal, lazy, Loading, onCleanup } from "solid-js";
+import { createEffect, createMemo, lazy, Loading, onCleanup, refresh } from "solid-js";
 import {
   isOptionalElementDefined,
   LazyCustomElementRequestController,
@@ -28,12 +28,11 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";
-    const [revision, setRevision] = createSignal(0);
     let live = true;
     const loader = new LazyCustomElementRequestController({
       requestUpdate: () => {
         if (live) {
-          setRevision((value) => value + 1);
+          void refresh(view);
         }
       },
     });
@@ -45,25 +44,23 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
       live = false;
       loader.requestWhileActive(questionPanelElement, false);
     });
-    const loaded = () => {
-      revision();
-      return isOptionalElementDefined(questionPanelElement);
-    };
-    const failure = () => {
-      revision();
+    const view = createMemo(() => {
       const value = loader.visibleState;
-      return value?.status === "error" ? value : undefined;
-    };
+      return {
+        loaded: isOptionalElementDefined(questionPanelElement),
+        failure: value?.status === "error" ? value : undefined,
+      };
+    });
     return (
       <>
         {props.props && (
           <Loading fallback={<LoadingState />}>
-            {loaded() ? (
+            {view().loaded ? (
               <QuestionPanel props={props.props} />
-            ) : failure() ? (
+            ) : view().failure ? (
               <LazyViewError
-                error={failure()?.error}
-                stale={failure()?.stale}
+                error={view().failure?.error}
+                stale={view().failure?.stale}
                 subtitle={questionPanelElement.label}
                 onRetry={() => loader.retry()}
               />

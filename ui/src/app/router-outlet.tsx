@@ -11,7 +11,6 @@ import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
-import { LitRouteHost } from "./lit-route-host.tsx";
 import {
   createRouterOutletPresentation,
   selectRenderedRouteMatch,
@@ -28,16 +27,6 @@ type RouterOutletOptions = {
   retryContext?: ApplicationContext;
   presented?: boolean;
 };
-
-function measureRoutedRender<T>(routeId: string, render: () => T): T {
-  const startedAt = globalThis.performance?.now() ?? 0;
-  const result = render();
-  const durationMs = Math.round((globalThis.performance?.now() ?? startedAt) - startedAt);
-  if (durationMs >= 16) {
-    console.debug("[openclaw] routed render", { routeId, durationMs });
-  }
-  return result;
-}
 
 /**
  * Shows progress while waiting for the restarting gateway. The state lives on
@@ -124,7 +113,7 @@ function renderRouterOutlet(
     renderedMatch.status === "notFound" ||
     renderedMatch.status === "redirected"
   ) {
-    return { legacy: null };
+    return { state: "empty" };
   }
 
   const routeId = renderedMatch.routeId;
@@ -132,43 +121,23 @@ function renderRouterOutlet(
     ? { router, retryContext: options.retryContext, error: renderedMatch.error, routeId }
     : undefined;
   if (!renderedMatch.module) {
-    return error ? { legacy: null, error } : showPending ? { state: "loading" } : { legacy: null };
+    return { state: showPending && !error ? "loading" : "empty", error };
   }
   const routeModule = renderedMatch.module;
   if (
-    routeModule.renderSolid &&
-    !(
-      renderedMatch.error &&
-      (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(renderedMatch.error))
-    )
+    error &&
+    (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
   ) {
-    return {
-      render: routeModule.renderSolid,
-      props: {
-        data: renderedMatch.data,
-        loaderPending: renderedMatch.isFetching === "loader",
-        presented: options.presented !== false,
-      },
-      error: error ? { ...error, inline: true } : undefined,
-    };
+    return { state: "empty", error };
   }
-  const render = routeModule.render;
-  const renderedPage = render
-    ? () =>
-        measureRoutedRender(routeId, () =>
-          options.presented === false
-            ? render(renderedMatch.data, renderedMatch.isFetching === "loader", false)
-            : render(renderedMatch.data, renderedMatch.isFetching === "loader"),
-        )
-    : undefined;
   return {
-    legacy:
-      error && (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
-        ? null
-        : renderedPage?.(),
-    error: error
-      ? { ...error, inline: Boolean(renderedPage) && !routeModule.retainOnNavigate }
-      : undefined,
+    render: routeModule.renderSolid,
+    props: {
+      data: renderedMatch.data,
+      loaderPending: renderedMatch.isFetching === "loader",
+      presented: options.presented !== false,
+    },
+    error: error ? { ...error, inline: true } : undefined,
   };
 }
 
@@ -190,8 +159,7 @@ type RouteContent =
       props: SolidRouteProps;
       error?: RouteErrorProps;
     }
-  | { legacy: unknown; error?: RouteErrorProps }
-  | { state: "loading" | "startup" };
+  | { state: "empty" | "loading" | "startup"; error?: RouteErrorProps };
 
 type Presentation = { key: string; render: (presented: boolean) => RouteContent };
 
@@ -213,65 +181,43 @@ function RoutePresentation(props: {
     const current = value();
     return "state" in current ? current.state : undefined;
   };
-  const isLegacy = () => "legacy" in value();
-  const SolidPage = () => {
-    const page = (
-      <>
-        <Show when={native()}>
-          {(current) => (
-            <ContentPresentation value={() => props.presented !== false}>
-              <Show when={current().render} keyed>
-                {(View) => (
-                  <View
-                    data={current().props.data}
-                    loaderPending={current().props.loaderPending}
-                    presented={current().props.presented}
-                  />
-                )}
-              </Show>
-            </ContentPresentation>
-          )}
-        </Show>
-        <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>
-        <Show when={state() === "startup"}>
-          <AgentStartupState />
-        </Show>
-        <Show when={state() === "loading"}>
-          <LoadingState />
-        </Show>
-      </>
-    );
-    return props.presentation ? (
-      <openclaw-route-presentation
-        style={{ display: props.presented ? "contents" : "none" }}
-        hidden={!props.presented}
-        inert={!props.presented}
-        aria-hidden={props.presented ? "false" : "true"}
-      >
-        {page}
-      </openclaw-route-presentation>
-    ) : (
-      <openclaw-route-fragment style={{ display: "contents" }}>{page}</openclaw-route-fragment>
-    );
-  };
-  return (
-    <Show when={isLegacy()} fallback={<SolidPage />}>
-      <LitRouteHost
-        presentation={props.presentation}
-        presented={props.presented}
-        renderValue={() => {
-          const current = value();
-          return "legacy" in current ? current.legacy : null;
-        }}
-      />
-      <Show when={error()}>
+  const page = (
+    <>
+      <Show when={native()}>
         {(current) => (
-          <openclaw-route-fragment style={{ display: "contents" }}>
-            <RouteError {...current()} />
-          </openclaw-route-fragment>
+          <ContentPresentation value={() => props.presented !== false}>
+            <Show when={current().render} keyed>
+              {(View) => (
+                <View
+                  data={current().props.data}
+                  loaderPending={current().props.loaderPending}
+                  presented={current().props.presented}
+                />
+              )}
+            </Show>
+          </ContentPresentation>
         )}
       </Show>
-    </Show>
+      <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>
+      <Show when={state() === "startup"}>
+        <AgentStartupState />
+      </Show>
+      <Show when={state() === "loading"}>
+        <LoadingState />
+      </Show>
+    </>
+  );
+  return props.presentation ? (
+    <openclaw-route-presentation
+      style={{ display: props.presented ? "contents" : "none" }}
+      hidden={!props.presented}
+      inert={!props.presented}
+      aria-hidden={props.presented ? "false" : "true"}
+    >
+      {page}
+    </openclaw-route-presentation>
+  ) : (
+    <openclaw-route-fragment style={{ display: "contents" }}>{page}</openclaw-route-fragment>
   );
 }
 
@@ -279,11 +225,13 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-router-outlet": HTMLAttributes<HTMLElement>;
+      "openclaw-route-presentation": HTMLAttributes<HTMLElement>;
+      "openclaw-route-fragment": HTMLAttributes<HTMLElement>;
     }
   }
 }
 
-/** Solid owns route lifetimes; unported modules own only their Lit island children. */
+/** Solid owns route presentation and retained page lifetimes. */
 export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
   let host!: HTMLElement;
   let disposed = false;
@@ -433,7 +381,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined
           ? {
-              legacy: null,
+              state: "empty",
               error: {
                 router,
                 retryContext,
@@ -554,14 +502,14 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
             presentation
             presented={presentation().presented}
             renderValue={() =>
-              presentation().retained?.render(presentation().presented) ?? { legacy: null }
+              presentation().retained?.render(presentation().presented) ?? { state: "empty" }
             }
           />
         )}
       </Show>
       <Show when={Boolean(presentation().transient)}>
         <RoutePresentation
-          renderValue={() => presentation().transient?.render(true) ?? { legacy: null }}
+          renderValue={() => presentation().transient?.render(true) ?? { state: "empty" }}
         />
       </Show>
       <Show when={presentation().waiting}>

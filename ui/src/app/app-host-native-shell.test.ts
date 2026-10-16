@@ -141,22 +141,9 @@ describe("OpenClaw native shell", () => {
     window.addEventListener("openclaw:native-commands-state", recordState);
     try {
       shell.connect();
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: true, canGoForward: false },
-        }),
-      );
-      expect(shell.nativeHistoryState.canGoBack).toBe(true);
       expect(states).toEqual([true]);
 
       shell.disconnect();
-      shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: true, canGoForward: false },
-        }),
-      );
-      expect(shell.nativeHistoryState.canGoBack).toBe(false);
       expect(states).toEqual([true, false]);
     } finally {
       shell.disconnect();

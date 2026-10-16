@@ -1,8 +1,7 @@
 import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { emptyLegacyContent, LitContent } from "../../../lit/solid-content.tsx";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyConnector } from "./chat-reply-connector.ts";
 
@@ -22,9 +21,7 @@ export function ReplyLineView(props: ReplyLineProps) {
   const person = () => (
     <>
       <Show when={named()}>
-        <LitContent
-          value={renderChatAuthorAvatar(props.line.sender, undefined, props.line.agentAvatar)}
-        />
+        <ChatAuthorAvatar sender={props.line.sender} agentAvatar={props.line.agentAvatar} />
       </Show>
       <span class="chat-reply-attribution__name" title={name()}>
         {name()}
@@ -84,13 +81,10 @@ export function ReplyLineView(props: ReplyLineProps) {
   );
 }
 
-export function ReplyLineConnector(props: { line: ReplyLine; avatar: unknown }) {
+export function ReplyLineConnector(props: { line: ReplyLine; avatar: boolean | null | undefined }) {
   return (
     <Show
-      when={
-        props.avatar !== emptyLegacyContent &&
-        (props.line.state === "named" || props.line.state === "unavailable")
-      }
+      when={props.avatar && (props.line.state === "named" || props.line.state === "unavailable")}
     >
       <ReplyConnector />
     </Show>

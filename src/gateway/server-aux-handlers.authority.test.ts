@@ -23,13 +23,53 @@ import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./worker-environments/placement-turn-claim-events.js";
 
 type GatewayAux = ReturnType<typeof createGatewayAuxHandlers>;
 type GatewayAuxParams = Parameters<typeof createGatewayAuxHandlers>[0];
 const auxiliaries: GatewayAux[] = [];
 let fixture: OpenClawTestState | undefined;
+const credentialQuestions = [
+  {
+    questionId: "key",
+    header: "Key",
+    question: "Credential",
+    options: [],
+    isSecret: true,
+    secretStore: { name: "SERVICE_API_KEY", kind: "secret" as const },
+  },
+];
+
+function bindPublication(gatewayAux: GatewayAux, withWebPush = false) {
+  const broadcast = vi.fn();
+  const publishResolved = vi.fn();
+  gatewayAux.bindApprovalPublicationContext({
+    broadcast,
+    broadcastToConnIds: vi.fn(),
+    approvalEvents: { publishResolved },
+    ...(withWebPush ? { approvalWebPushDelivery: gatewayAux.approvalWebPushDelivery } : {}),
+    logGateway: { error: vi.fn() },
+  } as never);
+  return { broadcast, publishResolved };
+}
+
+function expectQuestionCancelled(
+  onResolved: ReturnType<typeof vi.fn>,
+  question: ReturnType<GatewayAux["questionManager"]["request"]>,
+) {
+  expect(onResolved).toHaveBeenCalledExactlyOnceWith(
+    { id: question.id, status: "cancelled" },
+    {
+      record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
+      ordinary: false,
+      sessionAccess: undefined,
+      isCurrent: expect.any(Function),
+      refreshRequester: expect.any(Function),
+    },
+  );
+  expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
+}
 
 function createAuthorityHarness(
   params: Pick<
@@ -164,23 +204,12 @@ describe("gateway auxiliary authority lifecycle", () => {
 
   it("retires one request approval while its sibling and admitted run remain live", async () => {
     const onAgentRunAuthorityClosed =
-      vi.fn<
-        (
-          authority: ReturnType<typeof claimAgentRunDelegatedAuthority>,
-          approvalReason?: string,
-        ) => void
-      >();
+      vi.fn<NonNullable<GatewayAuxParams["onAgentRunAuthorityClosed"]>>();
     const gatewayAux = createAuthorityHarness({
       onAgentRunAuthorityClosed,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
-    const publishResolved = vi.fn();
-    gatewayAux.bindApprovalPublicationContext({
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-      approvalEvents: { publishResolved },
-      logGateway: { error: vi.fn() },
-    } as never);
+    const { publishResolved } = bindPublication(gatewayAux);
     const authority = claimAgentRunDelegatedAuthority({
       instanceId: "native-permission-owner",
       runId: "native-permission-run",
@@ -251,16 +280,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const onResolved = vi.fn();
       const question = gatewayAux.questionManager.request({
-        questions: [
-          {
-            questionId: "key",
-            header: "Key",
-            question: "Credential",
-            options: [],
-            isSecret: true,
-            secretStore: { name: "SERVICE_API_KEY", kind: "secret" },
-          },
-        ],
+        questions: credentialQuestions,
         timeoutMs: 60_000,
         isRequesterActive: () => validateAgentRunDelegatedAuthority(authority),
         onResolved,
@@ -279,17 +299,7 @@ describe("gateway auxiliary authority lifecycle", () => {
           rotateAgentRunRegistryLifecycleGeneration();
         }
         // get/list also check liveness, so assert push delivery before either read.
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith(
-          { id: question.id, status: "cancelled" },
-          {
-            record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
-            ordinary: false,
-            sessionAccess: undefined,
-            isCurrent: expect.any(Function),
-            refreshRequester: expect.any(Function),
-          },
-        );
-        expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
+        expectQuestionCancelled(onResolved, question);
         await expect(answer).resolves.toEqual({ status: "cancelled" });
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledOnce();
         expect(onAgentRunAuthorityClosed).toHaveBeenCalledWith(
@@ -313,16 +323,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     const questions = authorities.map((authority, index) =>
       gatewayAux.questionManager.request({
         id: authority.operationalRunInstance.instanceId,
-        questions: [
-          {
-            questionId: "key",
-            header: "Key",
-            question: "Credential",
-            options: [],
-            isSecret: true,
-            secretStore: { name: "SERVICE_API_KEY", kind: "secret" },
-          },
-        ],
+        questions: credentialQuestions,
         timeoutMs: 60_000,
         isRequesterActive: () => validateAgentRunDelegatedAuthority(authority),
         onResolved: (event) => {
@@ -355,16 +356,8 @@ describe("gateway auxiliary authority lifecycle", () => {
     const restoreClock = installTestApprovalClock();
     try {
       const gatewayAux = createAuthorityHarness({});
-      const broadcast = vi.fn();
-      const publishResolved = vi.fn();
       const handleWebPushExpired = vi.spyOn(gatewayAux.approvalWebPushDelivery, "handleExpired");
-      gatewayAux.bindApprovalPublicationContext({
-        broadcast,
-        broadcastToConnIds: vi.fn(),
-        approvalEvents: { publishResolved },
-        approvalWebPushDelivery: gatewayAux.approvalWebPushDelivery,
-        logGateway: { error: vi.fn() },
-      } as never);
+      const { broadcast, publishResolved } = bindPublication(gatewayAux, true);
       const record = gatewayAux.execApprovalManager.create(
         { command: "echo expires" },
         1_000,
@@ -404,46 +397,11 @@ describe("gateway auxiliary authority lifecycle", () => {
       agentId: "main",
       sessionKey: "agent:main:worker-close",
     };
-    seedAttachedPlacementEnvironment(database, {
+    const placement = await advancePlacementFixtureToActive(placements, database, identity, {
       environmentId: "worker-env",
-      sessionId: identity.sessionId,
-      ownerEpoch: 7,
+      remoteWorkspaceDir: "/workspace/worker-close",
+      seedEnvironment: "before-dispatch",
     });
-    let placement = await placements.startDispatch(identity);
-    placement = await placements.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: "worker-env" },
-    });
-    placement = await placements.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = await placements.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace/worker-close",
-      },
-    });
-    placement = await placements.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (placement.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
     const operationalRunInstance = Object.freeze({
       instanceId: "worker-operational-instance",
       runId: "worker-run-close",
@@ -487,14 +445,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       registerWorkerTurnClaimClosedHandler: (handler) =>
         placements.registerTurnClaimClosedHandler(handler),
     });
-    const broadcast = vi.fn();
-    const publishResolved = vi.fn();
-    gatewayAux.bindApprovalPublicationContext({
-      broadcast,
-      broadcastToConnIds: vi.fn(),
-      approvalEvents: { publishResolved },
-      logGateway: { error: vi.fn() },
-    } as never);
+    const { broadcast, publishResolved } = bindPublication(gatewayAux);
     const execRecord = gatewayAux.execApprovalManager.create(
       { command: "echo worker", runId: turnClaim.runId },
       60_000,
@@ -513,16 +464,7 @@ describe("gateway auxiliary authority lifecycle", () => {
       .decision;
     const questionResolved = vi.fn();
     const question = gatewayAux.questionManager.request({
-      questions: [
-        {
-          questionId: "key",
-          header: "Key",
-          question: "Credential",
-          options: [],
-          isSecret: true,
-          secretStore: { name: "SERVICE_API_KEY", kind: "secret" },
-        },
-      ],
+      questions: credentialQuestions,
       timeoutMs: 60_000,
       isRequesterActive: () =>
         validateAuthority({
@@ -546,17 +488,7 @@ describe("gateway auxiliary authority lifecycle", () => {
 
     await placements.releaseTurn(turnClaim);
 
-    expect(questionResolved).toHaveBeenCalledExactlyOnceWith(
-      { id: question.id, status: "cancelled" },
-      {
-        record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
-        ordinary: false,
-        sessionAccess: undefined,
-        isCurrent: expect.any(Function),
-        refreshRequester: expect.any(Function),
-      },
-    );
-    expect(questionResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
+    expectQuestionCancelled(questionResolved, question);
     await expect(execDecision).resolves.toBeNull();
     await expect(pluginDecision).resolves.toBeNull();
     await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(2));
@@ -565,18 +497,14 @@ describe("gateway auxiliary authority lifecycle", () => {
       "exec.approval.resolved",
       "plugin.approval.resolved",
     ]);
-    expect(lifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "terminal",
-        record: expect.objectContaining({ kind: "exec", status: "cancelled" }),
-      }),
-    );
-    expect(lifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "terminal",
-        record: expect.objectContaining({ kind: "plugin", status: "cancelled" }),
-      }),
-    );
+    for (const kind of ["exec", "plugin"]) {
+      expect(lifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phase: "terminal",
+          record: expect.objectContaining({ kind, status: "cancelled" }),
+        }),
+      );
+    }
     await gatewayAux.stopOperatorInteractions();
     releaseAgentRunDelegatedAuthority(runAuthority);
   });
