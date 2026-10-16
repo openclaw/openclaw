@@ -117,6 +117,7 @@ function ChatVideoPlayerContent(
     });
     onCleanup(() => {
       mediaVisible = false;
+      expandButton = undefined;
       const previousMedia = media;
       media = undefined;
       if (previousMedia) {
