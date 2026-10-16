@@ -8,6 +8,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +19,7 @@ import { createClientHarness } from "./test-support.js";
 
 const remoteWorkspaceRoot = "/remote/codex-workspace";
 const readPath = "/remote/report.txt";
+const batchPaths = ["first", "second"].map((name) => `${remoteWorkspaceRoot}/reports/${name}.txt`);
 let openClawState: OpenClawTestState;
 type MediaOptions = Parameters<typeof prepareCodexRemoteWorkspaceMessageMedia>[0];
 type ExecClient = Parameters<typeof createCodexRemoteWorkspaceFileReader>[0];
@@ -43,7 +45,7 @@ function createRemoteFileReader(files: Record<string, string>) {
     }
     const buffer = Buffer.from(content);
     if (buffer.byteLength > maxBytes) {
-      throw new Error(`Codex remote workspace artifact exceeds the limit of ${maxBytes} bytes.`);
+      throw new Error(`Remote artifact exceeds the limit of ${maxBytes} bytes.`);
     }
     return buffer;
   });
@@ -84,23 +86,21 @@ async function expectNoRead(
 }
 
 describe("Codex remote file transport", () => {
-  it("distinguishes missing files from a missing Node.js executable", async () => {
-    const request = vi.fn(async () => execResult("", 1, "ENOENT: missing report.txt"));
-    const read = readFrom(request);
-    await expect(read({ path: readPath, maxBytes: 64 })).rejects.toThrow(
-      "file read failed: ENOENT",
-    );
-  });
-
-  it("reports the remote Node.js prerequisite clearly", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("failed to spawn command: No such file or directory");
-    });
-    const read = readFrom(request);
-    await expect(read({ path: readPath, maxBytes: 64 })).rejects.toThrow(
+  it.each([
+    [async () => execResult("", 1, "ENOENT: missing report.txt"), "file read failed: ENOENT"],
+    [
+      async () => {
+        throw new Error("failed to spawn command: No such file or directory");
+      },
       "requires Node.js on the remote app-server host",
-    );
-  });
+    ],
+  ] as const)(
+    "distinguishes remote file failures from missing Node.js: %s",
+    async (request, message) => {
+      const read = readFrom(request);
+      await expect(read({ path: readPath, maxBytes: 64 })).rejects.toThrow(message);
+    },
+  );
 
   it.each(["current", "before first chunk", "between chunks", "before final response"] as const)(
     "checks persisted lineage at remote file dispatch and completion (%s)",
@@ -154,14 +154,12 @@ describe("Codex remote file transport", () => {
         }
         const read = createCodexRemoteWorkspaceFileReader(harness.client, captured.authority);
         transfer = read({ path: readPath, maxBytes: bytes.length });
-        const settled = transfer.catch(() => undefined);
         if (holdFirstReply) {
-          const reply = await Promise.race([
+          const reply = await awaitGateBeforeSettlement(
             firstReply.promise,
-            settled.then(() => {
-              throw new Error("Remote file read settled before its first command");
-            }),
-          ]);
+            transfer.catch(() => undefined),
+            "Remote file read settled before its first command",
+          );
           // The worker admission must end before awaiting the native response.
           await replace();
           reply();
@@ -226,10 +224,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
   it("uses authoritative remote bytes when a stale local file exists", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
-    await writeFile(
-      path.join(openClawState.workspaceDir, "reused-upload.txt"),
-      "stale local content\n",
-    );
+    await writeFile(path.join(openClawState.workspaceDir, "reused-upload.txt"), "stale\n");
 
     const result = await prepareMedia(
       { filePath: remotePath },
@@ -267,7 +262,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
   it("rejects symlinks disguised as Gateway-owned media", async () => {
     const saved = await saveInbound("old Gateway media\n", "replaceable.txt");
     const externalPath = path.join(openClawState.workspaceDir, "private.txt");
-    await writeFile(externalPath, "gateway-local private data\n");
+    await writeFile(externalPath, "private\n");
     await unlink(saved.path);
     await symlink(externalPath, saved.path);
     await expectNoRead({ filePath: saved.path });
@@ -286,12 +281,10 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
   });
 
   it("enforces one aggregate byte limit across remote attachments", async () => {
-    const first = `${remoteWorkspaceRoot}/reports/first.txt`;
-    const second = `${remoteWorkspaceRoot}/reports/second.txt`;
     await expect(
       prepareMedia(
-        { mediaUrls: [first, second] },
-        createRemoteFileReader({ [first]: "abc", [second]: "def" }),
+        { mediaUrls: batchPaths },
+        createRemoteFileReader(Object.fromEntries(batchPaths.map((file) => [file, "abc"]))),
         { maxBytes: 5 },
       ),
     ).rejects.toThrow("limit of 2 bytes");
@@ -302,17 +295,14 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     let wallClock = 10_000;
     vi.spyOn(performance, "now").mockImplementation(() => elapsed);
     vi.spyOn(Date, "now").mockImplementation(() => wallClock);
-    const first = `${remoteWorkspaceRoot}/reports/first.txt`;
-    const second = `${remoteWorkspaceRoot}/reports/second.txt`;
-    const readRemoteFile = vi.fn<RemoteWorkspaceFileReader>(async ({ path: remotePath }) => {
+    const readRemoteFile = vi.fn<RemoteWorkspaceFileReader>(async () => {
       elapsed = 499.75;
       wallClock -= 5_000;
-      return Buffer.from(remotePath === first ? "first" : "second");
+      return Buffer.from("first");
     });
-    const transfer = prepareMedia({ mediaUrls: [first, second] }, readRemoteFile, {
-      timeoutMs: 500,
-    });
-    await expect(transfer).rejects.toThrow("timed out");
+    await expect(
+      prepareMedia({ mediaUrls: batchPaths }, readRemoteFile, { timeoutMs: 500 }),
+    ).rejects.toThrow("timed out");
     expect(readRemoteFile.mock.calls.map(([params]) => params.timeoutMs)).toEqual([500]);
   });
 

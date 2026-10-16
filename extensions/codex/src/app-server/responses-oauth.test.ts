@@ -51,11 +51,13 @@ const resolved = (
   credential: value,
   readCurrentCredential,
 });
+const fingerprint = (store: AuthProfileStore) =>
+  resolveCodexResponsesOAuthProfileFingerprint({ profileId, store });
 async function create(store = storeWith()) {
   return createCodexResponsesOAuth({
     profileId,
     store,
-    fingerprint: await resolveCodexResponsesOAuthProfileFingerprint({ profileId, store }),
+    fingerprint: await fingerprint(store),
   });
 }
 
@@ -152,13 +154,7 @@ it("materializes a pending cold-start snapshot from the existing refresh owner's
     profileId,
     credential: credential(),
   });
-  const fingerprint = await resolveCodexResponsesOAuthProfileFingerprint({ profileId, store });
-  expect(fingerprint).toBe(
-    await resolveCodexResponsesOAuthProfileFingerprint({
-      profileId,
-      store: storeWith(credential(), false),
-    }),
-  );
+  expect(await fingerprint(store)).toBe(await fingerprint(storeWith(credential(), false)));
   expect(store.profiles[profileId]).toEqual(credential());
 });
 

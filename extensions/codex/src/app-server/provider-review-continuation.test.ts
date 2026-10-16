@@ -12,6 +12,7 @@ type ProviderReviewAcknowledgment = NonNullable<
   AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]
 >;
 type ReviewSnapshot = ReturnType<ProviderReviewAcknowledgment["read"]>;
+type NotificationHandler = (notification: CodexServerNotification) => unknown;
 const sessionId = "session-1";
 const findings = {
   explanation: "Review the intended operation.",
@@ -76,16 +77,14 @@ function fixture() {
   };
   const acknowledgment = Object.freeze(host) as ProviderReviewAcknowledgment;
   const request = vi.fn().mockResolvedValue(latest());
-  let notificationHandler: ((notification: CodexServerNotification) => unknown) | undefined;
+  let notificationHandler: NotificationHandler | undefined;
   const dispose = vi.fn(() => {
     notificationHandler = undefined;
   });
-  const addNotificationHandler = vi.fn(
-    (handler: (notification: CodexServerNotification) => unknown) => {
-      notificationHandler = handler;
-      return dispose;
-    },
-  );
+  const addNotificationHandler = (handler: NotificationHandler) => {
+    notificationHandler = handler;
+    return dispose;
+  };
   const turnStartParams: CodexTurnStartParams = {
     threadId: "native-thread",
     input: [

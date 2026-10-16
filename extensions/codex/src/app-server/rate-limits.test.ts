@@ -56,11 +56,8 @@ describe("formatCodexUsageLimitErrorMessage", () => {
 
   it("preserves Codex retry hints when structured reset windows are absent", () => {
     const message = usageError({
-      message:
-        "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
-      rateLimits: {
-        rateLimits: bucket({ primary: window(100, null) }),
-      },
+      message: "You've hit your usage limit; try again at May 11th, 2026 9:00 AM.",
+      rateLimits: { rateLimits: bucket({ primary: window(100, null) }) },
       nowMs: Date.UTC(2026, 4, 10, 23, 0, 0),
     });
 
@@ -245,7 +242,6 @@ describe("summarizeCodexRateLimits", () => {
         "Extra quota: primary 0% left ⏱1h",
       );
       const errorMessage = usageError({
-        message: "You've hit your usage limit for Extra quota. Switch to another model now.",
         rateLimits: payload,
         rateLimitsAuthoritative: true,
         nowMs,
