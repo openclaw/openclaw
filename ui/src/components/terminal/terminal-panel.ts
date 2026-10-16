@@ -16,7 +16,6 @@ import {
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { updateTerminalFont } from "./terminal-fonts.ts";
-import type { TerminalInputs } from "./terminal-panel-registration.tsx";
 import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   reattachTerminalSessionHosts,
@@ -410,6 +409,25 @@ export class TerminalPanelController extends SolidPanelController {
     }
   }
 }
+
+export type TerminalInputs = Pick<
+  TerminalPanelController,
+  | "client"
+  | "agentId"
+  | "sessionKey"
+  | "available"
+  | "suppressed"
+  | "themeMode"
+  | "basePath"
+  | "fullscreen"
+  | "embedded"
+  | "onClose"
+  | "tabsInHeader"
+  | "page"
+  | "routeTarget"
+  | "createTerminalController"
+  | "catalogReadyTimeoutMs"
+>;
 
 /** Public custom-element surface retained for the shell and panel hosts. */
 export type OpenClawTerminalPanel = HTMLElement &

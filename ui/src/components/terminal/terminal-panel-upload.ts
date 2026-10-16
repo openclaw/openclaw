@@ -302,7 +302,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     syncPolicy,
     hasActiveTab,
     hasPendingBatch,
-    chooseFiles(): void {
+    chooseFiles(this: void): void {
       if (admitUpload()) {
         host.fileInput()?.click();
       }
@@ -355,13 +355,13 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       }
       uploadFiles(Array.from(event.dataTransfer?.files ?? []));
     },
-    insertCompleted(): void {
+    insertCompleted(this: void): void {
       const batch = activeBatch;
       if (batch?.state === "failed" && batch.paths.length > 0) {
         insertPaths(batch);
       }
     },
-    retry(): void {
+    retry(this: void): void {
       if (!admitUpload()) {
         return;
       }
