@@ -519,10 +519,12 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
                 "native-linux-arm64",
                 "native-win32-x64",
                 "@fixture/native-linux-arm64",
-                ...(!architectures.includes("arm64")
+                ...(!architectures.some((architecture) => architecture === "arm64")
                   ? ["native-darwin-arm64", "@fixture/native-darwin-arm64"]
                   : []),
-                ...(!architectures.includes("x86_64") ? ["native-darwin-x64"] : []),
+                ...(!architectures.some((architecture) => architecture === "x86_64")
+                  ? ["native-darwin-x64"]
+                  : []),
               ].some(
                 (packageName) =>
                   name === `lib/node_modules/openclaw/node_modules/${packageName}` ||

@@ -217,7 +217,11 @@ it("recovers silent presence without replaying pre-activation messages", async (
     withinTest(Promise.race([promise, stoppedBeforeReady]), signal);
   cleanupAccount = async () => {
     abort.abort();
-    await lifecycle.finally(() => scheduler.stop());
+    try {
+      await lifecycle;
+    } finally {
+      await scheduler.stop();
+    }
   };
   try {
     await waitFor(ready[0].promise);

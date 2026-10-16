@@ -39,7 +39,7 @@ function buildFetchGuard(body: unknown) {
 }
 
 async function fetchedModel(
-  model: UpstreamProviderCatalogModel,
+  model: UpstreamProviderCatalogModel | undefined,
   metadata = makeProvider("opencode", "https://opencode.ai/zen/v1", "@ai-sdk/openai-compatible"),
 ) {
   assert(model);
