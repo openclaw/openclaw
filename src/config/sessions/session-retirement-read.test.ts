@@ -35,19 +35,36 @@ import { maintenanceLane, targetDiscoveryLane } from "./session-transcript-worke
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
 
-it("compares retained history without acquiring Doctor deletion custody", () => {
+function setup() {
   const fixture = createFixture();
-  const pathname = databasePath(fixture.stateDir, "main");
+  const store = (agentId = "ops", ownerStorePath?: string) => {
+    const path = databasePath(fixture.stateDir, agentId);
+    return { databaseAgentId: agentId, ownerStorePath: ownerStorePath ?? path, path };
+  };
+  const options = (agentId = "ops") => ({ agentId, path: store(agentId).path, env: fixture.env });
+  const seed = (
+    key = "agent:ops:chat",
+    agentId = "ops",
+    entry?: Parameters<typeof seedClaim>[0]["entry"],
+  ) => seedClaim({ databaseAgentId: agentId, databasePath: store(agentId).path, key, entry });
+  const reader = (ownerStorePath?: string) =>
+    captureSessionRetirementReader(store("ops", ownerStorePath), fixture.env);
+  const list = () => listSessionEntryKeysReadOnly({ ...options(), storePath: store().path });
+  return { ...fixture, store, options, seed, reader, list };
+}
+
+it("compares retained history without acquiring Doctor deletion custody", () => {
+  const fixture = setup();
   const key = "agent:main:chat";
-  seedClaim({ databaseAgentId: "main", databasePath: pathname, key });
-  const options = { agentId: "main", path: pathname, env: fixture.env };
+  fixture.seed(key, "main");
+  const options = fixture.options("main");
   runOpenClawAgentWriteTransaction(({ db }) => {
     ensureOpenClawAgentBoardSchemaInTransaction(db);
     ensureSessionPendingInputsSchema(db);
     ensureSessionInputCompletionsSchema(db);
   }, options);
   const database = openOpenClawAgentDatabase(options);
-  const store = { databaseAgentId: "main", ownerStorePath: pathname, path: pathname };
+  const store = fixture.store("main");
   const observed = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
     ["node", "input"],
@@ -71,8 +88,8 @@ it("compares retained history without acquiring Doctor deletion custody", () => 
       canonicalKey: "agent:ops:chat",
       key,
       entry: { sessionId: "session-agent-main-chat" },
+      generations: [expect.anything()],
     });
-    expect(comparison?.generations).toHaveLength(1);
     expect(observed.counts).toEqual({ node: 0, input: 0 });
     const custody = readClaim(database, store, key, "agent:ops:chat");
     expect(custody?.generations[0]?.contentFingerprint).toBe(
@@ -88,17 +105,12 @@ it("compares retained history without acquiring Doctor deletion custody", () => 
 });
 
 it("keeps detailed legacy detection current after a foreign transcript commit", async () => {
-  const fixture = createFixture();
-  const sourcePath = databasePath(fixture.stateDir, "main");
-  const destinationPath = databasePath(fixture.stateDir, "ops");
+  const fixture = setup();
+  const sourcePath = fixture.store("main").path;
+  const destinationPath = fixture.store().path;
   const entry = { sessionId: "shared-generation", updatedAt: 100 };
-  seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat", entry });
-  seedClaim({
-    databaseAgentId: "ops",
-    databasePath: destinationPath,
-    key: "agent:ops:chat",
-    entry,
-  });
+  fixture.seed("agent:main:chat", "main", entry);
+  fixture.seed("agent:ops:chat", "ops", entry);
   const detect = () =>
     migrateLegacyMainSessionKeys({
       cfg: fixture.cfg,
@@ -114,21 +126,17 @@ it("keeps detailed legacy detection current after a foreign transcript commit", 
       sourceKeys: ["agent:main:chat"],
     },
   ]);
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      appendTranscriptEventInTransaction(
-        database,
-        {
-          agentId: "ops",
-          path: destinationPath,
-          sessionId: entry.sessionId,
-          sessionKey: "agent:ops:chat",
-        },
-        { type: "message", id: "foreign-later", text: "Canonical history changed." },
-      );
-    },
-    { agentId: "ops", path: destinationPath, env: fixture.env },
-  );
+  runOpenClawAgentWriteTransaction((database) => {
+    appendTranscriptEventInTransaction(
+      database,
+      {
+        ...fixture.options(),
+        sessionId: entry.sessionId,
+        sessionKey: "agent:ops:chat",
+      },
+      { type: "message", id: "foreign-later", text: "Canonical history changed." },
+    );
+  }, fixture.options());
   const changed = await detect();
   expect(changed).toMatchObject({ complete: false, ledgerComplete: false, changes: [] });
   expect(changed.outcomes).toEqual([
@@ -145,70 +153,52 @@ it("keeps detailed legacy detection current after a foreign transcript commit", 
 });
 
 it("lists workspace keys off-thread and rejects a captured absence after a foreign creation", async () => {
-  const fixture = createFixture();
-  const pathname = databasePath(fixture.stateDir, "ops");
-  const scope = { agentId: "ops", env: fixture.env, storePath: pathname };
-  const readAbsent = captureSessionRetirementReader(
-    { databaseAgentId: "ops", ownerStorePath: pathname, path: pathname },
-    fixture.env,
-  );
-  expect(await listSessionEntryKeysReadOnly(scope)).toEqual([]);
-  seedClaim({ databaseAgentId: "ops", databasePath: pathname, key: "agent:ops:chat" });
+  const fixture = setup();
+  const readAbsent = fixture.reader();
+  expect(await fixture.list()).toEqual([]);
+  fixture.seed();
   await expect(readAbsent.read({ operation: "keys" })).rejects.toThrow("identity changed");
   const observed = observeHostDataSql();
   try {
-    expect(await listSessionEntryKeysReadOnly(scope)).toEqual(["agent:ops:chat"]);
+    expect(await fixture.list()).toEqual(["agent:ops:chat"]);
     expect(observed.queries.filter((sql) => /\bsession_nodes\b/.test(sql))).toEqual([]);
   } finally {
     observed.restore();
   }
-  seedClaim({ databaseAgentId: "ops", databasePath: pathname, key: "agent:ops:later" });
-  expect(await listSessionEntryKeysReadOnly(scope)).toEqual(["agent:ops:chat", "agent:ops:later"]);
-  const ownerStorePath = `${pathname}.json`;
-  const readAlias = captureSessionRetirementReader(
-    { databaseAgentId: "ops", ownerStorePath, path: pathname },
-    fixture.env,
-  );
+  fixture.seed("agent:ops:later");
+  expect(await fixture.list()).toEqual(["agent:ops:chat", "agent:ops:later"]);
+  const ownerStorePath = `${fixture.store().path}.json`;
+  const readAlias = fixture.reader(ownerStorePath);
   fs.writeFileSync(ownerStorePath, "{}\n");
   await expect(readAlias.read({ operation: "keys" })).rejects.toThrow("identity changed");
 });
 
 it("retains missing stores while another legacy store is read", async () => {
-  const fixture = createFixture();
-  const sourcePath = databasePath(fixture.stateDir, "main");
-  const missingPath = databasePath(fixture.stateDir, "ops");
-  seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" });
+  const fixture = setup();
+  fixture.seed("agent:main:chat", "main");
   const unreadable: Array<{ path: string; error: unknown }> = [];
   const scan = prepareComparisonClaimsFromStores({
     env: fixture.env,
     legacyAgentId: "main",
     ownerAgentId: "ops",
-    stores: [
-      { databaseAgentId: "main", ownerStorePath: sourcePath, path: sourcePath },
-      { databaseAgentId: "ops", ownerStorePath: missingPath, path: missingPath },
-    ],
+    stores: [fixture.store("main"), fixture.store()],
     onUnreadable: (store, error) => unreadable.push({ path: store.path, error }),
   });
   const result = scan.read();
-  seedClaim({ databaseAgentId: "ops", databasePath: missingPath, key: "agent:main:late" });
+  fixture.seed("agent:main:late");
   expect((await result).legacy.map((claim) => claim.key)).toEqual(["agent:main:chat"]);
-  expect(unreadable).toHaveLength(1);
-  expect(unreadable[0]?.path).toBe(missingPath);
+  expect(unreadable).toEqual([{ path: fixture.store().path, error: expect.anything() }]);
   expect(String(unreadable[0]?.error)).toContain("identity changed");
 });
 
 it("refuses retirement facts after a native write bypasses the held FIFO", async () => {
-  const fixture = createFixture();
-  const pathname = databasePath(fixture.stateDir, "ops");
-  seedClaim({ databaseAgentId: "ops", databasePath: pathname, key: "agent:ops:chat" });
-  const reader = captureSessionRetirementReader(
-    { databaseAgentId: "ops", ownerStorePath: pathname, path: pathname },
-    fixture.env,
-  );
+  const fixture = setup();
+  fixture.seed();
+  const reader = fixture.reader();
   await expect(
     withSessionRetirementReaders([reader], async () => {
       const facts = await reader.read({ operation: "keys" });
-      seedClaim({ databaseAgentId: "ops", databasePath: pathname, key: "agent:ops:late" });
+      fixture.seed("agent:ops:late");
       return facts;
     }),
   ).rejects.toBeInstanceOf(SessionEntryChangedDuringReadError);
@@ -217,11 +207,9 @@ it("refuses retirement facts after a native write bypasses the held FIFO", async
 it.each(["refusal", "eviction"] as const)(
   "settles an ordered retirement %s without waiting on its following writer",
   async (settlement) => {
-    const fixture = createFixture();
-    const pathname = databasePath(fixture.stateDir, "ops");
+    const fixture = setup();
     const key = "agent:ops:retirement";
-    seedClaim({ databaseAgentId: "ops", databasePath: pathname, key });
-    const options = { agentId: "ops", path: pathname, env: fixture.env };
+    fixture.seed(key);
     const cleanupEntered = createDeferredCore();
     const releaseCleanup = createDeferredCore();
     const writerSettled = createDeferredCore();
@@ -240,7 +228,7 @@ it.each(["refusal", "eviction"] as const)(
           if (request.kind !== "session-retirement-read") {
             return run(request, controls);
           }
-          following = runOpenClawAgentWriteAdmission(options, () => {
+          following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
             writerSettled.resolve();
             return "following writer";
           });
@@ -255,7 +243,7 @@ it.each(["refusal", "eviction"] as const)(
         }),
       ];
     });
-    const reading = listSessionEntryKeysReadOnly({ ...options, storePath: pathname });
+    const reading = fixture.list();
     try {
       const outcome = await Promise.race([
         reading.catch((error: unknown) => error),
