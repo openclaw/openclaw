@@ -183,7 +183,7 @@ function DisclosureContent(props: {
   // The overflow observer measures the rendered markdown island.
   createEffect(dependencies, ({ expanded, forwarded, connected }) => {
     if (!connected) {
-      return;
+      return undefined;
     }
     const overflow = messageOverflowRef(expanded, forwarded);
     overflow(element);
