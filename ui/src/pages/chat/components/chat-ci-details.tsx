@@ -102,16 +102,13 @@ function createCiDetails(
   props: ChatCiDisclosureProps,
   host: SolidBridgeElement<ChatCiDisclosureProps>,
 ) {
-  const [state, setState] = createStore<DetailsState>(
-    {
-      loading: false,
-      result: undefined,
-      error: null,
-      retryAt: 0,
-      expandedJobs: {},
-    },
-    { ownedWrite: true },
-  );
+  const [state, setState] = createStore<DetailsState>({
+    loading: false,
+    result: undefined,
+    error: null,
+    retryAt: 0,
+    expandedJobs: {},
+  });
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   let target = "";
   let requestController: AbortController | undefined;

@@ -34,17 +34,14 @@ type AutomationState = {
 };
 
 function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
-  const [state, setState] = createStore<AutomationState>(
-    {
-      jobs: {},
-      pending: {},
-      loading: false,
-      loaded: false,
-      schedulerEnabled: undefined,
-      error: null,
-    },
-    { ownedWrite: true },
-  );
+  const [state, setState] = createStore<AutomationState>({
+    jobs: {},
+    pending: {},
+    loading: false,
+    loaded: false,
+    schedulerEnabled: undefined,
+    error: null,
+  });
   const saving = createMemo(() => Object.keys(state.pending).length > 0);
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gateway = projectSource<
