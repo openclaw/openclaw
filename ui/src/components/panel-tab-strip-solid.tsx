@@ -1,4 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { Accessor } from "solid-js";
 import { For, Show, createEffect, createMemo, flush, onSettled, untrack } from "solid-js";
 import { createTabsController } from "../lib/tabs-controller.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
@@ -19,6 +20,7 @@ declare module "@solidjs/web" {
 export type SolidPanelTabStripTab = Omit<PanelTabStripTab, "icon"> & { icon?: SolidJSX.Element };
 export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
   tabs: T[];
+  renderIcon?: (tab: Accessor<T>) => SolidJSX.Element;
   activeId: string | null;
   ariaControls: string | ((tab: T) => string);
   onSelect: (id: string) => void;
@@ -308,9 +310,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
             };
             const content = () => (
               <>
-                <Show when={tab().icon != null}>
+                <Show when={props.renderIcon || tab().icon != null}>
                   <span class="tabstrip-tab__icon" aria-hidden="true">
-                    {tab().icon}
+                    {props.renderIcon ? props.renderIcon(tab) : tab().icon}
                   </span>
                 </Show>
                 <span class="tabstrip-tab__label">{tab().label}</span>

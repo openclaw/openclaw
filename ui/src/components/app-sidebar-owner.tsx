@@ -312,23 +312,31 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   override updated() {
     super.updated();
     this.sidebarSnapshotController.capture();
+    const input = this.narrationSyncInput();
     if (!this.narration) {
-      if (this.sidebarLiveActivity) {
+      if (input.enabled) {
         this.ensureNarrationController();
       }
     } else {
-      this.narration.sync(this.narrationSyncInput());
+      this.narration.sync(input);
     }
   }
 
   private narrationSyncInput(): SidebarNarrationSyncInput {
     const gateway = this.context?.gateway.snapshot;
+    const enabled =
+      this.sidebarLiveActivity &&
+      this.sidebarAgentsMode === "chip" &&
+      this.navigationVisible &&
+      !this.navigationCollapsed &&
+      this.navigationView === "sessions" &&
+      !this.contextualSidebar;
     return {
-      enabled: this.sidebarLiveActivity,
+      enabled,
       connected: this.connected && gateway?.phase === "connected",
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
-      rows: this.visibleSessionTreeInOrder(),
+      rows: enabled ? this.visibleSessionTreeInOrder() : [],
       openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };

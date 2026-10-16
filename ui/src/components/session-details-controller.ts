@@ -6,9 +6,10 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 type DetailScope = { sessions: Pick<SessionCapability, "observeRow" | "describe"> };
+type DetailRow = Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">;
 
 /** The expanded view holds a descriptor; the session capability owns its row facts. */
-export class SessionDetailsController<Scope extends DetailScope> {
+export class SessionDetailsOwner<Scope extends DetailScope> {
   loading = false;
   error: string | null = null;
   private binding?: {
@@ -26,11 +27,8 @@ export class SessionDetailsController<Scope extends DetailScope> {
     private readonly options: {
       captureScope: () => Scope | null;
       isCurrent: (scope: Scope) => boolean;
-      row: () => Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId"> | undefined;
-      agentId: (
-        row: Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">,
-        scope: Scope,
-      ) => string;
+      row: () => DetailRow | undefined;
+      agentId: (row: DetailRow, scope: Scope) => string;
     },
   ) {}
 

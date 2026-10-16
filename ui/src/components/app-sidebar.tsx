@@ -150,6 +150,19 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       untrack(() => {
         owner.commitRender();
         scroll.restore();
+        // The projection owns the display deadline; this mounted view owns its timer.
+        const deadline = owner.sessionProjection.subtitleDeadline;
+        if (owner.isConnected && Number.isFinite(deadline)) {
+          const timer = globalThis.setTimeout(
+            () => {
+              owner.sessionProjection.invalidate();
+              owner.requestUpdate();
+            },
+            Math.max(0, deadline - Date.now()),
+          );
+          return () => globalThis.clearTimeout(timer);
+        }
+        return undefined;
       }),
   );
   onSettled(() => {

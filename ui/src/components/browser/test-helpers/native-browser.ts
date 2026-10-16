@@ -83,6 +83,7 @@ export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false)
 
 export function setupNativeBrowserPanelTests() {
   const controllers: BrowserPanelController[] = [];
+  const cleanups: (() => void)[] = [];
   let hit: Element | null;
   let frames: Map<number, FrameRequestCallback>;
   let nextFrame: number;
@@ -132,8 +133,10 @@ export function setupNativeBrowserPanelTests() {
     const host = new TestBrowserPanelHost(client);
     host.sessionKey = sessionKey;
     document.body.append(host.renderRoot);
-    hit = host.renderRoot.querySelector(".bp-stage");
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+    hit = stage;
     const controller = new BrowserPanelController(host);
+    cleanups.push(controller.native.presentation.mountStage(stage));
     controllers.push(controller);
     controller.hostConnected();
     return { controller, host, request };
@@ -164,6 +167,9 @@ export function setupNativeBrowserPanelTests() {
   });
 
   afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) {
+      cleanup();
+    }
     for (const controller of controllers.splice(0)) {
       controller.hostDisconnected();
     }

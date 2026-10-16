@@ -16,6 +16,7 @@ import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-reque
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;

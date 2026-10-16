@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -756,7 +757,8 @@ describe("update-startup", () => {
       runAutoUpdate,
       onUpdateScheduleChange: (schedule) => {
         if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
+          // This observer outlives the campaign job that publishes its terminal schedule.
+          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
         }
       },
     });
@@ -1685,7 +1687,8 @@ describe("update-startup", () => {
       activeWorkInspectors: idleActiveWorkInspectors(),
       onUpdateScheduleChange: (schedule) => {
         if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
+          // This observer outlives the campaign job that publishes its terminal schedule.
+          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
         }
       },
     });

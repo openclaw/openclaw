@@ -103,7 +103,25 @@ export function inspectGatewayCrashLoopBreakerInDatabase(db: EngineConnection, n
   });
 }
 
+function readGatewayLastShutdownInDatabase(db: EngineConnection) {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
+      .selectFrom("gateway_boot_lifecycle")
+      .select(["reason", "completed_at_ms as completedAtMs"])
+      .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
+      .where("completed_at_ms", "is not", null)
+      .orderBy("completed_at_ms", "desc")
+      .limit(1),
+  );
+  return row?.completedAtMs == null ? undefined : { ...row, completedAtMs: row.completedAtMs };
+}
+
 export const gatewayBootReadOperations = {
+  "gatewayBoot.lastShutdown": (_input: undefined, db) => ({
+    type: "gatewayBoot.lastShutdown" as const,
+    shutdown: readGatewayLastShutdownInDatabase(db),
+  }),
   "gatewayBoot.breaker": (nowMs: number, db) => ({
     type: "gatewayBoot.breaker" as const,
     decision: inspectGatewayCrashLoopBreakerInDatabase(db, nowMs),

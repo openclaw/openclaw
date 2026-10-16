@@ -6,7 +6,7 @@ import {
   selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
-import { SessionDetailsController } from "./session-details-controller.ts";
+import { SessionDetailsOwner } from "./session-details-controller.ts";
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -25,7 +25,7 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
   const [active, setActive] = createSignal(false);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const notify = () => setRevision((value) => value + 1);
-  const details = new SessionDetailsController(notify, {
+  const details = new SessionDetailsOwner(notify, {
     captureScope: () => {
       const context = options.context();
       const connection = context?.sessions.captureConnectionScope();

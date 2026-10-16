@@ -227,6 +227,7 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 }
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
+  let menuTrigger: HTMLButtonElement | null = null;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
@@ -288,14 +289,10 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     HTMLTableRowElement,
     MouseEvent | KeyboardEvent
   > = (event) => {
-    const currentRow = row();
-    const onOpenSessionMenu = props.onOpenSessionMenu;
     return handleContextMenuEvent(
       event,
-      event instanceof KeyboardEvent
-        ? event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')
-        : null,
-      (trigger, x, y) => onOpenSessionMenu(currentRow, { x, y }, trigger),
+      event instanceof KeyboardEvent ? menuTrigger : null,
+      (trigger, x, y) => props.onOpenSessionMenu(row(), { x, y }, trigger),
     );
   };
 
@@ -423,6 +420,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               <Icon name="chevronDown" />
             </button>
             <button
+              ref={(element) => (menuTrigger = element)}
               class="icon-btn"
               type="button"
               title={t("chat.sidebar.openSessionMenu")}

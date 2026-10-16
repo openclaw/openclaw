@@ -18,7 +18,7 @@ import {
 } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
-import { DesktopAudio } from "./desktop-audio.ts";
+import type { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
@@ -61,6 +61,7 @@ export class DesktopPanelController extends SolidPanelController {
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null = null;
   fullscreenMode!: DesktopFullscreen;
+  audio!: DesktopAudio;
   pictureInPicture!: DesktopPictureInPicture;
   launcher!: DesktopAppLauncher;
 
@@ -82,11 +83,6 @@ export class DesktopPanelController extends SolidPanelController {
   private canResize = false;
 
   private readonly connection = new DesktopConnectionHandoff();
-  private readonly audio = new DesktopAudio(
-    this,
-    () => this.state === "connected",
-    () => void this.connectEnvironment(this.environmentId, this.controlling),
-  );
   private credentials: DesktopCredentials | undefined;
   private credentialAuth: "vnc-password" | "ard-account" | undefined;
   private pendingConnection: PendingDesktopConnection | null = null;
@@ -141,6 +137,11 @@ export class DesktopPanelController extends SolidPanelController {
     reservationPrefix: "desktop",
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode?.ownsFullscreen() ?? false,
+  });
+
+  readonly audioTarget = () => ({
+    connected: this.state === "connected",
+    reconnect: () => void this.connectEnvironment(this.environmentId, this.controlling),
   });
 
   get launchTarget() {
@@ -313,9 +314,9 @@ export class DesktopPanelController extends SolidPanelController {
   }
 
   private disconnectConnection(retainViewer = false): void {
-    this.audio.close();
     // Native close can precede Solid mounting; each Solid owner handles its disposal.
     if (this.isConnected) {
+      this.audio.close();
       this.pictureInPicture.close();
       this.mobileKeyboard.reset();
     }

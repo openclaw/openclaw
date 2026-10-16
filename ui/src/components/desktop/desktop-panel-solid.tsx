@@ -2,6 +2,7 @@ import { createEffect, createMemo } from "solid-js";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { usePanelController } from "../solid-panel-controller.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
+import { createDesktopAudio } from "./desktop-audio.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type { DesktopPanelController } from "./desktop-panel-controller.ts";
 import { createDesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
@@ -9,6 +10,7 @@ import { DesktopPresentation } from "./desktop-presentation.tsx";
 
 export function DesktopPanelContent(props: { controller: DesktopPanelController }) {
   const controller = props.controller;
+  controller.audio = createDesktopAudio(controller, controller.audioTarget);
   controller.mobileKeyboard = createDesktopMobileKeyboard(controller.keyboardTarget);
   controller.pictureInPicture = createDesktopPictureInPicture(controller, () => {
     const target = controller.launchTarget;

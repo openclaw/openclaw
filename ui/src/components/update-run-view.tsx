@@ -61,7 +61,7 @@ function RunStep(props: { step: UpdateRunStep; label?: string }) {
   const status = () => t(`updates.run.step.${props.step.status}`);
   return (
     <li
-      class={`update-run-view__step update-run-view__step--${props.step.status}`}
+      class={["update-run-view__step", `update-run-view__step--${props.step.status}`]}
       data-step={props.step.step}
       data-status={props.step.status}
       title={props.step.step}
@@ -146,9 +146,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
               >
                 <summary>{t("updates.run.steps")}</summary>
                 <ol
-                  ref={(element) => {
-                    steps = element;
-                  }}
+                  ref={(element) => (steps = element)}
                   class="update-run-view__step-scroll"
                   tabindex={0}
                   aria-label={t("updates.run.steps")}
@@ -172,9 +170,7 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
                 </Show>
               </summary>
               <pre
-                ref={(element) => {
-                  details = element;
-                }}
+                ref={(element) => (details = element)}
                 class="update-run-view__details"
                 tabindex={0}
                 aria-label={t("updates.run.details")}
@@ -195,7 +191,10 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
                     <li
                       data-oracle={oracle.name}
                       data-state={oracle.state}
-                      class={`update-run-view__oracle update-run-view__oracle--${oracle.state}`}
+                      class={[
+                        "update-run-view__oracle",
+                        `update-run-view__oracle--${oracle.state}`,
+                      ]}
                     >
                       <span aria-hidden="true">{ORACLE_MARKS[oracle.state]}</span>
                       <span>{t(`updates.run.oracle.${oracle.name}`)}</span>

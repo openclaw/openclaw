@@ -135,6 +135,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       status: running ? "running" : "done",
       model: "gpt-5-mini",
       modelProvider: "openai",
+      thinkingLevel: "medium",
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
@@ -171,6 +177,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  pinnedRows[0]!.sharingRole = "admin";
+  pinnedRows[0]!.visibility = "shared";
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
@@ -227,8 +235,13 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
+  const messageIds = Array.from(
+    { length: counts.transcriptMessages },
+    (_, index) => `team-message-${index + 1}`,
+  );
+  const historyMessages = messageIds.map((id, index) => ({
     role: index % 2 ? "assistant" : "user",
+    __openclaw: { id, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
       ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
@@ -388,6 +401,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    sessionReactions: {
+      [selectedSessionKey]: Object.fromEntries(
+        messageIds.map((id) => [
+          id,
+          [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
+        ]),
+      ),
+    },
     ...(options.liveRun
       ? {
           inFlightRun: {

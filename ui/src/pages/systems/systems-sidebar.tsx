@@ -195,7 +195,10 @@ function SystemsInventory(props: { controller: Systems }) {
           panelClass="sidebar-session-sort-menu"
           placement="bottom-end"
           label={t("systems.filterSort")}
-          triggerClass={`systems-filter__sort sidebar-session-sort${controller().state.statusFilter !== "all" ? " sidebar-session-sort--filtered" : ""}`}
+          triggerClass={[
+            "systems-filter__sort sidebar-session-sort",
+            { "sidebar-session-sort--filtered": controller().state.statusFilter !== "all" },
+          ]}
           triggerAttributes={{ title: t("systems.filterSort") }}
           trigger={<Icon name="listFilter" />}
           items={[

@@ -590,7 +590,7 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("replaces held running subtitles at their deadline without another input or full row projection", async () => {
+  it("replaces held running subtitles at their deadline after reparenting without a full row projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const target = session("running", {
@@ -608,6 +608,10 @@ describe("sidebar projection memo", () => {
     sidebar.sidebarNarrationLines = new Map([[target.key, "Second activity"]]);
     await settleLitElement(sidebar);
     expect(row(target.key)?.textContent).toContain("First activity");
+    const parent = sidebar.hostElement.parentElement!;
+    sidebar.hostElement.remove();
+    parent.append(sidebar.hostElement);
+    await settleLitElement(sidebar);
     projectRows.mockClear();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     await vi.advanceTimersByTimeAsync(1_499);

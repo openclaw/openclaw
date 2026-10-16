@@ -54,6 +54,7 @@ export function WidgetCardMenu(props: {
   });
   return (
     <Menu
+      lazy="while-open"
       id={`widget-actions-${id}`}
       class="chat-tool-card__widget-actions"
       panelClass="chat-tool-card__widget-actions-panel"

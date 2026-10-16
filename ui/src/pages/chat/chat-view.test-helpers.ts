@@ -10,6 +10,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -18,7 +19,26 @@ import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./components/chat-message-markdown.ts";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+
+type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
+const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
+
+export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+  const update = modelControlsUpdates.get(container);
+  if (update) {
+    update(props);
+  } else {
+    if (!container.isConnected) {
+      document.body.append(container);
+      onTestFinished(() => container.remove());
+    }
+    const view = mountSolidComponent(ChatModelControls, props, container);
+    modelControlsUpdates.set(container, (next) => view.update(next));
+  }
+  return container;
+}
 
 export function requireElement(container: Element, selector: string, label: string): Element {
   const element = container.querySelector(selector);
@@ -312,7 +332,17 @@ export function getThinkingSelect(container: Element): HTMLElement {
   return select;
 }
 
+function openThinkingPicker(container: Element): void {
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
+  if (picker && !picker.open) {
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    flush();
+  }
+}
+
 export function getThinkingSlider(container: Element): HTMLInputElement | null {
+  openThinkingPicker(container);
   return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
 }
 
@@ -322,6 +352,7 @@ export function getThinkingSliderValues(container: Element): string[] {
 }
 
 export function getThinkingReasoningValueLabel(container: Element): string {
+  openThinkingPicker(container);
   const preview = container.querySelector(
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",

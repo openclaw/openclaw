@@ -116,14 +116,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  rosterCollapsedAgentIds: ReadonlySet<string> | null = null;
+  readRosterCollapsedAgentIds: (() => ReadonlySet<string> | null) | null = null;
   private readonly rosterSourceMemo = new SidebarProjectionMemo<
     NonNullable<SidebarProjectionHost["rosterSessionSource"]>
   >();
 
   get rosterSessionSource() {
     const context = this.context;
-    const collapsedAgentIds = this.rosterCollapsedAgentIds;
+    const collapsedAgentIds = this.readRosterCollapsedAgentIds?.();
     if (!context || !collapsedAgentIds) {
       return null;
     }
@@ -145,7 +145,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionSortMode: SidebarSessionSortMode = loadStoredSidebarSessionSortMode();
 
   readonly pinnedSessions = new SidebarPinnedSessions(this);
-  readonly sessionProjection = new SidebarSessionProjection(undefined, this);
+  readonly sessionProjection = new SidebarSessionProjection();
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
@@ -317,7 +317,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   override disconnectedCallback() {
-    this.sessionProjection.dispose();
+    this.sessionProjection.invalidate();
     this.homeMemos.clear();
     super.disconnectedCallback();
   }

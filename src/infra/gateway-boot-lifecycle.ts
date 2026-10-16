@@ -2,10 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -19,11 +17,7 @@ import {
   inspectGatewayCrashLoopBreakerInDatabase,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
@@ -84,39 +78,21 @@ export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision
 >;
 
-export function readGatewayLastShutdown(
-  env: NodeJS.ProcessEnv = process.env,
-): { reason: string | null; completedAtMs: number } | undefined {
-  try {
-    return withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
-            .selectFrom("gateway_boot_lifecycle")
-            .select(["reason", "completed_at_ms as completedAtMs"])
-            .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
-            .where("completed_at_ms", "is not", null)
-            .orderBy("completed_at_ms", "desc")
-            .limit(1),
-        );
-        return row?.completedAtMs == null
-          ? undefined
-          : { ...row, completedAtMs: row.completedAtMs };
-      },
-      { env },
-    );
-  } catch {
-    return undefined;
-  }
+/** Inspection keeps snapshot preparation off the caller's event loop. */
+export async function readGatewayLastShutdownAsync(env = process.env) {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "gatewayBoot.lastShutdown", input: undefined },
+    { signal: getAsyncWorkSignal() },
+  );
+  return reply?.shutdown;
 }
 
-export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
-  const lastShutdown = readGatewayLastShutdown(env);
-  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
-    return undefined;
-  }
-  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+export async function readGatewayLastInstallationReplacementAsync(env = process.env) {
+  const lastShutdown = await readGatewayLastShutdownAsync(env);
+  return lastShutdown?.reason?.startsWith("gateway.installation_replaced:")
+    ? { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs }
+    : undefined;
 }
 
 export function inspectGatewayCrashLoopBreaker(

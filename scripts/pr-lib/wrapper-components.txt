@@ -1199,6 +1199,7 @@ src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-database-admission-relay.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
+src/infra/sqlite-worker-operation-scope.ts
 src/infra/sqlite-worker-operation-settlement.ts
 src/infra/sqlite-worker-request-class.ts
 src/infra/sqlite-worker-request-custody.ts

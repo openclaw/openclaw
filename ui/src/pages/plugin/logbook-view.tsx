@@ -319,12 +319,7 @@ export function Logbook(props: LogbookProps) {
   const state = () => model.state;
   createEffect(
     () => (props.connected ? props.client : null),
-    (client) => {
-      model.connect(client);
-      if (client && !model.state.timeline && !model.state.loading && !model.state.error) {
-        void model.load();
-      }
-    },
+    (client) => void (model.connect(client) && model.load()),
   );
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
