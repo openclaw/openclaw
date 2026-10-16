@@ -1,17 +1,17 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
 import type { BrowserTab } from "../client.types.js";
 import { gotoPageWithNavigationGuard as gotoPageWithNavigationGuardReal } from "../pw-session-navigation.js";
 import {
-  getPwToolsCoreSessionMocks,
+  getPwToolsCoreSessionMocks as sessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
 } from "../pw-tools-core.test-harness.js";
+import { atBarrier, gate, startRoute } from "./agent-route.test-support.js";
 import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
   open: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock("../pw-ai-module.js", () => ({
 }));
 
 import {
-  assertBrowserDashboardTargetCurrent,
+  assertBrowserDashboardTargetCurrent as assertCurrent,
   reconcileBrowserDashboards,
   requestBrowserDashboard,
   stopBrowserDashboard,
@@ -59,6 +59,13 @@ function dashboardRoute(tab: BrowserTab, route: "/act" | "/navigate" = "/act") {
 
 describe("dashboard action ownership", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+  function retire(kind: string) {
+    if (kind === "replacement") {
+      fixture.widgets[0]!.instanceId = "instance-two";
+      return reconcileBrowserDashboards();
+    }
+    return stopBrowserDashboard(request);
+  }
 
   it.each([
     { revoke: "replacement", boundary: "nested batch" },
@@ -70,15 +77,10 @@ describe("dashboard action ownership", () => {
       const dashboard = await requestBrowserDashboard(request);
       const targetId = dashboard.browserTab!.targetId;
       const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
-      const waitEntered = createDeferred<void>();
-      const releaseWait = createDeferred<void>();
-      const closeEntered = createDeferred<void>();
-      const releaseClose = createDeferred<{ status: "closed" }>();
+      const ready = gate();
+      const closing = gate<{ status: "closed" }>();
       const nextEffect = vi.fn(async () => {});
-      const holdAction = async () => {
-        waitEntered.resolve();
-        await releaseWait.promise;
-      };
+      const holdAction = ready.block;
       const mainFrame = { url: () => tab.url };
       setPwToolsCoreCurrentPage({
         url: () => tab.url,
@@ -86,81 +88,48 @@ describe("dashboard action ownership", () => {
         isClosed: () => false,
         waitForTimeout: holdAction,
       });
-      setPwToolsCoreCurrentRefLocator({
-        click: nextEffect,
-        fill: holdAction,
-        press: nextEffect,
-      });
+      setPwToolsCoreCurrentRefLocator({ click: nextEffect, fill: holdAction, press: nextEffect });
       if (boundary === "navigation preparation") {
-        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mockImplementationOnce(
+        sessionMocks().withPageNavigationRequestGuard.mockImplementationOnce(
           async ({ action, page }) => {
             await holdAction();
             return await action(page.url());
           },
         );
       }
-      browser.closeOwned.mockImplementation(async () => {
-        closeEntered.resolve();
-        return await releaseClose.promise;
+      browser.closeOwned.mockImplementation(closing.block);
+      const body: BrowserActRequest =
+        boundary === "submit"
+          ? { kind: "type", targetId, ref: "1", text: "updated value", submit: true }
+          : boundary === "navigation preparation"
+            ? { kind: "click", targetId, ref: "1" }
+            : {
+                kind: "batch",
+                targetId,
+                stopOnError: false,
+                actions: [
+                  {
+                    kind: "batch",
+                    stopOnError: false,
+                    actions: [
+                      { kind: "wait", timeMs: 1 },
+                      { kind: "click", ref: "1" },
+                    ],
+                  },
+                  { kind: "click", ref: "2" },
+                ],
+              };
+      const { response, completion: operation } = startRoute(dashboardRoute(tab), {
+        body,
+        assertCurrent: (profile) => assertCurrent(dashboard, "main", {}, profile),
       });
-      const actions: BrowserActRequest[] = [
-        { kind: "wait", timeMs: 1 },
-        { kind: "click", ref: "1" },
-      ];
-      let body: BrowserActRequest = {
-        kind: "batch",
-        targetId,
-        stopOnError: false,
-        actions:
-          boundary === "nested batch"
-            ? [
-                { kind: "batch", stopOnError: false, actions },
-                { kind: "click", ref: "2" },
-              ]
-            : actions,
-      };
-      if (boundary === "submit") {
-        body = { kind: "type", targetId, ref: "1", text: "updated value", submit: true };
-      } else if (boundary === "navigation preparation") {
-        body = { kind: "click", targetId, ref: "1" };
-      }
-      const response = createBrowserRouteResponse();
-      const operation = Promise.resolve(
-        dashboardRoute(tab)(
-          {
-            params: {},
-            query: {},
-            body,
-            assertCurrent: async (profile) =>
-              await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
-          },
-          response.res,
-        ),
-      );
       let retirement: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          waitEntered.promise,
-          operation.then(() => {
-            throw new Error(
-              `Action ended before wait: ${response.statusCode} ${JSON.stringify(response.body)}`,
-            );
-          }),
-        ]);
-        if (revoke === "replacement") {
-          fixture.widgets[0]!.instanceId = "instance-two";
-          retirement = reconcileBrowserDashboards();
-        } else {
-          retirement = stopBrowserDashboard(request);
-        }
-        await Promise.race([
-          closeEntered.promise,
-          retirement.then(() => {
-            throw new Error("Dashboard retirement ended before closing its tab");
-          }),
-        ]);
+        await atBarrier(ready.entered, operation, "Action ended before wait", response);
+        retirement = retire(revoke);
+        await atBarrier(closing.entered, retirement, "retired before tab close");
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
-        releaseWait.resolve();
+        ready.resolve();
         await operation;
         expect(nextEffect).not.toHaveBeenCalled();
         expect(response.statusCode).toBeGreaterThanOrEqual(400);
@@ -168,8 +137,8 @@ describe("dashboard action ownership", () => {
           error: expect.stringMatching(/dashboard|Dashboard/),
         });
       } finally {
-        releaseWait.resolve();
-        releaseClose.resolve({ status: "closed" });
+        ready.resolve();
+        closing.resolve({ status: "closed" });
         await Promise.allSettled([operation, retirement]);
       }
     },
@@ -186,10 +155,8 @@ describe("dashboard action ownership", () => {
       const dashboard = await requestBrowserDashboard(request);
       const targetId = dashboard.browserTab!.targetId;
       const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
-      const preparationEntered = createDeferred<void>();
-      const releasePreparation = createDeferred<void>();
-      const closeEntered = createDeferred<void>();
-      const releaseClose = createDeferred<{ status: "closed" }>();
+      const ready = gate();
+      const closing = gate<{ status: "closed" }>();
       const requestedUrl = "https://93.184.216.34/next";
       let currentUrl = dashboard.url;
       let navigations = 0;
@@ -209,8 +176,7 @@ describe("dashboard action ownership", () => {
         route: vi.fn(async () => {
           preparations += 1;
           if (preparations === (retry ? 2 : 1)) {
-            preparationEntered.resolve();
-            await releasePreparation.promise;
+            await ready.block();
           }
         }),
         unroute: vi.fn(async () => {}),
@@ -220,49 +186,20 @@ describe("dashboard action ownership", () => {
       const gotoGuard = vi
         .mocked(pwSession.gotoPageWithNavigationGuard)
         .mockImplementation(gotoPageWithNavigationGuardReal);
-      browser.closeOwned.mockImplementation(async () => {
-        closeEntered.resolve();
-        return await releaseClose.promise;
+      browser.closeOwned.mockImplementation(closing.block);
+      const { response, completion: operation } = startRoute(dashboardRoute(tab, "/navigate"), {
+        body: { targetId, url: requestedUrl },
+        assertCurrent: (profile) => assertCurrent(dashboard, "main", {}, profile),
       });
-      const response = createBrowserRouteResponse();
-      const operation = Promise.resolve(
-        dashboardRoute(tab, "/navigate")(
-          {
-            params: {},
-            query: {},
-            body: { targetId, url: requestedUrl },
-            assertCurrent: async (profile) =>
-              await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
-          },
-          response.res,
-        ),
-      );
       let retirement: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          preparationEntered.promise,
-          operation.then(() => {
-            throw new Error(
-              `Navigation ended before preparation: ${response.statusCode} ${JSON.stringify(response.body)}`,
-            );
-          }),
-        ]);
+        await atBarrier(ready.entered, operation, "Navigation ended before ready", response);
         if (revoke !== "none") {
-          if (revoke === "replacement") {
-            fixture.widgets[0]!.instanceId = "instance-two";
-            retirement = reconcileBrowserDashboards();
-          } else {
-            retirement = stopBrowserDashboard(request);
-          }
-          await Promise.race([
-            closeEntered.promise,
-            retirement.then(() => {
-              throw new Error("Dashboard retirement ended before closing its tab");
-            }),
-          ]);
+          retirement = retire(revoke);
+          await atBarrier(closing.entered, retirement, "retired before tab close");
         }
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
-        releasePreparation.resolve();
+        ready.resolve();
         await operation;
         if (revoke === "none") {
           expect(goto).toHaveBeenCalledTimes(retry ? 2 : 1);
@@ -277,8 +214,8 @@ describe("dashboard action ownership", () => {
         }
         expect(page.unroute).toHaveBeenCalledTimes(retry ? 2 : 1);
       } finally {
-        releasePreparation.resolve();
-        releaseClose.resolve({ status: "closed" });
+        ready.resolve();
+        closing.resolve({ status: "closed" });
         await Promise.allSettled([operation, retirement]);
         gotoGuard.mockRestore();
       }

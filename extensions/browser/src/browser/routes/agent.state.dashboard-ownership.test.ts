@@ -1,15 +1,15 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
 import type { BrowserTab } from "../client.types.js";
 import {
-  getPwToolsCoreSessionMocks,
+  getPwToolsCoreSessionMocks as sessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
 } from "../pw-tools-core.test-harness.js";
 import { createProfileSelectionOps } from "../server-context.selection.js";
+import { atBarrier, gate, startRoute } from "./agent-route.test-support.js";
 import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
   open: vi.fn(),
@@ -37,14 +37,14 @@ vi.mock("../chrome.js", async (importOriginal) => ({
 }));
 vi.mock("../pw-session-connection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../pw-session-connection.js")>()),
-  getPageForTargetId: () => getPwToolsCoreSessionMocks().getPageForTargetId(),
+  getPageForTargetId: () => sessionMocks().getPageForTargetId(),
 }));
 vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: async () => ({
     ...(await import("../pw-tools-core.state.js")),
     ...(await import("../pw-tools-core.storage.js")),
     ...(await import("../pw-session-actions.js")),
-    getPageForTargetId: getPwToolsCoreSessionMocks().getPageForTargetId,
+    getPageForTargetId: sessionMocks().getPageForTargetId,
   }),
 }));
 
@@ -62,62 +62,35 @@ const sessionKey = "agent:main:dashboard-state-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
 type MutationCase = {
-  name: string;
   route: string;
   body: Record<string, unknown>;
   preparation?: "cdp" | "device queue" | "focus" | "permission socket";
   effects?: number;
 };
-const mutations: MutationCase[] = [
-  { name: "media", route: "/set/media", body: { colorScheme: "dark" } },
-  { name: "locale", route: "/set/locale", body: { locale: "en-US" }, preparation: "cdp" },
-  { name: "timezone", route: "/set/timezone", body: { timezoneId: "UTC" }, preparation: "cdp" },
-  {
-    name: "device",
-    route: "/set/device",
-    body: { name: "Desktop Chrome" },
-    preparation: "device queue",
-    effects: 4,
-  },
-  { name: "offline", route: "/set/offline", body: { offline: true } },
-  { name: "headers", route: "/set/headers", body: { headers: { "X-Test": "fixture" } } },
-  {
-    name: "credentials",
-    route: "/set/credentials",
-    body: { username: "fixture", password: "not-real" },
-  },
-  {
-    name: "geolocation",
-    route: "/set/geolocation",
-    body: { latitude: 0, longitude: 0 },
-    effects: 2,
-  },
-  {
-    name: "cookies set",
-    route: "/cookies/set",
-    body: { cookie: { name: "theme", value: "dark", url: "http://service.example/" } },
-  },
-  {
-    name: "cookies set-many",
-    route: "/cookies/set-many",
-    body: { cookies: [{ name: "theme", value: "dark", url: "http://service.example/" }] },
-  },
-  { name: "cookies clear", route: "/cookies/clear", body: {} },
-  { name: "storage set", route: "/storage/:kind/set", body: { key: "theme", value: "dark" } },
-  { name: "storage clear", route: "/storage/:kind/clear", body: {} },
-  {
-    name: "permissions via Playwright",
-    route: "/permissions/grant",
-    body: { origin: "http://service.example", permissions: ["audioCapture"] },
-  },
-  {
-    name: "permissions via CDP",
-    route: "/permissions/grant",
-    body: { origin: "http://service.example", permissions: ["clipboardReadWrite"] },
-    preparation: "permission socket",
-  },
-  { name: "focus", route: "/tabs/focus", body: {}, preparation: "focus" },
-];
+const cookie = { name: "theme", value: "dark", url: "http://service.example/" };
+const mutations: Array<[string, Record<string, unknown>?, MutationCase["preparation"]?, number?]> =
+  [
+    ["/set/media", { colorScheme: "dark" }],
+    ["/set/locale", { locale: "en-US" }, "cdp"],
+    ["/set/timezone", { timezoneId: "UTC" }, "cdp"],
+    ["/set/device", { name: "Desktop Chrome" }, "device queue", 4],
+    ["/set/offline", { offline: true }],
+    ["/set/headers", { headers: { "X-Test": "fixture" } }],
+    ["/set/credentials", { username: "fixture", password: "not-real" }],
+    ["/set/geolocation", { latitude: 0, longitude: 0 }, undefined, 2],
+    ["/cookies/set", { cookie }],
+    ["/cookies/set-many", { cookies: [cookie] }],
+    ["/cookies/clear"],
+    ["/storage/:kind/set", { key: "theme", value: "dark" }],
+    ["/storage/:kind/clear"],
+    ["/permissions/grant", { origin: "http://service.example", permissions: ["audioCapture"] }],
+    [
+      "/permissions/grant",
+      { origin: "http://service.example", permissions: ["clipboardReadWrite"] },
+      "permission socket",
+    ],
+    ["/tabs/focus", {}, "focus"],
+  ];
 
 function stateRoute(tab: BrowserTab, spec: MutationCase, hold: () => Promise<void>) {
   const listTabs = async () => {
@@ -150,19 +123,16 @@ function stateRoute(tab: BrowserTab, spec: MutationCase, hold: () => Promise<voi
 describe("dashboard state mutation ownership", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
   it.each(
-    mutations.flatMap((spec) => [false, true].map((stop) => Object.assign({}, spec, { stop }))),
-  )("$name revalidates after preparation with stop=$stop", async (spec) => {
+    mutations.flatMap(([route, body = {}, preparation, effects]) =>
+      [false, true].map((stop) => ({ route, body, preparation, effects, stop })),
+    ),
+  )("$route/$preparation revalidates with stop=$stop", async (spec) => {
     const dashboard = await requestBrowserDashboard(request);
     const targetId = dashboard.browserTab!.targetId;
     const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const closeEntered = createDeferred<void>();
-    const releaseClose = createDeferred<{ status: "closed" }>();
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const ready = gate();
+    const closing = gate<{ status: "closed" }>();
+    const hold = ready.block;
     const effect = vi.fn(async () => {});
     const page = {
       url: () => dashboard.url,
@@ -188,17 +158,17 @@ describe("dashboard state mutation ownership", () => {
     };
     setPwToolsCoreCurrentPage(page);
     if (!spec.preparation) {
-      getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
+      sessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
         await hold();
         return page;
       });
     } else if (spec.preparation === "device queue") {
-      const state = getPwToolsCoreSessionMocks().ensurePageState();
-      let tail: Promise<void> | undefined = release.promise;
+      const state = sessionMocks().ensurePageState();
+      let tail: Promise<void> | undefined = ready.promise;
       Object.assign(state, {
         emulation: {
           get transitionTail() {
-            entered.resolve();
+            ready.enter();
             return tail;
           },
           set transitionTail(value: Promise<void> | undefined) {
@@ -214,48 +184,22 @@ describe("dashboard state mutation ownership", () => {
       }
       return await run(effect);
     });
-    browser.closeOwned.mockImplementation(async () => {
-      closeEntered.resolve();
-      return await releaseClose.promise;
+    browser.closeOwned.mockImplementation(closing.block);
+    const { response, completion: operation } = startRoute(stateRoute(tab, spec, hold), {
+      params: { kind: "local" },
+      body: { ...spec.body, targetId },
+      assertCurrent: async (profile) =>
+        await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
     });
-    const response = createBrowserRouteResponse();
-    const operation = Promise.resolve(
-      stateRoute(
-        tab,
-        spec,
-        hold,
-      )(
-        {
-          params: { kind: "local" },
-          query: {},
-          body: { ...spec.body, targetId },
-          assertCurrent: async (profile) =>
-            await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
-        },
-        response.res,
-      ),
-    );
     let retirement: Promise<unknown> | undefined;
     try {
-      await Promise.race([
-        entered.promise,
-        operation.then(() => {
-          throw new Error(
-            `Mutation ended before preparation: ${response.statusCode} ${JSON.stringify(response.body)}`,
-          );
-        }),
-      ]);
+      await atBarrier(ready.entered, operation, "mutation ended before preparation", response);
       if (spec.stop) {
         retirement = stopBrowserDashboard(request);
-        await Promise.race([
-          closeEntered.promise,
-          retirement.then(() => {
-            throw new Error("Dashboard retirement ended before native close");
-          }),
-        ]);
+        await atBarrier(closing.entered, retirement, "retired before native close");
       }
       expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
-      release.resolve();
+      ready.resolve();
       await operation;
       expect(effect).toHaveBeenCalledTimes(spec.stop ? 0 : (spec.effects ?? 1));
       if (spec.stop) {
@@ -266,8 +210,8 @@ describe("dashboard state mutation ownership", () => {
         expect(response.body).toMatchObject({ ok: true });
       }
     } finally {
-      release.resolve();
-      releaseClose.resolve({ status: "closed" });
+      ready.resolve();
+      closing.resolve({ status: "closed" });
       await Promise.allSettled([operation, retirement]);
     }
   });

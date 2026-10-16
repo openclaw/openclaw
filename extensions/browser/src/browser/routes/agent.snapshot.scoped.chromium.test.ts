@@ -14,8 +14,9 @@ import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import * as pageCdp from "../pw-session.page-cdp.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
 import { getFreePort } from "../test-port.js";
+import { atBarrier, gate, runRoute } from "./agent-route.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const outside = '<button id="outside">Same</button>';
@@ -87,6 +88,38 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     let targetId: string;
     let routes: ReturnType<typeof createBrowserRouteApp>;
 
+    async function load(html: string) {
+      await page.goto(`http://127.0.0.1:${fixturePort}/`);
+      await page.setContent(html);
+    }
+
+    function routeApp(endpoint: string, name: string) {
+      const state: BrowserServerState = {
+        port: 0,
+        profiles: new Map(),
+        resolved: resolveBrowserConfig({
+          defaultProfile: name,
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+          profiles: { [name]: { cdpUrl: endpoint, color: "#123456", attachOnly: true } },
+        }),
+      };
+      const result = createBrowserRouteApp();
+      registerBrowserRoutes(result.app, createBrowserRouteContext({ getState: () => state }));
+      return result;
+    }
+
+    async function markersGone() {
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Array.from(document.querySelectorAll("*")).some((element) =>
+              element.getAttributeNames().some((name) => name.startsWith("data-openclaw-capture-")),
+            ),
+          ),
+        )
+        .toBe(false);
+    }
+
     beforeAll(async () => {
       fixture = createServer((req, res) => {
         res.setHeader("Content-Type", "text/html");
@@ -117,17 +150,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         targetInfo: { targetId },
       } = await session.send("Target.getTargetInfo"));
       await session.detach();
-      const state: BrowserServerState = {
-        port: 0,
-        profiles: new Map(),
-        resolved: resolveBrowserConfig({
-          defaultProfile: "scoped",
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-          profiles: { scoped: { cdpUrl, color: "#123456", attachOnly: true } },
-        }),
-      };
-      routes = createBrowserRouteApp();
-      registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
+      routes = routeApp(cdpUrl, "scoped");
     }, 30_000);
 
     afterAll(async () => {
@@ -150,18 +173,12 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         (method === "get" ? routes.getHandlers : routes.postHandlers).get(route),
         route,
       );
-      const response = createBrowserRouteResponse();
       const input = { targetId, ...values };
-      await handler(
-        {
-          params: {},
-          query: method === "get" ? input : {},
-          body: method === "post" ? input : undefined,
-          signal,
-        },
-        response.res,
-      );
-      return response;
+      return await runRoute(handler, {
+        query: method === "get" ? input : {},
+        body: method === "post" ? input : undefined,
+        signal,
+      });
     }
 
     it.each(cases)(
@@ -248,12 +265,10 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     ])(
       "preserves newer refs after an older $kind capture $mode",
       async ({ kind, mode }) => {
-        await page.goto(`http://127.0.0.1:${fixturePort}/`);
-        await page.setContent(
+        await load(
           `<button id="a" onclick="document.querySelector('output').textContent='a'">A</button><button id="b" onclick="document.querySelector('output').textContent='b'">B</button><output></output>`,
         );
-        const entered = createDeferred<void>();
-        const release = createDeferred<void>();
+        const marking = gate();
         const settled = createDeferred<void>();
         const nativeMark = pageCdp.markBackendDomRefsOnPage;
         let first = true;
@@ -264,8 +279,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
               return await nativeMark(options);
             }
             first = false;
-            entered.resolve();
-            await release.promise;
+            await marking.block();
             try {
               return await nativeMark(options);
             } finally {
@@ -286,12 +300,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           controller.signal,
         );
         try {
-          await Promise.race([
-            entered.promise,
-            older.then(() => {
-              throw new Error("Capture ended before the marker barrier");
-            }),
-          ]);
+          await atBarrier(marking.entered, older, "capture ended before markers");
           if (mode === "abort") {
             controller.abort(new Error("Probe cancelled the older request"));
           } else {
@@ -308,26 +317,16 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
             Object.entries(newerBody.refs).find(([, value]) => value.name === "B")?.[0],
             "B snapshot ref",
           );
-          release.resolve();
+          marking.resolve();
           await settled.promise;
           await older;
-          await expect
-            .poll(() =>
-              page.evaluate(() =>
-                Array.from(document.querySelectorAll("*")).some((element) =>
-                  element
-                    .getAttributeNames()
-                    .some((name) => name.startsWith("data-openclaw-capture-")),
-                ),
-              ),
-            )
-            .toBe(false);
+          await markersGone();
           const action = await call("post", "/act", { kind: "click", ref, timeoutMs: 500 });
           const clicked = await page.locator("output").textContent();
           expect(action.statusCode, JSON.stringify(action.body)).toBe(200);
           expect(clicked).toBe("b");
         } finally {
-          release.resolve();
+          marking.resolve();
           await older;
           binding.mockRestore();
         }
@@ -336,8 +335,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     );
 
     it("does not clear a newer binding after a delayed native pre-clear read", async () => {
-      await page.goto(`http://127.0.0.1:${fixturePort}/`);
-      await page.setContent(
+      await load(
         `<button id="a">A</button><button id="b" onclick="document.querySelector('output').textContent='b'">B</button><output></output>`,
       );
       const version = (await fetch(`${cdpUrl}/json/version`).then((response) =>
@@ -428,17 +426,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         upstream.on("error", () => downstream.close());
       });
       const originalRoutes = routes;
-      routes = createBrowserRouteApp();
-      const state: BrowserServerState = {
-        port: 0,
-        profiles: new Map(),
-        resolved: resolveBrowserConfig({
-          defaultProfile: "clear",
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-          profiles: { clear: { cdpUrl: proxyUrl, color: "#123456", attachOnly: true } },
-        }),
-      };
-      registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
+      routes = routeApp(proxyUrl, "clear");
       let older: ReturnType<typeof call> | undefined;
       try {
         const seeded = await call("get", "/snapshot", { format: "ai", selector: "#b" });
@@ -451,29 +439,14 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           { format: "ai", selector: "#a", timeoutMs: 10_000 },
           controller.signal,
         );
-        await Promise.race([
-          entered.promise,
-          older.then(() => {
-            throw new Error("Missing native clear barrier");
-          }),
-        ]);
+        await atBarrier(entered.promise, older, "missing native clear barrier");
         controller.abort(new Error("cancel after native pre-clear read"));
         const newer = await call("get", "/snapshot", { format: "ai", selector: "#b" });
         expect(newer.statusCode, JSON.stringify(newer.body)).toBe(200);
         const ref = Object.keys((newer.body as { refs: Record<string, unknown> }).refs)[0]!;
         release();
         await older;
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              Array.from(document.querySelectorAll("*")).some((element) =>
-                element
-                  .getAttributeNames()
-                  .some((name) => name.startsWith("data-openclaw-capture-")),
-              ),
-            ),
-          )
-          .toBe(false);
+        await markersGone();
         const action = await call("post", "/act", { kind: "click", ref, timeoutMs: 500 });
         const clicked = await page.locator("output").textContent();
         expect(action.statusCode, JSON.stringify(action.body)).toBe(200);
@@ -496,8 +469,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     }, 30_000);
 
     it("rejects scoped publication when native markers cannot be installed", async () => {
-      await page.goto(`http://127.0.0.1:${fixturePort}/`);
-      await page.setContent(outside + group);
+      await load(outside + group);
       const binding = vi
         .spyOn(pageCdp, "markBackendDomRefsOnPage")
         .mockResolvedValueOnce(new Set());
@@ -519,8 +491,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     it.each(["ai", "aria"] as const)(
       "does not retarget %s refs when a control disappears during marker binding",
       async (format) => {
-        await page.goto(`http://127.0.0.1:${fixturePort}/`);
-        await page.setContent(
+        await load(
           '<button id="first">Same</button><button id="second">Same</button><button id="third">Same</button><output></output>',
         );
         await page.evaluate(() => {
@@ -563,8 +534,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
     );
 
     it("does not retarget a removed scoped control to an outside duplicate", async () => {
-      await page.goto(`http://127.0.0.1:${fixturePort}/`);
-      await page.setContent(`${outside}<button id="selected">Same</button><output></output>`);
+      await load(`${outside}<button id="selected">Same</button><output></output>`);
       await page.locator("#outside").evaluate((el) =>
         el.addEventListener("click", () => {
           document.querySelector("output")!.textContent = "outside";

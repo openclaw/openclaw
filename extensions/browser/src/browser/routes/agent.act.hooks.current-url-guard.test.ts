@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { expectResponse, runRoute } from "./agent-route.test-support.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
-const chromeMcpMocks = vi.hoisted(() => ({
+const mcp = vi.hoisted(() => ({
   evaluateChromeMcpScript: vi.fn(async () => true),
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
@@ -21,13 +22,11 @@ const pwMocks = vi.hoisted(() => ({
   setInputFilesViaPlaywright: vi.fn(async () => {}),
 }));
 
-vi.mock("../chrome-mcp.js", () => chromeMcpMocks);
+vi.mock("../chrome-mcp.js", () => mcp);
 
 vi.mock("../paths.js", () => pathMocks);
 
-vi.mock("../pw-ai-module.js", () => ({
-  getPwAiModule: vi.fn(async () => pwMocks),
-}));
+vi.mock("../pw-ai-module.js", () => ({ getPwAiModule: vi.fn(async () => pwMocks) }));
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 
@@ -71,9 +70,7 @@ async function callHook(params: {
       },
     }),
   } as never);
-  const response = createBrowserRouteResponse();
-  await postHandlers.get(params.path)!({ params: {}, query: {}, body: params.body }, response.res);
-  return response;
+  return await runRoute(postHandlers.get(params.path), { body: params.body });
 }
 
 async function upload(profile: Parameters<typeof createProfileContext>[0]) {
@@ -92,7 +89,7 @@ const blockedHookCases = [
     body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
     sideEffects: [
       pathMocks.resolveExistingUploadPaths,
-      chromeMcpMocks.uploadChromeMcpFile,
+      mcp.uploadChromeMcpFile,
       pwMocks.armFileUploadViaPlaywright,
       pwMocks.uploadViaPlaywright,
       pwMocks.clickViaPlaywright,
@@ -103,14 +100,14 @@ const blockedHookCases = [
     label: "dialog",
     path: "/hooks/dialog" as const,
     body: { accept: true },
-    sideEffects: [chromeMcpMocks.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
+    sideEffects: [mcp.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
   },
 ];
 
 describe("agent act hook current URL guard", () => {
   beforeEach(() => {
     for (const fn of [
-      ...Object.values(chromeMcpMocks),
+      ...Object.values(mcp),
       ...Object.values(pathMocks),
       ...Object.values(pwMocks),
     ]) {
@@ -125,11 +122,11 @@ describe("agent act hook current URL guard", () => {
 
       const response = await callHook({ path, body, profileCtx });
 
-      expect(response.statusCode).toBe(400);
-      expect(response.body).toEqual({
-        error: "browser navigation blocked by policy",
-        reason: "navigation_blocked",
-      });
+      expectResponse(
+        response,
+        { error: "browser navigation blocked by policy", reason: "navigation_blocked" },
+        400,
+      );
       expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
       for (const sideEffect of sideEffects) {
         expect(sideEffect).not.toHaveBeenCalled();
@@ -137,36 +134,24 @@ describe("agent act hook current URL guard", () => {
     },
   );
 
-  it("sends extension-backed uploads as byte payloads, not local path handoff", async () => {
-    // Store extensions need byte payloads, but retain the oversized-file path fallback.
-    const response = await upload({ driver: "extension" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        browserFilesystemLocal: false,
-        uploadPathsFallbackOnPayloadLimit: true,
-        ref: "upload-button",
-        paths: ["/tmp/upload.txt"],
-      }),
-    );
-  });
-
-  it("keeps non-extension profiles on the rejecting payload branch at the size cap", async () => {
-    const response = await upload({ attachOnly: true });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        browserFilesystemLocal: false,
-        uploadPathsFallbackOnPayloadLimit: false,
-        ref: "upload-button",
-        paths: ["/tmp/upload.txt"],
-      }),
-    );
-  });
+  it.each([
+    { profile: { driver: "extension" as const }, fallback: true },
+    { profile: { attachOnly: true }, fallback: false },
+  ])(
+    "uploads byte payloads with oversized-path fallback=$fallback",
+    async ({ profile, fallback }) => {
+      // Store extensions cannot hand off local paths until the payload size cap.
+      expectResponse(await upload(profile), { ok: true });
+      expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          browserFilesystemLocal: false,
+          uploadPathsFallbackOnPayloadLimit: fallback,
+          ref: "upload-button",
+          paths: ["/tmp/upload.txt"],
+        }),
+      );
+    },
+  );
 
   it.each([
     { targeting: { ref: "upload-button" }, paths: ["first.txt"] },
@@ -184,9 +169,8 @@ describe("agent act hook current URL guard", () => {
       allowPrivateNetwork: true,
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
-    expect(chromeMcpMocks.uploadChromeMcpFile).toHaveBeenCalledWith(
+    expectResponse(response, { ok: true });
+    expect(mcp.uploadChromeMcpFile).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "tab-1",
         uid: "upload-button",
