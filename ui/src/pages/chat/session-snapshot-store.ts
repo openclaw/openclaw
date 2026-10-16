@@ -619,6 +619,7 @@ function flushActiveStores(): void {
   }
 }
 
+// Module-lifetime browser events flush every active store, including during page teardown.
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", flushActiveStores);
   document.addEventListener("visibilitychange", () => {

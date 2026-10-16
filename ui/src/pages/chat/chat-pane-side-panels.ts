@@ -124,6 +124,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     await customElements.whenDefined("openclaw-chat-sidebar-region");
     this.invalidate();
     await this.updateComplete;
+    // The lazy sidebar owns its header DOM; wait for its commit before resolving the focus target.
     const region = this.element.querySelector("openclaw-chat-sidebar-region");
     await region?.updateComplete;
     const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
