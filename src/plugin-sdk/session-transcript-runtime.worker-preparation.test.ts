@@ -24,7 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentity,
-  appendSessionTranscriptMessageByIdentityStrict,
+  appendSessionTranscriptMessageByIdentityStrict as appendStrict,
   withSessionTranscriptWrite,
   withSessionTranscriptWriteLock,
 } from "./session-transcript-runtime.js";
@@ -35,30 +35,24 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: Object.assign(
-      (
-        ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-      ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
+      (...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>) => {
         const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-        return {
-          ...owner,
-          get fileIdentity() {
-            return owner.fileIdentity;
-          },
-          runExisting: (source, operation, options) =>
-            owner.runExisting(
-              source,
-              (worker) =>
-                operation({
-                  execute: async (command, commandOptions) => {
-                    if (command.type === "session.turn.commit") {
-                      delivery.beforeTurnCommit?.();
-                    }
-                    return await worker.execute(command, commandOptions);
-                  },
-                }),
-              options,
-            ),
-        };
+        const runExisting = owner.runExisting;
+        owner.runExisting = (source, operation, options) =>
+          runExisting(
+            source,
+            (worker) =>
+              operation({
+                execute: async (command, commandOptions) => {
+                  if (command.type === "session.turn.commit") {
+                    delivery.beforeTurnCommit?.();
+                  }
+                  return await worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          );
+        return owner;
       },
       actual.captureOpenClawAgentDatabaseExecution,
     ),
@@ -88,7 +82,7 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
       for (const instance of instances) {
         await instance.run(async () => {
           await expect(
-            appendSessionTranscriptMessageByIdentityStrict({
+            appendStrict({
               ...f.scope,
               message: { role: "assistant", content: "guarded" },
               beforeFreshMessageCommit: guard,
@@ -131,7 +125,7 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
     const expected = /preparation\.prepareMessage \/ preparation\.source/u;
     for (const operation of [
       () =>
-        appendSessionTranscriptMessageByIdentityStrict({
+        appendStrict({
           ...target,
           message,
           prepareMessageAfterIdempotencyCheck: prepare,
@@ -170,16 +164,13 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
           idempotencyLookup: "scan" as const,
           preparation: { prepareMessage: prepareMemory },
         };
-        await expect(transcript.appendMessage(options)).resolves.toMatchObject({
-          appended: true,
-          messageId: "memory-private",
-          message: { content: "memory prepared" },
-        });
-        await expect(transcript.appendMessage(options)).resolves.toMatchObject({
-          appended: false,
-          messageId: "memory-private",
-          message: { content: "memory prepared" },
-        });
+        for (const appended of [true, false]) {
+          await expect(transcript.appendMessage(options)).resolves.toMatchObject({
+            appended,
+            messageId: "memory-private",
+            message: { content: "memory prepared" },
+          });
+        }
         await expect(
           transcript.appendMessage({
             message: { ...message, idempotencyKey: "suppressed" },
@@ -189,12 +180,10 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
         return await transcript.readEvents();
       });
       expect(prepareMemory).toHaveBeenCalledOnce();
-      expect(events).toHaveLength(2);
-      expect(events.at(-1)).toMatchObject({
-        type: "message",
-        id: "memory-private",
-        message: { content: "memory prepared" },
-      });
+      expect(events).toMatchObject([
+        {},
+        { type: "message", id: "memory-private", message: { content: "memory prepared" } },
+      ]);
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
@@ -236,7 +225,7 @@ function withSeed(run: (fixture: Fixture) => Promise<void>) {
 }
 it("prepares strict appends without caller-thread SQL and retains the released sync callback type", async () => {
   type Message = { role: string; content: string; idempotencyKey: string };
-  type Params = Parameters<typeof appendSessionTranscriptMessageByIdentityStrict<Message>>[0];
+  type Params = Parameters<typeof appendStrict<Message>>[0];
   expectTypeOf<NonNullable<Params["prepareMessageAfterIdempotencyCheck"]>>().toEqualTypeOf<
     (message: Message) => Message | undefined
   >();
@@ -247,7 +236,7 @@ it("prepares strict appends without caller-thread SQL and retains the released s
     const prepare = vi.fn(async (message: Message) => ({ ...message, content: "prepared" }));
     const sql = observeHostDataSql();
     try {
-      const result = await appendSessionTranscriptMessageByIdentityStrict({
+      const result = await appendStrict({
         ...scope,
         message: { role: "assistant", content: "original", idempotencyKey: "strict-key" },
         preparation: { prepareMessage: prepare },
@@ -308,7 +297,7 @@ it.each([false, true])(
           };
         },
       });
-      const appending = appendSessionTranscriptMessageByIdentityStrict({
+      const appending = appendStrict({
         ...scope,
         message,
         preparation: { source: beforeFreshMessageCommit },

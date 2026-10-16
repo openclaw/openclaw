@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -41,6 +42,11 @@ describe("private session transcript mirror runtime", () => {
     sessionKey: `agent:main:${name}`,
     storePath,
   });
+  async function seed(name: string) {
+    const scope = target(name);
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    return scope;
+  }
   const message = (role: string, text: string, idempotencyKey: string, timestamp: number) => ({
     role,
     content: [{ type: "text", text }],
@@ -51,10 +57,17 @@ describe("private session transcript mirror runtime", () => {
     existingIdempotencyKeys: new Set(["mirror-user"]),
     messagesByIdempotencyKey: new Map([["mirror-user", expect.objectContaining({ role: "user" })]]),
   };
+  function expectAppend(
+    value: { result?: unknown; messageSeq?: number },
+    role: string,
+    seq?: number,
+  ) {
+    expect(value.result).toMatchObject({ appended: true, message: { role } });
+    expect(value.messageSeq).toBe(seq);
+  }
 
   it("rechecks idempotency and publishes only committed visible sequences", async () => {
-    const scope = target("indexed-mirror");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await seed("indexed-mirror");
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
@@ -66,10 +79,7 @@ describe("private session transcript mirror runtime", () => {
         idempotencyLookup: "scan",
         message: message("user", "persist once", "mirror-user", 1),
       });
-      expect(first).toMatchObject({
-        messageSeq: 1,
-        result: { appended: true, message: { role: "user" } },
-      });
+      expectAppend(first, "user", 1);
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject(
         userFacts,
       );
@@ -85,9 +95,7 @@ describe("private session transcript mirror runtime", () => {
       });
       expect(replay.messageSeq).toBeUndefined();
 
-      if (!first.result) {
-        throw new Error("expected initial mirror append");
-      }
+      assert(first.result, "expected initial mirror append");
       await locked.appendMessage({
         message: message("assistant", "abandoned branch", "mirror-abandoned", 3),
         parentId: first.result.messageId,
@@ -96,10 +104,7 @@ describe("private session transcript mirror runtime", () => {
         message: message("assistant", "final active branch", "mirror-active", 4),
         parentId: first.result.messageId,
       });
-      expect(activeBranch).toMatchObject({
-        result: { appended: true, message: { role: "assistant" } },
-      });
-      expect(activeBranch.messageSeq).toBeUndefined();
+      expectAppend(activeBranch, "assistant");
     });
 
     const resolvedScope = resolveSqliteTranscriptScope(scope);
@@ -118,10 +123,7 @@ describe("private session transcript mirror runtime", () => {
       const afterReconcile = await locked.appendMessageWithMessageSequence({
         message: message("assistant", "after active branch", "mirror-after-reconcile", 5),
       });
-      expect(afterReconcile).toMatchObject({
-        messageSeq: 3,
-        result: { appended: true, message: { role: "assistant" } },
-      });
+      expectAppend(afterReconcile, "assistant", 3);
     });
     await waitForSessionTranscriptProjection(scope);
 
@@ -147,10 +149,7 @@ describe("private session transcript mirror runtime", () => {
         idempotencyLookup: "scan",
         message: message("assistant", "projection fallback", "mirror-dirty", 6),
       });
-      expect(dirtyProjection).toMatchObject({
-        result: { appended: true, message: { role: "assistant" } },
-      });
-      expect(dirtyProjection.messageSeq).toBeUndefined();
+      expectAppend(dirtyProjection, "assistant");
     });
   });
 
@@ -179,59 +178,44 @@ describe("private session transcript mirror runtime", () => {
           }),
         ),
     );
-    expect(appended.lifecycleRevision).toBe(entry.lifecycleRevision);
-    expect(appended.messageSeq).toBe(1);
+    expect(appended).toMatchObject({ lifecycleRevision: entry.lifecycleRevision, messageSeq: 1 });
     const result = appended.result;
-    if (!result) {
-      throw new Error("expected committed mirror reply");
-    }
+    assert(result, "expected committed mirror reply");
     await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement-lifecycle" });
     const internalUpdates: InternalSessionTranscriptUpdate[] = [];
     const publicUpdates: SessionTranscriptUpdate[] = [];
-    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
-    const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
-    try {
-      await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
-        locked.publishUpdate({
-          lifecycleRevision: appended.lifecycleRevision,
-          message: result.message,
-          messageId: result.messageId,
-          messageSeq: appended.messageSeq,
-        }),
-      );
-      expect(internalUpdates).toMatchObject([
-        {
-          lifecycleRevision: "committed-lifecycle",
-          messageId: result.messageId,
-          messageSeq: 1,
-        },
-      ]);
-      expect(publicUpdates).toHaveLength(1);
-      expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
-    } finally {
-      offInternal();
-      offPublic();
-    }
+    using subscriptions = new DisposableStack();
+    subscriptions.defer(
+      onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update)),
+    );
+    subscriptions.defer(onSessionTranscriptUpdate((update) => publicUpdates.push(update)));
+    await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+      locked.publishUpdate({
+        lifecycleRevision: appended.lifecycleRevision,
+        message: result.message,
+        messageId: result.messageId,
+        messageSeq: appended.messageSeq,
+      }),
+    );
+    expect(internalUpdates).toMatchObject([
+      {
+        lifecycleRevision: "committed-lifecycle",
+        messageId: result.messageId,
+        messageSeq: 1,
+      },
+    ]);
+    expect(publicUpdates).toHaveLength(1);
+    expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
   });
 
   it("rejects an admission receipt for a different transcript target", async () => {
-    const admittedScope = target("admitted");
-    const requestedScope = target("requested");
-    await upsertSessionEntryCore(admittedScope, {
-      sessionId: admittedScope.sessionId,
-      updatedAt: 1,
-    });
-    await upsertSessionEntryCore(requestedScope, {
-      sessionId: requestedScope.sessionId,
-      updatedAt: 1,
-    });
+    const admittedScope = await seed("admitted");
+    const requestedScope = await seed("requested");
     const admitted = await appendSessionTranscriptMessageByIdentity({
       ...admittedScope,
       message: { role: "user", content: "admitted elsewhere" },
     });
-    if (!admitted?.anchor) {
-      throw new Error("expected admitted transcript anchor");
-    }
+    assert(admitted?.anchor, "expected admitted transcript anchor");
 
     await expect(
       readCodexSessionTranscriptEventsBeforeAdmission(requestedScope, {

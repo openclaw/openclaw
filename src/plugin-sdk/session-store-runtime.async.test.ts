@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -74,9 +75,7 @@ async function createMemoryEntry(
 ) {
   const scope = { agentId: "main", env, sessionKey };
   const binding = await acquireSessionActorStorage(scope, { authority, lifetime, create: true });
-  if (!binding) {
-    throw new Error("Expected memory acquisition");
-  }
+  assert(binding, "Expected memory acquisition");
   databases.push({ agentId: binding.agentId, path: binding.path });
   try {
     await binding.actor.storage.mutate(
@@ -92,8 +91,6 @@ async function createMemoryEntry(
 const completeEntry: InternalSessionEntry = {
   sessionId: "selected",
   updatedAt: 1,
-  createdAt: 1,
-  category: "Synthetic",
   execCwd: "/synthetic/workspace",
   skillsSnapshot: { prompt: "Complete saved prompt", skills: [] },
   pluginExtensions: { synthetic: { enabled: true } },
@@ -109,6 +106,16 @@ const completeEntry: InternalSessionEntry = {
   },
 };
 
+type Store = Omit<Parameters<typeof getSessionEntryByIdAsync>[0], "sessionId" | "orderBy">;
+const byId = (scope: Store, sessionId = "selected", orderBy?: "updatedAt") =>
+  getSessionEntryByIdAsync({ ...scope, sessionId, orderBy });
+const publicRow = (sessionKey: string, entry: Partial<InternalSessionEntry>) => ({
+  sessionKey,
+  entry: expect.objectContaining(entry),
+});
+const put = (scope: Parameters<typeof getSessionEntryAsync>[0], entry: InternalSessionEntry) =>
+  upsertSessionEntry({ ...scope, entry });
+
 it("resolves historical transcript keys off the host after the current session changes", async () => {
   expectTypeOf<typeof resolveTranscriptSessionKeyBySessionIdAsync>().parameters.toEqualTypeOf<
     Parameters<typeof resolveTranscriptSessionKeyBySessionId>
@@ -119,37 +126,23 @@ it("resolves historical transcript keys off the host after the current session c
     withoutHostSql(() => resolveTranscriptSessionKeyBySessionIdAsync({ ...scope, sessionId }));
   expect(await read("missing")).toBeUndefined();
   expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
-  await upsertSessionEntry({
-    ...scope,
-    sessionKey,
-    entry: { sessionId: "historical", updatedAt: 1 },
-  });
+  await put({ ...scope, sessionKey }, { sessionId: "historical", updatedAt: 1 });
   expect(await read("historical")).toBe(sessionKey);
-  await upsertSessionEntry({
-    ...scope,
-    sessionKey,
-    entry: { sessionId: "current", updatedAt: 2 },
-  });
+  await put({ ...scope, sessionKey }, { sessionId: "current", updatedAt: 2 });
   expect(await read("historical")).toBe(sessionKey);
   expect(await read("current")).toBe(sessionKey);
   expect(await read("missing")).toBeUndefined();
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  try {
-    for (let call = 0; call < 2; call++) {
-      expect(resolveTranscriptSessionKeyBySessionId({ ...scope, sessionId: "historical" })).toBe(
-        sessionKey,
-      );
-    }
-    expect(warning).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("resolveTranscriptSessionKeyBySessionIdAsync"),
-      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+  using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  for (let call = 0; call < 2; call++) {
+    expect(resolveTranscriptSessionKeyBySessionId({ ...scope, sessionId: "historical" })).toBe(
+      sessionKey,
     );
-  } finally {
-    warning.mockRestore();
   }
-  await expect(
-    getSessionEntryByIdAsync({ ...scope, sessionId: "historical" }),
-  ).resolves.toBeUndefined();
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("resolveTranscriptSessionKeyBySessionIdAsync"),
+    { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+  );
+  expect(await byId(scope, "historical")).toBeUndefined();
 });
 
 it("lists current public metadata off the host after an owner write without creating absent stores", async () => {
@@ -168,28 +161,21 @@ it("lists current public metadata off the host after an owner write without crea
   const read = () => withoutHostSql(() => listSessionEntriesAsync(scope));
   const before = await read();
   expect(before).toEqual([
-    {
-      sessionKey,
-      entry: expect.objectContaining({
-        sessionId: "selected",
-        initializationPending: true,
-        pluginExtensions: completeEntry.pluginExtensions,
-      }),
-    },
+    publicRow(sessionKey, {
+      sessionId: "selected",
+      initializationPending: true,
+      pluginExtensions: completeEntry.pluginExtensions,
+    }),
   ]);
   expect(before[0]?.entry).not.toHaveProperty("pendingProjectGitUrl");
   expect(before[0]?.entry).not.toHaveProperty("skillsSnapshot");
 
-  await upsertSessionEntry({
-    ...scope,
-    sessionKey,
-    entry: { sessionId: "replacement", updatedAt: 2, displayName: "Replacement" },
-  });
+  await put(
+    { ...scope, sessionKey },
+    { sessionId: "replacement", updatedAt: 2, displayName: "Replacement" },
+  );
   expect(await read()).toEqual([
-    {
-      sessionKey,
-      entry: expect.objectContaining({ sessionId: "replacement", displayName: "Replacement" }),
-    },
+    publicRow(sessionKey, { sessionId: "replacement", displayName: "Replacement" }),
   ]);
   expect(before[0]?.entry.sessionId).toBe("selected");
 });
@@ -212,13 +198,13 @@ it("reads committed watermark updates off the host and ignores a reset predecess
     },
   });
   const read = () => withoutHostSql(() => readAmbientTranscriptWatermarkAsync({ ...scope, key }));
-  await upsertSessionEntry({ ...scope, entry: entry("11", 1) });
+  await put(scope, entry("11", 1));
   expect(await read()).toMatchObject({ messageId: "11" });
 
-  await upsertSessionEntry({ ...scope, entry: entry("12", 2) });
+  await put(scope, entry("12", 2));
   expect(await read()).toMatchObject({ messageId: "12" });
 
-  await upsertSessionEntry({ ...scope, entry: { ...entry("12", 2), sessionId: "after-reset" } });
+  await put(scope, { ...entry("12", 2), sessionId: "after-reset" });
   expect(await read()).toBeUndefined();
 });
 
@@ -257,7 +243,7 @@ it.each(["durable", "memory"] as const)(
       }
     }
     const expectId = (sessionId: string, suffix: string, orderBy?: "updatedAt") =>
-      expect(getSessionEntryByIdAsync({ ...scope, sessionId, orderBy })).resolves.toMatchObject({
+      expect(byId(scope, sessionId, orderBy)).resolves.toMatchObject({
         sessionKey: `${prefix}${suffix}`,
       });
     await expectId("duplicate", "a-old");
@@ -270,9 +256,7 @@ it.each(["durable", "memory"] as const)(
 it("keeps the complete public projection for durable and memory entry reads", async () => {
   const { env } = makeScope("sdk-async-entry-");
   const durable = { agentId: "main", env, sessionKey: "agent:main:durable" };
-  await expect(
-    getSessionEntryByIdAsync({ ...durable, sessionId: "missing" }),
-  ).resolves.toBeUndefined();
+  expect(await byId(durable, "missing")).toBeUndefined();
   expect(existsSync(resolveOpenClawAgentSqlitePath(durable))).toBe(false);
   replaceSessionEntrySync(durable, completeEntry);
   const publicEntry = getSessionEntry(durable);
@@ -289,10 +273,7 @@ it("keeps the complete public projection for durable and memory entry reads", as
   detachedEntry.skillsSnapshot!.prompt = "Plugin-local replacement";
   detachedEntry.skillsSnapshot!.skills.push({ name: "plugin-local" });
   await expect(getSessionEntryAsync(durable)).resolves.toEqual(publicEntry);
-  await expect(getSessionEntryByIdAsync({ ...durable, sessionId: "selected" })).resolves.toEqual({
-    sessionKey: durable.sessionKey,
-    entry: publicEntry,
-  });
+  expect(await byId(durable)).toEqual({ sessionKey: durable.sessionKey, entry: publicEntry });
   const scope = await createMemoryEntry(env, "agent:main:dashboard:incognito-selected", {
     ...completeEntry,
     incognito: true,
@@ -301,13 +282,8 @@ it("keeps the complete public projection for durable and memory entry reads", as
     const entry = await getSessionEntryAsync(scope);
     expect(entry).toEqual({ ...publicEntry, incognito: true });
     expect(getSessionEntry(scope)).toEqual(entry);
-    await expect(getSessionEntryByIdAsync({ ...scope, sessionId: "selected" })).resolves.toEqual({
-      sessionKey: scope.sessionKey,
-      entry,
-    });
-    await expect(
-      getSessionEntryByIdAsync({ ...scope, sessionId: "missing" }),
-    ).resolves.toBeUndefined();
+    expect(await byId(scope)).toEqual({ sessionKey: scope.sessionKey, entry });
+    expect(await byId(scope, "missing")).toBeUndefined();
   });
 });
 
@@ -345,9 +321,7 @@ it("keeps absent and closed memory owners absent without allocating a database",
   const absent = await captureSessionEntryCurrentCheckAsync(scope);
   expect(absent.entry).toBeUndefined();
   await expect(absent.isCurrent()).resolves.toBe(true);
-  await expect(
-    getSessionEntryByIdAsync({ ...scope, storePath: database.path, sessionId: "missing" }),
-  ).resolves.toBeUndefined();
+  expect(await byId({ ...scope, storePath: database.path }, "missing")).toBeUndefined();
   expect(memorySessionActorOwners.read(database)).toBeUndefined();
   await createMemoryEntry(env, scope.sessionKey, {
     sessionId: "closed",
@@ -355,9 +329,7 @@ it("keeps absent and closed memory owners absent without allocating a database",
     incognito: true,
   });
   const binding = await acquireSessionActorStorage(scope, { authority, lifetime });
-  if (!binding) {
-    throw new Error("Expected existing memory session");
-  }
+  assert(binding, "Expected existing memory session");
   try {
     memorySessionActorOwners.closeDatabase(database);
     await expect(

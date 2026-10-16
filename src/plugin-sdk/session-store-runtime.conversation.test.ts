@@ -39,14 +39,31 @@ import {
 describe("current conversation session binding", () => {
   let tempDir: string;
   let storePath: string;
+  type Scope = Parameters<typeof getSessionEntry>[0];
+  type Guard = Parameters<typeof patchSessionEntry>[0]["assertCommitAllowed"];
+  type Store = { agentId: string; storePath?: string; env?: NodeJS.ProcessEnv };
+  const store = () => ({ agentId: "main", storePath });
+  const binding = (scope: Scope, sessionId: string) => ({
+    sessionKey: scope.sessionKey,
+    sessionId,
+  });
+  const rename = (
+    scope: Scope,
+    displayName: string,
+    assertCommitAllowed: Guard,
+    preserveActivity = false,
+  ) =>
+    patchSessionEntry({
+      ...scope,
+      skipMaintenance: true,
+      preserveActivity,
+      assertCommitAllowed,
+      update: () => ({ displayName }),
+    });
+  const seedEntry = (scope: Scope, entry: Partial<SessionEntry> = {}) =>
+    upsertSessionEntry({ ...scope, entry: { sessionId: "original", updatedAt: 100, ...entry } });
 
-  const addressFor = (
-    options: { agentId: string; storePath?: string; env?: NodeJS.ProcessEnv } = {
-      agentId: "main",
-      storePath,
-    },
-    peerId = "room",
-  ) => ({
+  const addressFor = (options: Store = store(), peerId = "room") => ({
     ...options,
     channel: "reef",
     accountId: "default",
@@ -58,13 +75,7 @@ describe("current conversation session binding", () => {
     normalizeSessionDeliveryState({
       context: { channel: "reef", accountId: "default", to: `group:${peerId}`, threadId },
     });
-  async function seedConversation(
-    options: { agentId: string; storePath?: string; env?: NodeJS.ProcessEnv } = {
-      agentId: "main",
-      storePath,
-    },
-    entry: Partial<SessionEntry> = {},
-  ) {
+  async function seedConversation(options: Store = store(), entry: Partial<SessionEntry> = {}) {
     const scope = { ...options, sessionKey: "agent:main:reef:group:room" };
     const delivery = deliveryFor();
     await upsertSessionEntry({
@@ -159,51 +170,32 @@ describe("current conversation session binding", () => {
           chatType: "group",
           delivery,
         });
-        expect(getConversationSession(address)).toEqual({
-          sessionKey: replacementScope.sessionKey,
-          sessionId: "replacement",
-        });
+        expect(getConversationSession(address)).toEqual(binding(replacementScope, "replacement"));
         throw rollback;
       }, databaseOptions),
     ).toThrow(rollback);
-    expect(getConversationSession(address)).toEqual({
-      sessionKey: scope.sessionKey,
-      sessionId: "original",
-    });
+    expect(getConversationSession(address)).toEqual(binding(scope, "original"));
     expect(getSessionEntry(replacementScope)).toBeUndefined();
     await withoutEntrySql(async () => {
-      expect(await getConversationSessionAsync(address)).toEqual({
-        sessionKey: scope.sessionKey,
-        sessionId: "original",
-      });
+      expect(await getConversationSessionAsync(address)).toEqual(binding(scope, "original"));
       await upsertSessionEntry({
         ...replacementScope,
         entry: { sessionId: "replacement", updatedAt: 200, chatType: "group", delivery },
       });
-      expect(await getConversationSessionAsync(address)).toEqual({
-        sessionKey: replacementScope.sessionKey,
-        sessionId: "replacement",
-      });
+      expect(await getConversationSessionAsync(address)).toEqual(
+        binding(replacementScope, "replacement"),
+      );
     });
   });
 
   it("keeps prepared guards on the canonical row selected by shorthand and normalized keys", async () => {
     const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: "original", updatedAt: 100 },
-    });
+    await seedEntry(scope);
     for (const sessionKey of [" main ", " AGENT:MAIN:main "]) {
       const current = await captureSessionEntryCurrentCheckAsync({ ...scope, sessionKey });
       await expect(current.isCurrent()).resolves.toBe(true);
       await withoutEntrySql(async () => {
-        await patchSessionEntry({
-          ...scope,
-          sessionKey,
-          skipMaintenance: true,
-          assertCommitAllowed: current.source,
-          update: () => ({ displayName: sessionKey }),
-        });
+        await rename({ ...scope, sessionKey }, sessionKey, current.source);
       });
       expect(getSessionEntry(scope)?.displayName).toBe(sessionKey);
     }
@@ -211,10 +203,7 @@ describe("current conversation session binding", () => {
 
   it("rejects a retargeted foreign conversation store even when its session key is unchanged", async () => {
     const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: "title-owner", updatedAt: 100, displayName: "Original title" },
-    });
+    await seedEntry(scope, { sessionId: "title-owner", displayName: "Original title" });
     const firstDirectory = path.join(tempDir, "foreign-first");
     const secondDirectory = path.join(tempDir, "foreign-second");
     const aliasDirectory = path.join(tempDir, "foreign-alias");
@@ -241,12 +230,7 @@ describe("current conversation session binding", () => {
       errorMessage: "Conversation source changed before title commit",
     });
     await expect(current.isCurrent()).resolves.toBe(true);
-    await patchSessionEntry({
-      ...scope,
-      skipMaintenance: true,
-      assertCommitAllowed: current.source,
-      update: () => ({ displayName: "Accepted title" }),
-    });
+    await rename(scope, "Accepted title", current.source);
     expect(getSessionEntry(scope)?.displayName).toBe("Accepted title");
 
     fs.unlinkSync(aliasDirectory);
@@ -255,37 +239,28 @@ describe("current conversation session binding", () => {
       sessionKey: conversationKey,
       sessionId: "foreign-1",
     });
-    await expect(
-      patchSessionEntry({
-        ...scope,
-        skipMaintenance: true,
-        assertCommitAllowed: current.source,
-        update: () => ({ displayName: "Rejected title" }),
-      }),
-    ).rejects.toThrow("Conversation source changed before title commit");
+    await expect(rename(scope, "Rejected title", current.source)).rejects.toThrow(
+      "Conversation source changed before title commit",
+    );
     expect(getSessionEntry(scope)?.displayName).toBe("Accepted title");
   });
 
   it("runs composed opaque SDK guards before committing the title change", async () => {
     const scope = { agentId: "main", storePath, sessionKey: "agent:main:main" };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: "original", updatedAt: 100, displayName: "Original title" },
-    });
+    await seedEntry(scope, { displayName: "Original title" });
     const observed: Array<string | undefined> = [];
     const refusal = new Error("Opaque SDK guard refused the title change");
     await expect(
-      patchSessionEntry({
-        ...scope,
-        skipMaintenance: true,
-        assertCommitAllowed: composeSessionEntryCommitGuards([
+      rename(
+        scope,
+        "Rejected title",
+        composeSessionEntryCommitGuards([
           () => {
             observed.push(getSessionEntry(scope)?.displayName);
             throw refusal;
           },
         ]),
-        update: () => ({ displayName: "Rejected title" }),
-      }),
+      ),
     ).rejects.toThrow(refusal);
     expect(observed).toEqual(["Original title"]);
     expect(getSessionEntry(scope)?.displayName).toBe("Original title");
@@ -311,13 +286,7 @@ describe("current conversation session binding", () => {
           : current.source);
       if (current) {
         await withoutEntrySql(async () => {
-          await patchSessionEntry({
-            ...scope,
-            skipMaintenance: true,
-            preserveActivity: true,
-            assertCommitAllowed: assertCurrent,
-            update: () => ({ displayName: "Current owner title" }),
-          });
+          await rename(scope, "Current owner title", assertCurrent, true);
         }, true);
       }
       const original = getSessionEntry(scope);
@@ -327,7 +296,7 @@ describe("current conversation session binding", () => {
         chatType: "group" as const,
         delivery,
       };
-      const rename = patchSessionEntry({
+      const renaming = patchSessionEntry({
         ...scope,
         preserveActivity: true,
         assertCommitAllowed:
@@ -344,12 +313,11 @@ describe("current conversation session binding", () => {
           return { displayName: "Late title for the original owner" };
         },
       });
-      await expect(rename).rejects.toThrow("Conversation owner changed before title commit");
+      await expect(renaming).rejects.toThrow("Conversation owner changed before title commit");
       expect(getSessionEntry(scope)).toEqual(original);
-      expect(getConversationSession(address)).toEqual({
-        sessionKey: replacementScope.sessionKey,
-        sessionId: replacement.sessionId,
-      });
+      expect(getConversationSession(address)).toEqual(
+        binding(replacementScope, replacement.sessionId),
+      );
       expect(getSessionEntry(replacementScope)).not.toHaveProperty("displayName");
     },
   );

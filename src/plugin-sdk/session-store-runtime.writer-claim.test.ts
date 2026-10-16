@@ -59,37 +59,28 @@ describe("plugin session writer claim projection", () => {
   it.each(["patch", "upsert"] as const)(
     "preserves server publication through %s lifecycle changes while rejecting forged grants",
     async (method) => {
-      const sessionKey = "agent:main:plugin-publication";
-      const storePath = path.join(sessionDirs.make(), "sessions.json");
+      const scope = {
+        sessionKey: "agent:main:plugin-publication",
+        storePath: path.join(sessionDirs.make(), "sessions.json"),
+      };
       const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
       const updatedAt = Date.now();
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        {
-          ...privateGenerationEntry(),
-          publicShare,
-          updatedAt,
-        },
-      );
-      const mutate = async (entry: InternalSessionEntry) => {
-        if (method === "patch") {
-          await patchSessionEntry({
-            sessionKey,
-            storePath,
-            replaceEntry: true,
-            update: () => entry,
-          });
-        } else {
-          await upsertSessionEntry({ sessionKey, storePath, entry });
-        }
-      };
+      await replaceSessionEntry(scope, {
+        ...privateGenerationEntry(),
+        publicShare,
+        updatedAt,
+      });
+      const mutate = (entry: InternalSessionEntry) =>
+        method === "patch"
+          ? patchSessionEntry({ ...scope, replaceEntry: true, update: () => entry })
+          : upsertSessionEntry({ ...scope, entry });
       await mutate({
         sessionId: "session-1",
         lifecycleRevision: "generation-2",
         updatedAt,
         publicShare: { ...publicShare, id: "b".repeat(48) },
       });
-      const sameSession = loadSessionEntry({ sessionKey, storePath });
+      const sameSession = loadSessionEntry(scope);
       expect(sameSession?.sessionId).toBe("session-1");
       expect(sameSession?.publicShare).toEqual(publicShare);
       expectGenerationPrivateFieldsCleared(sameSession);
@@ -100,7 +91,7 @@ describe("plugin session writer claim projection", () => {
         updatedAt,
         publicShare: { ...publicShare, sessionId: "session-2", id: "c".repeat(48) },
       });
-      expect(loadSessionEntry({ sessionKey, storePath })?.publicShare).toBeUndefined();
+      expect(loadSessionEntry(scope)?.publicShare).toBeUndefined();
     },
   );
 
@@ -133,27 +124,27 @@ describe("plugin session writer claim projection", () => {
   });
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {
-    const sessionKey = "agent:main:patch-preserve-generation";
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    await replaceSessionEntry({ sessionKey, storePath }, privateGenerationEntry());
+    const scope = {
+      sessionKey: "agent:main:patch-preserve-generation",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, privateGenerationEntry());
 
     await patchSessionEntry({
-      sessionKey,
-      storePath,
+      ...scope,
       update: () => ({ model: "gpt-5.6" }),
     });
 
     const { updatedAt: _updatedAt, ...generation } = privateGenerationEntry();
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    expect(loadSessionEntry(scope)).toMatchObject({
       ...generation,
       model: "gpt-5.6",
     });
 
     await upsertSessionEntry({
       entry: { sessionId: "session-1", updatedAt: 20 },
-      sessionKey,
-      storePath,
+      ...scope,
     });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(generation);
+    expect(loadSessionEntry(scope)).toMatchObject(generation);
   });
 });
