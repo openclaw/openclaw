@@ -1,4 +1,11 @@
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+
+/** Current caller and session facts supplied by the question access owner. */
+export type QuestionClientAuthorization = (
+  client: GatewayClient | null,
+  target?: { agentId: string; canonicalKey: string; entry: SessionEntry } | null,
+) => boolean;
 
 type QuestionSessionCurrentRead = {
   readonly target: {

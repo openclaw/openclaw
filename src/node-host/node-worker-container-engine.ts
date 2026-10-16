@@ -255,6 +255,7 @@ export async function createNodeWorkerContainer(
     bundleRoot: string;
     bundleEntry: string;
     workspaceDir: string;
+    homeDir?: string;
     gatewayNamespace: string;
     launchId: string;
     env: NodeJS.ProcessEnv;
@@ -286,13 +287,16 @@ export async function createNodeWorkerContainer(
     "--workdir",
     params.workspaceDir,
   ];
+  if (params.homeDir && params.homeDir !== params.workspaceDir) {
+    args.push("--mount", `type=bind,source=${params.homeDir},target=${params.homeDir}`);
+  }
   if (engine.id === "docker" && process.getuid && process.getgid) {
     args.push("--user", `${process.getuid()}:${process.getgid()}`);
   }
   const containerEnv: NodeJS.ProcessEnv = {
     ...params.env,
     PATH: CONTAINER_PATH,
-    HOME: params.workspaceDir,
+    HOME: params.homeDir ?? params.workspaceDir,
   };
   if (containerEnv.NODE_EXTRA_CA_CERTS) {
     let certificatePath: string;
@@ -354,13 +358,6 @@ export async function createNodeWorkerContainer(
     throw new Error("node worker container engine returned an invalid container identity");
   }
   return { engine: engine.id, containerId, engineTarget: engine.target };
-}
-
-export function buildNodeWorkerContainerStartArgv(
-  engine: NodeWorkerContainerEngine,
-  containerId: string,
-): string[] {
-  return [engine.command, "start", "--attach", "--interactive", containerId];
 }
 
 /** Inspect the container rather than its disposable Docker client process. */

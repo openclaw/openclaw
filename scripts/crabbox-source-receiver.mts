@@ -97,8 +97,15 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
-    { phase: "base-fetch" });
+  const preparedGit = path.join(cwd, ".git");
+  const reuseBase = stat(preparedGit)?.isDirectory() &&
+    git(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"], {
+      env: { ...env, GIT_DIR: preparedGit, GIT_INDEX_FILE: path.join(preparedGit, "index") }
+    }).trim() === expected.baseSha;
+  // A reused lease already owns this exact base. Fetch its objects into the new
+  // private Git directory; no alternates may survive replacement of preparedGit.
+  git(["fetch", "-q", "--depth=2", reuseBase ? preparedGit : "origin",
+    expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
   git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
@@ -162,11 +169,14 @@ try {
       fs.mkdirSync(directory);
     }
   }
+  // Reuse only physically verified bytes, kinds, and executable bits. No source
+  // code runs before acceptance; lifecycle hooks still trigger a full recheck.
+  const changed = files.filter(entry => sourceMismatch(entry) !== null);
   // Batch raw blobs once; checkout/archive would apply attributes or export rules.
   const blobPath = path.join(temporary, "blobs");
   const output = fs.openSync(blobPath, "wx");
   try { git(["cat-file", "--batch"], {
-    input: files.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
+    input: changed.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
   }); } finally { fs.closeSync(output); }
   const input = fs.openSync(blobPath, "r");
   const buffer = Buffer.alloc(65536);
@@ -180,7 +190,7 @@ try {
     return chunk;
   }
   try {
-    for (const entry of files) {
+    for (const entry of changed) {
       let header = "";
       for (;;) {
         const byte = take(1)[0];
@@ -233,38 +243,37 @@ try {
     if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
   }
   // Verify filesystem bytes, kind, and executable bit independently of either index.
-  function verify({ file, mode, oid }) {
-    if (!reachable(file)) fail("source parent mismatch: " + file);
+  function sourceMismatch({ file, mode, oid }) {
+    if (!reachable(file)) return "source parent mismatch";
     const info = stat(file);
     let actual;
     if (mode === "120000") {
-      if (!info?.isSymbolicLink()) fail("source kind mismatch: " + file);
+      if (!info?.isSymbolicLink()) return "source kind mismatch";
       const target = fs.readlinkSync(file, { encoding: "buffer" });
       actual = createHash("sha1").update("blob " + target.length + "\0").update(target).digest("hex");
     } else {
       if (!info?.isFile() || Boolean(info.mode & 0o100) !== (mode === "100755"))
-        fail("source mode mismatch: " + file);
+        return "source mode mismatch";
       actual = hashFile(file, "sha1", true);
     }
-    if (actual !== oid) fail("source bytes mismatch: " + file);
+    return actual === oid ? null : "source bytes mismatch";
   }
-  for (const entry of files) verify(entry);
+  function verify(entry) {
+    const mismatch = sourceMismatch(entry);
+    if (mismatch) fail(mismatch + ": " + entry.file);
+  }
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
   const sourceIndex = git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" });
-  fs.rmSync(".git", { recursive: true, force: true });
-  fs.renameSync(gitDir, path.join(cwd, ".git"));
-  env.GIT_DIR = path.join(cwd, ".git");
-  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   const sourceGit = stat(env.GIT_DIR);
   // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
   // index caches or hooksPath, but cannot change source membership or comparison refs.
-  function verifySource() {
+  function verifySource(entries = files) {
     const currentGit = stat(env.GIT_DIR);
     if (!currentGit?.isDirectory() || currentGit.dev !== sourceGit.dev || currentGit.ino !== sourceGit.ino ||
         !stat(env.GIT_INDEX_FILE)?.isFile() || stat(path.join(env.GIT_DIR, "commondir")))
       fail("source Git owner mismatch");
-    for (const entry of files) verify(entry);
+    for (const entry of entries) verify(entry);
     for (const file of deleted) {
       if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
     }
@@ -280,7 +289,13 @@ try {
       .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
     if (extras.length) fail("unexpected source entry: " + extras[0]);
   }
-  verifySource();
+  verifySource(changed);
+  // Publish Git identity only after verification; rejected source must retain
+  // the prepared checkout revision for recovery. Renaming preserves its owner.
+  fs.rmSync(".git", { recursive: true, force: true });
+  fs.renameSync(gitDir, path.join(cwd, ".git"));
+  env.GIT_DIR = path.join(cwd, ".git");
+  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   if (selected.has("pnpm-lock.yaml")) {
     const installer = ".github/actions/setup-node-env/install-dependencies.sh";
     if (!selected.has(installer) || !stat(installer)?.isFile())
@@ -289,6 +304,7 @@ try {
     // source's install owner before any caller payload can run.
     const installEnv = { ...env, CI: "true", GITHUB_WORKSPACE: cwd,
       NODE_BIN: path.dirname(process.execPath), FROZEN_LOCKFILE: "true",
+      PNPM_CONFIG_FROZEN_LOCKFILE: "true",
       DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
     for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
     process.stderr.write("[crabbox] reconciling selected-source dependencies\n");

@@ -18,12 +18,10 @@ export type SessionMutationsHost = PendingRowHost &
     reconcileMutation: (
       agentId?: string | null,
       isErrorCurrent?: () => boolean,
+      immediate?: boolean,
     ) => Promise<SessionRefreshOutcome>;
     publishedRow: (key: string) => GatewaySessionRow | undefined;
-    archiveFields: Pick<
-      ReturnType<typeof createSessionRowProvenance>,
-      "fieldObservation" | "observeFields" | "inheritRow" | "mergeRow"
-    >;
+    archiveFields: Pick<ReturnType<typeof createSessionRowProvenance>, "inheritRow">;
     readRevision: () => number;
     notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
     clearThink: (key: string, agentId?: string | null) => void;

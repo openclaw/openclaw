@@ -11,10 +11,15 @@ const loadModelAuthRuntime = createLazyRuntimeModule(
 
 export function createRuntimeModelAuth({
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
 }: Pick<
   PluginRuntime["modelAuth"],
-  "ensureAuthProfileStore" | "isProviderApiKeyConfigured"
+  | "ensureAuthProfileStore"
+  | "ensureAuthProfileStoreAsync"
+  | "isProviderApiKeyConfigured"
+  | "isProviderApiKeyConfiguredAsync"
 >): PluginRuntime["modelAuth"] {
   const getApiKeyForModel = createLazyRuntimeMethod(
     loadModelAuthRuntime,
@@ -31,9 +36,11 @@ export function createRuntimeModelAuth({
   return {
     resolveProviderIdForAuth,
     ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
     resolveAuthProfileOrder,
     listProfilesForProvider,
     isProviderApiKeyConfigured,
+    isProviderApiKeyConfiguredAsync,
     getApiKeyForModel: (params) =>
       getApiKeyForModel({
         model: params.model,

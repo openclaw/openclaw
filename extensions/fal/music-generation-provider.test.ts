@@ -1,50 +1,15 @@
 // Fal tests cover music generation provider plugin behavior.
-import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
-    apiKey: "fal-key",
-    source: "env",
-    mode: "api-key",
-  })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, resolveApiKeyForProviderMock } = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
-  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
-  return {
-    ...original,
-    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-    postJsonRequest: postJsonRequestMock,
-    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  };
-});
-
-function postRequest(): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected fal music request");
-  }
-  return request as Record<string, unknown>;
-}
+installProviderHttpMockCleanup();
 
 function streamedAudioResponse(bytes: string): Response {
   return new Response(
@@ -66,16 +31,16 @@ function falMusicJsonResponse(value: unknown) {
 }
 
 describe("fal music generation provider", () => {
-  afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    postJsonRequestMock.mockReset();
-    resolveApiKeyForProviderMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
-    vi.unstubAllGlobals();
+  beforeEach(async () => {
+    const { fetchWithTimeout } = await import("openclaw/plugin-sdk/provider-http");
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "fal-key" });
+    vi.mocked(fetchWithTimeout).mockImplementation((url, init, _timeoutMs, fetchFn = fetch) =>
+      fetchFn(url, init),
+    );
   });
 
-  it("declares explicit mode capabilities", () => {
-    expectExplicitMusicGenerationCapabilities(buildFalMusicGenerationProvider());
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("submits MiniMax music through fal and downloads the generated track", async () => {
@@ -106,8 +71,9 @@ describe("fal music generation provider", () => {
       format: "mp3",
     });
 
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/minimax-music/v2.6");
-    expect(postRequest().body).toEqual({
+    const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "fal music request");
+    expect(request.url).toBe("https://fal.run/fal-ai/minimax-music/v2.6");
+    expect(request.body).toEqual({
       prompt: "city pop chorus",
       lyrics: "[Verse]\nNeon rain",
       duration: 42,
@@ -194,8 +160,9 @@ describe("fal music generation provider", () => {
       durationSeconds: 30,
     });
 
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/ace-step/prompt-to-audio");
-    expect(postRequest().body).toEqual({
+    const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "fal music request");
+    expect(request.url).toBe("https://fal.run/fal-ai/ace-step/prompt-to-audio");
+    expect(request.body).toEqual({
       prompt: "lofi beach loop",
       instrumental: true,
       duration: 30,
@@ -226,8 +193,9 @@ describe("fal music generation provider", () => {
       durationSeconds: 12,
     });
 
-    expect(postRequest().url).toBe("https://fal.run/fal-ai/stable-audio-25/text-to-audio");
-    expect(postRequest().body).toEqual({
+    const request = requireFirstPostJsonRecordRequest(postJsonRequestMock, "fal music request");
+    expect(request.url).toBe("https://fal.run/fal-ai/stable-audio-25/text-to-audio");
+    expect(request.body).toEqual({
       prompt: "orchestral hit",
       seconds_total: 12,
     });

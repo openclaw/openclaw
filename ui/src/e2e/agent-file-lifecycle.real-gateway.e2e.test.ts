@@ -14,10 +14,9 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   captureAgentFileScreenshot,
   selectAgentFileWorkspace,
@@ -163,6 +162,7 @@ catalogSuite.define(() => {
     const mutations: string[] = [];
     let rejectCatalog = false;
     let holdCatalog = false;
+    let receivedLatestCatalog = false;
     const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
@@ -223,6 +223,10 @@ catalogSuite.define(() => {
                 });
               }
               if (catalogReply && holdCatalog) {
+                const models = requireRecord(frame.payload).models;
+                receivedLatestCatalog ||=
+                  Array.isArray(models) &&
+                  models.some((model) => requireRecord(model).id === "inventory-latest");
                 heldCatalogs.push(() => socket.send(message));
               } else if (catalogReply && rejectCatalog) {
                 socket.send(
@@ -244,17 +248,16 @@ catalogSuite.define(() => {
           const picker = editor.locator(
             'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
           );
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
-          const identityName = editor.locator(
-            ".agent-identity-editor__fields input[maxlength='64']",
-          );
+          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
           await identityName.fill("Keep this identity draft");
           expect(await identityName.inputValue()).toBe("Keep this identity draft");
-          await picker.locator(".picker-select__trigger").click();
+          await openPicker(picker);
           await picker.locator('[role="option"][data-value="fixture/selected"]').click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
@@ -274,11 +277,20 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
+          // Opening refreshes the catalog; verify publication updates closed choices first.
+          const choices = () =>
+            picker.evaluate((element) =>
+              element
+                .closest("openclaw-select-picker")
+                ?.params.options.map((option) => option.value),
+            );
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
 
           await publish("published");
+          await expect.poll(choices).toContain("fixture/published");
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
@@ -303,42 +315,13 @@ catalogSuite.define(() => {
             await picker.locator('[role="option"][data-value="ollama/inventory-before"]').count(),
           ).toBe(0);
 
-          const settleCatalogFrames = () =>
-            page.evaluate(async () => {
-              // SAFETY: Gateway readiness above establishes this app's connected runtime.
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
-              };
-              await app.runtime.context.gateway.snapshot.client.request("health", {});
-              await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
-
           holdCatalog = true;
           inventoryModel = "inventory-held";
           commands.push(await refreshInventory());
-          await expect.poll(() => heldCatalogs.length).toBe(1);
-          const readsWhileHeld = catalogRequests.size;
+          await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
           inventoryModel = "inventory-latest";
           commands.push(await refreshInventory());
-          await settleCatalogFrames();
-          expect(catalogRequests.size).toBe(readsWhileHeld);
-          expect(heldCatalogs).toHaveLength(1);
-
-          // Release the retired read, but keep its queued replacement behind the wire gate.
-          for (const release of heldCatalogs.splice(0)) {
-            release();
-          }
-          await expect.poll(() => heldCatalogs.length).toBe(1);
-          expect(catalogRequests.size).toBe(readsWhileHeld + 1);
-          await settleCatalogFrames();
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
-          ).toBe(0);
-          expect(
-            await picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
-          ).toBe(1);
+          await expect.poll(() => receivedLatestCatalog).toBe(true);
           holdCatalog = false;
           for (const release of heldCatalogs.splice(0)) {
             release();
@@ -381,6 +364,8 @@ catalogSuite.define(() => {
 
           rejectCatalog = false;
           await publish("recovered");
+          await expect.poll(choices).toContain("fixture/recovered");
+          await openPicker(picker);
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
@@ -475,12 +460,19 @@ suite.define(() => {
         signal.throwIfAborted();
         await state.writeConfig({
           agents: {
-            defaults: { workspace: mainWorkspace },
+            ownership: "explicit",
+            defaults: {
+              workspace: mainWorkspace,
+              systemAgent: { agentId: "main" },
+              heartbeat: { agentId: "main" },
+              sessionStore: { agentId: "main" },
+            },
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
               writer: { workspace: writerWorkspace },
             },
           },
+          talk: { agentId: "main" },
           gateway: {
             auth: { mode: "none" },
             controlUi: {

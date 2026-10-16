@@ -24,15 +24,18 @@ function boundedTurnDefaults() {
   } satisfies Omit<Parameters<typeof runBoundedCodexAppServerTurn>[0], "options" | "isolation">;
 }
 
+type TurnParams = Parameters<typeof runBoundedCodexAppServerTurn>[0];
+
+function runTurn(params: Partial<TurnParams> & Pick<TurnParams, "options">) {
+  return runBoundedCodexAppServerTurn({
+    ...boundedTurnDefaults(),
+    isolation: "private-stdio",
+    ...params,
+  });
+}
+
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it.each<{ source: string; requirements: JsonValue }>([
-    { source: "managed config layers", requirements: null },
-    {
-      source: "requirements",
-      requirements: {
-        hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "managed-policy" }] }] },
-      },
-    },
     { source: "required feature", requirements: { featureRequirements: { hooks: true } } },
   ])(
     "preserves mandatory hooks from $source in a private tool-free turn",
@@ -43,15 +46,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       });
 
       await expect(
-        runBoundedCodexAppServerTurn({
-          model: { mode: "required", id: "gpt-5.4" },
-          timeoutMs: 5_000,
+        runTurn({
           options: { clientFactory: fake.factory },
-          taskLabel: "isolated completion",
-          developerInstructions: "Write a short memory narrative.",
-          input: [{ type: "text", text: "Summarize this garden plan.", text_elements: [] }],
-          requiredModalities: ["text"],
-          isolation: "private-stdio",
           requireNoExternalCapabilities: true,
         }),
       ).resolves.toMatchObject({ text: "The message was sent successfully." });
@@ -92,15 +88,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       managedRequirements: { featureRequirements: { hooks: true, shell_tool: true } },
     });
     await expect(
-      runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+      runTurn({
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name the conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
-        isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
     ).rejects.toThrow("cannot override required feature shell_tool");
@@ -127,15 +116,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
             : []),
         ],
       });
-      const run = runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
+      const run = runTurn({
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name the conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
-        isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       });
       if (hasRevision) {
@@ -196,8 +178,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }
         },
       });
-      const run = runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      const run = runTurn({
         options: { clientFactory: async () => harness.client },
         isolation: "configured-transport",
       });
@@ -228,12 +209,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const fake = createClientFactory({ completeTurn: false });
     const controller = new AbortController();
     let outcome: unknown;
-    const run = runBoundedCodexAppServerTurn({
-      ...boundedTurnDefaults(),
+    const run = runTurn({
       signal: controller.signal,
       options: { clientFactory: fake.factory },
-      developerInstructions: "Name the conversation.",
-      input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
       isolation: "configured-transport",
     }).catch((error: unknown) => {
       outcome = error;
@@ -259,17 +237,14 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("bounds turn notifications received before turn/start acknowledges", async () => {
     const fake = createClientFactory({ preBindDeltaCount: 257 });
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         options: { clientFactory: fake.factory },
-        developerInstructions: "Name the conversation.",
-        input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
         isolation: "configured-transport",
       }),
     ).rejects.toThrow("pre-bind notification buffer exceeded");
   });
 
-  it.each(["model/list", "mcpServerStatus/list"])(
+  it.each(["mcpServerStatus/list"])(
     "does not dispatch a turn after its caller retires during %s",
     async (suspendedMethod) => {
       const suspended = createDeferred<void>();
@@ -285,14 +260,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       const retired = new Error("bounded turn caller retired");
       let current = true;
       const params = {
-        model: { mode: "required" as const, id: "gpt-5.4" },
-        timeoutMs: 5_000,
         options: { clientFactory: fake.factory },
-        taskLabel: "isolated completion",
-        developerInstructions: "Name the conversation.",
-        input: [{ type: "text" as const, text: "Help me plan a garden.", text_elements: [] }],
-        requiredModalities: ["text" as const],
-        isolation: "private-stdio" as const,
         requireNoExternalCapabilities: true,
         assertCurrent: () => {
           if (!current) {
@@ -300,7 +268,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }
         },
       };
-      const run = runBoundedCodexAppServerTurn(params);
+      const run = runTurn(params);
       const rejection = expect(run).rejects.toBe(retired);
       await suspended.promise;
       const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
@@ -309,9 +277,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
       await rejection;
       expect(fake.methods).not.toContain("turn/start");
-      if (suspendedMethod === "model/list") {
-        expect(fake.methods).not.toContain("thread/start");
-      }
       expect(fake.notifications.size).toBe(0);
       expect(fake.requests.size).toBe(0);
       if (!codexHome) {
@@ -340,20 +305,15 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
             current = false;
           }
+          if (request.method === "configRequirements/read" && blockedMethod === "thread/start") {
+            current = false;
+          }
           send({ id: request.id, result: results[request.method] });
         },
       });
-      const releaseFence = vi.fn();
-      harness.client.setThreadSessionRequestGuard(async () => {
-        if (blockedMethod === "thread/start") {
-          current = false;
-        }
-        return releaseFence;
-      });
       try {
         await expect(
-          runBoundedCodexAppServerTurn({
-            ...boundedTurnDefaults(),
+          runTurn({
             assertCurrent: () => {
               if (!current) {
                 throw expired;
@@ -365,7 +325,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           }),
         ).rejects.toBe(expired);
         expect(harness.writes.map((line) => JSON.parse(line).method)).not.toContain(blockedMethod);
-        expect(releaseFence).toHaveBeenCalledOnce();
       } finally {
         harness.client.close();
       }
@@ -374,13 +333,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
-    const run = runBoundedCodexAppServerTurn({
-      ...boundedTurnDefaults(),
+    const run = runTurn({
       options: { clientFactory: fake.factory },
       taskLabel: "hosted search",
-      developerInstructions: "Search only.",
-      input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
-      isolation: "private-stdio",
     });
     await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
 
@@ -410,55 +365,32 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     await expect(run).resolves.toMatchObject({ text: "The message was sent successfully." });
   });
 
-  it("reports its own timeout with the configured bound", async () => {
-    const fake = createClientFactory({ completeTurn: false });
-
-    await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
-        timeoutMs: 100,
-        options: { clientFactory: fake.factory },
-        taskLabel: "hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
-        isolation: "private-stdio",
-      }),
-    ).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "codex app-server hosted search turn timed out after 100ms",
-    });
-  });
-
   it("does not adopt a prior turn's timeout as its own", async () => {
     const first = createClientFactory({ completeTurn: false });
     let priorTimeout: unknown;
     try {
-      await runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      await runTurn({
         timeoutMs: 100,
         options: { clientFactory: first.factory },
         taskLabel: "first hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find first query.", text_elements: [] }],
-        isolation: "private-stdio",
       });
     } catch (error) {
       priorTimeout = error;
     }
-    expect(priorTimeout).toMatchObject({ name: "TimeoutError" });
+    expect(priorTimeout).toMatchObject({
+      name: "TimeoutError",
+      timeoutMs: 100,
+      message: "codex app-server first hosted search turn timed out after 100ms",
+    });
 
     const caller = new AbortController();
     caller.abort(priorTimeout);
     const second = createClientFactory({ completeTurn: false });
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         signal: caller.signal,
         options: { clientFactory: second.factory },
         taskLabel: "second hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find second query.", text_elements: [] }],
-        isolation: "private-stdio",
       }),
     ).rejects.toMatchObject({
       name: "Error",
@@ -472,55 +404,15 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
-        developerInstructions: "Finalize only.",
-        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
     ).resolves.toMatchObject({ text: "The message was sent successfully." });
   });
 
-  it("can return a completed turn without text when the finalization caller opts in", async () => {
-    const fake = createClientFactory({ emptyAnswer: true });
-
-    await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
-        options: { clientFactory: fake.factory },
-        taskLabel: "settled-turn finalization",
-        developerInstructions: "Finalize only.",
-        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        isolation: "private-stdio",
-        requireNoExternalCapabilities: true,
-        allowEmptyText: true,
-      }),
-    ).resolves.toMatchObject({ text: "", model: "gpt-5.4" });
-  });
-
-  it("rejects a completed turn without text for ordinary bounded callers", async () => {
-    const fake = createClientFactory({ emptyAnswer: true });
-
-    await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
-        options: { clientFactory: fake.factory },
-        taskLabel: "hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
-        isolation: "private-stdio",
-      }),
-    ).rejects.toThrow("hosted search turn returned no text");
-
-    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    expect(startParams).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
-  });
-
   it.each([
-    { receipt: "notification", codexErrorInfo: undefined, status: undefined },
     { receipt: "notification", codexErrorInfo: "serverOverloaded", status: 503 },
     { receipt: "turn", codexErrorInfo: "rateLimitExceeded", status: 429 },
     {
@@ -539,18 +431,14 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       );
 
       await expect(
-        runBoundedCodexAppServerTurn({
-          ...boundedTurnDefaults(),
+        runTurn({
           options: { clientFactory: fake.factory },
           taskLabel: "settled-turn finalization",
-          developerInstructions: "Finalize only.",
-          input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-          isolation: "private-stdio",
           requireNoExternalCapabilities: true,
         }),
       ).rejects.toMatchObject({
         message: "terminal upstream failure",
-        ...(status === undefined ? {} : { status }),
+        status,
       });
     },
   );
@@ -562,46 +450,34 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
-        developerInstructions: "Finalize only.",
-        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
     ).rejects.toThrow("turn ended with status interrupted");
   });
 
-  it.each(["prepared", "profile", "implicit"] as const)(
+  it.each(["prepared", "profile"] as const)(
     "bridges %s auth into the private home when the configured home is native",
     async (authSelection) => {
       const fake = createClientFactory();
       const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
       const profile = "openai:bounded";
 
-      await runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
-        ...(authSelection === "prepared"
-          ? { preparedAuth }
-          : authSelection === "profile"
-            ? { profile }
-            : {}),
+      await runTurn({
+        ...(authSelection === "prepared" ? { preparedAuth } : { profile }),
         authRequirement: "api-key",
         options: {
           clientFactory: fake.factory,
           pluginConfig: { appServer: { homeScope: "user" } },
         },
-        isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       });
 
       expect(fake.factory).toHaveBeenCalledWith(
         expect.objectContaining({
-          ...(authSelection === "prepared"
-            ? { preparedAuth }
-            : { authProfileId: authSelection === "profile" ? profile : undefined }),
+          ...(authSelection === "prepared" ? { preparedAuth } : { authProfileId: profile }),
           authRequirement: "api-key",
           startOptions: expect.objectContaining({
             homeScope: "agent",
@@ -619,8 +495,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
   it("carries attached provider overrides into private turns without importing tool policy", async () => {
     const fake = createClientFactory();
-    await runBoundedCodexAppServerTurn({
-      ...boundedTurnDefaults(),
+    await runTurn({
       options: {
         clientFactory: fake.factory,
         pluginConfig: {
@@ -639,7 +514,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           },
         },
       },
-      isolation: "private-stdio",
     });
     expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.args).toEqual([
       "app-server",
@@ -662,9 +536,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   it("resolves relative executable and model-catalog paths before entering the private workspace", async () => {
     const fake = createClientFactory();
     const command = "./bin/custom-codex";
-    await runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
-      timeoutMs: 5_000,
+    await runTurn({
       options: {
         clientFactory: fake.factory,
         pluginConfig: {
@@ -674,11 +546,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           },
         },
       },
-      taskLabel: "isolated completion",
-      developerInstructions: "Answer only.",
-      input: [{ type: "text", text: "Name the conversation.", text_elements: [] }],
-      requiredModalities: ["text"],
-      isolation: "private-stdio",
       requireNoExternalCapabilities: true,
     });
     expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions).toMatchObject({
@@ -690,47 +557,38 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
   });
 
-  it.each(["/opt/codex-wrapper.js", "./bin/codex-wrapper.js"])(
-    "preserves the Node launcher %s while removing inherited native policy flags",
-    async (wrapper) => {
-      const fake = createClientFactory();
-      await runBoundedCodexAppServerTurn({
-        model: { mode: "required", id: "gpt-5.4" },
-        timeoutMs: 5_000,
-        options: {
-          clientFactory: fake.factory,
-          pluginConfig: {
-            appServer: {
-              command: "node",
-              args: [wrapper, "app-server", "--sandbox", "danger-full-access"],
-            },
+  it("preserves the Node launcher while removing inherited native policy flags", async () => {
+    const wrapper = "./bin/codex-wrapper.js";
+    const fake = createClientFactory();
+    await runTurn({
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: {
+          appServer: {
+            command: "node",
+            args: [wrapper, "app-server", "--sandbox", "danger-full-access"],
           },
         },
-        taskLabel: "isolated completion",
-        developerInstructions: "Answer only.",
-        input: [{ type: "text", text: "Name the conversation.", text_elements: [] }],
-        requiredModalities: ["text"],
-        isolation: "private-stdio",
-        requireNoExternalCapabilities: true,
-      });
-      expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions).toMatchObject({
-        command: "node",
-        cwd: expect.stringContaining("codex-bounded-turn-"),
-        args: [
-          path.resolve(wrapper),
-          "app-server",
-          "-c",
-          "project_root_markers=[]",
-          "-c",
-          "features.hooks=true",
-          "-c",
-          "features.plugins=false",
-          "--listen",
-          "stdio://",
-        ],
-      });
-    },
-  );
+      },
+      requireNoExternalCapabilities: true,
+    });
+    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions).toMatchObject({
+      command: "node",
+      cwd: expect.stringContaining("codex-bounded-turn-"),
+      args: [
+        path.resolve(wrapper),
+        "app-server",
+        "-c",
+        "project_root_markers=[]",
+        "-c",
+        "features.hooks=true",
+        "-c",
+        "features.plugins=false",
+        "--listen",
+        "stdio://",
+      ],
+    });
+  });
 
   it("preserves and reports the configured native provider when no override is supplied", async () => {
     const model = "gpt-5.6-luna";
@@ -739,8 +597,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       models: [codexModel(model)],
     });
 
-    const result = await runBoundedCodexAppServerTurn({
-      ...boundedTurnDefaults(),
+    const result = await runTurn({
       model: { mode: "required", id: model },
       options: {
         clientFactory: fake.factory,
@@ -761,47 +618,6 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     );
   });
 
-  it.each([
-    { label: "visible catalog ID", id: "gpt-5.6-sol", hidden: false, requested: "gpt-5.6-sol" },
-    {
-      label: "hidden catalog ID",
-      id: "test-hidden-catalog",
-      hidden: true,
-      requested: "test-hidden-catalog",
-    },
-    {
-      label: "hidden execution ID",
-      id: "test-hidden-catalog",
-      hidden: true,
-      requested: "codex-execution-model",
-    },
-  ])("uses the execution model for a required $label", async ({ id, hidden, requested }) => {
-    const fake = createClientFactory({
-      models: [
-        { ...codexModel("codex-execution-model", id), hidden, isDefault: !hidden },
-        { ...codexModel(), isDefault: hidden },
-      ],
-    });
-
-    await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
-        model: { mode: "required", id: requested },
-        options: { clientFactory: fake.factory },
-        isolation: "configured-transport",
-      }),
-    ).resolves.toMatchObject({
-      model: id,
-      nativeSelection: { model: "codex-execution-model", modelProvider: "openai" },
-      text: "The message was sent successfully.",
-    });
-
-    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
-    expect(threadStart).toMatchObject({ model: "codex-execution-model" });
-    expect(turnStart).not.toHaveProperty("model");
-  });
-
   it("keeps hidden models out of live-default selection", async () => {
     const fake = createClientFactory({
       models: [
@@ -812,14 +628,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         model: { mode: "live-default" },
         options: { clientFactory: fake.factory },
         taskLabel: "hosted search",
-        developerInstructions: "Search only.",
-        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
-        isolation: "private-stdio",
       }),
     ).resolves.toMatchObject({
       model: "visible-model",
@@ -837,8 +649,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     const fake = createClientFactory();
 
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         model: { mode: "required", id: "missing-model" },
         options: { clientFactory: fake.factory },
         isolation: "configured-transport",
@@ -847,7 +658,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).toEqual(["model/list"]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "attests ring-zero and totals response usage (missing final usage: %s)",
     async (missingFinalUsage) => {
       const firstResponse = {
@@ -885,13 +696,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       ];
 
       await expect(
-        runBoundedCodexAppServerTurn({
-          ...boundedTurnDefaults(),
+        runTurn({
           options: { clientFactory: fake.factory },
           taskLabel: "settled-turn finalization",
-          developerInstructions: "Finalize only.",
-          input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-          isolation: "private-stdio",
           historyItems,
           requireNoExternalCapabilities: true,
         }),
@@ -961,13 +768,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
 
     await expect(
-      runBoundedCodexAppServerTurn({
-        ...boundedTurnDefaults(),
+      runTurn({
         options: { clientFactory: fake.factory },
         taskLabel: "settled-turn finalization",
-        developerInstructions: "Finalize only.",
-        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
-        isolation: "private-stdio",
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),

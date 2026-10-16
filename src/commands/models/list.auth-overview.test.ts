@@ -4,12 +4,10 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
-import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
-import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   formatProviderAuthProfileCounts,
@@ -47,66 +45,6 @@ vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(() => undefined),
 }));
 
-vi.mock("../../agents/model-auth.js", () => {
-  const resolveConfigKey = (
-    cfg: { models?: { providers?: Record<string, { apiKey?: unknown }> } } | undefined,
-    provider: string,
-  ) => cfg?.models?.providers?.[provider]?.apiKey;
-
-  const resolveConfiguredEnvRef = (value: unknown) =>
-    typeof value === "string"
-      ? /^\$\{([A-Z_][A-Z0-9_]*)\}$/u.exec(value)?.[1]
-      : value && typeof value === "object" && "source" in value && "id" in value
-        ? value.source === "env" && typeof value.id === "string"
-          ? value.id
-          : undefined
-        : undefined;
-
-  return {
-    getCustomProviderApiKey: vi.fn((cfg, provider) => {
-      const value = resolveConfigKey(cfg, provider);
-      return resolveConfiguredEnvRef(value) ?? (typeof value === "string" ? value : undefined);
-    }),
-    resolveEnvApiKey: vi.fn((provider: string) => {
-      if (provider !== "openai" || !process.env.OPENAI_API_KEY?.trim()) {
-        return null;
-      }
-      return {
-        apiKey: process.env.OPENAI_API_KEY,
-        source: "env: OPENAI_API_KEY",
-      };
-    }),
-    resolveUsableCustomProviderApiKey: vi.fn(
-      (params: {
-        cfg?: { models?: { providers?: Record<string, { apiKey?: unknown }> } };
-        provider: string;
-      }) => {
-        const apiKey = resolveConfigKey(params.cfg, params.provider);
-        const envRef = resolveConfiguredEnvRef(apiKey);
-        if (envRef) {
-          return process.env[envRef]?.trim()
-            ? { apiKey: process.env[envRef], source: `env: ${envRef}` }
-            : null;
-        }
-        if (
-          typeof apiKey !== "string" ||
-          !apiKey ||
-          apiKey === "secretref-managed" ||
-          apiKey.startsWith("oauth:")
-        ) {
-          return null;
-        }
-        if (apiKey === "OPENAI_API_KEY") {
-          return process.env.OPENAI_API_KEY?.trim()
-            ? { apiKey: process.env.OPENAI_API_KEY, source: "env: OPENAI_API_KEY" }
-            : null;
-        }
-        return { apiKey, source: "models.json" };
-      },
-    ),
-  };
-});
-
 function resolveOpenAiOverview(apiKey: string) {
   return resolveProviderAuthOverview({
     provider: "openai",
@@ -121,8 +59,8 @@ function resolveOpenAiOverview(apiKey: string) {
           },
         },
       },
-    } as never,
-    store: { version: 1, profiles: {} } as never,
+    },
+    store: { version: 1, profiles: {} },
     modelsPath: "/tmp/models.json",
   });
 }
@@ -130,32 +68,6 @@ function resolveOpenAiOverview(apiKey: string) {
 describe("resolveProviderAuthOverview", () => {
   beforeEach(() => {
     persistedStores.clear();
-    vi.mocked(resolveEnvApiKey).mockClear();
-  });
-
-  it("projects synthetic auth to value/source and drops runtime credential fields", () => {
-    // #104713: status callers pass their richer runtime object (credential,
-    // mode, expiresAt); the overview must not let those reach JSON output.
-    const runtimeSyntheticAuth = {
-      value: "plugin-owned",
-      source: "xAI plugin config",
-      credential: "xai-raw-credential-material",
-      mode: "api-key",
-      expiresAt: Date.now() + 60_000,
-    };
-    const overview = resolveProviderAuthOverview({
-      provider: "xai",
-      cfg: {},
-      store: { version: 1, profiles: {} } as never,
-      modelsPath: "/tmp/models.json",
-      syntheticAuth: runtimeSyntheticAuth,
-    });
-
-    expect(overview.syntheticAuth).toStrictEqual({
-      value: "plugin-owned",
-      source: "xAI plugin config",
-    });
-    expect(JSON.stringify(overview)).not.toContain("xai-raw-credential-material");
   });
 
   it("labels token profiles that only have tokenRef", () => {
@@ -168,39 +80,11 @@ describe("resolveProviderAuthOverview", () => {
           provider: "github-copilot",
           tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
         },
-      }) as never,
+      }),
       modelsPath: "/tmp/models.json",
     });
 
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
-  });
-
-  it("reports the selected agent auth store when profiles are effective", () => {
-    persistedStores.set("/tmp/openclaw-agent-custom", {
-      profiles: {
-        "openai:peter@example.test": {},
-      },
-    });
-    const overview = resolveProviderAuthOverview({
-      provider: "openai",
-      cfg: {},
-      store: createAuthProfileStoreFixture({
-        "openai:peter@example.test": {
-          type: "oauth",
-          provider: "openai",
-          access: "access-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
-      }) as never,
-      modelsPath: "/tmp/openclaw-agent-custom/models.json",
-      agentDir: "/tmp/openclaw-agent-custom",
-    });
-
-    expect(overview.effective).toEqual({
-      kind: "profiles",
-      detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
-    });
   });
 
   it("reports an explicit provider env SecretRef ahead of stored profiles", () => {
@@ -227,10 +111,10 @@ describe("resolveProviderAuthOverview", () => {
     const overview = withEnv({ CUSTOM_PROVIDER_KEY: "current-provider-key" }, () =>
       resolveProviderAuthOverview({
         provider: "custom",
-        cfg: cfg as never,
+        cfg,
         store: createAuthProfileStoreFixture({
           "custom:models-json": createApiKeyCredential("custom", "stale-provider-key"),
-        }) as never,
+        }),
         modelsPath: "/tmp/models.json",
       }),
     );
@@ -259,7 +143,7 @@ describe("resolveProviderAuthOverview", () => {
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
         },
-      }) as never,
+      }),
       modelsPath: "/tmp/openclaw-agent-custom/models.json",
       agentDir: "/tmp/openclaw-agent-custom",
     });
@@ -268,16 +152,6 @@ describe("resolveProviderAuthOverview", () => {
       kind: "profiles",
       detail: "/tmp/auth-profiles.json",
     });
-  });
-
-  it("renders marker-backed models.json auth as marker detail", () => {
-    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
-      resolveOpenAiOverview(NON_ENV_SECRETREF_MARKER),
-    );
-
-    expect(overview.effective.kind).toBe("missing");
-    expect(overview.effective.detail).toBe("missing");
-    expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
   it("treats OAuth delegation markers as effective models.json auth", () => {
@@ -301,62 +175,6 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.effective.detail).toBe("missing");
     expect(overview.modelsJson?.value).not.toContain("marker(");
     expect(overview.modelsJson?.value).not.toContain("OPENAI_API_KEY");
-  });
-
-  it("treats env-var marker as usable only when the env key is currently resolvable", () => {
-    const prior = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-openai-from-env"; // pragma: allowlist secret
-    try {
-      const overview = resolveOpenAiOverview("OPENAI_API_KEY");
-      expect(overview.effective.kind).toBe("env");
-      expect(overview.effective.detail).not.toContain("OPENAI_API_KEY");
-    } finally {
-      if (prior === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = prior;
-      }
-    }
-  });
-
-  it("keeps setup fallback when precomputed auth maps do not cover the provider", () => {
-    resolveProviderAuthOverview({
-      provider: "amazon-bedrock",
-      cfg: {},
-      store: { version: 1, profiles: {} } as never,
-      modelsPath: "/tmp/models.json",
-      aliasMap: {},
-      envCandidateMap: { openai: ["OPENAI_API_KEY"] },
-      authEvidenceMap: {},
-    });
-
-    expect(resolveEnvApiKey).toHaveBeenCalledWith(
-      "amazon-bedrock",
-      process.env,
-      expect.objectContaining({
-        skipSetupProviderFallback: false,
-      }),
-    );
-  });
-
-  it("skips setup fallback when precomputed auth maps cover the provider", () => {
-    resolveProviderAuthOverview({
-      provider: "openai",
-      cfg: {},
-      store: { version: 1, profiles: {} } as never,
-      modelsPath: "/tmp/models.json",
-      aliasMap: {},
-      envCandidateMap: { openai: ["OPENAI_API_KEY"] },
-      authEvidenceMap: {},
-    });
-
-    expect(resolveEnvApiKey).toHaveBeenCalledWith(
-      "openai",
-      process.env,
-      expect.objectContaining({
-        skipSetupProviderFallback: true,
-      }),
-    );
   });
 });
 

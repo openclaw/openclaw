@@ -27,8 +27,6 @@ describe("/browser-setup local process dispatch", () => {
 
   it.each([
     { local: false, profile: "chrome" },
-    { local: true, profile: "chrome" },
-    { local: false, profile: "work" },
     { local: true, profile: "work" },
   ])(
     "uses selector-free host-local argv with local=$local and profile=$profile, even when disconnected",

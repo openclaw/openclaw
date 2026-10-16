@@ -12,7 +12,7 @@ import {
 } from "./placement-dispatch-coordinator.test-support.js";
 
 it.each(["targeted sweep", "recovery"] as const)(
-  "reclaims independent sessions while %s waits for another session's dispatch",
+  "reclaims independent sessions while %s handles a busy session",
   async (kind) => {
     const dispatchEntered = createDeferredCore();
     const dispatchRelease = createDeferredCore();
@@ -33,7 +33,10 @@ it.each(["targeted sweep", "recovery"] as const)(
           return { ...ACTIVE_PLACEMENT, ...request };
         },
         reconcileActive: async (_environmentId, admit) => {
-          await admit!([REQUEST.sessionId], recover);
+          await admit!([REQUEST.sessionId], async (mode) => {
+            expect(mode).toBe("results-only");
+            await recover();
+          });
         },
         resumeProvisioning: admittedRecovery(recover),
         reclaim: async (request, _authorize, _beforeDrain, serialize) =>
@@ -57,10 +60,18 @@ it.each(["targeted sweep", "recovery"] as const)(
     const stop = coordinated.reclaim(stopped);
     await reclaimEntered.promise;
     await coordinated.reclaim({ ...stopped, sessionId: "other-stop" });
-    expect(events).toEqual(["reclaim:stopped", "reclaim:other-stop"]);
+    expect(events).toEqual([
+      ...(kind === "targeted sweep" ? ["recovery"] : []),
+      "reclaim:stopped",
+      "reclaim:other-stop",
+    ]);
     dispatchRelease.resolve();
     await Promise.all([dispatch, recovery]);
-    expect(events).toEqual(["reclaim:stopped", "reclaim:other-stop", "recovery"]);
+    expect(events).toEqual(
+      kind === "targeted sweep"
+        ? ["recovery", "reclaim:stopped", "reclaim:other-stop"]
+        : ["reclaim:stopped", "reclaim:other-stop", "recovery"],
+    );
     reclaimRelease.resolve();
     await stop;
   },

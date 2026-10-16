@@ -68,7 +68,7 @@ async function activate() {
 }
 
 function storeKey(value: string) {
-  writeSecretStoreEntry({
+  return writeSecretStoreEntry({
     scope: { kind: "team" },
     name: secretRef.id,
     value,
@@ -111,7 +111,7 @@ beforeEach(async () => {
     },
   };
   await fs.writeFile(configPath, JSON.stringify(config));
-  storeKey(key);
+  await storeKey(key);
   await activate();
 });
 
@@ -240,7 +240,7 @@ it("keeps protected credentials through a fresh setup read and verified-route re
   expect(JSON.stringify(binding.executionFingerprint)).not.toContain(key);
   expect(await fs.readFile(configPath, "utf8")).not.toContain(key);
 
-  storeKey("synthetic-rotated-key");
+  await storeKey("synthetic-rotated-key");
   await activate();
   expect(await resolveSystemAgentVerifiedInferenceRoute(binding, deps)).toBeNull();
 });
@@ -426,7 +426,7 @@ it.each([
         authFingerprint: fingerprintResolvedProviderAuth(auth),
       });
       if (rotateBeforeBinding) {
-        storeKey("synthetic-rotated-key");
+        await storeKey("synthetic-rotated-key");
         await activate();
       }
       return {

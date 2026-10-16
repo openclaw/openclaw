@@ -11,11 +11,14 @@ import {
   modelCellPrefix,
   parseCodeModeMatrixOptions,
   runCodeModeModelMatrix,
-  validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
   type CodeModeMatrixTask,
 } from "../../../scripts/code-mode-model-matrix.ts";
-import { getEffectiveQaEvidenceEntries, projectQaEvidenceScenarioOutcomes } from "../api.js";
+import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
+  validateQaEvidenceSummaryJson,
+} from "../api.js";
 
 const extendedTasks = [
   "large-result-reduction",
@@ -166,7 +169,6 @@ describe("Code Mode model matrix classification", () => {
       expected: "CM-EXPECTED",
       mode: "code",
       model: "ollama/qwen3.5:9b",
-      task: "read",
       ...overrides,
     });
   }
@@ -340,7 +342,11 @@ describe("Code Mode model matrix extended fixtures", () => {
       const result = await runCodeModeModelMatrix(options, {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "fixture-build",
-        readGitSha: async () => "fixture-source",
+        readSourceIdentity: async () => ({
+          gitSha: "fixture-source",
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }),
       });
       const readArtifact = async (name: string) =>
         await fs.readFile(path.join(result.outputDir, name), "utf8");
@@ -462,7 +468,11 @@ describe("Code Mode model matrix extended fixtures", () => {
       throw new Error("dry run must not execute");
     };
     const result = await runCodeModeModelMatrix(options, {
-      readGitSha: async () => "fixture-source",
+      readSourceIdentity: async () => ({
+        gitSha: "fixture-source",
+        sourceDirty: false,
+        sourcePatchSha256: null,
+      }),
       buildCliArtifacts: forbidden,
       readBuildSha256: forbidden,
       runCell: forbidden,
@@ -702,7 +712,11 @@ describe("Code Mode model matrix artifacts", () => {
             }
             return "build123";
           },
-          readGitSha: async () => "abc123",
+          readSourceIdentity: async () => ({
+            gitSha: "abc123",
+            sourceDirty: false,
+            sourcePatchSha256: null,
+          }),
           runCell: async ({ cell, gitSha }) => {
             calls += 1;
             const before = validateQaEvidenceSummaryJson(

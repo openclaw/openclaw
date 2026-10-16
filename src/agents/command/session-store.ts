@@ -3,23 +3,23 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
-  type CliSessionBinding,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
+import { projectSessionUsageSnapshot } from "../../config/sessions/session-entry-usage.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
+import { clearAllCliSessions } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
-import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
+import { buildMainSessionRecoveryAfterAgentRunPatch } from "../main-session-recovery/main-session-recovery-clear.js";
+import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
@@ -137,7 +137,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.agentHarnessId = agentHarnessId;
     }
     next.abortedLastRun = result.meta.aborted ?? false;
-    clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }
@@ -146,7 +145,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   const hasUsage = hasNonzeroUsage(usage);
-  if (hasBillableUsage(usage) && !preserveUserFacingRunState) {
+  if (!preserveUserFacingRunState) {
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
@@ -156,15 +155,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         agentDir: params.agentDir,
       }),
     );
-    if (hasUsage) {
-      next.inputTokens = usage.input ?? 0;
-      next.outputTokens = usage.output ?? 0;
-      next.cacheRead = usage.cacheRead ?? 0;
-      next.cacheWrite = usage.cacheWrite ?? 0;
-    }
-    // Snapshot cumulative run cost once, independently of current context.
-    // Unknown current cost must clear the previous run's snapshot too.
-    next.estimatedCostUsd = runEstimatedCostUsd;
+    Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));
   }
   if (!preserveUserFacingRunState) {
     const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
@@ -208,7 +199,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // their exact still-current row and cannot recreate a deleted owner.
         return null;
       }
-      return preserveUserFacingRunState
+      const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
         : projectSessionSnapshotChanges({
             initial: entry,
@@ -216,8 +207,24 @@ export async function updateSessionStoreAfterAgentRun(params: {
             current: currentEntry,
             reassertAbortedLastRun: result.meta.aborted === true,
           });
+      if (!preserveUserFacingRunState) {
+        Object.assign(
+          patch,
+          buildMainSessionRecoveryAfterAgentRunPatch(
+            { ...currentEntry, ...patch },
+            params.clearRestartRecoveryForceSafeTools,
+          ),
+        );
+      }
+      if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
+        // Clear the current snooze, including one set while this run was in flight.
+        patch.snoozedUntil = undefined;
+        patch.snoozedAt = undefined;
+      }
+      return patch;
     },
     {
+      workerGuard: {},
       ...(preserveUserFacingRunState || params.compactionAccounting
         ? {}
         : { fallbackEntry: entry }),
@@ -230,16 +237,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   );
 }
 
-type CliSessionForkStoreParams = {
-  agentId: string;
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedCliSessionId: string;
-  assertCommitAllowed?: () => void;
-};
-
 function isSameSessionLifecycleOwner(
   current: InternalSessionEntry,
   expected: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">,
@@ -248,85 +245,6 @@ function isSameSessionLifecycleOwner(
     current.sessionId === expected.sessionId &&
     current.lifecycleRevision === expected.lifecycleRevision &&
     current.activeWriterRunId === expected.activeWriterRunId
-  );
-}
-
-async function patchCliSessionForkBinding(
-  params: CliSessionForkStoreParams,
-  updateBinding: (binding: CliSessionBinding) => CliSessionBinding | undefined,
-): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedCliSessionId } = params;
-  const entry = sessionStore[sessionKey];
-  if (!entry || entry.cliSessionBindings?.[provider]?.sessionId !== expectedCliSessionId) {
-    return undefined;
-  }
-  let committed: SessionEntry | undefined;
-  await patchSessionEntryCore(
-    { agentId: params.agentId, storePath, sessionKey },
-    (currentEntry) => {
-      const currentBinding = currentEntry.cliSessionBindings?.[provider];
-      // A binding id can survive session rollover. Fork authority belongs to the exact lifecycle.
-      if (
-        !isSameSessionLifecycleOwner(currentEntry, entry) ||
-        currentBinding?.sessionId !== expectedCliSessionId
-      ) {
-        return null;
-      }
-      const nextBinding = updateBinding(currentBinding);
-      if (!nextBinding) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      setCliSessionBinding(next, provider, nextBinding);
-      return next;
-    },
-    {
-      assertCommitAllowed: params.assertCommitAllowed,
-      onCommitted: (current) => {
-        // Only the commit edge proves this transition and owns cache publication.
-        committed = current;
-        sessionStore[sessionKey] = current;
-      },
-    },
-  );
-  return committed;
-}
-
-/** Clears the one-shot fork marker before the resumed CLI process starts. */
-export async function consumeCliSessionForkInStore(
-  params: CliSessionForkStoreParams,
-): Promise<SessionEntry | undefined> {
-  return await patchCliSessionForkBinding(params, (binding) => {
-    if (binding.forkNextResume !== true) {
-      return undefined;
-    }
-    const { forkNextResume: _forkNextResume, ...consumedBinding } = binding;
-    return consumedBinding;
-  });
-}
-
-/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
-export async function restoreCliSessionForkInStore(
-  params: CliSessionForkStoreParams,
-): Promise<SessionEntry | undefined> {
-  return await patchCliSessionForkBinding(params, (binding) =>
-    binding.forkNextResume === true ? undefined : { ...binding, forkNextResume: true },
-  );
-}
-
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
-export async function persistCliSessionForkSuccessorInStore(
-  params: CliSessionForkStoreParams & {
-    successorCliSessionId: string;
-  },
-): Promise<SessionEntry | undefined> {
-  if (params.successorCliSessionId === params.expectedCliSessionId) {
-    return undefined;
-  }
-  return await patchCliSessionForkBinding(params, (binding) =>
-    binding.forkNextResume === true
-      ? undefined
-      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
   );
 }
 
@@ -386,6 +304,7 @@ export async function recordCliCompactionInStore(params: {
       };
     },
     {
+      workerGuard: {},
       onCommitted: (committed) => {
         // Retain the committed fact without overwriting a later writer's cache on return.
         committedEntry = committed;

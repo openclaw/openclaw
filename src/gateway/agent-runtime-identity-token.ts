@@ -135,6 +135,7 @@ const spawnModelAutoSelectionSchema = z.object({
 const sessionSpawnContextSchema = z
   .object({
     requesterProfileId: normalizedRequiredStringSchema.optional(),
+    requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
     resolvedModel: z
@@ -147,6 +148,15 @@ const sessionSpawnContextSchema = z
       version: z.literal(1),
       allow: stringListSchema,
       deny: stringListSchema,
+      delegatedToolPolicy: z
+        .object({
+          requesterSessionKey: normalizedRequiredStringSchema,
+          targetAgentId: normalizedRequiredStringSchema,
+          deny: stringListSchema,
+          requesterDeny: stringListSchema,
+        })
+        .strict()
+        .optional(),
     }),
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
@@ -154,6 +164,9 @@ const sessionSpawnContextSchema = z
     ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
+      : {}),
+    ...(context.requesterSenderIsOwner !== undefined
+      ? { requesterSenderIsOwner: context.requesterSenderIsOwner }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
     ...(context.inheritedPermissionMode
@@ -383,11 +396,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
     if (raw.executionIdentity !== undefined) {
-      try {
-        executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
-      } catch {
-        return undefined;
-      }
+      executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
     }
     if (executionIdentity?.runId !== operationalRunId) {
       executionIdentity = undefined;
@@ -422,25 +431,12 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
   }
 }
 
-export type AgentRuntimeIdentityTokenParams = {
-  agentId: string;
-  sessionKey: string;
-  operationalRunInstance: OperationalRunInstanceRef;
-  approvalOwnerPluginId?: string;
+export type AgentRuntimeIdentityTokenParams = Omit<
+  AgentRuntimeIdentity,
+  "kind" | "delegatedAuthority" | "executionIdentity" | "cronSelfManagementContext"
+> & {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
-  turnSourceChannel?: string;
-  turnSourceLocal?: true;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  gatewayUiCommandTarget?: GatewayUiCommandTarget;
-  messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
-  cronToolsAllowCapture?: "final-executable-surface";
-  cronExecToolTarget?: { host: "gateway"; ask?: "always" };
-  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
-  cronManagementGrant?: CronCreatorAuthorityGrant;
-  sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
   approvalAuthority?: AgentRunDelegatedAuthority;

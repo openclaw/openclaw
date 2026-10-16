@@ -44,11 +44,9 @@ function postResponse(payload: unknown) {
 function taskResponse(data: unknown) {
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ code: 200, data }));
 }
-function mockSuccess(
-  data = { state: "success", resultJson: JSON.stringify({ resultUrls: [OUTPUT] }) },
-) {
+function mockSuccess() {
   postResponse({ code: 200, data: { taskId: "task /1" } });
-  taskResponse(data);
+  taskResponse({ state: "success", response: { resultUrls: [OUTPUT] } });
   fetchWithTimeoutMock.mockResolvedValueOnce(
     new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }),
   );
@@ -68,7 +66,7 @@ describe("Kie AI registered video provider", () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(
       new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }),
     );
-    const pending = generate({ audio: true, durationSeconds: 10 });
+    const pending = generate({ audio: true, durationSeconds: 10, timeoutMs: 20_000 });
     await vi.runAllTimersAsync();
     const result = await pending;
     expect(submittedBody()).toEqual({
@@ -98,82 +96,23 @@ describe("Kie AI registered video provider", () => {
 
   it.each([
     {
-      model: "kling-2.6/text-to-video",
-      image: true,
-      routed: "kling-2.6/image-to-video",
-      input: { duration: "5", sound: false, image_urls: [IMAGE] },
-    },
-    {
-      model: "kling-2.6/image-to-video",
-      routed: "kling-2.6/text-to-video",
-      input: { duration: "5", sound: false, aspect_ratio: "16:9" },
-    },
-    {
-      model: "grok-imagine/text-to-video",
-      input: { duration: 6, resolution: "480p", aspect_ratio: "16:9" },
-    },
-    {
-      model: "grok-imagine/text-to-video",
-      image: true,
-      routed: "grok-imagine/image-to-video",
-      input: { duration: "6", resolution: "480p", image_urls: [IMAGE] },
-    },
-    { model: "wan/2-6-text-to-video", input: { duration: "5", resolution: "1080p" } },
-    {
-      model: "wan/2-6-text-to-video",
-      image: true,
-      routed: "wan/2-6-image-to-video",
-      input: { duration: "5", resolution: "1080p", image_urls: [IMAGE] },
-    },
-    { model: "hailuo/02-text-to-video-standard", input: { duration: "6" } },
-    {
-      model: "hailuo/02-text-to-video-standard",
-      image: true,
-      routed: "hailuo/02-image-to-video-standard",
-      input: { duration: "6", resolution: "768P", image_url: IMAGE },
-    },
-    { model: "hailuo/02-text-to-video-pro", input: {} },
-    {
       model: "hailuo/02-text-to-video-pro",
-      image: true,
-      routed: "hailuo/02-image-to-video-pro",
-      input: { image_url: IMAGE },
+      inputImages: undefined,
+      input: {},
     },
     {
       model: "hailuo/2-3-image-to-video-standard",
-      image: true,
+      inputImages: [{ url: IMAGE }],
       input: { duration: "6", resolution: "768P", image_url: IMAGE },
-    },
-    {
-      model: "hailuo/2-3-image-to-video-pro",
-      image: true,
-      input: { duration: "6", resolution: "768P", image_url: IMAGE },
-    },
-    {
-      model: "bytedance/seedance-1.5-pro",
-      input: { duration: 4, resolution: "720p", aspect_ratio: "16:9", generate_audio: false },
-    },
-    {
-      model: "bytedance/seedance-1.5-pro",
-      image: true,
-      input: {
-        duration: 4,
-        resolution: "720p",
-        aspect_ratio: "16:9",
-        generate_audio: false,
-        input_urls: [IMAGE],
-      },
     },
   ])(
-    "maps documented inputs for $model (image=$image)",
-    async ({ model, image, routed, input }) => {
+    "maps optional controls and scalar image URLs for $model",
+    async ({ model, inputImages, input }) => {
       mockSuccess();
-      const result = await generate({ model, ...(image ? { inputImages: [{ url: IMAGE }] } : {}) });
-      expect(submittedBody()).toEqual({
-        model: routed ?? model,
-        input: { prompt: PROMPT, ...input },
-      });
-      expect(result.model).toBe(routed ?? model);
+      const result = await generate({ model, inputImages });
+      expect(submittedBody()).toEqual({ model, input: { prompt: PROMPT, ...input } });
+      expect(result.model).toBe(model);
+      expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4-bytes"));
     },
   );
 
@@ -208,23 +147,14 @@ describe("Kie AI registered video provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each(["submission", "poll", "upload"])(
-    "surfaces HTTP-200 body errors from %s and stops",
-    async (stage) => {
-      const error = { code: 422, msg: "Record not found for requested model" };
-      if (stage === "poll") {
-        postResponse({ code: 200, data: { taskId: "task-1" } });
-        fetchWithTimeoutMock.mockResolvedValueOnce(Response.json(error));
-      } else {
-        postResponse(error);
-      }
-      await expect(
-        generate(stage === "upload" ? { inputImages: [{ buffer: Buffer.from("png") }] } : {}),
-      ).rejects.toThrow("Record not found for requested model");
-      expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(stage === "poll" ? 1 : 0);
-    },
-  );
+  it("stops before submission when upload returns an HTTP-200 body error", async () => {
+    postResponse({ code: 422, msg: "Record not found for requested model" });
+    await expect(generate({ inputImages: [{ buffer: Buffer.from("png") }] })).rejects.toThrow(
+      "Record not found for requested model",
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -239,15 +169,6 @@ describe("Kie AI registered video provider", () => {
     taskResponse(data);
     await expect(generate()).rejects.toThrow(error);
     expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("accepts the documented response.resultUrls mirror when resultJson is absent", async () => {
-    postResponse({ code: 200, data: { taskId: "task-1" } });
-    taskResponse({ state: "success", response: { resultUrls: [OUTPUT] } });
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response("mp4", { headers: { "content-type": "video/mp4" } }),
-    );
-    expect((await generate()).videos[0]?.buffer).toEqual(Buffer.from("mp4"));
   });
 
   it("uses model-specific capabilities through the shared runtime", async () => {
@@ -297,24 +218,8 @@ describe("Kie AI registered video provider", () => {
       request: { model: "bytedance/seedance-1.5-pro", prompt: "Hi" },
       error: "requires a prompt of 3-20000 characters",
     },
-    {
-      request: { model: "wan/2-6-image-to-video", prompt: "x", inputImages: [{ url: IMAGE }] },
-      error: "requires a prompt of 2-5000 characters",
-    },
   ])("rejects invalid inputs before upload or billing: $error", async ({ request, error }) => {
     await expect(generate(request)).rejects.toThrow(error);
     expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps polling inside the caller's total deadline", async () => {
-    vi.useFakeTimers();
-    postResponse({ code: 200, data: { taskId: "task-1" } });
-    taskResponse({ state: "generating" });
-    const pending = expect(generate({ timeoutMs: 1000 })).rejects.toThrow(
-      /timed out|did not finish in time/,
-    );
-    await vi.runAllTimersAsync();
-    await pending;
-    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
   });
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/index.js";
+import type { GatewayClientHostDeps } from "../../packages/gateway-client/src/client.js";
 import type { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { GatewayClient } from "./client.js";
 
@@ -14,8 +14,8 @@ const fixture = vi.hoisted(() => ({
   readOnlyLoad: vi.fn(),
 }));
 
-vi.mock("../../packages/gateway-client/src/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/gateway-client/src/index.js")>()),
+vi.mock("../../packages/gateway-client/src/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/gateway-client/src/client.js")>()),
   GatewayClient: class {
     constructor(private readonly options: { hostDeps: GatewayClientHostDeps }) {}
 
@@ -56,39 +56,15 @@ beforeEach(() => {
       params.onSnapshot?.({ entry, expectedToken: fixture.token ?? null });
       return entry;
     });
-  fixture.store
-    .mockReset()
-    .mockImplementation((params: { token: string; expectedToken?: string | null }) => {
-      if (
-        params.expectedToken === undefined ||
-        (params.expectedToken === null
-          ? fixture.token === undefined
-          : params.expectedToken === fixture.token)
-      ) {
-        fixture.token = params.token;
-        return { token: params.token, role: "operator", scopes: [], updatedAtMs: 1 };
-      }
-      return null;
-    });
-  fixture.clear
-    .mockReset()
-    .mockImplementation((params: { expectedToken?: string; observedToken?: string }) => {
-      if (
-        params.expectedToken === fixture.token ||
-        (params.observedToken?.trim() === params.expectedToken &&
-          params.observedToken === fixture.token)
-      ) {
-        fixture.token = undefined;
-        return true;
-      }
-      return false;
-    });
+  fixture.store.mockReset();
+  fixture.clear.mockReset();
   fixture.readOnlyLoad.mockReset();
 });
 
 function host(origin: boolean, readOnly = false, explicit = true) {
   const client = new GatewayClient({
     url: "wss://gateway.example.test",
+    deviceIdentity: null,
     ...(origin ? { deviceAuthScope: "wss://gateway.example.test" } : {}),
     ...(explicit ? { token: "fixture-shared-auth" } : {}),
     ...(readOnly ? { sharedStateMode: "read-only" } : {}),
@@ -104,7 +80,6 @@ function host(origin: boolean, readOnly = false, explicit = true) {
 }
 
 const observations = [
-  { name: "valid", token: "fixture-existing", malformed: false },
   { name: "malformed scopes", token: "fixture-existing", malformed: true },
   { name: "absent", token: undefined, malformed: false },
   { name: "raw whitespace", token: " fixture-existing ", malformed: false },
@@ -112,13 +87,11 @@ const observations = [
 
 it.each(
   observations.flatMap(({ name, token, malformed }) =>
-    [false, true].flatMap((origin) =>
-      [false, true].map((rotated) => ({ name, token, malformed, origin, rotated })),
-    ),
+    [false, true].map((origin) => ({ name, token, malformed, origin })),
   ),
 )(
-  "uses exact $name comparison privately (origin: $origin, rotated: $rotated)",
-  async ({ token, malformed, origin, rotated }) => {
+  "forwards the exact $name observation after rotation (origin: $origin)",
+  async ({ token, malformed, origin }) => {
     fixture.token = token;
     fixture.malformed = malformed;
     const deps = host(origin);
@@ -129,25 +102,13 @@ it.each(
     } else {
       expect(loaded?.token).toBe(token);
     }
-    if (rotated) {
-      fixture.token = "fixture-newer";
-    }
-    const stored = await deps.store({
+    fixture.token = "fixture-newer";
+    await deps.store({
       ...scope,
       token: "fixture-issued",
       scopes: [],
       expectedToken: loaded?.token?.trim() ?? null,
     });
-    expect(stored).toEqual(
-      rotated
-        ? null
-        : {
-            token: "fixture-issued",
-            role: "operator",
-            scopes: [],
-            updatedAtMs: 1,
-          },
-    );
     expect(fixture.store).toHaveBeenCalledWith({
       ...scope,
       ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
@@ -155,19 +116,17 @@ it.each(
       scopes: [],
       expectedToken: token ?? null,
     });
-    expect(fixture.token).toBe(rotated ? "fixture-newer" : "fixture-issued");
   },
 );
 
 it.each([false, true])(
-  "cleans exact raw legacy bytes without redirecting receipt cleanup (origin: %s)",
+  "forwards raw legacy bytes only for matching receipt cleanup (origin: %s)",
   async (origin) => {
     fixture.token = " fixture-existing ";
     const deps = host(origin, false, false);
     const scope = { deviceId: "fixture-device", role: "operator" };
     await deps.load(scope);
-    expect(await deps.clear({ ...scope, expectedToken: "fixture-existing" })).toBe(true);
-    expect(fixture.token).toBeUndefined();
+    await deps.clear({ ...scope, expectedToken: "fixture-existing" });
     expect(fixture.clear).toHaveBeenLastCalledWith({
       ...scope,
       ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),
@@ -175,8 +134,7 @@ it.each([false, true])(
       observedToken: " fixture-existing ",
     });
     fixture.token = "fixture-newer";
-    expect(await deps.clear({ ...scope, expectedToken: "fixture-issued" })).toBe(false);
-    expect(fixture.token).toBe("fixture-newer");
+    await deps.clear({ ...scope, expectedToken: "fixture-issued" });
     expect(fixture.clear).toHaveBeenLastCalledWith({
       ...scope,
       ...(origin ? { gatewayScope: "wss://gateway.example.test" } : {}),

@@ -1,29 +1,26 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import { collectMattermostCallbackPaths } from "./callback-host.js";
 import {
   createWebhookInFlightLimiter,
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
   sendHttpRequestRejection,
   type OpenClawPluginApi,
 } from "./runtime-api.js";
 import {
   normalizeSlashCommandTrigger,
   parseSlashCommandPayload,
-  resolveSlashCommandConfig,
   type MattermostRegisteredCommand,
 } from "./slash-commands.js";
 import {
   clearMattermostSlashCommandValidationCacheForAccount,
   createSlashCommandHttpHandler,
   sendSlashCommandResponse,
+  readSlashCommandBody,
 } from "./slash-http.js";
 
-const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
-const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
 const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
 const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
 const SLASH_AUTHENTICATED_IN_FLIGHT_KEY = `${SLASH_ROUTE_IN_FLIGHT_KEY}:authenticated`;
@@ -48,33 +45,14 @@ type SlashCommandAccountState = {
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
-  /** Current HTTP handler for this account. */
   handler: SlashHandler | null;
 };
 
-/**
- * Map from accountId → per-account slash command state.
- *
- * Anchored to globalThis so that jiti-loaded (route registration) and
- * native-ESM-loaded (monitor/activation) module instances share the
- * same Map. Without this, each module loader creates its own copy of
- * the module-level variable and the HTTP handler never sees the tokens
- * populated by the monitor.
- */
-const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
-
-function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[ACCOUNT_STATES_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, SlashCommandAccountState>;
-  }
-  const accountStates = new Map<string, SlashCommandAccountState>();
-  globalStore[ACCOUNT_STATES_KEY] = accountStates;
-  return accountStates;
-}
-
-const accountStates = getSlashAccountStates();
+// Route registration and monitor activation can use different module loaders.
+// Share their map; deactivateSlashCommands owns account cleanup.
+const accountStates = resolveGlobalMap<string, SlashCommandAccountState>(
+  Symbol.for("openclaw.mattermost.slash-account-states"),
+);
 
 function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
   const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
@@ -215,63 +193,28 @@ export function deactivateSlashCommands(accountId?: string) {
  * rotated Mattermost token.
  */
 export function registerSlashCommandRoute(api: OpenClawPluginApi) {
-  const mmConfig = api.config.channels?.mattermost as MattermostConfig | undefined;
-
-  // Collect callback paths from both top-level and per-account config.
-  // Command registration uses account.config.commands, so the HTTP route
-  // registration must include any account-specific callbackPath overrides.
-  // Also extract the pathname from an explicit callbackUrl when it differs
-  // from callbackPath, so that Mattermost callbacks hit a registered route.
-  const callbackPaths = new Set<string>();
-
-  const addCallbackPaths = (
-    raw: Partial<import("./slash-commands.js").MattermostSlashCommandConfig> | undefined,
-  ) => {
-    const resolved = resolveSlashCommandConfig(raw);
-    callbackPaths.add(resolved.callbackPath);
-    if (resolved.callbackUrl) {
-      try {
-        const urlPath = new URL(resolved.callbackUrl).pathname;
-        if (urlPath && urlPath !== resolved.callbackPath) {
-          callbackPaths.add(urlPath);
-        }
-      } catch {
-        // Invalid URL — ignore, will be caught during registration
-      }
-    }
-  };
-
-  const commandsRaw = mmConfig?.commands as
-    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-    | undefined;
-  addCallbackPaths(commandsRaw);
-
-  const accountsRaw = mmConfig?.accounts ?? {};
-  for (const accountId of Object.keys(accountsRaw)) {
-    const accountCommandsRaw = accountsRaw[accountId]?.commands;
-    addCallbackPaths(accountCommandsRaw);
-  }
-
   const dispatchRoute = async (
     req: IncomingMessage,
     res: ServerResponse,
     onRequestAuthenticated: () => void,
   ) => {
     if (accountStates.size === 0) {
-      sendSlashCommandResponse(res, 503, {
-        response_type: "ephemeral",
-        text: "Slash commands are not yet initialized. Please try again in a moment.",
-      });
+      sendSlashCommandResponse(
+        res,
+        503,
+        "Slash commands are not yet initialized. Please try again in a moment.",
+      );
       return;
     }
 
     if (accountStates.size === 1) {
       const state = accountStates.values().next().value;
       if (!state?.handler) {
-        sendSlashCommandResponse(res, 503, {
-          response_type: "ephemeral",
-          text: "Slash commands are not yet initialized. Please try again in a moment.",
-        });
+        sendSlashCommandResponse(
+          res,
+          503,
+          "Slash commands are not yet initialized. Please try again in a moment.",
+        );
         return;
       }
       await state.handler(req, res, undefined, onRequestAuthenticated);
@@ -282,20 +225,8 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     // registered team/trigger before account-specific validation.
     // Use the bounded helper so a slow/never-finishing client cannot tie up the
     // routing handler indefinitely (Slowloris).
-    let bodyStr: string;
-    try {
-      bodyStr = await readRequestBodyWithLimit(req, {
-        maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
-        timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
-        // Defer destruction so the rejections below reach Mattermost before the close.
-        destroyOnLimit: false,
-      });
-    } catch (error) {
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
-        return;
-      }
-      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+    const bodyStr = await readSlashCommandBody(req, res);
+    if (bodyStr === undefined) {
       return;
     }
 
@@ -327,10 +258,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     }
 
     if (match.kind === "none") {
-      sendSlashCommandResponse(res, 401, {
-        response_type: "ephemeral",
-        text: "Unauthorized: invalid command token.",
-      });
+      sendSlashCommandResponse(res, 401, "Unauthorized: invalid command token.");
       return;
     }
 
@@ -342,10 +270,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         match.source === "token"
           ? "Conflict: command token is not unique across accounts."
           : "Conflict: slash command is not unique across accounts.";
-      sendSlashCommandResponse(res, 409, {
-        response_type: "ephemeral",
-        text: conflictText,
-      });
+      sendSlashCommandResponse(res, 409, conflictText);
       return;
     }
 
@@ -378,7 +303,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     }
   };
 
-  for (const callbackPath of callbackPaths) {
+  for (const callbackPath of collectMattermostCallbackPaths(api.config.channels?.mattermost)) {
     api.registerHttpRoute({
       path: callbackPath,
       auth: "plugin",

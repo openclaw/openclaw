@@ -6,6 +6,7 @@ import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 describe("buildDiscordNativeCommandContext", () => {
   it("builds direct-message slash command context", async () => {
     const ctx = await buildDiscordNativeCommandContext({
+      cfg: { channels: { discord: { guilds: { "*": { tools: { deny: ["exec"] } } } } } },
       agentId: "codex",
       prompt: "/status",
       commandArgs: {},
@@ -46,12 +47,25 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.ChannelPromptContext).toBeUndefined();
     expect(ctx.ChannelStructuredContext).toBeUndefined();
     expect(ctx.GroupSystemPrompt).toBeUndefined();
+    expect(ctx.ConversationToolPolicy).toBeUndefined();
     expect(ctx.OwnerAllowFrom).toBeUndefined();
     expect(ctx.Timestamp).toBe(123);
   });
 
   it("builds guild slash command context with owner allowlist and channel metadata", async () => {
     const ctx = await buildDiscordNativeCommandContext({
+      cfg: {
+        channels: {
+          discord: {
+            guilds: {
+              "guild-1": {
+                tools: { allow: ["exec"] },
+                channels: { "parent-1": { tools: { deny: ["exec"] } } },
+              },
+            },
+          },
+        },
+      },
       agentId: "codex",
       prompt: "/status",
       commandArgs: { values: { model: "gpt-5.2" } },
@@ -68,6 +82,8 @@ describe("buildDiscordNativeCommandContext", () => {
         allowed: true,
         users: ["discord:user-1"],
         systemPrompt: "  Use the runbook.  ",
+        matchSource: "parent",
+        matchKey: "parent-1",
       },
       guildInfo: {
         id: "guild-1",
@@ -95,6 +111,7 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.ConversationLabel).toBe("chan-1");
     expect(ctx.GroupSubject).toBe("Ops");
     expect(ctx.GroupSpace).toBe("guild-1");
+    expect(ctx.ConversationToolPolicy).toEqual({ deny: ["exec"] });
     expect(ctx.MemberRoleIds).toEqual(["admin"]);
     expect(ctx.ConversationRouteContextObserved).toBe(true);
     expect(ctx.ConversationRoutePeerId).toBe("chan-1");

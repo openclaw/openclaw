@@ -1,4 +1,3 @@
-// Collects operating system summary facts for diagnostics.
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -15,21 +14,14 @@ type OsFacts = Omit<OsSummary, "label"> & {
   runtimeLabel?: string;
   summary?: OsSummary;
 };
-const cachedOsFactsByKey = new Map<string, OsFacts>();
+let cachedOsFacts: OsFacts | undefined;
 
 function resolveOsFacts(): OsFacts {
-  const platform = os.platform();
-  const release = os.release();
-  const arch = os.arch();
-  // Preserve the raw OS tuple identity: a product-version update alone does not
-  // invalidate metadata already observed during this process.
-  const cacheKey = `${platform}\0${release}\0${arch}`;
-  let facts = cachedOsFactsByKey.get(cacheKey);
-  if (!facts) {
-    facts = { platform, arch, release };
-    cachedOsFactsByKey.set(cacheKey, facts);
-  }
-  return facts;
+  return (cachedOsFacts ??= {
+    platform: os.platform(),
+    release: os.release(),
+    arch: os.arch(),
+  });
 }
 
 // Startup and first-turn probes share one timeout and kill policy. spawnSync

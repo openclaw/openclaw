@@ -4,6 +4,7 @@ import {
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
+import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 
 export type GatewayConnectAuthSelection = {
   authToken?: string;
@@ -19,23 +20,15 @@ export type GatewayConnectAuthSelection = {
   usingStoredDeviceToken?: boolean;
 };
 
-function normalized(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
-
-export function selectGatewayConnectAuth(params: {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-  storedToken?: string;
-  storedScopes?: string[];
-  pendingDeviceTokenRetry?: boolean;
-  trustedDeviceTokenRetry?: boolean;
-  preferBootstrapToken?: boolean;
-}): GatewayConnectAuthSelection {
+export function selectGatewayConnectAuth(
+  params: NonNullable<ConnectParams["auth"]> & {
+    storedToken?: string;
+    storedScopes?: string[];
+    pendingDeviceTokenRetry?: boolean;
+    trustedDeviceTokenRetry?: boolean;
+    preferBootstrapToken?: boolean;
+  },
+): GatewayConnectAuthSelection {
   const authToken = normalized(params.token);
   const bootstrapToken = normalized(params.bootstrapToken);
   const explicitDeviceToken = normalized(params.deviceToken);

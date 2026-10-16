@@ -1,5 +1,4 @@
 import { fileLogTransport } from "./logger-file-transport.js";
-import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 
 export const testApi = {
   drainFileLogQueueSyncForTests: fileLogTransport.drainSync,
@@ -7,8 +6,4 @@ export const testApi = {
   resetFileLogTransportForTests: fileLogTransport.resetForTests,
   setFileLogAppenderForTests: fileLogTransport.setAppenderForTests,
   setFileLogQueueMaxRecordsForTests: fileLogTransport.setMaxQueuedRecordsForTests,
-  setHostnameResolverForTests(resolver?: () => string): void {
-    loggerHostnameState.resolver = resolver ?? defaultLoggerHostnameResolver;
-    loggerHostnameState.cached = null;
-  },
 };

@@ -30,8 +30,7 @@ export type DiscordAudioFrame = {
   recordingEpoch: bigint;
 };
 
-// Playback counters are worker-owned. The status word also carries main-thread
-// input reservations, so starvation cannot retire an already admitted IPC chunk.
+// Playback counters are worker-owned; main reads them without a per-chunk handshake.
 export const DISCORD_AUDIO_CLOCK_BYTES = 24;
 export const DISCORD_AUDIO_PLAYED_BYTES = 0;
 const DISCORD_AUDIO_OUTPUT_STATUS = 1;
@@ -47,67 +46,18 @@ export const DiscordAudioOutputStatus = {
   Retiring: 2n,
   Closed: 3n,
 } as const;
-const OUTPUT_STATUS_MASK = 3n;
-const OUTPUT_INPUT_RESERVATION = 4n;
-
 export function getDiscordAudioOutputStatus(clock: BigInt64Array): bigint {
-  return Atomics.load(clock, DISCORD_AUDIO_OUTPUT_STATUS) & OUTPUT_STATUS_MASK;
+  return Atomics.load(clock, DISCORD_AUDIO_OUTPUT_STATUS);
 }
 
 export function setDiscordAudioOutputStatus(clock: BigInt64Array, status: bigint): void {
   for (;;) {
     const current = Atomics.load(clock, DISCORD_AUDIO_OUTPUT_STATUS);
-    if ((current & OUTPUT_STATUS_MASK) >= status) {
+    if (current >= status) {
       return;
     }
-    const next = (current & ~OUTPUT_STATUS_MASK) | status;
-    if (Atomics.compareExchange(clock, DISCORD_AUDIO_OUTPUT_STATUS, current, next) === current) {
+    if (Atomics.compareExchange(clock, DISCORD_AUDIO_OUTPUT_STATUS, current, status) === current) {
       return;
-    }
-  }
-}
-
-export function admitDiscordAudioInput(clock: BigInt64Array): boolean {
-  for (;;) {
-    const current = Atomics.load(clock, DISCORD_AUDIO_OUTPUT_STATUS);
-    if ((current & OUTPUT_STATUS_MASK) >= DiscordAudioOutputStatus.Retiring) {
-      return false;
-    }
-    if (
-      Atomics.compareExchange(
-        clock,
-        DISCORD_AUDIO_OUTPUT_STATUS,
-        current,
-        current + OUTPUT_INPUT_RESERVATION,
-      ) === current
-    ) {
-      return true;
-    }
-  }
-}
-
-export function releaseDiscordAudioInput(clock: BigInt64Array): void {
-  Atomics.sub(clock, DISCORD_AUDIO_OUTPUT_STATUS, OUTPUT_INPUT_RESERVATION);
-}
-
-export function retireDiscordAudioOutput(clock: BigInt64Array): boolean {
-  for (;;) {
-    const current = Atomics.load(clock, DISCORD_AUDIO_OUTPUT_STATUS);
-    if ((current & OUTPUT_STATUS_MASK) >= DiscordAudioOutputStatus.Retiring) {
-      return true;
-    }
-    if (current >= OUTPUT_INPUT_RESERVATION) {
-      return false;
-    }
-    if (
-      Atomics.compareExchange(
-        clock,
-        DISCORD_AUDIO_OUTPUT_STATUS,
-        current,
-        DiscordAudioOutputStatus.Retiring,
-      ) === current
-    ) {
-      return true;
     }
   }
 }

@@ -4,9 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const workflow = parse(readFileSync(".github/workflows/clawsweeper-dispatch.yml", "utf8")) as {
-  jobs: { dispatch: { steps: { name: string; run?: string }[] } };
+  jobs: {
+    dispatch: {
+      concurrency: { group: string; "cancel-in-progress": string };
+      steps: { name: string; run?: string }[];
+    };
+  };
 };
 const install = workflow.jobs.dispatch.steps.find(
   (step) => step.name === "Install GitHub API backoff helper",
@@ -153,5 +159,99 @@ fi`,
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+type BurstEvent = {
+  name:
+    | "pull_request_target"
+    | "pull_request_review"
+    | "pull_request_review_comment"
+    | "issue_comment";
+  action: string;
+  comment?: number;
+};
+
+// Replays admitted events for one PR through GitHub job concurrency: a group keeps one
+// running and one pending run, a newer run replaces the pending one, and cancel-in-progress
+// also stops the running one. Nothing finishes mid-burst, matching same-second webhooks.
+function replayBurst(events: BurstEvent[]) {
+  type Run = { cancelled: boolean };
+  const concurrency = workflow.jobs.dispatch.concurrency;
+  const slots = new Map<string, { running?: Run; pending?: Run }>();
+  const runs = events.map((event, index) => {
+    const context = {
+      eventName: event.name,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runId: 38349881260 + index,
+      githubEvent: {
+        action: event.action,
+        issue: event.name === "issue_comment" ? { number: 170628 } : {},
+        pull_request: event.name === "issue_comment" ? {} : { number: 170628 },
+        comment: event.comment === undefined ? {} : { id: event.comment },
+      },
+    };
+    const group = String(evaluateWorkflowExpression(concurrency.group, context));
+    const run = { cancelled: false };
+    const { running, pending } = slots.get(group) ?? {};
+    if (pending) {
+      pending.cancelled = true;
+    }
+    if (running && evaluateWorkflowExpression(concurrency["cancel-in-progress"], context)) {
+      running.cancelled = true;
+      slots.set(group, { running: run });
+    } else {
+      slots.set(group, running ? { running, pending: run } : { running: run });
+    }
+    return run;
+  });
+  return runs.map((run, index) => `${events[index]?.name}${run.cancelled ? " cancelled" : ""}`);
+}
+
+describe("ClawSweeper dispatch concurrency", () => {
+  it("never cancels review runs on the PR head when comments arrive (#170628)", () => {
+    expect(
+      replayBurst([
+        { name: "pull_request_review", action: "submitted" },
+        { name: "pull_request_review_comment", action: "created", comment: 11 },
+        { name: "pull_request_review_comment", action: "created", comment: 12 },
+        { name: "pull_request_review_comment", action: "created", comment: 13 },
+        { name: "issue_comment", action: "created", comment: 21 },
+        { name: "issue_comment", action: "created", comment: 22 },
+        { name: "pull_request_review", action: "edited" },
+        { name: "issue_comment", action: "edited", comment: 21 },
+      ]),
+    ).toEqual([
+      "pull_request_review",
+      "pull_request_review_comment",
+      "pull_request_review_comment",
+      "pull_request_review_comment",
+      // Superseded by its own edit; comment runs never attach to the PR head.
+      "issue_comment cancelled",
+      "issue_comment",
+      "pull_request_review",
+      "issue_comment",
+    ]);
+  });
+
+  it("supersedes pull request runs only with newer pull request runs", () => {
+    expect(
+      replayBurst([
+        { name: "pull_request_target", action: "opened" },
+        { name: "issue_comment", action: "edited", comment: 21 },
+        { name: "pull_request_review", action: "edited" },
+        { name: "pull_request_target", action: "labeled" },
+        { name: "pull_request_target", action: "labeled" },
+        { name: "pull_request_target", action: "ready_for_review" },
+      ]),
+    ).toEqual([
+      "pull_request_target cancelled",
+      "issue_comment",
+      "pull_request_review",
+      "pull_request_target cancelled",
+      "pull_request_target cancelled",
+      "pull_request_target",
+    ]);
   });
 });

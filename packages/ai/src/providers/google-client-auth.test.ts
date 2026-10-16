@@ -28,7 +28,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
-import { streamGoogle } from "./google.js";
+import { streamGoogle, streamSimpleGoogle } from "./google.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -70,19 +70,79 @@ describe("Google SDK construction auth", () => {
     configureAiTransportHost({});
   });
 
-  it.each(["none", "short", "long"] as const)(
-    "identifies OpenCode conversations with %s cache retention",
-    async (cacheRetention) => {
-      await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {
-        apiKey: "test",
-        sessionId: "conversation-123",
-        cacheRetention,
+  it.each([
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 64,
+      expected: {
+        maxOutputTokens: 2112,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: 64,
+      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
+    },
+    {
+      id: "gemini-2.5-flash",
+      reasoning: "off",
+      maxTokens: 64,
+      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: undefined,
+      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+    },
+    {
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 8000,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+  ] as const)(
+    "preserves the output budget at the Google SDK boundary: $id $reasoning $maxTokens",
+    async ({ id, reasoning, maxTokens, expected }) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+      await streamSimpleGoogle({ ...googleModel(), id }, context, {
+        apiKey: "test-key",
+        reasoning,
+        maxTokens,
       }).result();
-      expect(googleMockState.configs[0]).toMatchObject({
-        httpOptions: { headers: { "x-opencode-session": "conversation-123" } },
-      });
+      await streamSimpleGoogleVertex({ ...vertexModel(), id }, context, {
+        apiKey: "test-key",
+        reasoning,
+        maxTokens,
+      }).result();
+      expect(googleMockState.requests).toHaveLength(2);
+      for (const request of googleMockState.requests) {
+        const serialized = JSON.stringify(request);
+        expect(JSON.parse(serialized)).toEqual({
+          model: id,
+          contents: [{ role: "user", parts: [{ text: "hello" }] }],
+          config: expected,
+        });
+      }
     },
   );
+
+  it("identifies OpenCode conversations without cache retention", async () => {
+    await streamGoogle({ ...googleModel(), baseUrl: "https://opencode.ai/zen/v1" }, context, {
+      apiKey: "test",
+      sessionId: "conversation-123",
+      cacheRetention: "none",
+    }).result();
+    expect(googleMockState.configs[0]).toMatchObject({
+      httpOptions: { headers: { "x-opencode-session": "conversation-123" } },
+    });
+  });
 
   it("unwraps Google API-key sentinels immediately before client construction", async () => {
     const buildModelFetch = vi.fn();
@@ -168,23 +228,6 @@ describe("Google SDK construction auth", () => {
       expect(googleMockState.requests[0]).toMatchObject({
         config: { thinkingConfig: expectedThinking },
       });
-    },
-  );
-
-  it.each(["gemma-4-26b-a4b-it", "gemini-2.5-pro"])(
-    "keeps unsupported disabled-thinking config out of Vertex requests for %s",
-    async (modelId) => {
-      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
-
-      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
-        apiKey: "test-vertex-key",
-        reasoning: "off",
-      }).result();
-
-      expect(googleMockState.requests[0]).toMatchObject({ config: {} });
-      expect((googleMockState.requests[0] as { config: unknown }).config).not.toHaveProperty(
-        "thinkingConfig",
-      );
     },
   );
 

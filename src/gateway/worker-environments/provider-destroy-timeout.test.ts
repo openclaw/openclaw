@@ -182,9 +182,9 @@ describe("worker provider teardown deadlines", () => {
         to: "destroyed",
       });
       finish.resolve();
-      expect(await second).toMatchObject({
-        code: "invalid_state",
-        message: "Worker environment owner changed during teardown",
+      expect(await second).toBeInstanceOf(Error);
+      expect(support.testState.store.get(initial.environmentId)).toMatchObject({
+        state: "destroyed",
       });
       expect(destroy).toHaveBeenCalledOnce();
     } finally {

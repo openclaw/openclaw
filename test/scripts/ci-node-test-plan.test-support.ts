@@ -20,6 +20,31 @@ type VitestConfig = {
   test?: VitestTestConfig;
 };
 
+export function isNumberedToolingGroup(group: { shard_name: string }) {
+  return /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name);
+}
+export function nonToolingPlacement(plan: CompactNodeTestShard[]) {
+  return plan
+    .flatMap((job) => {
+      const groups = job.groups
+        .filter((group) => !isNumberedToolingGroup(group))
+        .map((group) => group.shard_name)
+        .toSorted();
+      return groups.length === 0
+        ? []
+        : [
+            {
+              groups,
+              planConcurrency: job.planConcurrency,
+              pretestBuildMode: job.pretestBuildMode,
+              requiresDist: job.requiresDist,
+              runner: job.runner,
+            },
+          ];
+    })
+    .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
+}
+
 export function listTestFiles(rootDir: string): string[] {
   const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
   expect(gitFiles).not.toBeNull();
@@ -102,7 +127,10 @@ export function expectRuntimeReleaseInventory({
   );
   expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
     RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-      (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
+      // Bundled extensions retain their separate canonical extension plans.
+      (file) =>
+        !file.startsWith("extensions/") &&
+        (compactMode === "pull-request" || !file.startsWith("test/scripts/")),
     ).toSorted(),
   );
   expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);

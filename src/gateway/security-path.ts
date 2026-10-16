@@ -21,24 +21,12 @@ function normalizePathSeparators(pathname: string): string {
   return collapsed.replace(/\/+$/, "");
 }
 
-function resolveDotSegments(pathname: string): string {
-  try {
-    return new URL(pathname, "http://localhost").pathname;
-  } catch {
-    return pathname;
-  }
-}
-
 function normalizePathForSecurity(pathname: string): string {
-  return (
-    normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolveDotSegments(pathname))) || "/"
-  );
+  const resolved = URL.parse(pathname, "http://localhost")?.pathname ?? pathname;
+  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolved)) || "/";
 }
 
-function buildCanonicalPathCandidates(
-  pathname: string,
-  maxDecodePasses = MAX_PATH_DECODE_PASSES,
-): {
+function buildCanonicalPathCandidates(pathname: string): {
   candidates: string[];
   decodePasses: number;
   decodePassLimitReached: boolean;
@@ -49,7 +37,7 @@ function buildCanonicalPathCandidates(
   let decoded = pathname;
   let malformedEncoding = false;
   let decodePasses = 0;
-  for (let pass = 0; pass < maxDecodePasses; pass++) {
+  for (let pass = 0; pass < MAX_PATH_DECODE_PASSES; pass++) {
     let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);

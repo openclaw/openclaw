@@ -13,6 +13,7 @@ import {
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
+import { retainCreatedComposer, type CreationComposer } from "./creation-composer.ts";
 import type { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import type { StartedSessionNavigation } from "./started-session-navigation.ts";
@@ -29,7 +30,7 @@ type InitialTurn = {
 };
 
 function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boolean>): boolean {
-  const { context, client, result, turn } = options;
+  const { context, result, turn } = options;
   const { text: message, attachments } = turn;
   const handedOffAttachments =
     result.initialRun.status === "rejected" &&
@@ -44,11 +45,6 @@ function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boo
       sessionId: typeof result.entry?.sessionId === "string" ? result.entry.sessionId : undefined,
       retryAfter,
     });
-  if (result.initialRun.status === "started") {
-    context.chatSubmissions.retain(
-      buildInitialChatSubmission(result.key, turn, client, result.initialRun.runId),
-    );
-  }
   return handedOffAttachments;
 }
 
@@ -56,6 +52,7 @@ function retainInitialSessionTurn(options: InitialTurn, retryAfter?: Promise<boo
 export async function completeInitialSessionTurn(
   options: InitialTurn & {
     instant: InstantThreadHandoff | undefined;
+    composer?: CreationComposer;
     navigation: StartedSessionNavigation;
     isCurrent: () => boolean;
     clearDraft: (releasePayloads: boolean, keepPending?: boolean) => Promise<void>;
@@ -67,15 +64,28 @@ export async function completeInitialSessionTurn(
 ) {
   const { context, client, agentId, result, instant } = options;
   const { key, initialRun } = result;
-  if (instant) {
-    await instant.waitForReady();
+  // Capture attachment display bytes before consuming the accepted draft. Lazy
+  // preview navigation must not keep sent input in the new-session cache.
+  const acceptedSubmission =
+    initialRun.status === "started"
+      ? buildInitialChatSubmission(key, options.turn, client, initialRun.runId)
+      : null;
+  if (!instant && options.isCurrent()) {
+    context.chatSubmissions.retain(acceptedSubmission);
+  }
+  const clearing =
+    initialRun.status !== "rejected"
+      ? options.clearDraft(
+          true,
+          options.isCurrent() && (!instant || instant.isCurrent()) ? undefined : false,
+        )
+      : undefined;
+  if (instant || clearing) {
+    await Promise.all([instant?.waitForReady(), clearing]);
   }
   if (!options.isCurrent() || (instant && !instant.isCurrent())) {
     // A confirmed send retires its captured draft, but never publishes a first
     // turn into a different authenticated or navigation owner.
-    if (initialRun.status !== "rejected") {
-      await options.clearDraft(true, false);
-    }
     return;
   }
   const restriction =
@@ -95,6 +105,10 @@ export async function completeInitialSessionTurn(
         releaseChatAttachmentPayloads(attachments);
       }
       options.onRejectedPrompt(initialRun.error);
+    } else if (clearing) {
+      if (instant) {
+        context.chatSubmissions.retain(acceptedSubmission);
+      }
     } else {
       const handedOffAttachments = retainInitialSessionTurn(options, retry?.promise);
       await options.clearDraft(!handedOffAttachments);
@@ -110,6 +124,10 @@ export async function completeInitialSessionTurn(
     ) {
       options.onAccepted?.();
       return;
+    }
+    if (options.composer) {
+      options.composer.accept(result);
+      retainCreatedComposer(context, key, options.composer);
     }
     instant?.admitted(key, agentId);
     await options.navigation.navigate(

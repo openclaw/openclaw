@@ -24,6 +24,20 @@ describe("listBuzzAccountIds", () => {
 });
 
 describe("resolveBuzzAccount", () => {
+  it("defaults group access to allowlist", () => {
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveBuzzAccount({ cfg }).config.groupPolicy).toBe("allowlist");
+  });
+
   it("isolates named identities and never fills missing fields from root credentials", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
     vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");

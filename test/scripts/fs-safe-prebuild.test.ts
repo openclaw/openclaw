@@ -93,11 +93,11 @@ async function createFixture() {
     if (process.env.FIXTURE_NPM_FAIL) process.exit(1);
     const prefix = args[args.indexOf("--prefix") + 1];
     const target = path.join(prefix, "node_modules", ${JSON.stringify(NATIVE_NAME)});
-    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(path.join(target, "lib"), { recursive: true });
     fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({
-      name: ${JSON.stringify(NATIVE_NAME)}, version: process.env.FIXTURE_WRONG_VERSION ? "9.9.9" : ${JSON.stringify(NATIVE_VERSION)}, main: "index.cjs",
+      name: ${JSON.stringify(NATIVE_NAME)}, version: process.env.FIXTURE_WRONG_VERSION ? "9.9.9" : ${JSON.stringify(NATIVE_VERSION)}, main: "lib/index.cjs",
     }));
-    fs.writeFileSync(path.join(target, "index.cjs"), process.env.FIXTURE_BROKEN_DOWNLOAD
+    fs.writeFileSync(path.join(target, "lib/index.cjs"), process.env.FIXTURE_BROKEN_DOWNLOAD
       ? "throw new Error('addon load failed')"
       : "module.exports.readCloneFileMetadata = (paths) => paths;");
   `,
@@ -214,25 +214,24 @@ describe("packaged fs-safe prebuild restoration", () => {
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
       warning: false,
     },
-  ])("makes no npm request for $name", async ({ env, warning }) => {
+    { name: "source checkout", warning: false, source: true },
+  ])("makes no npm request for $name", async ({ env, warning, source }) => {
     const fixture = await createFixture();
+    if (source) {
+      for (const directory of [".git", "src", "extensions"]) {
+        await fs.mkdir(path.join(fixture.packageRoot, directory));
+      }
+    }
     const result = fixture.run(env);
     expect(result.status, result.stderr).toBe(0);
     expect(Boolean(result.stderr)).toBe(warning);
     await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-    await expectCompleted(fixture);
-  });
-
-  it("leaves source checkout dependency ownership to its package manager", async () => {
-    const fixture = await createFixture();
-    for (const directory of [".git", "src", "extensions"]) {
-      await fs.mkdir(path.join(fixture.packageRoot, directory));
+    if (source) {
+      expect(result.stderr).toBe("");
+      await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
+    } else {
+      await expectCompleted(fixture);
     }
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toBe("");
-    await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-    await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("runs the PATH-selected npm CLI directly when deferred lifecycle has no npm_execpath", async () => {
@@ -275,7 +274,7 @@ describe("packaged fs-safe prebuild restoration", () => {
         cli,
         `
       if (process.argv.includes("--version")) throw new Error("npm initialized before discovery completed");
-      if (process.env.NODE_OPTIONS?.includes("data:text/javascript")) throw new Error("discovery preload leaked into install");
+      if ([process.env.NODE_OPTIONS, process.env.BUN_OPTIONS].some(value => value?.includes("data:text/javascript"))) throw new Error("discovery preload leaked into install");
       ${original}
     `,
       );
@@ -287,7 +286,7 @@ describe("packaged fs-safe prebuild restoration", () => {
       );
       const result = fixture.run({ npm_execpath: undefined, PATH: bin });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
+      expect(result.stdout, result.stderr).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
       expect((await fs.readFile(fixture.callsPath, "utf8")).trim().split("\n")).toHaveLength(1);
       await expectCompleted(fixture);
     },

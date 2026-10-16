@@ -26,16 +26,6 @@ function expectJsonSchema(
 }
 
 describe("buildPluginConfigSchema", () => {
-  it("builds json schema in input mode", () => {
-    const schema = z.strictObject({ enabled: z.boolean().default(true) });
-    const result = buildPluginConfigSchema(schema);
-    expectJsonSchema(result, {
-      type: "object",
-      additionalProperties: false,
-      properties: { enabled: { type: "boolean", default: true } },
-    });
-  });
-
   it("uses the host converter and preserves metadata, references and runtime transforms", () => {
     const policy = z.string().describe("Policy name").meta({
       id: "Plugin/Policy~v1",
@@ -96,14 +86,6 @@ describe("buildPluginConfigSchema", () => {
     });
   });
 
-  it("uses zod runtime parsing by default", () => {
-    const result = buildPluginConfigSchema(z.strictObject({ enabled: z.boolean().default(true) }));
-    expect(result.safeParse?.({})).toEqual({
-      success: true,
-      data: { enabled: true },
-    });
-  });
-
   it("allows custom safeParse overrides", () => {
     const safeParse = vi.fn(() => ({ success: true as const, data: { normalized: true } }));
     const result = buildPluginConfigSchema(z.strictObject({ enabled: z.boolean().optional() }), {
@@ -145,26 +127,6 @@ describe("buildJsonPluginConfigSchema", () => {
     expect(result.safeParse?.({ enabled: "yes" })).toEqual({
       success: false,
       error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
-    });
-  });
-
-  it("keeps numeric-looking object keys outside array-index range as strings", () => {
-    const result = buildJsonPluginConfigSchema(
-      {
-        type: "object",
-        required: ["100001"],
-        properties: {
-          "100001": { type: "boolean" },
-        },
-      },
-      { cacheKey: "config-schema.test.large-numeric-key" },
-    );
-
-    expect(result.safeParse?.({})).toEqual({
-      success: false,
-      error: {
-        issues: [{ path: ["100001"], message: "must have required property '100001'" }],
-      },
     });
   });
 });

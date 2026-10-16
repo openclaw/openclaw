@@ -7,7 +7,7 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import {
   resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
-  resolveMemoryProviderState,
+  resolveMemoryProviderLifecycle,
 } from "./manager-provider-state.js";
 
 const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
@@ -18,11 +18,6 @@ vi.mock("./embeddings.js", async (importOriginal) => ({
   resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama" ? DEFAULT_OLLAMA_EMBEDDING_MODEL : fallbackSourceModel,
 }));
-
-type EmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData: { provider: string; model: string };
-};
 
 function createProvider(id: string): EmbeddingProvider {
   return {
@@ -60,37 +55,16 @@ function expectMemoryFallbackRequest(
   return request;
 }
 
-describe("memory manager mistral provider wiring", () => {
-  it("stores mistral client after fallback activation", () => {
-    const mistralRuntime: EmbeddingProviderRuntime = {
-      id: "mistral",
-      cacheKeyData: { provider: "mistral", model: "mistral-embed" },
-    };
-    const mistralProvider = createProvider("mistral");
-    const fallbackState = resolveMemoryProviderState({
-      provider: mistralProvider,
-      runtime: mistralRuntime,
-      requestedProvider: "openai",
-      fallbackFrom: "openai",
-      fallbackReason: "forced test",
-    });
-
-    expect(fallbackState.fallbackFrom).toBe("openai");
-    expect(fallbackState.fallbackReason).toBe("forced test");
-    expect(fallbackState.provider).toBe(mistralProvider);
-    expect(fallbackState.providerRuntime).toBe(mistralRuntime);
-  });
-
+describe("memory provider requests and lifecycle", () => {
   it("resolves a fallback provider as available", () => {
-    const fallbackState = resolveMemoryProviderState({
+    const lifecycle = resolveMemoryProviderLifecycle({
       provider: createProvider("openai"),
       requestedProvider: "local",
       fallbackFrom: "local",
       fallbackReason: "worker crashed",
     });
 
-    expect(fallbackState.providerUnavailableReason).toBeUndefined();
-    expect(fallbackState.lifecycle).toEqual({
+    expect(lifecycle).toEqual({
       mode: "fallback-active",
       providerId: "openai",
       fallbackFrom: "local",
@@ -102,7 +76,6 @@ describe("memory manager mistral provider wiring", () => {
     const provider = "ollama";
     const model = DEFAULT_OLLAMA_EMBEDDING_MODEL;
     const sharedRemote = {
-      nonBatchConcurrency: 3,
       batch: {
         enabled: true,
         wait: false,

@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  listUsableProviderAuthProfileIds: () => ({ agentDir: "", profileIds: [] }),
+  listUsableProviderAuthProfileIdsAsync: async () => ({ agentDir: "", profileIds: [] }),
 }));
 
 function createAuthSearchTool(webSearch?: { apiKey: string }) {
@@ -51,15 +51,29 @@ afterEach(() => {
 });
 
 describe("xAI web search auth lifecycle", () => {
-  it("preserves credential settlement failures instead of reporting a missing API key", async () => {
-    const authError = new Error("OAuth token refresh failed for xai: refresh did not settle");
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValueOnce(authError);
-    const mockFetch = installXaiWebSearchFetch();
-    const tool = createAuthSearchTool();
-
-    await expect(tool.execute({ query: "search waiting for credentials" })).rejects.toBe(authError);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
+  it.each(["initial lookup", "refresh after 401"])(
+    "preserves failures during %s without a fallback",
+    async (phase) => {
+      const authError = new Error("OAuth token refresh failed for xai: refresh did not settle");
+      if (phase === "refresh after 401") {
+        providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+          apiKey: "expired-oauth-token",
+          source: "profile:xai:default",
+          mode: "oauth",
+          profileId: "xai:default",
+        });
+      }
+      providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValueOnce(authError);
+      const mockFetch = installXaiWebSearchFetch();
+      mockFetch.mockImplementation(
+        async () => new Response("expired", { status: 401, statusText: "Unauthorized" }),
+      );
+      await expect(
+        createAuthSearchTool().execute({ query: `search auth failure: ${phase}` }),
+      ).rejects.toBe(authError);
+      expect(mockFetch).toHaveBeenCalledTimes(phase === "initial lookup" ? 0 : 1);
+    },
+  );
 
   it("keeps configured API-key fallback when OAuth credential resolution fails", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockRejectedValueOnce(
@@ -139,25 +153,4 @@ describe("xAI web search auth lifecycle", () => {
       }
     },
   );
-
-  it("preserves a failed OAuth refresh when no API-key fallback can recover", async () => {
-    const authError = new Error("OAuth token refresh failed for xai: re-authenticate");
-    providerAuthRuntimeMocks.resolveApiKeyForProvider
-      .mockResolvedValueOnce({
-        apiKey: "expired-oauth-token",
-        source: "profile:xai:default",
-        mode: "oauth",
-        profileId: "xai:default",
-      })
-      .mockRejectedValueOnce(authError);
-    const mockFetch = vi.fn(
-      async () => new Response("expired", { status: 401, statusText: "Unauthorized" }),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-
-    await expect(
-      createAuthSearchTool().execute({ query: "unrecoverable search OAuth refresh" }),
-    ).rejects.toBe(authError);
-    expect(mockFetch).toHaveBeenCalledOnce();
-  });
 });

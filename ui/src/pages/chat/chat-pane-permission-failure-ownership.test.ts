@@ -1,22 +1,38 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
+import { createComponent, createSignal, merge } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+
+function permissionPicker(state: ChatPageHost, selectedSession: GatewaySessionRow | undefined) {
+  return renderChatPaneComposerControls({
+    state,
+    selectedSession,
+    agentDefaultModel: undefined,
+    modelAccess: { allowed: true, requiredScope: "operator.write" },
+    effortAccess: { allowed: true, requiredScope: "operator.write" },
+    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
+    permissionAccess: { allowed: true, requiredScope: "operator.write" },
+    canSelectFull: true,
+    onModelSetup: vi.fn(),
+  }).permissionPicker;
+}
 
 describe("chat permission failure ownership", () => {
   it.each([
@@ -93,24 +109,12 @@ describe("chat permission failure ownership", () => {
           state.sessionsResultAgentId = "main";
         },
       );
-      const controlParams = {
-        state,
-        get selectedSession() {
-          return observation.row ?? undefined;
-        },
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        contextWindowAccess: { allowed: true, requiredScope: "operator.admin" } as const,
-        permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      };
+      const picker = () => permissionPicker(state, observation.row ?? undefined);
       let selection: Promise<unknown> = Promise.resolve();
       try {
         await host.sessions.refresh({ agentId: "main", force: true });
-        const controls = renderChatPaneComposerControls(controlParams);
-        selection = Promise.resolve(controls.permissionPicker.onSelect("full"));
+        const controls = picker();
+        selection = Promise.resolve(controls.onSelect("full"));
         await vi.waitFor(() =>
           expect(host.request).toHaveBeenCalledWith(
             "sessions.patch",
@@ -122,21 +126,24 @@ describe("chat permission failure ownership", () => {
           ),
         );
         const container = document.createElement("div");
-        const draw = () =>
-          render(
-            renderChatPermissionPicker(
-              renderChatPaneComposerControls(controlParams).permissionPicker,
-            ),
-            container,
-          );
-        draw();
+        const [currentPicker, setCurrentPicker] = createSignal(picker());
+        const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
+          container,
+        });
+        onTestFinished(view.unmount);
+        const draw = () => {
+          setCurrentPicker(picker());
+          flush();
+        };
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",
         )!;
-        expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
-        expect(trigger.textContent).not.toContain("Applying permissions");
+        expect(trigger.getAttribute("aria-label")).toContain(
+          t("chat.permissionControls.modes.full.label"),
+        );
+        expect(trigger.getAttribute("aria-label")).not.toContain("Applying permissions");
         expect(trigger.disabled).toBe(true);
-        void controls.permissionPicker.onSelect("guarded");
+        void controls.onSelect("guarded");
         expect(
           host.request.mock.calls.filter(([method]) => method === "sessions.patch"),
         ).toHaveLength(1);
@@ -159,7 +166,9 @@ describe("chat permission failure ownership", () => {
         expect(state.chatError).toContain("Failed to update permissions");
         if (recovery !== "immediate") {
           draw();
-          expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+          expect(trigger.getAttribute("aria-label")).toContain(
+            t("chat.permissionControls.modes.full.label"),
+          );
           expect(trigger.disabled).toBe(false);
           recoveryUnavailable = false;
           if (recovery === "affected") {
@@ -178,7 +187,7 @@ describe("chat permission failure ownership", () => {
           foregroundAgent === "main" ? selectedSession.key : otherSession.key,
         ]);
         draw();
-        expect(trigger.textContent).toContain(
+        expect(trigger.getAttribute("aria-label")).toContain(
           t(
             `chat.permissionControls.modes.${recovery === "unrelated" ? "full" : persistedMode}.label`,
           ),
@@ -258,17 +267,10 @@ describe("chat permission failure ownership", () => {
         () => {},
       );
       const controls = () =>
-        renderChatPaneComposerControls({
+        permissionPicker(
           state,
-          selectedSession: state.sessionsResult?.sessions.find((row) => row.key === original.key),
-          agentDefaultModel: undefined,
-          modelAccess: { allowed: true, requiredScope: "operator.write" },
-          effortAccess: { allowed: true, requiredScope: "operator.write" },
-          contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-          permissionAccess: { allowed: true, requiredScope: "operator.write" },
-          canSelectFull: true,
-          onModelSetup: vi.fn(),
-        });
+          state.sessionsResult?.sessions.find((row) => row.key === original.key),
+        );
       const successorError = "Successor's current error";
       const replace = async () => {
         current = {
@@ -290,7 +292,7 @@ describe("chat permission failure ownership", () => {
         await host.sessions.refresh({ agentId: "research", force: true });
         expect(host.sessions.state.agentId).toBe("research");
         expect(state.sessionsResult?.sessions[0]?.sessionId).toBe(original.sessionId);
-        const older = Promise.resolve(controls().permissionPicker.onSelect("full"));
+        const older = Promise.resolve(controls().onSelect("full"));
         operations.push(older);
         await patchIssued.promise;
         expect(host.request).toHaveBeenCalledWith(
@@ -312,7 +314,7 @@ describe("chat permission failure ownership", () => {
         }
         if (replacement === "newer selection") {
           holdRecovery = false;
-          const newer = Promise.resolve(controls().permissionPicker.onSelect("guarded"));
+          const newer = Promise.resolve(controls().onSelect("guarded"));
           operations.push(newer);
           await newer;
           expect(current.permissionMode).toBe("guarded");
@@ -391,17 +393,7 @@ describe("chat permission failure ownership", () => {
       const state = pane.state;
       expect(selectedChatSessionRow(state)).toMatchObject(original);
       selection = Promise.resolve(
-        renderChatPaneComposerControls({
-          state,
-          selectedSession: selectedChatSessionRow(state),
-          agentDefaultModel: undefined,
-          modelAccess: { allowed: true, requiredScope: "operator.write" },
-          effortAccess: { allowed: true, requiredScope: "operator.write" },
-          contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-          permissionAccess: { allowed: true, requiredScope: "operator.write" },
-          canSelectFull: true,
-          onModelSetup: vi.fn(),
-        }).permissionPicker.onSelect("full"),
+        permissionPicker(state, selectedChatSessionRow(state)).onSelect("full"),
       );
       await selection;
       expect(sessions.state.agentId).toBe("main");
@@ -454,17 +446,7 @@ describe("chat permission failure ownership", () => {
     });
     try {
       await host.sessions.refresh({ agentId: "main", force: true });
-      await renderChatPaneComposerControls({
-        state,
-        selectedSession: selectedChatSessionRow(state),
-        agentDefaultModel: undefined,
-        modelAccess: { allowed: true, requiredScope: "operator.write" },
-        effortAccess: { allowed: true, requiredScope: "operator.write" },
-        contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-        permissionAccess: { allowed: true, requiredScope: "operator.write" },
-        canSelectFull: true,
-        onModelSetup: vi.fn(),
-      }).permissionPicker.onSelect("full");
+      await permissionPicker(state, selectedChatSessionRow(state)).onSelect("full");
       expect(host.request).toHaveBeenCalledWith(
         "sessions.patch",
         expect.objectContaining({ key: state.sessionKey, permissionMode: "full" }),

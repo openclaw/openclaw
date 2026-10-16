@@ -24,8 +24,10 @@ const nodes = [
 const makeConfig = (defaultBinding: string, agentBinding: string) => ({
   tools: { exec: { node: defaultBinding } },
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true },
+      main: {},
       research: { name: "Research", tools: { exec: { node: agentBinding } } },
     },
   },
@@ -227,8 +229,10 @@ suite.define(() => {
         expect(JSON.parse(String(clearedAgent.raw))).toEqual({
           tools: { exec: {} },
           agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
             entries: {
-              main: { default: true },
+              main: {},
               research: { name: "Research", tools: { exec: {} } },
             },
           },

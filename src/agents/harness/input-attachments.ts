@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -16,6 +17,18 @@ export function bindHarnessInputAttachments(params: {
   const initialInput = {
     media: structuredClone(attempt.inputAttachmentMedia ?? attempt.media),
     userTurnTranscriptRecorder: attempt.userTurnTranscriptRecorder,
+  };
+  const resolveInputAttachmentMedia = async () => {
+    assertActive();
+    attemptSignal?.throwIfAborted();
+    const recorder = initialInput.userTurnTranscriptRecorder;
+    const message = (await recorder?.resolveMessage()) ?? recorder?.message;
+    assertActive();
+    attemptSignal?.throwIfAborted();
+    const media = structuredClone(
+      (message ? readPersistedMediaFacts(message) : undefined) ?? initialInput.media ?? [],
+    );
+    return Object.freeze(media.map((fact) => Object.freeze(fact)));
   };
   const inputPolicyEligible =
     !attempt.sandbox?.enabled &&
@@ -57,6 +70,7 @@ export function bindHarnessInputAttachments(params: {
         }
       : undefined;
   return {
+    resolveInputAttachmentMedia,
     prepareInputAttachments,
     setInputAttachmentReadAllowed: (allowed: boolean) => {
       assertActive();

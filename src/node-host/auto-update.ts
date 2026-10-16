@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
-import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -12,6 +11,7 @@ import {
   compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
+  resolveUpdateRegistryTarget,
 } from "../infra/update-check.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -28,15 +28,6 @@ type NodeUpdateRuntime = {
   resumeAfterUpdate(): void;
 };
 
-function updatesEnabled(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return (
-    config.nodeHost?.autoUpdate?.enabled !== false &&
-    config.update?.checkOnStart !== false &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
-  );
-}
-
 /** Owns discovery and idle admission; the launcher owns executable activation. */
 export function startNodeHostAutoUpdate(params: {
   runtime: NodeUpdateRuntime;
@@ -51,7 +42,6 @@ export function startNodeHostAutoUpdate(params: {
   const stateDir = resolveStateDir(env);
   const configIO = createConfigIO({ env, observe: false, pluginValidation: "skip" });
   let pending: (PreparedNodeRuntimeUpdate & { channel: UpdateChannel }) | undefined;
-  let paused = false;
   let handedOff = false;
   let waitingLogged = false;
 
@@ -67,7 +57,12 @@ export function startNodeHostAutoUpdate(params: {
       installKind: "package",
     }).channel;
     return {
-      enabled: updatesEnabled(snapshot.config, env) && (channel === "stable" || channel === "beta"),
+      enabled:
+        snapshot.config.nodeHost?.autoUpdate?.enabled !== false &&
+        snapshot.config.update?.checkOnStart !== false &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN) &&
+        (channel === "stable" || channel === "beta"),
       channel,
     };
   };
@@ -89,7 +84,7 @@ export function startNodeHostAutoUpdate(params: {
 
   const tryActivate = async () => {
     const candidate = pending;
-    if (!candidate || !(await activationAllowed())) {
+    if (!candidate) {
       return CHECK_INTERVAL_MS;
     }
     signal.throwIfAborted();
@@ -102,7 +97,6 @@ export function startNodeHostAutoUpdate(params: {
       }
       return IDLE_CHECK_INTERVAL_MS;
     }
-    paused = true;
     try {
       const { assertNodeRuntimeUpdateCompatible } = await import("./auto-update-compatibility.js");
       signal.throwIfAborted();
@@ -119,7 +113,6 @@ export function startNodeHostAutoUpdate(params: {
         pending = undefined;
         return CHECK_INTERVAL_MS;
       }
-      signal.throwIfAborted();
       await requestNodeHostLauncherRestart({
         runtimeRoot: candidate.runtimeRoot,
         version: candidate.version,
@@ -131,7 +124,6 @@ export function startNodeHostAutoUpdate(params: {
     } finally {
       if (!handedOff) {
         params.runtime.resumeAfterUpdate();
-        paused = false;
       }
     }
   };
@@ -155,6 +147,7 @@ export function startNodeHostAutoUpdate(params: {
       channel: policy.channel,
       env,
       signal,
+      ...(process.versions.bun ? resolveUpdateRegistryTarget({ env }) : {}),
       runCommand: process.versions.bun
         ? undefined
         : (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
@@ -171,10 +164,6 @@ export function startNodeHostAutoUpdate(params: {
     }
     params.log(`node auto-update preparing ${available.version}`);
     const { prepareNodeRuntimeUpdate } = await import("./auto-update-install.js");
-    const installPolicy = await readPolicy();
-    if (!installPolicy.enabled || installPolicy.channel !== policy.channel) {
-      return CHECK_INTERVAL_MS;
-    }
     signal.throwIfAborted();
     const candidate = await prepareNodeRuntimeUpdate({
       targetVersion: available.version,
@@ -184,10 +173,6 @@ export function startNodeHostAutoUpdate(params: {
     signal.throwIfAborted();
     for (const warning of candidate.warnings ?? []) {
       params.log(redactSensitiveText(warning));
-    }
-    const currentPolicy = await readPolicy();
-    if (!currentPolicy.enabled || currentPolicy.channel !== policy.channel) {
-      return CHECK_INTERVAL_MS;
     }
     pending = { ...candidate, channel: policy.channel };
     waitingLogged = false;
@@ -221,17 +206,11 @@ export function startNodeHostAutoUpdate(params: {
       }
       await sleepWithAbort(delay, signal, { ref: false });
     }
-  })()
-    .catch((error: unknown) => {
-      if (!signal.aborted) {
-        params.log(`node auto-update stopped: ${redactSensitiveText(String(error))}`);
-      }
-    })
-    .finally(() => {
-      if (paused && !handedOff) {
-        params.runtime.resumeAfterUpdate();
-      }
-    });
+  })().catch((error: unknown) => {
+    if (!signal.aborted) {
+      params.log(`node auto-update stopped: ${redactSensitiveText(String(error))}`);
+    }
+  });
 
   return {
     stop: async () => {

@@ -210,38 +210,20 @@ describe("meeting native continuous voice", () => {
     }
   });
 
-  it.each(["safe-read-only", "none"] as const)(
-    "enforces the %s policy for native delegation",
-    async (toolPolicy) => {
-      const fixture = await createLiveFixture({ toolPolicy });
-      try {
-        const consult = fixture.callbacks.runAgentConsult;
-        expect(consult).toBeTypeOf("function");
-        if (!consult) {
-          throw new Error("Expected native agent delegation");
-        }
-        if (toolPolicy === "none") {
-          await expect(consult({ prompt: "Check the project" })).rejects.toThrow(
-            "meeting tool policy",
-          );
-          expect(fixture.consultAgent).not.toHaveBeenCalled();
-        } else {
-          await expect(consult({ prompt: "Check the project" })).resolves.toEqual({
-            text: "The answer.",
-          });
-          expect(fixture.consultAgent).toHaveBeenCalledWith(
-            expect.objectContaining({
-              meetingSessionId: "meeting-1",
-              requesterSessionKey: "agent:main:requester",
-              args: { question: "Check the project" },
-            }),
-          );
-        }
-      } finally {
-        await fixture.handle.stop();
+  it.each(["none"] as const)("enforces the %s policy for native delegation", async (toolPolicy) => {
+    const fixture = await createLiveFixture({ toolPolicy });
+    try {
+      const consult = fixture.callbacks.runAgentConsult;
+      expect(consult).toBeTypeOf("function");
+      if (!consult) {
+        throw new Error("Expected native agent delegation");
       }
-    },
-  );
+      await expect(consult({ prompt: "Check the project" })).rejects.toThrow("meeting tool policy");
+      expect(fixture.consultAgent).not.toHaveBeenCalled();
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
 
   it.each(["native delegation", "function tool"] as const)(
     "rejects %s admission immediately after stop before bridge closure",

@@ -65,6 +65,7 @@ export function createGatewayStoreTestStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    ownsWarmBoot?: boolean;
     resourceBasePath?: string;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
@@ -84,6 +85,7 @@ export function createGatewayStoreTestStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      ownsWarmBoot: params.ownsWarmBoot,
       resourceBasePath: params.resourceBasePath,
       clientOptions: params.clientOptions,
     },

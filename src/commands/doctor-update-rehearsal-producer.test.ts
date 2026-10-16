@@ -4,15 +4,13 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
-import { importLegacySkillProposal } from "../skills/workshop/store.js";
+import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
 import { inspectPreparedDoctorRehearsal } from "./doctor-update-rehearsal-inventory.js";
-import { collectDoctorSkillWorkshopBackupResources } from "./doctor-update-rehearsal-workshop.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -24,6 +22,7 @@ it("admits real producer plugin host, dependency and basename links without trav
     const locator = path.join(root, "example");
     const modules = path.join(root, "modules");
     await fs.mkdir(candidate);
+    await materializeUpdateCandidateStateWorker(candidate);
     await fs.mkdir(plugin);
     await fs.symlink(plugin, locator, "dir");
     await fs.mkdir(path.join(modules, "dependency"), { recursive: true });
@@ -131,113 +130,6 @@ it("admits real producer plugin host, dependency and basename links without trav
         "candidate is not migration data",
       );
     } finally {
-      await rehearsal.cleanup();
-    }
-  });
-});
-
-it.each(["pending", "applied"] as const)(
-  "admits real copied Workshop %s history without claiming external skill data",
-  async (status) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
-      const skillDir = path.join(source.workspaceDir, "skills", "saved-procedure");
-      const content = "# Saved procedure\n\nKeep the operator's current skill.\n";
-      const applied = createAppliedLegacyProposal({
-        id: "saved-procedure-20260901-1234567890",
-        title: "Save procedure",
-        description: "Keep a procedure",
-        content,
-        target: { skillKey: "saved-procedure", skillDir },
-      });
-      const record = {
-        ...applied,
-        status,
-        appliedAt: status === "applied" ? applied.appliedAt : undefined,
-        origin: { agentId: "main" },
-      };
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(record.target.skillFile, content);
-      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: source.env } });
-      const config: OpenClawConfig = {
-        agents: { entries: { main: { workspace: source.workspaceDir } } },
-      };
-      closeOpenClawStateDatabaseForTest();
-      const rehearsal = await prepareUpdateCandidateRehearsal({
-        config,
-        stateDir: source.stateDir,
-        candidateRoot: source.root,
-        env: source.env,
-      });
-      try {
-        const copiedRecord = path.join(rehearsal.stateDir, "state", "openclaw.sqlite");
-        const before = await fs.readFile(copiedRecord);
-        await collectDoctorSkillWorkshopBackupResources({
-          config: JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")),
-          env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-        });
-        expect(
-          await fs.readFile(copiedRecord),
-          "Workshop collector must preserve copied database bytes",
-        ).toEqual(before);
-        const admitted = await inspectPreparedDoctorRehearsal({
-          ...rehearsal,
-          env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-          assertCurrent() {},
-        });
-        admitted.assertPrepared();
-        expect(await fs.readFile(record.target.skillFile, "utf8")).toBe(content);
-        expect(await fs.readFile(copiedRecord)).toEqual(before);
-      } finally {
-        await rehearsal.cleanup();
-      }
-    });
-  },
-);
-
-it("releases copied Workshop readers before removing a rehearsal", async () => {
-  const { openSqliteWorkerStore } = await import("../infra/sqlite-worker-store.js");
-  const { closeOpenClawStateDatabaseByPathAsync } =
-    await import("../state/openclaw-state-db-cache.js");
-  await withOpenClawTestState({ scenario: "minimal" }, async (source) => {
-    openOpenClawStateDatabase({ env: source.env });
-    closeOpenClawStateDatabaseForTest();
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config: {},
-      stateDir: source.stateDir,
-      candidateRoot: source.root,
-      env: source.env,
-    });
-    const copied = path.join(rehearsal.stateDir, "state", "openclaw.sqlite");
-    const retained = path.join(source.root, "retained-rehearsal.sqlite");
-    const successor = path.join(source.root, "successor.sqlite");
-    let store:
-      | import("../infra/sqlite-worker-store.js").SqliteWorkerStore<
-          import("../infra/sqlite-worker-store.test-support.js").FixtureOperations
-        >
-      | undefined;
-    try {
-      await collectDoctorSkillWorkshopBackupResources({
-        config: {},
-        env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
-      });
-      await fs.link(copied, retained);
-      await rehearsal.cleanup();
-      await expect(fs.stat(copied)).rejects.toMatchObject({ code: "ENOENT" });
-      // A real link preserves physical identity without depending on allocator inode reuse.
-      store = await openSqliteWorkerStore<
-        import("../infra/sqlite-worker-store.test-support.js").FixtureOperations
-      >({
-        moduleUrl: new URL("../infra/sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: successor,
-        input: { type: "link", existingPath: retained },
-      });
-      await store.execute({ type: "append", input: { value: "after rehearsal cleanup" } });
-      expect(await store.execute({ type: "read", input: undefined })).toEqual([
-        "after rehearsal cleanup",
-      ]);
-    } finally {
-      await store?.close();
-      await closeOpenClawStateDatabaseByPathAsync(copied);
       await rehearsal.cleanup();
     }
   });

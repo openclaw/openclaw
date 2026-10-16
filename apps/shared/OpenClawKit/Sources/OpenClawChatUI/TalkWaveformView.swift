@@ -412,10 +412,9 @@ enum TalkWaveformMath {
         baseRadius: CGFloat,
         amplitude: CGFloat,
         time: Double,
-        seed: Double,
-        sampleCount: Int = 96) -> Path
+        seed: Double) -> Path
     {
-        let count = max(sampleCount, 24)
+        let count = 96
         var points: [CGPoint] = []
         points.reserveCapacity(count)
 
@@ -433,8 +432,7 @@ enum TalkWaveformMath {
         }
 
         var path = Path()
-        guard let first = points.first else { return path }
-        path.move(to: first)
+        path.move(to: points[0])
         path.addLines(Array(points.dropFirst()))
         path.closeSubpath()
         return path
@@ -463,10 +461,9 @@ enum TalkWaveformMath {
         baseRadius: CGFloat,
         amplitude: CGFloat,
         samples: [Double],
-        scale: Double = 1,
-        sampleCount: Int = 72) -> Path
+        scale: Double = 1) -> Path
     {
-        let count = max(sampleCount, 24)
+        let count = 72
         var path = Path()
 
         for index in 0..<count {
@@ -490,7 +487,7 @@ enum TalkWaveformMath {
     static func radialEnvelopeMagnitude(progress: Double, samples: [Double]) -> Double {
         guard !samples.isEmpty else { return 0.08 }
         let x = min(max(progress, 0), 1)
-        let mirroredHistory = abs(x * 2 - 1) * Double(max(samples.count - 1, 0))
+        let mirroredHistory = abs(x * 2 - 1) * Double(samples.count - 1)
         let level = Self.interpolatedEnvelopeSample(at: mirroredHistory, samples: samples)
         return 0.08 + 0.92 * pow(level, 0.72)
     }
@@ -502,10 +499,9 @@ enum TalkWaveformMath {
         in size: CGSize,
         samples: [Double],
         sampleRange: ClosedRange<Double> = 0...1,
-        scale: Double = 1,
-        sampleCount: Int = 48) -> Path
+        scale: Double = 1) -> Path
     {
-        let count = max(sampleCount, 16)
+        let count = 48
         let midY = Double(size.height) / 2
         let halfHeight = max(1, midY - 1)
         var upper: [CGPoint] = []
@@ -522,8 +518,7 @@ enum TalkWaveformMath {
         }
 
         var path = Path()
-        guard let first = upper.first else { return path }
-        path.move(to: first)
+        path.move(to: upper[0])
         path.addLines(Array(upper.dropFirst()))
         for point in upper.reversed() {
             path.addLine(to: CGPoint(x: point.x, y: 2 * midY - point.y))
@@ -539,7 +534,7 @@ enum TalkWaveformMath {
         guard !samples.isEmpty else { return 0.03 * taper }
 
         let distanceFromCenter = abs(x - 0.5) * 2
-        let historyPosition = distanceFromCenter * Double(max(samples.count - 1, 0))
+        let historyPosition = distanceFromCenter * Double(samples.count - 1)
         let level = Self.interpolatedEnvelopeSample(at: historyPosition, samples: samples)
         return taper * (0.03 + 0.97 * pow(level, 0.72))
     }

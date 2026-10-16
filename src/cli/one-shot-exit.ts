@@ -1,43 +1,9 @@
-import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime, ExitError } from "../runtime.js";
+import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
-import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "./signal-exit-barrier.js";
-
-type VitestWorkerMarkers = {
-  tinypoolState?: unknown;
-  vitestWorker?: unknown;
-};
-
-const SYSTEM_CA_FLAG = "--use-system-ca";
+import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 let requestedExitCode: number | "process" | undefined;
-
-function resolveVitestWorkerMarkers(): VitestWorkerMarkers {
-  const processMarkers = process as NodeJS.Process & Record<string, unknown>;
-  const globalMarkers = globalThis as typeof globalThis & Record<string, unknown>;
-  return {
-    tinypoolState: processMarkers["__tinypool_state__"],
-    vitestWorker: globalMarkers["__vitest_worker__"],
-  };
-}
-
-function hasNodeRuntimeOption(
-  option: string,
-  env: NodeJS.ProcessEnv,
-  execArgv: readonly string[],
-): boolean {
-  const normalize = (value: string) => value.replaceAll("_", "-");
-  if (execArgv.some((arg) => normalize(arg) === option)) {
-    return true;
-  }
-  return (env.NODE_OPTIONS ?? "").split(/\s+/u).some((token) => {
-    const quote = token[0];
-    const unquoted =
-      (quote === '"' || quote === "'") && token.at(-1) === quote ? token.slice(1, -1) : token;
-    return normalize(unquoted) === option;
-  });
-}
 
 function resolveProcessExitCode(fallback = 0): number {
   const value = process.exitCode;
@@ -50,54 +16,12 @@ function resolveProcessExitCode(fallback = 0): number {
   return fallback;
 }
 
-function isVitestWorker(
-  env: NodeJS.ProcessEnv,
-  markers: VitestWorkerMarkers = resolveVitestWorkerMarkers(),
-): boolean {
-  const hasVitestEnv =
-    env.VITEST === "true" ||
-    env.VITEST === "1" ||
-    env.VITEST_POOL_ID !== undefined ||
-    env.VITEST_WORKER_ID !== undefined;
-  return (
-    hasVitestEnv && (markers.tinypoolState !== undefined || markers.vitestWorker !== undefined)
-  );
-}
-
-function requestExitAfterSystemCaCliCompletion(
-  runtime: RuntimeEnv = defaultRuntime,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    execArgv?: readonly string[];
-    platform?: NodeJS.Platform;
-    exitCode?: number;
-  } = {},
-): boolean {
-  const env = params.env ?? process.env;
-  const execArgv = params.execArgv ?? process.execArgv;
-  const platform = params.platform ?? process.platform;
-  const usesSystemCa =
-    env.NODE_USE_SYSTEM_CA === "1" || hasNodeRuntimeOption(SYSTEM_CA_FLAG, env, execArgv);
-  if (platform !== "darwin" || !usesSystemCa || runtime !== defaultRuntime) {
-    return false;
-  }
-  if (requestedExitCode !== undefined) {
-    return false;
-  }
-  requestedExitCode = params.exitCode ?? "process";
-  return true;
-}
-
 export async function runCliWithExitFinalization(params: {
   run: () => Promise<void>;
   onError: (error: unknown) => void | Promise<void>;
-  /** Join caller-owned state after command cleanup and before scheduling process exit. */
+  /** Join caller-owned state after command cleanup and before process completion. */
   finalize?: () => Promise<void>;
   runtime?: RuntimeEnv;
-  env?: NodeJS.ProcessEnv;
-  execArgv?: readonly string[];
-  platform?: NodeJS.Platform;
-  markers?: VitestWorkerMarkers;
 }): Promise<void> {
   const runtime = params.runtime ?? defaultRuntime;
   let finalizationFailure: { error: unknown } | undefined;
@@ -113,16 +37,10 @@ export async function runCliWithExitFinalization(params: {
       requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
     }
   } finally {
-    await waitForCliSignalExit();
-    const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
-      env: params.env,
-      execArgv: params.execArgv,
-      platform: params.platform,
-    });
-    if (
-      params.finalize ||
-      (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers))
-    ) {
+    let signalExitCode = await waitForCliSignalExit();
+    if (runtime === defaultRuntime) {
+      // A disposer warning is not completion. Native writers must settle before
+      // finalizers close their databases, and before Node tears down the isolate.
       await waitForPendingCliDisposers();
     }
     if (params.finalize) {
@@ -139,7 +57,23 @@ export async function runCliWithExitFinalization(params: {
         }
       }
     }
-    flushExitAfterOneShotOutput(runtime, params.env, params.markers);
+    if (runtime === defaultRuntime) {
+      await waitForPendingCliDisposers();
+      signalExitCode = (await waitForCliSignalExit()) ?? signalExitCode;
+      const requestedCode = requestedExitCode;
+      requestedExitCode = undefined;
+      if (signalExitCode !== undefined) {
+        process.exitCode = signalExitCode;
+      } else if (requestedCode !== undefined) {
+        process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
+      }
+      if (signalExitCode !== undefined || requestedCode !== undefined) {
+        // Explicit exits retain runtime.exit's terminal contract after owned cleanup.
+        // Ordinary command completion must not add ANSI bytes to its output.
+        restoreRuntimeTerminalState("CLI exit", { resumeStdinIfPaused: false });
+      }
+      // Node drains stdio and V8 compiler work naturally.
+    }
   }
   // A cleanup failure must not replace an embedded runtime's original exit.
   if (finalizationFailure) {
@@ -166,32 +100,7 @@ export function requestExitAfterOneShotOutput(
   return true;
 }
 
-/** A recorded command outcome must not be held hostage by resource cleanup. */
-export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): void {
-  if (isVitestWorker(process.env)) {
-    return;
-  }
-  setTimeout(() => {
-    try {
-      onStall();
-    } finally {
-      exitAfterSignalExitBarriers(exitCode);
-    }
-  }, 10_000).unref();
-}
-
-function flushExitAfterOneShotOutput(
-  runtime: RuntimeEnv = defaultRuntime,
-  env: NodeJS.ProcessEnv = process.env,
-  markers: VitestWorkerMarkers = resolveVitestWorkerMarkers(),
-): void {
-  const requestedCode = requestedExitCode;
-  requestedExitCode = undefined;
-  if (requestedCode === undefined || runtime !== defaultRuntime || isVitestWorker(env, markers)) {
-    return;
-  }
-
-  const exit = () =>
-    runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
-  drainProcessOutput(exit);
+/** Report unsettled cleanup without bypassing its native resource owner. */
+export function watchCliExitAfterOutput(onStall: () => void): void {
+  setTimeout(onStall, 10_000).unref();
 }

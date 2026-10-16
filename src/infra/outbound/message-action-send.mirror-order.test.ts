@@ -3,8 +3,7 @@
 // rewrote the folded main session's durable delivery route and minted a
 // conversation identity before the send was attempted.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,11 +13,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -30,10 +29,11 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 const MAIN_SESSION_KEY = "agent:main:main";
 
 describe("outbound mirror route ordering", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mirror-order-");
   let storePath: string;
   let cfg: OpenClawConfig;
   const handleAction = vi.fn();
+  const sendMedia = vi.fn();
 
   function registerTestChannel() {
     const plugin: ChannelPlugin = {
@@ -50,6 +50,7 @@ describe("outbound mirror route ordering", () => {
       },
       outbound: {
         deliveryMode: "direct",
+        sendMedia,
         // The plugin action path above owns the send; core delivery must not run.
         sendText: async () => {
           throw new Error("unexpected core sendText");
@@ -84,19 +85,19 @@ describe("outbound mirror route ordering", () => {
   }
 
   beforeEach(async () => {
-    storePath = path.join(tempDirs.make("openclaw-mirror-order-"), "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
     cfg = {
       session: { store: storePath },
       channels: { testchat: { enabled: true } },
     } as OpenClawConfig;
     handleAction.mockReset();
+    sendMedia.mockReset();
     registerTestChannel();
     await seedMainSessionWithDiscordOrigin();
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it("leaves the main session route untouched when the send fails", async () => {
@@ -138,6 +139,46 @@ describe("outbound mirror route ordering", () => {
       from: "testchat:12345",
     });
   });
+
+  it.each(["plugin", "core"] as const)(
+    "retains distinct media identities through %s sends with matching mirror text",
+    async (handledBy) => {
+      handleAction.mockResolvedValue(
+        handledBy === "plugin" ? jsonResult({ ok: true, messageId: "media-send" }) : null,
+      );
+      sendMedia.mockResolvedValue({ channel: "testchat", messageId: "media-send" });
+      const mediaUrls = ["https://example.com/one/chart.png", "https://example.com/two/chart.png"];
+      for (const media of [...mediaUrls, mediaUrls[1]]) {
+        const result = await runMessageAction({
+          cfg,
+          action: "send",
+          params: { channel: "testchat", target: "user:12345", message: "Chart", media },
+          agentId: "main",
+          dryRun: false,
+        });
+        expect(result.handledBy).toBe(handledBy);
+      }
+      const events = loadTranscriptEventsSync({
+        agentId: "main",
+        sessionKey: MAIN_SESSION_KEY,
+        sessionId: "main-session",
+        storePath,
+      });
+      expect(events).toEqual([
+        expect.objectContaining({ type: "session", id: "main-session" }),
+        ...mediaUrls.map((mediaUrl) =>
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              content: [{ type: "text", text: "Chart\nchart.png" }],
+              openclawDelivery: { mediaUrls: [mediaUrl] },
+            }),
+          }),
+        ),
+      ]);
+      expect(handledBy === "plugin" ? handleAction : sendMedia).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it.each([
     {

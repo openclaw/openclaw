@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-/** Provider catalog entry shape used when resolving capability-scoped model references. */
 export type CapabilityModelProviderCandidate = {
   id: string;
   aliases?: readonly string[];
@@ -8,7 +7,6 @@ export type CapabilityModelProviderCandidate = {
   models?: readonly string[];
 };
 
-/** Normalized provider/model reference selected for a media capability. */
 export type CapabilityModelRef = {
   provider: string;
   model: string;

@@ -4,9 +4,19 @@ import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import * as runConfig from "./run-config.js";
+import * as selfCheck from "./self-check.js";
+import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -56,6 +66,13 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function makeTempDir(prefix: string) {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
@@ -175,29 +192,6 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   return catalog;
 }
 
-async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  let content: string | undefined;
-  await vi.waitFor(
-    async () => {
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
-      }
-      if (content !== expected) {
-        throw new Error(`file did not reach expected content: ${filePath}`);
-      }
-    },
-    { interval: 1, timeout: timeoutMs },
-  );
-  if (content === undefined) {
-    throw new Error(`file did not reach expected content: ${filePath}`);
-  }
-  return content;
-}
-
 async function expectFileMissing(filePath: string): Promise<void> {
   try {
     await readFile(filePath, "utf8");
@@ -240,60 +234,6 @@ async function createQaLabRepoRootFixture(params?: {
     "utf8",
   );
   return repoRoot;
-}
-
-type QaLabSuiteScenarioFixture = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: unknown[];
-  details?: string;
-};
-
-async function createQaLabSuiteResultFixture(params?: {
-  scenarios?: QaLabSuiteScenarioFixture[];
-  watchUrl?: string;
-}) {
-  const outputDir = await makeTempDir("qa-lab-suite-result-");
-  const scenarios = params?.scenarios ?? [
-    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
-  ];
-  const report = "# QA report\n";
-  const evidencePath = path.join(outputDir, "qa-evidence.json");
-  const reportPath = path.join(outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  await Promise.all([
-    writeFile(
-      evidencePath,
-      JSON.stringify({
-        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
-      }),
-      "utf8",
-    ),
-    writeFile(reportPath, report, "utf8"),
-    writeFile(
-      summaryPath,
-      JSON.stringify({
-        run: { status: "completed" },
-        counts: {
-          total: scenarios.length,
-          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
-        },
-        scenarios,
-      }),
-      "utf8",
-    ),
-  ]);
-  return {
-    evidencePath,
-    outputDir,
-    report,
-    reportPath,
-    scenarios,
-    summaryPath,
-    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
-  };
 }
 
 async function writeEvidenceFixture(
@@ -370,7 +310,7 @@ describe("qa-lab server", () => {
       executionKind: "suite",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -448,7 +388,7 @@ describe("qa-lab server", () => {
     async ({ status }) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture({
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
         scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
       });
       suiteLaunchMock.runQaSuite.mockResolvedValue({
@@ -516,7 +456,7 @@ describe("qa-lab server", () => {
     async (invalidResult) => {
       const lab = await startQaLabServerForTest();
       cleanups.push(lab.stop);
-      const result = await createQaLabSuiteResultFixture();
+      const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"));
       await writeFile(result.summaryPath, invalidResult.summary, "utf8");
       suiteLaunchMock.runQaSuite.mockResolvedValue({
         executionKind: "flow",
@@ -546,7 +486,7 @@ describe("qa-lab server", () => {
   it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(lab.stop);
-    const result = await createQaLabSuiteResultFixture({
+    const result = await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
       scenarios: [
         { name: "Channel chat baseline", status: "pass", steps: [] },
         {
@@ -587,7 +527,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: "http://runtime-watch.invalid",
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -623,7 +565,7 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -661,9 +603,141 @@ describe("qa-lab server", () => {
     );
   });
 
-  it("allows only one concurrent request to commit a resolved suite plan", async () => {
+  it("serializes self-check admission and drains accepted work before stopping the bus", async ({
+    signal,
+  }) => {
+    const entered = Promise.withResolvers<void>();
+    const result: Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>> = {
+      outputPath: "self-check.md",
+      report: "Self-check executor completed.",
+      checks: [{ name: "Fixture execution", status: "pass" }],
+      scenarioResult: { name: "Fixture execution", status: "pass", steps: [] },
+    };
+    const finish =
+      Promise.withResolvers<Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>>>();
+    using _ = vi.spyOn(selfCheck, "runQaSelfCheckAgainstState").mockImplementation(() => {
+      entered.resolve();
+      return finish.promise;
+    });
     const lab = await startQaLabServerForTest();
-    cleanups.push(lab.stop);
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
+    const request = postLabJson(lab.baseUrl, "/api/scenario/self-check", {});
+    void request.catch(() => undefined);
+    let stopped = false;
+    try {
+      await withinTest(entered.promise, signal);
+      for (const route of [
+        "/api/reset",
+        "/v1/reset",
+        "/api/scenario/self-check",
+        "/api/scenario/suite",
+      ]) {
+        const response = await withinTest(
+          postLabJson(lab.baseUrl, route, { scenarioIds: ["dm-chat-baseline"] }),
+          signal,
+        );
+        await response.json();
+        expect(response.status).toBe(409);
+      }
+      await expect(withinTest(lab.runSelfCheck(), signal)).rejects.toThrow(
+        "QA run already in progress",
+      );
+      const stoppedRun = stop().then(() => {
+        stopped = true;
+      });
+      void stoppedRun.catch(() => undefined);
+      const outbound = await postLabJson(lab.baseUrl, "/v1/outbound/message", {
+        to: "dm:qa-operator",
+        text: "accepted self-check still delivering",
+      });
+      expect(outbound.status).toBe(200);
+      expect(await outbound.json()).toMatchObject({
+        message: { direction: "outbound", text: "accepted self-check still delivering" },
+      });
+      expect(stopped).toBe(false);
+      await expect(withinTest(lab.runSelfCheck(), signal)).rejects.toThrow("QA Lab is stopping");
+      for (const route of [
+        "/api/reset",
+        "/v1/reset",
+        "/api/scenario/self-check",
+        "/api/scenario/suite",
+      ]) {
+        const response = await postLabJson(lab.baseUrl, route, {});
+        expect(response.status).toBe(503);
+        await response.json();
+      }
+      finish.resolve(result);
+      const response = await withinTest(request, signal);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ report: "Self-check executor completed." });
+      await withinTest(stoppedRun, signal);
+      expect(stopped).toBe(true);
+    } finally {
+      finish.resolve(result);
+      const response = await withinTest(request, signal);
+      if (!response.bodyUsed) {
+        await response.arrayBuffer();
+      }
+      await withinTest(stop(), signal);
+    }
+  });
+
+  it("closes the lab after an accepted self-check rejects during shutdown", async ({ signal }) => {
+    const entered = Promise.withResolvers<void>();
+    const finish =
+      Promise.withResolvers<Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>>>();
+    using _ = vi.spyOn(selfCheck, "runQaSelfCheckAgainstState").mockImplementation(() => {
+      entered.resolve();
+      return finish.promise;
+    });
+    const lab = await startQaLabServerForTest();
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
+    const request = postLabJson(lab.baseUrl, "/api/scenario/self-check", {});
+    void request.catch(() => undefined);
+    const failure = new Error("self-check executor failed");
+    try {
+      await withinTest(entered.promise, signal);
+      const stopped = stop();
+      void stopped.catch(() => undefined);
+      finish.reject(failure);
+      const response = await withinTest(request, signal);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "self-check executor failed" });
+      await expect(withinTest(stopped, signal)).resolves.toBeUndefined();
+      await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+    } finally {
+      finish.reject(failure);
+      const response = await withinTest(request, signal);
+      if (!response.bodyUsed) {
+        await response.arrayBuffer();
+      }
+      await withinTest(stop(), signal);
+    }
+  });
+
+  it("serializes suite admission and drains accepted work before stopping the bus", async ({
+    signal,
+  }) => {
+    const summaryValidated = Promise.withResolvers<number>();
+    const readSummary = suiteSummary.readQaSuiteFailedOrSkippedScenarioCountFromFile;
+    using _ = vi
+      .spyOn(suiteSummary, "readQaSuiteFailedOrSkippedScenarioCountFromFile")
+      .mockImplementation((...args) => {
+        const validation = readSummary(...args);
+        // Returning the same promise lets the server publish status before this test resumes.
+        void validation.then(summaryValidated.resolve, summaryValidated.reject);
+        return validation;
+      });
+    const modelCatalog = await import("./model-catalog.runtime.js");
+    using catalog = vi.spyOn(modelCatalog, "loadQaRunnerModelOptions").mockResolvedValue([]);
+    const lab = await startQaLabServerForTest();
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
     let finishSuite: ((value: unknown) => void) | undefined;
     suiteLaunchMock.runQaSuite.mockImplementation(
       () =>
@@ -684,18 +758,42 @@ describe("qa-lab server", () => {
       responses.map((response) => response.status).toSorted((left, right) => left - right),
     ).toEqual([202, 409]);
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
-    finishSuite?.({
+    const result = {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture(),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-")),
+    };
+    let stopped = false;
+    const stoppedRun = stop().then(() => {
+      stopped = true;
     });
-    await vi.waitFor(async () => {
-      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
-        runner: { status: string };
-      };
-      expect(bootstrap.runner.status).toBe("completed");
-    });
+    try {
+      const outbound = await postLabJson(lab.baseUrl, "/v1/outbound/message", {
+        to: "dm:qa-operator",
+        text: "accepted suite still delivering",
+      });
+      expect(outbound.status).toBe(200);
+      expect(await outbound.json()).toMatchObject({
+        message: { direction: "outbound", text: "accepted suite still delivering" },
+      });
+      expect(stopped).toBe(false);
+      const bootstrap = await fetch(`${lab.baseUrl}/api/bootstrap`);
+      expect(bootstrap.status).toBe(200);
+      await bootstrap.json();
+      expect(catalog).not.toHaveBeenCalled();
+      for (const route of ["/api/reset", "/api/scenario/self-check", "/api/scenario/suite"]) {
+        const response = await postLabJson(lab.baseUrl, route, {});
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ error: "QA Lab is stopping" });
+      }
+    } finally {
+      finishSuite?.(result);
+      await withinTest(summaryValidated.promise, signal);
+      await withinTest(stoppedRun, signal);
+    }
+    expect(stopped).toBe(true);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
   it("rejects empty and unknown explicit selections before dispatch", async () => {
@@ -716,7 +814,9 @@ describe("qa-lab server", () => {
       executionKind: "flow",
       expectedCells: [],
       observedCells: [],
-      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
+      result: await writeQaLabSuiteResultFixture(await makeTempDir("qa-lab-suite-result-"), {
+        watchUrl: lab.baseUrl,
+      }),
     });
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
@@ -859,7 +959,7 @@ describe("qa-lab server", () => {
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
-  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+  it("keeps the bus available during shutdown and rejects a suite whose plan resolves after stop", async () => {
     let markGatewayStopping = () => {};
     const gatewayStopping = new Promise<void>((resolve) => {
       markGatewayStopping = resolve;
@@ -911,9 +1011,21 @@ describe("qa-lab server", () => {
     slowInbound.on("error", () => undefined);
     slowInbound.write(inboundBody.slice(0, 1));
     await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
-    const stopping = lab.stop();
+    let stopping: Promise<void> | undefined;
+    const resolvePlan = runConfig.resolveQaLabRunPlan;
+    using _ = vi.spyOn(runConfig, "resolveQaLabRunPlan").mockImplementationOnce((...args) => {
+      stopping = lab.stop();
+      return resolvePlan(...args);
+    });
+    const suiteResponse = postLabJson(lab.baseUrl, "/api/scenario/suite", {
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      scenarioIds: ["dm-chat-baseline"],
+    });
     await gatewayStopping;
     try {
+      expect((await suiteResponse).status).toBe(503);
+      expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
       await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
       expect(pollWaiterSettled).toBe(false);
     } finally {
@@ -1437,22 +1549,25 @@ describe("qa-lab server", () => {
     expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
-  it("aborts an in-flight runner model catalog when the lab stops", async () => {
+  it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
     const repoRoot = await makeTempDir("qa-lab-abort-catalog-");
     const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
     const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
     await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist/package.json"), '{"type":"module"}');
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
       [
-        'const fs = require("node:fs");',
+        'import fs from "node:fs";',
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        `sendReceipt(${JSON.stringify(markerPath)}, "started");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -1477,12 +1592,14 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFileContent(markerPath, "0")).toBe("0");
+    await withinTest(receipts.waitFor(markerPath, "started"), signal);
+    expect(await readFile(markerPath, "utf8")).toBe("0");
 
     await lab.stop();
     stopped = true;
     if (process.platform !== "win32") {
-      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+      // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
+      expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
   });
 

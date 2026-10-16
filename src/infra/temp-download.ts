@@ -1,4 +1,3 @@
-// Creates private temporary workspaces for downloads.
 import path from "node:path";
 import {
   buildRandomTempFilePath as buildRandomTempFilePathBase,

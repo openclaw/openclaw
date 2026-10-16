@@ -3,6 +3,7 @@ import {
   WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
 } from "@openclaw/ai/diagnostics";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { REPEATED_TOOL_ERROR_CODE } from "../../../packages/agent-core/src/errors.js";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
@@ -11,11 +12,14 @@ import {
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../agents/sessions/transcript-turn-error.js";
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  REPETITIVE_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type AssistantMessage,
 } from "../types.js";
 
 const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
+  REPEATED_TOOL_ERROR_CODE,
+  REPETITIVE_OUTPUT_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,

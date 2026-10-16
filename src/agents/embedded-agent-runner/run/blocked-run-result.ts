@@ -1,3 +1,4 @@
+import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -7,7 +8,7 @@ export function buildEmbeddedRunBlockedResult(input: {
   errorMessage: string;
   durationMs: number;
   agentMeta: EmbeddedAgentMeta;
-  attempt: EmbeddedRunAttemptResult;
+  attempt?: Pick<EmbeddedRunAttemptResult, "systemPromptReport">;
   replayInvalid: boolean;
   finalPromptText?: string;
 }): EmbeddedAgentRunResult {
@@ -16,9 +17,10 @@ export function buildEmbeddedRunBlockedResult(input: {
     meta: {
       durationMs: input.durationMs,
       agentMeta: input.agentMeta,
-      systemPromptReport: input.attempt.systemPromptReport,
+      systemPromptReport: input.attempt?.systemPromptReport,
       finalAssistantVisibleText: input.text,
       finalAssistantRawText: input.text,
+      terminalReply: sanitizeAgentRunTerminalReply(input.text),
       finalPromptText: input.finalPromptText,
       replayInvalid: input.replayInvalid,
       livenessState: "blocked",

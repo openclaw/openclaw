@@ -37,35 +37,38 @@ function register(close: () => void): () => void {
   return dispose;
 }
 
-it("keeps three SQLite caches within the exit-listener budget beside eight startup owners", () => {
-  for (let index = 0; index < 8; index++) {
+it.each([
+  {
+    name: "adjacent caches beside eight startup owners",
+    startupOwners: 8,
+    owners: ["agent-readonly", "agent", "auth-profile"],
+    nonSqlite: [],
+  },
+  {
+    name: "caches separated by non-SQLite finalizers",
+    startupOwners: 0,
+    owners: ["agent", "capture-finalizer", "shared-state", "capture-store", "last-owner"],
+    nonSqlite: ["capture-finalizer", "last-owner"],
+  },
+])("preserves order and listener budget for $name", ({ startupOwners, owners, nonSqlite }) => {
+  for (let index = 0; index < startupOwners; index++) {
     exits.once("exit", () => {});
   }
   const closed: string[] = [];
-  for (const cache of ["agent-readonly", "agent", "auth-profile"]) {
-    register(() => closed.push(cache));
+  for (const owner of owners) {
+    const close = () => {
+      closed.push(owner);
+    };
+    if (nonSqlite.includes(owner)) {
+      exits.once("exit", close);
+    } else {
+      register(close);
+    }
   }
   expect(exits.listenerCount("exit")).toBeLessThanOrEqual(exits.getMaxListeners());
   exits.emit("exit", 0);
-  expect(closed).toEqual(["agent-readonly", "agent", "auth-profile"]);
+  expect(closed).toEqual(owners);
   expect(exits.listenerCount("exit")).toBe(0);
-});
-
-it("preserves finalization order across intervening non-SQLite exit owners", () => {
-  const closed: string[] = [];
-  register(() => closed.push("agent"));
-  exits.once("exit", () => closed.push("capture-finalizer"));
-  register(() => closed.push("shared-state"));
-  register(() => closed.push("capture-store"));
-  exits.once("exit", () => closed.push("last-owner"));
-  exits.emit("exit", 0);
-  expect(closed).toEqual([
-    "agent",
-    "capture-finalizer",
-    "shared-state",
-    "capture-store",
-    "last-owner",
-  ]);
 });
 
 it("unregisters independently and closes duplicate callbacks once per registration despite errors", () => {
@@ -84,15 +87,23 @@ it("unregisters independently and closes duplicate callbacks once per registrati
   expect(exits.listenerCount("exit")).toBe(0);
 });
 
-it("retains the current emission snapshot when an earlier cache unregisters a later one", () => {
+it.each(["unregister", "register"])("retains the emission snapshot across %s", (operation) => {
   const closed: string[] = [];
   register(() => {
     closed.push("first");
-    retireSecond();
+    if (operation === "unregister") {
+      retireSecond();
+    } else {
+      register(() => closed.push("new"));
+    }
   });
   const retireSecond = register(() => closed.push("second"));
   exits.emit("exit", 0);
   expect(closed).toEqual(["first", "second"]);
+  if (operation === "register") {
+    exits.emit("exit", 0);
+    expect(closed).toEqual(["first", "second", "new"]);
+  }
   expect(exits.listenerCount("exit")).toBe(0);
 });
 
@@ -106,19 +117,5 @@ it("closes remaining caches exactly once during reentrant exit dispatch", () => 
   register(() => closed.push("second"));
   exits.emit("exit", 0);
   expect(closed).toEqual(["first-start", "second", "first-end"]);
-  expect(exits.listenerCount("exit")).toBe(0);
-});
-
-it("does not run a newly registered cache in an already captured exit batch", () => {
-  const closed: string[] = [];
-  register(() => {
-    closed.push("first");
-    register(() => closed.push("new"));
-  });
-  register(() => closed.push("second"));
-  exits.emit("exit", 0);
-  expect(closed).toEqual(["first", "second"]);
-  exits.emit("exit", 0);
-  expect(closed).toEqual(["first", "second", "new"]);
   expect(exits.listenerCount("exit")).toBe(0);
 });

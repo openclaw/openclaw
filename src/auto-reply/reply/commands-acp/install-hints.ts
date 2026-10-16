@@ -1,4 +1,3 @@
-// Builds install hints for ACP runtimes missing local prerequisites.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {

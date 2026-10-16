@@ -1,4 +1,3 @@
-/** Formatting and validation helpers for migration previews and apply results. */
 import { log } from "@clack/prompts";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
@@ -11,7 +10,8 @@ function formatCount(value: number, label: string): string {
   return `${value} ${label}${value === 1 ? "" : "s"}`;
 }
 
-function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
+function formatPlan(plan: MigrationPlan, mode: FormatMode): string[] {
+  const heading = mode === "preview" ? "Migration preview:" : "Migration plan:";
   const lines = [`${theme.heading(heading)} ${plan.providerId}`, `Source: ${plan.source}`];
   if (plan.target) {
     lines.push(`Target: ${plan.target}`);
@@ -23,7 +23,11 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
       formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
-  return lines;
+  return [
+    ...lines,
+    ...formatPlanItems(plan, mode),
+    ...formatPlanWarnings(plan, mode === "result" ? plan.nextSteps : undefined),
+  ];
 }
 
 const ITEM_GROUPS = [
@@ -81,22 +85,13 @@ function formatPlanWarnings(
 
 /** Formats a redaction-safe migration preview for terminal output. */
 export function formatMigrationPreview(plan: MigrationPlan): string[] {
-  const safePlan = redactMigrationPlan(plan);
-  return [
-    ...formatPlanHeader(safePlan, "Migration preview:"),
-    ...formatPlanItems(safePlan, "preview"),
-    ...formatPlanWarnings(safePlan),
-  ];
+  return formatPlan(redactMigrationPlan(plan), "preview");
 }
 
 /** Formats redaction-safe migration apply results for terminal output. */
 export function formatMigrationResult(plan: MigrationPlan): string[] {
   const safePlan = redactMigrationPlan(plan);
-  const lines = [
-    ...formatPlanHeader(safePlan, "Migration plan:"),
-    ...formatPlanItems(safePlan, "result"),
-    ...formatPlanWarnings(safePlan, safePlan.nextSteps),
-  ];
+  const lines = formatPlan(safePlan, "result");
   if (safePlan.nextSteps && safePlan.nextSteps.length > 0) {
     lines.push("");
     lines.push(theme.heading("Next:"));
@@ -125,10 +120,7 @@ const REASON_CODE_MESSAGES: Record<string, string> = {
   "not selected for migration": "Skipped because it was not selected for migration",
 };
 
-// Phrase-form conflict reasons, used as-is in selection-prompt hints
-// (`<source label> <phrase>`) and wrapped into sentence form for preview
-// /result rows. Keep one map so the two surfaces never drift.
-/** Shared short conflict phrases used by migration output and selection hints. */
+// Selection hints use phrases; preview/result rows capitalize them as sentences.
 export const MIGRATION_CONFLICT_REASON_PHRASES: Record<string, string> = {
   "target exists": "already installed in workspace",
   "plugin exists": "already installed in workspace",
@@ -150,43 +142,32 @@ function humanizeReason(reason: string | undefined): string | undefined {
 }
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
-  if (mode === "preview") {
-    if (
-      item.status === "conflict" ||
-      item.status === "skipped" ||
-      item.status === "warning" ||
-      item.status === "error"
-    ) {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    if (item.kind === "skill" && item.action === "copy") {
-      return "Copy Codex skill into OpenClaw";
-    }
-    if (item.kind === "plugin" && item.action === "install") {
-      return "Install Codex plugin into OpenClaw";
-    }
-    return item.message ?? humanizeReason(item.reason);
-  }
-  if (
+  const installation =
     (item.kind === "skill" && item.action === "copy") ||
-    (item.kind === "plugin" && item.action === "install")
+    (item.kind === "plugin" && item.action === "install");
+  if (
+    item.status === "error" ||
+    item.status === "conflict" ||
+    (item.status === "warning" && (mode === "preview" || !installation)) ||
+    (item.status === "skipped" && mode === "preview")
   ) {
+    return humanizeReason(item.reason) ?? item.message;
+  }
+  if (installation) {
+    if (mode === "preview") {
+      return item.kind === "skill"
+        ? "Copy Codex skill into OpenClaw"
+        : "Install Codex plugin into OpenClaw";
+    }
     if (item.status === "migrated") {
       return "Migrated";
     }
     if (item.status === "skipped") {
       return "Skipped";
     }
-    if (item.status === "warning") {
-      return item.message ?? humanizeReason(item.reason);
+    if (item.status !== "warning") {
+      return undefined;
     }
-    if (item.status === "error" || item.status === "conflict") {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    return undefined;
-  }
-  if (item.status === "warning" || item.status === "error" || item.status === "conflict") {
-    return humanizeReason(item.reason) ?? item.message;
   }
   return item.message ?? humanizeReason(item.reason);
 }
@@ -258,12 +239,9 @@ export function assertApplySucceeded(result: MigrationApplyResult): void {
     return;
   }
   const reportHint = result.reportDir ? ` See report: ${result.reportDir}.` : "";
-  if (result.summary.errors > 0) {
-    throw new Error(
-      `Migration finished with ${formatCount(result.summary.errors, "error")}.${reportHint}`,
-    );
-  }
-  throw new Error(
-    `Migration finished with ${formatCount(result.summary.conflicts, "conflict")}.${reportHint}`,
-  );
+  const failureCount =
+    result.summary.errors > 0
+      ? formatCount(result.summary.errors, "error")
+      : formatCount(result.summary.conflicts, "conflict");
+  throw new Error(`Migration finished with ${failureCount}.${reportHint}`);
 }

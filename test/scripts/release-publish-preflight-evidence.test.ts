@@ -142,7 +142,10 @@ describe("publish preflight release inventory", () => {
     "refuses absence from an %s inventory",
     (state) => {
       let reads = 0;
-      const runGh = () => {
+      const runGh = (args: string[]) => {
+        if (args[1]?.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
         reads++;
         if (state === "malformed") {
           return JSON.stringify([{ draft: true }]);
@@ -178,13 +181,30 @@ describe("publish preflight release inventory", () => {
       body: "Published release notes",
       assets: [{ name: "dependency-evidence.zip" }],
     };
-    expect(
-      readPublishPreflightRelease(
-        () => JSON.stringify([release]),
-        "openclaw/openclaw",
-        `v${version}`,
-      ),
-    ).toEqual({ state: "found", release });
+    // The exact-tag endpoint serves published releases; drafts need the inventory.
+    const runGh = (args: string[]) => {
+      if (args[1]?.includes("/releases/tags/")) {
+        if (draft) {
+          throw new Error("HTTP 404: Not Found");
+        }
+        return JSON.stringify(release);
+      }
+      return JSON.stringify([release]);
+    };
+    expect(readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toEqual({
+      state: "found",
+      release,
+    });
+  });
+
+  it("does not mask a failed exact-tag read as absence", () => {
+    const runGh = vi.fn(() => {
+      throw new Error("HTTP 502: Bad Gateway");
+    });
+    expect(() => readPublishPreflightRelease(runGh, "openclaw/openclaw", `v${version}`)).toThrow(
+      "HTTP 502",
+    );
+    expect(runGh).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -372,9 +392,9 @@ function coreEvidenceFixture() {
 }
 
 describe("publish preflight immutable npm evidence", () => {
-  it("qualifies the complete prepared core package set against exact source metadata", () => {
+  it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
-    expect(fixture.verify().corePackages).toEqual(fixture.corePackages);
+    expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
   });
 
   it.each([
@@ -384,7 +404,7 @@ describe("publish preflight immutable npm evidence", () => {
     ["invalid checksums", "checksum verification failed"],
     ["changed reused manifest", "changed after candidate validation"],
     ["changed reused root bytes", "wrong digest"],
-  ])("rejects %s before publication", (mode, message) => {
+  ])("rejects %s before publication", async (mode, message) => {
     const fixture = coreEvidenceFixture();
     if (mode === "missing required package") {
       fixture.manifest.corePackageTarballs = fixture.corePackages.slice(0, -1);
@@ -408,7 +428,7 @@ describe("publish preflight immutable npm evidence", () => {
     if (mode === "changed reused root bytes") {
       writeFileSync(join(fixture.artifacts, "openclaw.tgz"), "changed root bytes");
     }
-    expect(() => fixture.verify()).toThrow(message);
+    await expect(fixture.verify()).rejects.toThrow(message);
   });
 
   it.each([

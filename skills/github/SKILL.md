@@ -42,7 +42,6 @@ gh pr view 55 --repo owner/repo --json title,body,author,files,commits,reviews,r
 gh pr checks 55 --repo owner/repo
 gh pr diff 55 --repo owner/repo
 gh pr create --repo owner/repo --title "feat: title" --body-file /tmp/pr.md
-gh pr merge 55 --repo owner/repo --squash
 ```
 
 When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. Omit the footer when `sessionUrl` is absent. Preserve any publication marker before exactly one footer, and keep the footer final:
@@ -53,6 +52,45 @@ When creating or refreshing a PR body, append this final footer only when the Ru
 ```
 
 URLs work directly: `gh pr view https://github.com/owner/repo/pull/55`.
+
+### Async merges
+
+Use the repository's native landing workflow when provided. For authorized
+programmatic merges elsewhere, use GitHub's [async merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously)
+through `gh api`; `gh pr merge` does not select this API. Supply the reviewed head
+SHA, preserve required reviews/checks, and check stack membership first: submitting
+a stacked PR also merges or queues its open downstack PRs, which need their own
+review and authorization.
+
+```bash
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  --method PUT repos/owner/repo/pulls/55/merge-async \
+  -H 'X-GitHub-Api-Version: 2026-03-10' \
+  -f sha=REVIEWED_HEAD_SHA -f merge_method=squash -f merge_action=direct_merge
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  repos/owner/repo/pulls/55/merge-async/REQUEST_UUID \
+  -H 'X-GitHub-Api-Version: 2026-03-10' -H 'Cache-Control: max-age=0'
+```
+
+Keep the Octopool guard header first after `api`. Protected older wrappers reject
+it before they can rewrite merge authority; use an Octopool build containing
+[the async guard](https://github.com/openclaw/octopool/pull/231) if it is refused.
+The supported wrapper preserves SHA/method/action/bypass and only rewrites commit
+text. Native `gh` can pass the header through. Do not remove it, disable policy,
+or select a raw binary to work around a rejection.
+
+Retain `details.uuid` from a `202` response before polling. `pending` means wait;
+`merged` includes `details.sha`, which still needs final PR/head verification.
+`enqueued` means queued, not merged: monitor the PR itself. To honor a configured
+queue, use `merge_action=default` (or `merge_queue` to explicitly enqueue), omitting
+direct-only method/title/message fields. Never enable `bypass_rules` without authorization.
+
+On `failed`, report `details.message`. A `409` identifies an existing request;
+inspect its UUID and options without resubmitting. Lost replies, polling errors,
+and result expiry after 24 hours require reconciliation, never a blind retry or
+synchronous fallback. Poll with bounded waits and fresh reads. Async processing
+does not arm auto-merge for unmet checks; use the native workflow or `gh pr merge
+--auto` when that behavior is authorized.
 
 ### Landing ownership
 

@@ -17,10 +17,9 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-export async function dispatchRaftWake(params: {
-  ctx: ChannelGatewayContext<ResolvedRaftAccount>;
-}): Promise<void> {
-  const { ctx } = params;
+export async function dispatchRaftWake(
+  ctx: ChannelGatewayContext<ResolvedRaftAccount>,
+): Promise<void> {
   // Gateway supplies the full runtime; the public context type intentionally
   // exposes only runtime contexts so external plugins cannot assume more.
   const channelRuntime = ctx.channelRuntime as RaftChannelRuntime | undefined;

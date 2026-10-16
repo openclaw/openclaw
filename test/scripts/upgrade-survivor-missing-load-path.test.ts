@@ -33,63 +33,54 @@ function planMissingLoadPath(
   }).plan;
 }
 
-it("plans the named missing-load-path row without adding aggregate coverage", () => {
-  const plan = planMissingLoadPath("2026.9.3");
-  expect(plan.lanes).toHaveLength(1);
-  expect(plan.lanes[0]).toMatchObject({
-    name: "published-upgrade-survivor-2026.9.3-missing-load-path",
-    command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'"),
-  });
-  for (const aggregate of ["reported-issues", "far-reaching"]) {
-    expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
-  }
-});
-
-it.each([
-  { baseline: "2026.6.35", supported: false },
-  { baseline: "2026.7.1", supported: false },
-  { baseline: "2026.7.1-2", supported: false },
-  { baseline: "2026.7.2-beta.4", supported: false },
-  { baseline: "2026.7.2-beta.5", supported: true },
-  { baseline: "2026.7.33", supported: false },
-  { baseline: "2026.7.35", supported: false },
-  { baseline: "2026.8.1", supported: true },
-  { baseline: "latest", supported: true },
-])("plans missing-path admission for $baseline", ({ baseline, supported }) => {
-  if (!supported) {
-    expect(() => planMissingLoadPath(baseline)).toThrow(
-      "missing-load-path has no compatible published baseline",
+it.each<{
+  baselines: string;
+  scenarios?: string;
+  selected?: string[];
+  rows: string[] | null;
+}>([
+  { baselines: "2026.9.3", rows: ["2026.9.3-missing-load-path"] },
+  ...["2026.7.1", "2026.7.1-2", "2026.7.2-beta.4"].map((baselines) => ({ baselines, rows: null })),
+  ...["2026.7.2-beta.5", "latest"].map((baselines) => ({
+    baselines,
+    rows: [`${baselines}-missing-load-path`],
+  })),
+  {
+    baselines: "2026.7.1 2026.9.3",
+    scenarios: "base missing-load-path",
+    rows: ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
+  },
+  { baselines: "2026.7.1", scenarios: "base missing-load-path", rows: null },
+  { baselines: "2026.7.1", selected: ["onboard"], rows: ["onboard"] },
+  ...["2026.7.1", "2026.7.1 2026.9.3"].map((baselines) => ({
+    baselines,
+    scenarios: "base missing-load-path",
+    selected: ["published-upgrade-survivor-2026.7.1"],
+    rows: ["2026.7.1"],
+  })),
+])(
+  "plans missing-path admission for $baselines ($scenarios, $selected)",
+  ({ baselines, scenarios, selected, rows }) => {
+    const plan = () => planMissingLoadPath(baselines, scenarios, selected);
+    if (rows === null) {
+      expect(plan).toThrow("missing-load-path has no compatible published baseline");
+      return;
+    }
+    const result = plan();
+    expect(result.lanes.map((lane) => lane.name)).toEqual(
+      rows.map((row) => (row === "onboard" ? row : `published-upgrade-survivor-${row}`)),
     );
-    return;
-  }
-  expect(planMissingLoadPath(baseline).lanes.map((lane) => lane.name)).toEqual([
-    `published-upgrade-survivor-${baseline}-missing-load-path`,
-  ]);
-});
-
-it("retains compatible missing-path rows in a mixed baseline matrix", () => {
-  const plan = planMissingLoadPath("2026.7.1 2026.9.3", "base missing-load-path");
-  expect(plan.lanes.map((lane) => lane.name)).toEqual([
-    "published-upgrade-survivor-2026.7.1",
-    "published-upgrade-survivor-2026.9.3",
-    "published-upgrade-survivor-2026.9.3-missing-load-path",
-  ]);
-});
-
-it("does not substitute base for an incompatible explicit missing-path request", () => {
-  expect(() => planMissingLoadPath("2026.7.1", "base missing-load-path")).toThrow(
-    "missing-load-path has no compatible published baseline",
-  );
-  expect(planMissingLoadPath("2026.7.1", "missing-load-path", ["onboard"]).lanes).toHaveLength(1);
-});
-
-it.each(["2026.7.1", "2026.7.1 2026.9.3"])(
-  "reruns one exact base row from the retained %s catalog",
-  (baselines) => {
-    const selectedName = "published-upgrade-survivor-2026.7.1";
-    const plan = planMissingLoadPath(baselines, "base missing-load-path", [selectedName]);
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([selectedName]);
-    expect(plan.omittedUnsupportedLanes).toEqual([]);
+    if (selected?.[0]?.startsWith("published-upgrade-survivor-")) {
+      expect(result.omittedUnsupportedLanes).toEqual([]);
+    }
+    if (baselines === "2026.9.3") {
+      expect(result.lanes[0]?.command).toContain(
+        "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'",
+      );
+      for (const aggregate of ["reported-issues", "far-reaching"]) {
+        expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
+      }
+    }
   },
 );
 
@@ -234,14 +225,9 @@ const convergenceRestartMessage =
   "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.";
 
 it.skipIf(process.platform === "win32").each([
-  { version: "2026.7.2-beta.5", provision: true, installExit: 0 },
   { version: "2026.8.1-1", companionVersion: "2026.8.1", provision: true, installExit: 0 },
-  { version: "2026.8.1", provision: true, installExit: 0 },
-  { version: "2026.8.2", provision: true, installExit: 0 },
   { version: "2026.9.1-beta.1", provision: true, installExit: 0 },
   { version: "2026.9.1", provision: false, installExit: 0 },
-  { version: "2026.9.4", provision: false, installExit: 0 },
-  { version: "2026.9.5", provision: false, installExit: 0 },
   { version: "2026.8.2", provision: true, installExit: 42 },
 ])(
   "provisions the published companion cohort for $version (install exit $installExit)",

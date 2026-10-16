@@ -65,12 +65,17 @@ async function runCustomSetup(scenario: Scenario) {
 
   const server = createServer((request, response) => {
     void (async () => {
+      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      if (request.method === "GET" && pathname === "/v1/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [] }));
+        return;
+      }
       let raw = "";
       for await (const chunk of request) {
         raw += String(chunk);
       }
       const body = JSON.parse(raw) as { stream?: boolean; model?: string };
-      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       expect(pathname).toBe(
         {
           openai: "/v1/chat/completions",
@@ -167,7 +172,11 @@ async function runCustomSetup(scenario: Scenario) {
     },
   };
   const configModule = await import("../config/config.js");
-  configModule.clearConfigCache();
+  configModule.clearRuntimeConfigSnapshot();
+  cleanupTasks.push(async () => {
+    configModule.clearRuntimeConfigSnapshot();
+  });
+  await configModule.captureRuntimeConfigAsyncReader()();
   const { activateSetupInference } = await import("../system-agent/setup-inference.js");
   const { runManualStage } = await import("./onboard-guided-manual.js");
   const activationResults: unknown[] = [];

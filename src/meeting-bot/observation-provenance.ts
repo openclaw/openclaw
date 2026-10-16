@@ -1,44 +1,25 @@
-import { z } from "zod";
 import type { MeetingParticipationSource } from "./participation-types.js";
-import type {
-  MeetingObservationProvenance,
-  MeetingTranscriptLine,
-  MeetingTranscriptSnapshot,
+import {
+  meetingObservationProvenanceSchema,
+  type MeetingObservationProvenance,
+  type MeetingTranscriptLine,
+  type MeetingTranscriptSnapshot,
 } from "./session-types.js";
-
-const boundedText = (max: number) =>
-  z
-    .string()
-    .min(1)
-    .max(max)
-    .refine((value) => value.trim().length > 0);
-const observerSchema = boundedText(128);
-const identitySchema = boundedText(512);
-const speakerSchema = boundedText(512);
-const observedAtSchema = z.iso.datetime({ offset: true }).max(64);
-const provenanceSchema = z.object({
-  observer: observerSchema,
-  observationId: boundedText(1_024).optional(),
-  sessionId: identitySchema.optional(),
-  epoch: identitySchema.optional(),
-  observedAt: observedAtSchema.optional(),
-  speaker: speakerSchema.optional(),
-  self: z.enum(["self", "other", "unknown"]),
-});
 
 /** Decode only bounded scalar facts. Invalid envelopes cannot donate identity or self claims. */
 export function normalizeMeetingObservationProvenance(
   value: unknown,
   fallback: { observer: string; epoch?: unknown; observedAt?: unknown; speaker?: unknown },
 ): MeetingObservationProvenance {
-  const parsed = provenanceSchema.safeParse(value);
+  const parsed = meetingObservationProvenanceSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
   }
-  const observer = observerSchema.safeParse(fallback.observer);
-  const epoch = identitySchema.safeParse(fallback.epoch);
-  const observedAt = observedAtSchema.safeParse(fallback.observedAt);
-  const speaker = speakerSchema.safeParse(fallback.speaker);
+  const fields = meetingObservationProvenanceSchema.shape;
+  const observer = fields.observer.safeParse(fallback.observer);
+  const epoch = fields.epoch.unwrap().safeParse(fallback.epoch);
+  const observedAt = fields.observedAt.unwrap().safeParse(fallback.observedAt);
+  const speaker = fields.speaker.unwrap().safeParse(fallback.speaker);
   return {
     observer: observer.success ? observer.data : "unknown",
     ...(epoch.success ? { epoch: epoch.data } : {}),

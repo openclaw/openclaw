@@ -22,46 +22,29 @@ export function isThinkingBlock(block: AssistantContentBlock): boolean {
   );
 }
 
-function stripSignatureFieldsFromThinkingBlock(
-  block: AssistantContentBlock,
-): AssistantContentBlock {
-  const stripped = { ...block };
-  Reflect.deleteProperty(stripped, "thinkingSignature");
-  Reflect.deleteProperty(stripped, "signature");
-  Reflect.deleteProperty(stripped, "thought_signature");
-  // data is the signature payload for redacted_thinking blocks
-  const type: unknown = Reflect.get(block, "type");
-  if (type === "redacted_thinking") {
-    Reflect.deleteProperty(stripped, "data");
-  }
-  return stripped;
-}
-
-function stripThinkingSignaturesFromMessage(message: AgentMessage): AgentMessage {
-  if (!isAssistantMessageWithContent(message)) {
-    return message;
-  }
+function stripThinkingSignaturesFromMessage(message: AssistantMessage): AssistantMessage {
   let changed = false;
-  const newContent: AssistantContentBlock[] = [];
-  for (const block of message.content) {
+  const content = Array.from(message.content, (block) => {
     if (!isThinkingBlock(block)) {
-      newContent.push(block);
-      continue;
+      return block;
     }
+    const signatureFields = ["thinkingSignature", "signature", "thought_signature"];
     const type: unknown = Reflect.get(block, "type");
-    const hasSignature =
-      Reflect.get(block, "thinkingSignature") != null ||
-      Reflect.get(block, "signature") != null ||
-      Reflect.get(block, "thought_signature") != null ||
-      (type === "redacted_thinking" && Reflect.get(block, "data") != null);
-    if (!hasSignature) {
-      newContent.push(block);
-      continue;
+    // data is the signature payload for redacted_thinking blocks.
+    if (type === "redacted_thinking") {
+      signatureFields.push("data");
     }
-    newContent.push(stripSignatureFieldsFromThinkingBlock(block));
+    if (!signatureFields.some((field) => Reflect.get(block, field) != null)) {
+      return block;
+    }
+    const stripped = { ...block };
+    for (const field of signatureFields) {
+      Reflect.deleteProperty(stripped, field);
+    }
     changed = true;
-  }
-  return changed ? { ...message, content: newContent } : message;
+    return stripped;
+  });
+  return changed ? { ...message, content } : message;
 }
 
 /**

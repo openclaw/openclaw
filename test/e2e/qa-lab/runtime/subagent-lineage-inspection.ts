@@ -600,14 +600,7 @@ async function inspectEnabledTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),
@@ -674,14 +667,7 @@ async function inspectDefaultOffTopology(
   }
 
   await gateway.restartAfterStateMutation(async () => {});
-  await waitUntil("default-off paired node reconnect after Gateway restart", async () => {
-    try {
-      await workerNode.publishInventory();
-      return true;
-    } catch {
-      return undefined;
-    }
-  });
+  await workerNode.publishInventory();
   await Promise.all([
     requireActivePlacement(gateway, topology.root),
     requireActivePlacement(gateway, topology.child),

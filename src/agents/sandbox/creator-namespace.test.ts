@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { hashTextSha256 } from "./hash.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "./runtime-status.js";
 import {
   buildSandboxContainerName,
   resolveSandboxWorkspaceLayoutPaths,
@@ -29,6 +30,7 @@ describe("required sandbox creator namespaces", () => {
             },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         const actors: Array<SessionCreatedActor | undefined> = [
           { type: "human", source: "profile", id },
           { type: "human", source: "channel", id },
@@ -38,8 +40,8 @@ describe("required sandbox creator namespaces", () => {
           { type: "human", source: "unknown" },
           undefined,
         ];
-        const layoutFor = (sessionKey: string, classificationSessionKey?: string) => {
-          const runtime = resolveSandboxRuntimeStatus({
+        const layoutFor = async (sessionKey: string, classificationSessionKey?: string) => {
+          const runtime = await resolveSandboxRuntimeStatusAsync({
             cfg,
             sessionKey,
             classificationSessionKey,
@@ -79,13 +81,15 @@ describe("required sandbox creator namespaces", () => {
                 sandbox: "required",
               },
             );
-            const layout = layoutFor(sessionKey);
+            const layout = await layoutFor(sessionKey);
             for (const alias of [
               sessionKey.slice("agent:main:".length),
               sessionKey.toUpperCase(),
             ]) {
-              expect.soft(layoutFor(alias), alias).toEqual(layout);
-              expect.soft(layoutFor("agent:main:borrowed-runtime", alias), alias).toEqual(layout);
+              expect.soft(await layoutFor(alias), alias).toEqual(layout);
+              expect
+                .soft(await layoutFor("agent:main:borrowed-runtime", alias), alias)
+                .toEqual(layout);
             }
             layouts.push(layout);
             scopes.add(layout.scopeKey);

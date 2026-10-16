@@ -19,7 +19,6 @@ import {
   parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
@@ -254,9 +253,7 @@ export function main(
         .filter((entry) => current.includes(entry))
         .toSorted(compareStrings);
       writeBaseline(root, kept);
-      reportRatchetSuccess(
-        "Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".",
-      );
+      console.log("Pruned " + BASELINE_PATH + ": " + baseline.size + " -> " + kept.length + ".");
       return 0;
     }
     if (
@@ -272,9 +269,7 @@ export function main(
     }
 
     if (added.length + expanded.length + stale.length === 0) {
-      reportRatchetSuccess(
-        "max-lines ratchet OK: " + current.length + " grandfathered suppressions.",
-      );
+      console.log("max-lines ratchet OK: " + current.length + " grandfathered suppressions.");
     }
     return 0;
   } catch (error) {

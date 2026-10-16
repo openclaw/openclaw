@@ -1,5 +1,5 @@
-// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readNonBlankString,
@@ -51,15 +51,29 @@ export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; v
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
+export function decodeConfigMutationInput(
+  bytes: Uint8Array,
+  sourceLabel: "--batch-file" | "--file" | "--stdin",
+): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`${sourceLabel} must be valid UTF-8.`, { cause: error });
+  }
+}
+
 export function readConfigMutationFileSync(
   filePath: string,
   sourceLabel: "--batch-file" | "--file",
 ): string {
   // These explicit CLI file flags have historically followed user-provided
   // symlinks. Pin the opened descriptor, then bound the read without changing that contract.
+  // Nonblocking open lets the descriptor check reject FIFOs without waiting for a writer.
+  const openFlags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
   let fd: number;
   try {
-    fd = fs.openSync(filePath, "r");
+    fd = fs.openSync(filePath, openFlags);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       throw new Error(`${sourceLabel} not found: ${filePath}. Check the path and try again.`, {
@@ -75,7 +89,10 @@ export function readConfigMutationFileSync(
       );
     }
     try {
-      return readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES).toString("utf8");
+      return decodeConfigMutationInput(
+        readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES),
+        sourceLabel,
+      );
     } catch (error) {
       if (error instanceof RangeError) {
         throw new RangeError(
@@ -132,7 +149,7 @@ export function resolveConfigSetMode(
         : "value";
 }
 
-function parseJson5Raw(raw: string, label: string): unknown {
+export function parseConfigMutationJson5(raw: string, label: string): unknown {
   let parsed: unknown;
   try {
     parsed = JSON5.parse(raw);
@@ -144,47 +161,40 @@ function parseJson5Raw(raw: string, label: string): unknown {
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {
-  const parsed = parseJson5Raw(raw, sourceLabel);
+  const parsed = parseConfigMutationJson5(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
   }
   if (parsed.length === 0) {
     throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
-  const out: ConfigSetBatchEntry[] = [];
-  for (const [index, entry] of parsed.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  return parsed.map((entry, index) => {
+    if (!isRecord(entry)) {
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
-    const typed = entry as Record<string, unknown>;
-    const path = normalizeOptionalString(typed.path) ?? "";
+    const path = normalizeOptionalString(entry.path);
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.hasOwn(typed, "value");
-    const hasRef = Object.hasOwn(typed, "ref");
-    const hasProvider = Object.hasOwn(typed, "provider");
-    const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
-    if (modeCount !== 1) {
+    const modes = (["value", "ref", "provider"] as const).filter((key) =>
+      Object.hasOwn(entry, key),
+    );
+    const mode = modes.length === 1 ? modes[0] : undefined;
+    if (mode === undefined) {
       throw new Error(
         `${sourceLabel}[${index}] must include exactly one of: value, ref, provider.`,
       );
     }
-    out.push({
-      path,
-      ...(hasValue ? { value: typed.value } : {}),
-      ...(hasRef ? { ref: typed.ref } : {}),
-      ...(hasProvider ? { provider: typed.provider } : {}),
-    });
-  }
-  return out;
+    return { path, [mode]: entry[mode] };
+  });
 }
 
 export function parseConfigSetCurrentExpectation(
   opts: ConfigSetOptions,
 ): ConfigSetCurrentExpectation | undefined {
   const expectAbsent = opts.expectCurrentAbsent === true;
-  const hasExpectedJson = opts.expectCurrentJson !== undefined;
+  const expectedJson = opts.expectCurrentJson;
+  const hasExpectedJson = expectedJson !== undefined;
   if (!expectAbsent && !hasExpectedJson) {
     return undefined;
   }
@@ -203,12 +213,8 @@ export function parseConfigSetCurrentExpectation(
       "config set mode error: conditional expectations require one path operation and cannot be combined with batch mode.",
     );
   }
-  if (expectAbsent) {
-    return { kind: "absent" };
-  }
-  const expectedJson = opts.expectCurrentJson;
   if (expectedJson === undefined) {
-    throw new Error("config set mode error: missing conditional expectation.");
+    return { kind: "absent" };
   }
   let value: unknown;
   try {
@@ -225,16 +231,14 @@ export function parseConfigSetCurrentExpectation(
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = opts.batchJson;
-  const hasInline = batchJson !== undefined;
-  const hasFile = opts.batchFile !== undefined;
-  if (!hasInline && !hasFile) {
-    return null;
-  }
-  if (hasInline && hasFile) {
-    throw new Error("Use either --batch-json or --batch-file, not both.");
-  }
-  if (hasInline) {
+  if (batchJson !== undefined) {
+    if (opts.batchFile !== undefined) {
+      throw new Error("Use either --batch-json or --batch-file, not both.");
+    }
     return parseBatchEntries(batchJson, "--batch-json");
+  }
+  if (opts.batchFile === undefined) {
+    return null;
   }
   const pathname = readNonBlankString(opts.batchFile);
   if (!pathname) {

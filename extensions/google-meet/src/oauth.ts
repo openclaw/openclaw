@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readGoogleApiErrorDetail } from "./google-api-errors.js";
+import { readGoogleApiErrorDetail } from "./google-api.js";
 
 const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -27,8 +27,8 @@ const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/drive.meet.readonly",
 ] as const;
 
-function resolveGoogleMeetTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
-  const now = resolveDateTimestampMs(nowMs);
+function resolveGoogleMeetTokenExpiresAt(value: unknown): number {
+  const now = resolveDateTimestampMs(Date.now());
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
     return now;
   }
@@ -40,14 +40,6 @@ function resolveGoogleMeetTokenExpiresAt(value: unknown, nowMs = Date.now()): nu
     now
   );
 }
-
-type GoogleMeetOAuthTokens = {
-  accessToken: string;
-  expiresAt: number;
-  refreshToken?: string;
-  scope?: string;
-  tokenType?: string;
-};
 
 export function buildGoogleMeetAuthUrl(params: {
   clientId: string;
@@ -70,7 +62,7 @@ export function buildGoogleMeetAuthUrl(params: {
   return `${GOOGLE_MEET_AUTH_URL}?${search.toString()}`;
 }
 
-async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleMeetOAuthTokens> {
+async function executeGoogleTokenRequest(body: URLSearchParams) {
   const { response, release } = await fetchWithSsrFGuard({
     url: GOOGLE_MEET_TOKEN_URL,
     init: {
@@ -129,7 +121,7 @@ export async function exchangeGoogleMeetAuthCode(params: {
   code: string;
   verifier: string;
   redirectUri?: string;
-}): Promise<GoogleMeetOAuthTokens> {
+}) {
   return await executeGoogleTokenRequest(
     tokenRequestBody({
       client_id: params.clientId,
@@ -146,7 +138,7 @@ async function refreshGoogleMeetAccessToken(params: {
   clientId: string;
   clientSecret?: string;
   refreshToken: string;
-}): Promise<GoogleMeetOAuthTokens> {
+}) {
   return await executeGoogleTokenRequest(
     tokenRequestBody({
       client_id: params.clientId,
@@ -160,17 +152,14 @@ async function refreshGoogleMeetAccessToken(params: {
 function shouldUseCachedGoogleMeetAccessToken(params: {
   accessToken?: string;
   expiresAt?: number;
-  now?: number;
-  safetyWindowMs?: number;
 }): boolean {
-  const now = params.now ?? Date.now();
-  const safetyWindowMs = params.safetyWindowMs ?? 60_000;
+  const now = Date.now();
   return Boolean(
     params.accessToken?.trim() &&
     typeof params.expiresAt === "number" &&
     Number.isFinite(params.expiresAt) &&
     params.expiresAt <= MAX_DATE_TIMESTAMP_MS &&
-    params.expiresAt > now + safetyWindowMs,
+    params.expiresAt > now + 60_000,
   );
 }
 

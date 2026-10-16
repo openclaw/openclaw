@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotToolPolicyHarnessFixtureForTest } from "../extensions/copilot/test-api.js";
 import {
   createOperationalRunInstanceRef,
@@ -12,7 +12,7 @@ import type { EmbeddedRunAttemptParams } from "../src/agents/embedded-agent-runn
 import { clearAgentHarnesses, registerAgentHarness } from "../src/agents/harness/registry.js";
 import { runAgentHarnessAttempt } from "../src/agents/harness/selection.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { useSessionStoreTempDirs } from "../src/test-utils/session-state-cleanup.js";
 
 const createdFixtures: Array<ReturnType<typeof createCopilotToolPolicyHarnessFixtureForTest>> = [];
 
@@ -20,7 +20,7 @@ afterEach(async () => {
   clearAgentHarnesses();
   await Promise.all(createdFixtures.splice(0).map((fixture) => fixture.dispose()));
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-copilot-policy-");
 
 function createUserTurnRecorder(message: Extract<AgentMessage, { role: "user" }>) {
   let blocked = false;
@@ -115,7 +115,7 @@ describe("Copilot tool policy handoff", () => {
     { name: "empty runtime allowlist", policy: { toolsAllow: [] }, restricted: true },
     { name: "unrestricted control", policy: {}, restricted: false },
   ])("enforces $name before native create, resume, and filesystem effects", async (testCase) => {
-    const workspaceDir = tempDirs.make("openclaw-copilot-policy-");
+    const workspaceDir = sessionDirs.make();
     const outputPath = path.join(workspaceDir, "native-write-proof.txt");
     const fixture = createCopilotToolPolicyHarnessFixtureForTest(outputPath);
     createdFixtures.push(fixture);

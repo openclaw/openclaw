@@ -22,13 +22,12 @@ import java.util.Locale
 
 class SettingsScreensTest {
   @Test
-  fun locationModes_hideAlwaysFromPlayAndMapThirdPartySelection() {
-    assertEquals(listOf("Off", "While Using"), locationModeLabels(backgroundLocationAvailable = false))
+  fun locationModes_hideAlwaysFromPlayAndIncludeItForThirdParty() {
+    assertEquals(listOf(LocationMode.Off, LocationMode.WhileUsing), locationModeOptions(backgroundLocationAvailable = false))
     assertEquals(
-      listOf("Off", "While Using", "Always"),
-      locationModeLabels(backgroundLocationAvailable = true),
+      listOf(LocationMode.Off, LocationMode.WhileUsing, LocationMode.Always),
+      locationModeOptions(backgroundLocationAvailable = true),
     )
-    assertEquals(LocationMode.Always, locationModeForLabel("Always"))
   }
 
   @Test

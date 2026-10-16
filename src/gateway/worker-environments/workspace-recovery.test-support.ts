@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
+import type { PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import type {
   WithPreparedWorkerWorkspaceRecovery,
   WorkerPlacementReclaimBarriers,
@@ -121,9 +122,9 @@ export async function applyWorkspace(params: {
   stagingRoot: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
-  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void;
-  commit?: (manifestRef: string) => void;
-  abort?: () => void;
+  begin?: (journal: WorkerWorkspaceReconciliationJournal) => void | Promise<void>;
+  commit?: (manifestRef: string) => void | Promise<void>;
+  abort?: () => void | Promise<void>;
   publishAcceptedManifest?: (accepted: {
     manifestRef: string;
     manifest: WorkerWorkspaceManifest;
@@ -138,19 +139,79 @@ export async function applyWorkspace(params: {
     currentManifestRef: `sha256:${"b".repeat(64)}`,
     acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     journal: {
-      load: () => pending,
-      begin: (journal) => {
+      load: async () => pending,
+      begin: async (journal) => {
         pending = journal;
-        params.begin?.(journal);
+        await params.begin?.(journal);
       },
-      commit: (manifestRef) => {
-        params.commit?.(manifestRef);
+      commit: async (manifestRef) => {
+        await params.commit?.(manifestRef);
         pending = undefined;
       },
-      abort: () => {
-        params.abort?.();
+      abort: async () => {
+        await params.abort?.();
         pending = undefined;
       },
     },
   });
+}
+
+export async function stagePendingWorkerWorkspaceResult(params: {
+  store: PlacementStore;
+  claim: Awaited<ReturnType<PlacementStore["claimTurn"]>>;
+  workspacePath: string;
+  base?: string;
+  current: string;
+  record?: boolean;
+  stagedResultRef?: string;
+}): Promise<{ baseManifestRef: string; currentManifestRef: string; stagedResultRef: string }> {
+  await fs.mkdir(params.workspacePath, { recursive: true });
+  await gitInit(params.workspacePath);
+  const { workerWorkspaceResultRef, workerWorkspaceResultStaging } =
+    await import("./workspace-result-staging.js");
+  const { stageWorkerWorkspaceResult } = workerWorkspaceResultStaging;
+  const payload = path.join(params.workspacePath, ".staged-payload");
+  await fs.mkdir(payload);
+  await fs.writeFile(path.join(payload, "result.txt"), params.current);
+  if (params.base !== undefined) {
+    await fs.writeFile(path.join(params.workspacePath, "result.txt"), params.base);
+  }
+  const encode = (content: string | undefined) => {
+    const raw = JSON.stringify({
+      version: 1,
+      baseCommit: null,
+      entries:
+        content === undefined
+          ? []
+          : [
+              {
+                path: "result.txt",
+                type: "file",
+                mode: 0o644,
+                size: Buffer.byteLength(content),
+                sha256: createHash("sha256").update(content).digest("hex"),
+              },
+            ],
+    });
+    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  };
+  const base = encode(params.base);
+  const current = encode(params.current);
+  await params.store.updateWorkspaceBaseManifest({ claim: params.claim, manifestRef: base.ref });
+  await params.store.markWorkspaceResultPending(params.claim);
+  const stagedResultRef = params.stagedResultRef ?? workerWorkspaceResultRef(params.claim.claimId);
+  await stageWorkerWorkspaceResult({
+    root: params.workspacePath,
+    stagingRoot: payload,
+    stagedResultRef,
+    baseManifestRef: base.ref,
+    currentManifestRef: current.ref,
+    baseManifestRaw: base.raw,
+    currentManifestRaw: current.raw,
+  });
+  if (params.record !== false) {
+    await params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
+  }
+  await fs.rm(payload, { recursive: true, force: true });
+  return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
 }

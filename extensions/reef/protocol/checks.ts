@@ -47,10 +47,26 @@ export function deterministicChecks(input: string | Uint8Array): CheckResult {
       findings.push({ code, decision: "deny" });
     }
   }
-  if (hasHighEntropyToken(text)) {
+  if (hasHighEntropyToken(maskGitHubCommitIds(text))) {
     findings.push({ code: "high_entropy_token", decision: "deny" });
   }
   return { allowed: findings.length === 0, text, findings };
+}
+
+// A full Git object id in a GitHub revision path is not, by itself, evidence of
+// a secret. Mask only that occurrence for the entropy heuristic: known-secret
+// rules and the model guard still inspect the original text. This recognizes
+// syntax locally; it neither fetches links nor verifies repository visibility.
+function maskGitHubCommitIds(text: string): string {
+  // Consume whole URI-like tokens, including mailto/data and Markdown wrappers,
+  // so nested references cannot exempt arbitrary query or fragment tokens.
+  // Apostrophes are valid URI characters and must not split the containing URI.
+  return text.replace(/(?<![a-z0-9+.-])[a-z0-9+.-]+:[^\s<>"`]+/gi, (url) =>
+    url.replace(
+      /^(https:\/\/github\.com\/[A-Za-z0-9-]+\/(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?:commit|blob|tree)\/)[A-Fa-f0-9]{40}(?=[/?#]|[)\]}.,;']*$)/,
+      "$1<git-object-id>",
+    ),
+  );
 }
 
 function hasHighEntropyToken(text: string): boolean {

@@ -86,13 +86,12 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
         .json::<DevicePairingList, _, _>(["devices", "list", "--json"])
         .map_err(|error| error.to_string())?;
 
-    let mut pending = Vec::with_capacity(nodes.len() + devices.pending.len());
-    pending.extend(nodes.into_iter().map(|request| PendingApproval {
+    let nodes = nodes.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Node,
         request_id: request.request_id,
         label: preferred_label([request.display_name.as_deref(), Some(&request.node_id)]),
-    }));
-    pending.extend(devices.pending.into_iter().map(|request| PendingApproval {
+    });
+    let devices = devices.pending.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Device,
         request_id: request.request_id,
         label: preferred_label([
@@ -100,8 +99,8 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
             request.client_id.as_deref(),
             Some(&request.device_id),
         ]),
-    }));
-    Ok(pending)
+    });
+    Ok(nodes.chain(devices).collect())
 }
 
 fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> String {

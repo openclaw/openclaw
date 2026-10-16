@@ -4,8 +4,8 @@ import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
+import { updateTerminalFont } from "./terminal-fonts.ts";
 import {
-  TERMINAL_FONT_FAMILY,
   TERMINAL_OUTPUT_ENCODER,
   type TerminalPanelSessionControllerHost,
   type TerminalPanelSessionTab,
@@ -15,14 +15,31 @@ import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
 
+/** Restore is passive once the user gives the document newer pointer or keyboard intent. */
+export function observeTerminalRestoreInput(document: Document, signal: AbortSignal) {
+  const input = { interacted: false, stop };
+  const onInteraction = () => {
+    input.interacted = true;
+  };
+  function stop() {
+    document.removeEventListener("pointerdown", onInteraction, true);
+    document.removeEventListener("keydown", onInteraction, true);
+    signal.removeEventListener("abort", stop);
+  }
+  document.addEventListener("pointerdown", onInteraction, true);
+  document.addEventListener("keydown", onInteraction, true);
+  signal.addEventListener("abort", stop, { once: true });
+  return input;
+}
+
 /** Creates the emulator and stream sink; the session controller owns tab adoption. */
 export async function bootTerminalPanelSession(params: {
   panel: TerminalPanelSessionControllerHost;
   connection: TerminalConnection;
   sequence: number;
-  signal: AbortSignal;
   awaitFirstOutput: boolean;
   isCurrent: () => boolean;
+  shouldFocusOnOpen?: () => boolean;
   onReady: (tab: TerminalPanelSessionTab) => void;
   onExit: (tab: TerminalPanelSessionTab, info: Parameters<TerminalSink["onExit"]>[0]) => void;
 }) {
@@ -40,9 +57,8 @@ export async function bootTerminalPanelSession(params: {
   }
   viewport.append(host);
   const tabReference: { current?: TerminalPanelSessionTab } = {};
-  const startupInput = createTerminalStartupInput(
-    connection,
-    () => tabReference.current?.gatewaySessionId,
+  const startupInput = createTerminalStartupInput(connection, () =>
+    tabReference.current?.status === "exited" ? undefined : tabReference.current?.gatewaySessionId,
   );
   const { createTerminalDefaultColorQueryResponder } =
     await import("@openclaw/libterminal/browser");
@@ -51,21 +67,27 @@ export async function bootTerminalPanelSession(params: {
     reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
   });
   const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
-    panel.createTerminalController({
-      parent,
-      readOnly: controllerOptions?.readOnly ?? false,
-      terminalOptions: {
-        fontSize: 11,
-        fontFamily: TERMINAL_FONT_FAMILY,
-        cursorBlink: true,
-        theme: terminalTheme(panel.themeMode),
-        scrollback: 5000,
+    panel.createTerminalController(
+      {
+        parent,
+        readOnly: controllerOptions?.readOnly ?? false,
+        terminalOptions: {
+          fontSize: 11,
+          fontFamily: panel.terminalFontFamily,
+          cursorBlink: true,
+          theme: terminalTheme(panel.themeMode),
+          scrollback: 5000,
+        },
+        // The session owner explicitly disposes adopted views. A completed view
+        // can move to another panel, so it must not retain the old owner's signal.
+        // The post-create current check below disposes cancelled in-flight boots.
+        // The browser controller owns these subscriptions and their teardown.
+        onData: startupInput.onData,
+        onResize: startupInput.onResize,
       },
-      signal: params.signal,
-      // The browser controller owns these subscriptions and their teardown.
-      onData: startupInput.onData,
-      onResize: startupInput.onResize,
-    });
+      params.shouldFocusOnOpen &&
+        (() => params.isCurrent() && params.shouldFocusOnOpen?.() !== false),
+    );
   let controller: GhosttyTerminalController;
   try {
     controller = await createController(host);
@@ -115,8 +137,13 @@ export async function bootTerminalPanelSession(params: {
       tab.defaultColorQueries.observe(data.slice(newlyObservedFrom));
       if (mode === "recovery") {
         return replaceTerminalController(tab, createController, data, signal).then((replaced) => {
-          if (replaced && data) {
-            params.onReady(tab);
+          if (replaced && !tab.cancelled && !signal.aborted) {
+            // Preferences may change during creation or deferred publication.
+            // An already-live tab does not schedule another panel render.
+            updateTerminalFont(tab.controller, panel.terminalFontFamily);
+            if (data) {
+              params.onReady(tab);
+            }
           }
         });
       }

@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, type ExactFileIdentity } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
@@ -39,8 +39,7 @@ type PlaybackSourceIdentity = {
   size: number;
   mtimeMs: number;
   ctimeMs: number;
-  dev: number;
-  ino: number;
+  exactIdentity: ExactFileIdentity;
 };
 
 type PlaybackSourceStat = Omit<PlaybackSourceIdentity, "path">;
@@ -116,8 +115,8 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
         source.size,
         source.mtimeMs,
         source.ctimeMs,
-        source.dev,
-        source.ino,
+        source.exactIdentity.dev.toString(),
+        source.exactIdentity.ino.toString(),
       ]),
     )
     .digest("hex");
@@ -130,21 +129,20 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-function playbackSourceIdentity(params: PlaybackSourceParams): PlaybackSourceIdentity {
-  return { path: params.sourcePath, ...params.sourceStat };
-}
-
 function playbackSourceIdentityMatches(
   source: PlaybackSourceIdentity,
-  opened: { realPath: string; stat: PlaybackSourceStat },
+  opened: {
+    realPath: string;
+    stat: Omit<PlaybackSourceStat, "exactIdentity">;
+    exactIdentity: ExactFileIdentity;
+  },
 ): boolean {
   return (
     opened.realPath === source.path &&
     opened.stat.size === source.size &&
     opened.stat.mtimeMs === source.mtimeMs &&
     opened.stat.ctimeMs === source.ctimeMs &&
-    opened.stat.dev === source.dev &&
-    opened.stat.ino === source.ino
+    sameFileIdentity(opened.exactIdentity, source.exactIdentity)
   );
 }
 
@@ -160,14 +158,6 @@ function cachePlaybackInspection(cacheKey: string, inspection: PlaybackInspectio
   playbackInspections.delete(cacheKey);
   playbackInspections.set(cacheKey, inspection);
   pruneMapToMaxSize(playbackInspections, MAX_PLAYBACK_ENTRIES.inspections);
-}
-
-function playbackInspectionCacheKey(params: {
-  sourceCacheKey: string;
-  kind: PlaybackMediaKind;
-  mimeType: string;
-}): string {
-  return `${params.sourceCacheKey}:${params.kind}:${normalizeMimeType(params.mimeType) ?? "unknown"}`;
 }
 
 async function probePlaybackSource(
@@ -205,13 +195,9 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
   params.assertCurrent?.();
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   const containerMode = resolvePlaybackMode(params.mimeType, policy);
-  const source = playbackSourceIdentity(params);
+  const source = { path: params.sourcePath, ...params.sourceStat };
   const sourceCacheKey = createPlaybackTranscodeCacheKey(source);
-  const cacheKey = playbackInspectionCacheKey({
-    sourceCacheKey,
-    kind: params.kind,
-    mimeType: params.mimeType,
-  });
+  const cacheKey = `${sourceCacheKey}:${params.kind}:${normalizeMimeType(params.mimeType) ?? "unknown"}`;
   const cached = readPlaybackInspection(cacheKey);
   if (cached) {
     return cached;
@@ -336,7 +322,6 @@ export async function resolvePlaybackMetadataForSource(
   return { playback: mode === "fallback" ? undefined : mode, durationMs, width, height };
 }
 
-/** Replaces the original container suffix for a transcoded response filename. */
 export function replacePlaybackFileExtension(fileName: string, extension: `.${string}`): string {
   const currentExtension = path.extname(fileName);
   const stem = currentExtension ? fileName.slice(0, -currentExtension.length) : fileName;
@@ -384,16 +369,16 @@ function playbackDurationsMatch(sourceDurationMs: number, outputDurationMs: numb
 }
 
 function buildPlaybackFfmpegArgs(params: {
-  audioStreamIndex?: number;
+  inspection: Extract<PlaybackInspection, { mode: "transcode" }>;
   inputPath: string;
   inputFormat: string;
   kind: PlaybackMediaKind;
   maxOutputBytes: number;
   outputPath: string;
-  videoStreamIndex?: number;
 }): string[] {
   const audioOnly = params.kind === "audio";
-  const primaryStreamIndex = audioOnly ? params.audioStreamIndex : params.videoStreamIndex;
+  const { audioStreamIndex, videoStreamIndex } = params.inspection;
+  const primaryStreamIndex = audioOnly ? audioStreamIndex : videoStreamIndex;
   if (primaryStreamIndex === undefined) {
     throw new Error(`Playback ${audioOnly ? "audio" : "video"} stream is missing`);
   }
@@ -422,9 +407,7 @@ function buildPlaybackFfmpegArgs(params: {
     "-1",
     "-map",
     `0:${primaryStreamIndex}`,
-    ...(!audioOnly && params.audioStreamIndex !== undefined
-      ? ["-map", `0:${params.audioStreamIndex}`]
-      : []),
+    ...(!audioOnly && audioStreamIndex !== undefined ? ["-map", `0:${audioStreamIndex}`] : []),
     ...(audioOnly ? ["-vn"] : []),
     "-sn",
     "-dn",
@@ -457,14 +440,12 @@ function buildPlaybackFfmpegArgs(params: {
 }
 
 async function transcodePlaybackSource(params: {
-  audioStreamIndex?: number;
+  inspection: Extract<PlaybackInspection, { mode: "transcode" }>;
   source: PlaybackSourceIdentity;
   mimeType: string;
   kind: PlaybackMediaKind;
   cacheKey: string;
   maxBytes: number;
-  sourceDurationMs: number;
-  videoStreamIndex?: number;
 }): Promise<void> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   await using opened = await openLocalFileSafely({ filePath: params.source.path });
@@ -498,6 +479,7 @@ async function transcodePlaybackSource(params: {
           !playbackSourceIdentityMatches(params.source, {
             realPath: opened.realPath,
             stat: await opened.handle.stat(),
+            exactIdentity: opened.exactIdentity,
           })
         ) {
           throw new Error("Playback source changed during transcode read");
@@ -528,17 +510,12 @@ async function transcodePlaybackSource(params: {
       }
       await runFfmpeg(
         buildPlaybackFfmpegArgs({
-          ...(params.audioStreamIndex !== undefined
-            ? { audioStreamIndex: params.audioStreamIndex }
-            : {}),
+          inspection: params.inspection,
           inputPath,
           inputFormat,
           kind: params.kind,
           maxOutputBytes: params.maxBytes,
           outputPath,
-          ...(params.videoStreamIndex !== undefined
-            ? { videoStreamIndex: params.videoStreamIndex }
-            : {}),
         }),
       );
       const outputStat = await fs.stat(outputPath);
@@ -554,7 +531,7 @@ async function transcodePlaybackSource(params: {
       }
       if (
         !outputProbe?.durationMs ||
-        !playbackDurationsMatch(params.sourceDurationMs, outputProbe.durationMs)
+        !playbackDurationsMatch(params.inspection.durationMs, outputProbe.durationMs)
       ) {
         throw new Error("Playback transcode output duration does not match its source");
       }
@@ -588,7 +565,7 @@ export async function resolvePlaybackTranscode(
     return { kind: "passthrough" };
   }
   const maxBytes = maxBytesForKind(params.kind);
-  const source = playbackSourceIdentity(params);
+  const source = { path: params.sourcePath, ...params.sourceStat };
   const cacheKey = createPlaybackTranscodeCacheKey(source);
   const target = policy.target;
   const operationKey = playbackCacheRelativePath(cacheKey, target.extension);
@@ -640,18 +617,12 @@ export async function resolvePlaybackTranscode(
   }
 
   const job = transcodePlaybackSource({
-    ...(inspection.audioStreamIndex !== undefined
-      ? { audioStreamIndex: inspection.audioStreamIndex }
-      : {}),
+    inspection,
     source,
     mimeType: params.mimeType,
     kind: params.kind,
     cacheKey,
     maxBytes,
-    sourceDurationMs: inspection.durationMs,
-    ...(inspection.videoStreamIndex !== undefined
-      ? { videoStreamIndex: inspection.videoStreamIndex }
-      : {}),
   });
   // Pool admission and test synchronization must observe the same completion boundary.
   playbackJobs.set(operationKey, job);

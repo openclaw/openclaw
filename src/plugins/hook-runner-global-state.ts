@@ -122,12 +122,13 @@ function overlayHookRegistries(
 
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
   const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
+  if (generationRegistry && !isPluginRegistryRetired(generationRegistry)) {
     return generationRegistry;
   }
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null;
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,
+    requestRegistry && !isPluginRegistryRetired(requestRegistry) ? requestRegistry : null,
   );
 }
 

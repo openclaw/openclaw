@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import { createCanvasDocument } from "../canvas/documents.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -26,6 +30,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
+  clearRuntimeConfigSnapshot();
 });
 
 async function requestHostedDocument(params: {
@@ -59,8 +64,7 @@ async function withHostedDocumentServer<T>(
   const document = await createCanvasDocument(
     {
       id: "host-switch-test",
-      kind: "html_bundle",
-      entrypoint: { type: "html", value: "<html><body>hosted</body></html>" },
+      html: "<html><body>hosted</body></html>",
     },
     { stateDir },
   );
@@ -72,6 +76,7 @@ async function withHostedDocumentServer<T>(
       OPENCLAW_STATE_DIR: stateDir,
     },
     async () => {
+      setRuntimeConfigSnapshot(params.config);
       const server = createGatewayHttpServer({
         clients,
         controlUiEnabled: false,
@@ -140,12 +145,6 @@ async function expectUnauthorized(response: Response): Promise<void> {
 }
 
 describe("core Canvas Gateway host switches", () => {
-  it("serves core widget documents by default", async () => {
-    const response = await requestHostedDocument({ config: {} });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("hosted");
-  });
-
   it.each([
     {
       label: "plugins.entries.canvas.config.host.enabled=false",

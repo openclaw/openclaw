@@ -21,6 +21,7 @@
  * Download saves the current tab through its native host, preserving its browser session;
  * its reply adds cancelled (true when the save panel was dismissed).
  */
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
@@ -82,9 +83,6 @@ const STATE_EVENT = "openclaw:native-browser-state";
 function nativeWindow(): NativeBrowserWindow | undefined {
   return typeof window === "undefined" ? undefined : window;
 }
-function handler() {
-  return nativeWindow()?.webkit?.messageHandlers?.openclawBrowser;
-}
 function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
@@ -95,18 +93,7 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 function browserUrl(value: unknown): value is string {
-  if (value === "about:blank") {
-    return true;
-  }
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return typeof value === "string" && (value === "about:blank" || isHttpUrl(value));
 }
 function isRect(value: unknown): value is NativeBrowserRect {
   return (
@@ -118,47 +105,6 @@ function isRect(value: unknown): value is NativeBrowserRect {
     finite(value.height) &&
     value.height >= 0
   );
-}
-function validMessage(value: unknown): value is NativeBrowserMessage {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (value.type === "release-scope") {
-    return nonempty(value.scope);
-  }
-  if (value.type === "present") {
-    return (
-      nonempty(value.scope) &&
-      (value.tabId === null || nonempty(value.tabId)) &&
-      (value.rect === null || isRect(value.rect)) &&
-      typeof value.visible === "boolean"
-    );
-  }
-  if (!nonempty(value.tabId)) {
-    return false;
-  }
-  switch (value.type) {
-    case "open":
-      return (
-        browserUrl(value.url) &&
-        sessionKey(value.sessionKey) &&
-        (value.activate === undefined || typeof value.activate === "boolean")
-      );
-    case "navigate":
-      return browserUrl(value.url);
-    case "inspect":
-      return finite(value.x) && value.x >= 0 && finite(value.y) && value.y >= 0;
-    case "back":
-    case "forward":
-    case "reload":
-    case "stop":
-    case "close":
-    case "snapshot":
-    case "download":
-      return true;
-    default:
-      return false;
-  }
 }
 function isState(value: unknown): value is NativeBrowserState {
   if (
@@ -213,14 +159,12 @@ function isNode(value: unknown): value is BrowserInspectedNode | null {
 export async function postNativeBrowserMessage(
   message: NativeBrowserMessage,
 ): Promise<NativeBrowserReply | null> {
-  const bridge = handler();
+  const bridge = nativeWindow()?.webkit?.messageHandlers?.openclawBrowser;
   if (typeof bridge?.postMessage !== "function") {
     return null;
   }
-  if (!validMessage(message)) {
-    return { ok: false, error: "Invalid native browser request" };
-  }
   try {
+    // Native hosts validate requests at the effect; malformed internal calls return their error.
     const post = bridge.postMessage.bind(bridge);
     const reply = await post(message);
     if (isRecord(reply) && reply.ok === false && typeof reply.error === "string") {

@@ -1,6 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import { prepareDevicePairingBinding } from "../../infra/device-pairing-binding.js";
+import type {
+  DevicePairingBinding,
+  DevicePairingNodeSnapshot,
+} from "../../infra/device-pairing-read.types.js";
 import type { PairedDevice, PairedDeviceNodeSurface } from "../../infra/device-pairing.types.js";
+import { NodeRegistry } from "../node-registry.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -9,6 +15,19 @@ import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers } from "./environments.js";
 
 export type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
+
+export function createDevicePairingNodeSnapshot(
+  paired: readonly PairedDevice[],
+): DevicePairingNodeSnapshot {
+  const bindings = new Map<string, DevicePairingBinding>();
+  for (const device of paired) {
+    const { binding } = prepareDevicePairingBinding(device.deviceId, device);
+    if (binding) {
+      bindings.set(device.deviceId, binding);
+    }
+  }
+  return { paired, bindings };
+}
 
 export function pairedNodeDevice(
   deviceId: string,
@@ -45,6 +64,7 @@ export function mockContext(
     {
       nodeId: "node-live",
       connId: "conn-live",
+      client: { invalidated: false },
       displayName: "Live Node",
       platform: "ios",
       caps: ["camera"],
@@ -57,9 +77,9 @@ export function mockContext(
     logGateway: {
       warn: vi.fn(),
     },
-    nodeRegistry: {
+    nodeRegistry: Object.assign(new NodeRegistry(), {
       listConnectedForPairingStates: () => connectedNodes,
-    },
+    }),
     workerEnvironmentService,
     getRuntimeConfig: () => ({
       cloudWorkers: {

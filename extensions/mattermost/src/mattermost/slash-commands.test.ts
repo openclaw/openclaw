@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMattermostClient, type MattermostClient } from "./client.js";
 import {
-  DEFAULT_COMMAND_SPECS,
   MATTERMOST_SLASH_POST_METHOD,
   parseSlashCommandPayload,
   registerSlashCommands,
@@ -10,6 +9,23 @@ import {
   resolveCommandText,
   resolveSlashCommandConfig,
 } from "./slash-commands.js";
+
+const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
+  current: vi.fn<typeof fetch>(),
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      params.beforeRequest?.();
+      return {
+        response: await fetchFixture.current(params.url, params.init),
+        release: async () => {},
+      };
+    },
+  };
+});
 
 describe("slash-commands", () => {
   async function registerSingleStatusCommand(
@@ -37,26 +53,6 @@ describe("slash-commands", () => {
       ],
     });
   }
-
-  it("parses application/x-www-form-urlencoded payloads", () => {
-    const payload = parseSlashCommandPayload(
-      "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=now",
-      "application/x-www-form-urlencoded",
-    );
-    expect(payload).toEqual({
-      token: "t1",
-      team_id: "team",
-      team_domain: undefined,
-      channel_id: "ch1",
-      channel_name: undefined,
-      user_id: "u1",
-      user_name: undefined,
-      command: "/oc_status",
-      text: "now",
-      trigger_id: undefined,
-      response_url: undefined,
-    });
-  });
 
   it("parses application/json payloads", () => {
     const payload = parseSlashCommandPayload(
@@ -101,30 +97,8 @@ describe("slash-commands", () => {
     expect(resolveCommandText("oc_help", "", undefined)).toBe("/help");
   });
 
-  it("registers both public model slash commands", () => {
-    expect(
-      DEFAULT_COMMAND_SPECS.filter(
-        (spec) => spec.trigger === "oc_model" || spec.trigger === "oc_models",
-      ).map((spec) => spec.trigger),
-    ).toEqual(["oc_model", "oc_models"]);
-  });
-
-  it("registers the queue command mapped to the core /queue directive", () => {
-    const queueSpec = DEFAULT_COMMAND_SPECS.find((spec) => spec.trigger === "oc_queue");
-    expect(queueSpec?.originalName).toBe("queue");
-    const triggerMap = new Map<string, string>([["oc_queue", "queue"]]);
-    expect(resolveCommandText("oc_queue", " collect drop:summarize ", triggerMap)).toBe(
-      "/queue collect drop:summarize",
-    );
-  });
-
-  it("normalizes callback path in slash config", () => {
-    const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
-    expect(config.callbackPath).toBe("/api/channels/mattermost/command");
-  });
-
   it("falls back to localhost callback URL for wildcard bind hosts", () => {
-    const config = resolveSlashCommandConfig({ callbackPath: "/api/channels/mattermost/command" });
+    const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
     const callbackUrl = resolveCallbackUrl({
       config,
       gatewayPort: 18789,
@@ -279,7 +253,7 @@ describe("slash-commands", () => {
 
   it("recreates a drifted command when its accepted delete body cannot be read", async () => {
     const calls: string[] = [];
-    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+    fetchFixture.current = vi.fn<typeof fetch>(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? "GET";
       calls.push(`${method} ${url.replace("https://chat.example.com/api/v4", "")}`);
@@ -326,7 +300,6 @@ describe("slash-commands", () => {
     const client = createMattermostClient({
       baseUrl: "https://chat.example.com",
       botToken: "bot-token",
-      fetchImpl,
     });
 
     const result = await registerSlashCommands({

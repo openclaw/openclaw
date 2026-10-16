@@ -14,10 +14,7 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
 } from "../../infra/diagnostic-events.js";
-import {
-  cloneDiagnosticContentValue,
-  resolveDiagnosticModelContentCapturePolicy,
-} from "../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
@@ -25,12 +22,6 @@ import {
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
-type ModelCallFailureKind = Extract<
-  TrustedDiagnosticEventInput,
-  { type: "model.call.error" }
->["failureKind"];
 
 const MAX_CAPTURED_CONTENT_BYTES = 128 * 1024;
 const FALLBACK_RESPONSE_RESERVE_BYTES = 16 * 1024;
@@ -191,16 +182,10 @@ function assistantMessageHasText(message: unknown): boolean {
   if (typeof message.content === "string") {
     return message.content.length > 0;
   }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const limit = Math.min(message.content.length, MAX_CAPTURED_OUTPUT_BLOCKS);
-  for (let index = 0; index < limit; index += 1) {
-    if (isTextAssistantContentBlock(message.content[index])) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    Array.isArray(message.content) &&
+    message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).some(isTextAssistantContentBlock)
+  );
 }
 
 // Claude's assistant envelopes can contain native tool arguments and opaque
@@ -213,43 +198,37 @@ function normalizeClaudeAssistantMessage(
   if (!isRecord(message)) {
     return undefined;
   }
+  if (message.content === "") {
+    return undefined;
+  }
   const content: Record<string, unknown>[] = [];
-  if (typeof message.content === "string") {
-    if (message.content.length === 0) {
-      return undefined;
+  const sourceBlocks =
+    typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : Array.isArray(message.content)
+        ? message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS)
+        : [];
+  if (Array.isArray(message.content) && sourceBlocks.length < message.content.length) {
+    budget.truncated = true;
+  }
+  for (const [index, sourceBlock] of sourceBlocks.entries()) {
+    if (isTextAssistantContentBlock(sourceBlock)) {
+      releaseFallbackReserve(budget);
     }
-    releaseFallbackReserve(budget);
-    const text = captureTextWithinBudget(message.content, budget);
-    if (text !== undefined && budget.remainingItems > 0) {
-      content.push({ type: "text", text });
-      budget.remainingItems -= 1;
-    } else if (text !== undefined) {
-      budget.truncated = true;
+    const block = assistantContentBlock(sourceBlock, budget);
+    if (block) {
+      if (budget.remainingItems > 0) {
+        content.push(block);
+        budget.remainingItems -= 1;
+      } else {
+        budget.truncated = true;
+      }
     }
-  } else if (Array.isArray(message.content)) {
-    const sourceBlocks = message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS);
-    if (sourceBlocks.length < message.content.length) {
-      budget.truncated = true;
-    }
-    for (const [index, sourceBlock] of sourceBlocks.entries()) {
-      if (isTextAssistantContentBlock(sourceBlock)) {
-        releaseFallbackReserve(budget);
+    if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
+      if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
+        budget.truncated = true;
       }
-      const block = assistantContentBlock(sourceBlock, budget);
-      if (block) {
-        if (budget.remainingItems > 0) {
-          content.push(block);
-          budget.remainingItems -= 1;
-        } else {
-          budget.truncated = true;
-        }
-      }
-      if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
-        if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
-          budget.truncated = true;
-        }
-        break;
-      }
+      break;
     }
   }
   if (content.length === 0) {
@@ -293,20 +272,6 @@ function privateData(params: {
   };
 }
 
-function failureKindForClaudeCli(
-  error: unknown,
-  abortSignal: AbortSignal | undefined,
-): ModelCallFailureKind | undefined {
-  if (isFailoverError(error) && error.reason === "timeout") {
-    return "timeout";
-  }
-  const inferred = diagnosticErrorFailureKind(error);
-  if (inferred) {
-    return inferred;
-  }
-  return abortSignal?.aborted ? "aborted" : undefined;
-}
-
 function usageField(usage: CliUsage | undefined): { usage?: CliUsage } {
   return usage ? { usage } : {};
 }
@@ -317,7 +282,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
   prompt: string;
   systemPrompt?: string;
   transport: "paired-node-cli" | "stdio" | "stdio-live";
-  now?: () => number;
 }) {
   // Listener registration is process-stable after plugin startup. This attempt-local
   // snapshot avoids trace ids, capture buffers, and byte accounting when nobody consumes them.
@@ -329,7 +293,6 @@ export function createClaudeCliModelCallDiagnostics(params: {
     return undefined;
   }
 
-  const now = params.now ?? (() => Date.now());
   const capture = resolveDiagnosticModelContentCapturePolicy(
     params.context.params.config ?? params.context.contextEngineConfig,
   );
@@ -396,12 +359,12 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const content: DiagnosticModelCallContent = {
       ...(capture.inputMessages
         ? {
-            inputMessages: cloneDiagnosticContentValue([
+            inputMessages: [
               {
                 role: "user",
                 content: [{ type: "text", text: captureBoundedText(params.prompt) }],
               },
-            ]),
+            ],
           }
         : {}),
       ...(capture.systemPrompt && params.systemPrompt
@@ -429,7 +392,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     if (outputContentBudget.truncated) {
       appendOutputTruncationMarker(messages);
     }
-    return cloneDiagnosticContentValue(messages);
+    return messages;
   };
   const completedModelContent = (output?: CliOutput): DiagnosticModelCallContent | undefined => {
     const base = baseModelContent();
@@ -455,7 +418,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       started = true;
-      startedAt = now();
+      startedAt = Date.now();
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.started",
@@ -475,7 +438,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
       if (!chunk) {
         return;
       }
-      firstCliOutputAt ??= now();
+      firstCliOutputAt ??= Date.now();
       if (stream === "stdout") {
         responseStreamBytes += knownByteLength ?? Buffer.byteLength(chunk, "utf8");
       }
@@ -512,7 +475,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
         {
           type: "model.call.completed",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           ...sizeTimingFields(),
           ...usageField(
             output.diagnosticUsage ?? observedTerminalUsage ?? output.usage ?? observedUsage,
@@ -526,12 +489,16 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       terminalEmitted = true;
-      const failureKind = failureKindForClaudeCli(error, params.context.params.abortSignal);
+      const failureKind =
+        isFailoverError(error) && error.reason === "timeout"
+          ? "timeout"
+          : (diagnosticErrorFailureKind(error) ??
+            (params.context.params.abortSignal?.aborted ? "aborted" : undefined));
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.error",
           ...baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, Date.now() - startedAt),
           errorCategory:
             (isFailoverError(error) ? error.reason : undefined) ??
             failureKind ??

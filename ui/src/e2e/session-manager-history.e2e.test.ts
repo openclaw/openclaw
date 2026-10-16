@@ -103,6 +103,7 @@ suite.define(() => {
           query: "deployment history",
           scope: {
             agentId: "main",
+            excludeDock: true,
             includeGlobal: true,
             includeUnknown: false,
             configuredAgentsOnly: true,

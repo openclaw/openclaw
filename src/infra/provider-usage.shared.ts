@@ -1,4 +1,3 @@
-// Shared provider usage labels, ids, and timeout helpers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -42,14 +41,10 @@ export function resolveUsageProviderId(
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
-  if (
-    normalized === "openai" &&
-    (options?.credentialType === "oauth" || options?.credentialType === "token")
-  ) {
-    return "openai";
-  }
   if (normalized === "openai") {
-    return undefined;
+    return options?.credentialType === "oauth" || options?.credentialType === "token"
+      ? normalized
+      : undefined;
   }
   // Claude CLI-backed models bill against the same Anthropic subscription as
   // native anthropic OAuth; without this mapping claude-cli-only setups get

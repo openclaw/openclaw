@@ -12,7 +12,7 @@ export function unsupportedPolicyKey(
 
 export function isChannelDenyRule(value: unknown): value is {
   readonly id?: string;
-  readonly when?: { readonly provider?: string };
+  readonly when: { readonly provider: string };
   readonly reason?: string;
 } {
   return (

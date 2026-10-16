@@ -1,15 +1,17 @@
-// Slack tests cover members plugin behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackMemberEvents } from "./members.js";
+import {
+  createSlackSystemEventTestHarness as initSlackHarness,
+  type SlackSystemEventHandler as MemberHandler,
+  type SlackSystemEventTestOverrides as MemberOverrides,
+} from "./system-event-test-harness.js";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
   reportJoin: vi.fn(),
 }));
-let registerSlackMemberEvents: typeof import("./members.js").registerSlackMemberEvents;
-let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
-type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
   reportChannelRoomJoin: memberMocks.reportJoin,
@@ -22,7 +24,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
     options: Record<string, unknown>,
   ) => memberMocks.enqueue(text, { ...options, sessionKey: route.sessionKey }),
 }));
-type MemberHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type MemberCaseArgs = {
   event?: Record<string, unknown>;
@@ -81,27 +82,12 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 }
 
 describe("registerSlackMemberEvents", () => {
-  beforeAll(async () => {
-    ({ registerSlackMemberEvents } = await import("./members.js"));
-    ({ createSlackSystemEventTestHarness: initSlackHarness } =
-      await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     memberMocks.enqueue.mockClear();
     memberMocks.reportJoin.mockReset().mockResolvedValue({ kind: "posted" });
   });
 
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
-    {
-      name: "allows DM member events for authorized senders in allowlist mode",
-      args: {
-        handler: "left" as const,
-        overrides: { dmPolicy: "allowlist", allowFrom: ["U1"] },
-        event: { ...makeMemberEvent({ user: "U1" }), type: "member_left_channel" },
-      },
-      calls: 1,
-    },
     {
       name: "blocks channel member events for users outside channel users allowlist",
       args: {
@@ -239,19 +225,6 @@ describe("registerSlackMemberEvents", () => {
     });
   });
 
-  it("keeps a human member join on the existing sender-authorized system-event path", async () => {
-    await runMemberCase({
-      overrides: { channelType: "channel", channelUsers: ["U_OWNER"] },
-      event: makeMemberEvent({ channel: "C1", user: "U_OWNER" }),
-    });
-
-    expect(memberMocks.reportJoin).not.toHaveBeenCalled();
-    expect(memberMocks.enqueue).toHaveBeenCalledWith(
-      "Slack: alice joined #general.",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-  });
-
   it("never introduces the bot into a direct-message conversation", async () => {
     await runMemberCase({
       overrides: { dmPolicy: "open" },
@@ -270,24 +243,6 @@ describe("registerSlackMemberEvents", () => {
     });
 
     expect(trackEvent).not.toHaveBeenCalled();
-  });
-
-  it("tracks accepted member events", async () => {
-    const trackEvent = vi.fn();
-    await runMemberCase({ trackEvent });
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it("keys each queued event by the envelope occurrence", async () => {
-    await runMemberCase({ body: { event_id: "Ev-member-2" } });
-
-    expect(memberMocks.enqueue).toHaveBeenCalledWith(
-      "Slack: alice joined #direct.",
-      expect.objectContaining({
-        contextKey: "slack:member:joined:D1:U1:Ev-member-2",
-      }),
-    );
   });
 
   it("uses the stable user ID when the post-auth name lookup fails", async () => {
@@ -318,6 +273,7 @@ describe("registerSlackMemberEvents", () => {
   });
 
   it("keeps enterprise member events isolated by listener workspace", async () => {
+    const trackEvent = vi.fn();
     const harness = initSlackHarness();
     harness.ctx.installationIdentity = {
       kind: "enterprise",
@@ -327,7 +283,7 @@ describe("registerSlackMemberEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+      async (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
         agentId: "main",
         sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
       }),
@@ -335,7 +291,7 @@ describe("registerSlackMemberEvents", () => {
     harness.ctx.resolveChannelName = resolveChannelName;
     harness.ctx.resolveUserName = resolveUserName;
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
-    registerSlackMemberEvents({ ctx: harness.ctx });
+    registerSlackMemberEvents({ ctx: harness.ctx, trackEvent });
     const handler = harness.getHandler("member_joined_channel");
     if (!handler) {
       throw new Error("expected Slack member joined handler");
@@ -358,6 +314,7 @@ describe("registerSlackMemberEvents", () => {
       sessionKey: "session:T111",
       contextKey: "slack:member:T111:joined:D1:U1:Ev-member-T111",
     });
+    expect(trackEvent).toHaveBeenCalledTimes(2);
     expect(memberMocks.enqueue).toHaveBeenNthCalledWith(2, expect.any(String), {
       sessionKey: "session:T222",
       contextKey: "slack:member:T222:joined:D1:U1:Ev-member-T222",

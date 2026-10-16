@@ -1,5 +1,4 @@
 export { resolveSystemdUserServiceAccount } from "./systemd-user-transport.js";
-/** Linux systemd user service installer, parser, and lifecycle controls. */
 export {
   isNonFatalSystemdInstallProbeError,
   isSystemdUnitActive,

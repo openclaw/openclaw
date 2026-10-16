@@ -8,6 +8,7 @@ import type {
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
+  WorkerHeartbeatResult,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -16,17 +17,12 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { workerProtocolObject } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
-const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "credential-replaced",
-  "owner-epoch-mismatch",
-]);
-
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
 export function isFencedCloseReason(
   reason: WorkerProtocolCloseReason,
 ): reason is WorkerFencedReason {
-  return FENCED_CLOSE_REASONS.has(reason);
+  return reason === "credential-replaced" || reason === "owner-epoch-mismatch";
 }
 
 export type WorkerConnectionState =
@@ -39,10 +35,10 @@ export type WorkerConnectionState =
   | { kind: "failed"; error: Error }
   | { kind: "stopped" };
 
-export type WorkerConnectionExit =
-  | { kind: "fenced"; reason: WorkerFencedReason }
-  | { kind: "failed"; error: Error }
-  | { kind: "stopped" };
+export type WorkerConnectionExit = Extract<
+  WorkerConnectionState,
+  { kind: "fenced" | "failed" | "stopped" }
+>;
 
 export type WorkerConnectionOptions = {
   endpoint: WorkerConnectionEndpoint;
@@ -52,9 +48,8 @@ export type WorkerConnectionOptions = {
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
   createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
-  heartbeatStatus?: () => WorkerHeartbeatParams["status"];
-  /** The connect frame was written; this does not establish admission. */
-  onAdmissionRequestSent?: () => void;
+  heartbeatParams?: () => Pick<WorkerHeartbeatParams, "githubGeneration">;
+  onHeartbeat?: (result: WorkerHeartbeatResult, assertCurrent: () => void) => Promise<void>;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 
@@ -108,8 +103,7 @@ export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadli
 export function parseWorkerAdmissionDeadlineResult(
   value: unknown,
 ): WorkerAdmissionDeadlineResult | undefined {
-  const parsed = WorkerAdmissionDeadlineResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return WorkerAdmissionDeadlineResultSchema.safeParse(value).data;
 }
 
 export class WorkerFencedError extends Error {

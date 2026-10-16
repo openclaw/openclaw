@@ -52,7 +52,8 @@ export function mergeGatewayAuthConfig(
   return merged;
 }
 
-function finalizeResolvedGatewayAuth(params: {
+/** Apply auth mode and Tailscale policy to credentials already selected by their owner. */
+export function resolveGatewayAuthFromCredentials(params: {
   authConfig: GatewayAuthConfig;
   authOverride?: GatewayAuthConfig;
   token?: string;
@@ -60,8 +61,7 @@ function finalizeResolvedGatewayAuth(params: {
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
   const { authConfig, authOverride, token, password } = params;
-  const mode =
-    authOverride?.mode ?? authConfig.mode ?? (password ? "password" : token ? "token" : "token");
+  const mode = authOverride?.mode ?? authConfig.mode ?? (password ? "password" : "token");
   const modeSource =
     authOverride?.mode !== undefined
       ? "override"
@@ -114,7 +114,7 @@ export function resolveGatewayAuth(params: {
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
-  return finalizeResolvedGatewayAuth({
+  return resolveGatewayAuthFromCredentials({
     authConfig,
     authOverride,
     token: resolvedCredentials.token,
@@ -173,7 +173,7 @@ export function resolveGatewayAuthForConfig(params: {
     : (plan.localPassword.value ??
       plan.envPassword ??
       (plan.authMode === "trusted-proxy" ? undefined : plan.remotePassword.value));
-  return finalizeResolvedGatewayAuth({
+  return resolveGatewayAuthFromCredentials({
     authConfig,
     authOverride,
     token,

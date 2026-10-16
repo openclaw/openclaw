@@ -2,7 +2,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "./gateway-scheduler.js";
 import {
   drainPendingSessionDelivery,
   type DeliverSessionDeliveryFn,
@@ -28,71 +28,48 @@ type SessionDeliveryRuntime = {
 
 const RUNTIME_RELOAD_RETRY_MS = 1_000;
 let runtime:
-  | (SessionDeliveryRuntime & {
-      runningEntries: Map<string, Promise<void>>;
+  | (Omit<SessionDeliveryRuntime, "scheduler"> & {
+      scheduler: GatewaySchedulerScope;
+      runningEntries: Set<string>;
       pendingSchedules: Set<Promise<void>>;
     })
   | undefined;
 let runtimeGeneration = 0;
-const scheduledEntries = new Map<string, GatewayScheduledJob>();
-let pendingScan: GatewayScheduledJob | undefined;
-
-function clearScheduledEntries(): void {
-  for (const scheduled of scheduledEntries.values()) {
-    scheduled.cancel();
-  }
-  scheduledEntries.clear();
-  pendingScan?.cancel();
-  pendingScan = undefined;
-}
 
 function armPendingScan(generation: number): void {
-  if (!runtime || generation !== runtimeGeneration || pendingScan) {
+  if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  pendingScan = runtime.scheduler.schedule({
+  runtime.scheduler.schedule({
     id: "session-delivery:scan",
     delayMs: RUNTIME_RELOAD_RETRY_MS,
-    run: () => {
-      pendingScan = undefined;
-      return schedulePendingSessionDeliveries();
-    },
+    mode: "earliest",
+    run: () => schedulePendingSessionDeliveries(),
   });
 }
 
 function resolveRetryDelayMs(entry: QueuedSessionDelivery, now: number): number {
   const claimDelayMs = Math.max(0, (entry.availableAt ?? 0) - now);
-  const deadlineDelayMs =
-    entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"
-      ? Math.max(0, entry.owner.deadlineAt - now)
-      : Number.POSITIVE_INFINITY;
-  if (entry.retryCount <= 0) {
-    return Math.min(claimDelayMs, deadlineDelayMs);
-  }
   if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
-    return Math.min(deadlineDelayMs, claimDelayMs);
+    return Math.min(claimDelayMs, Math.max(0, entry.owner.deadlineAt - now));
+  }
+  if (entry.retryCount <= 0) {
+    return claimDelayMs;
   }
   const attemptedAt = entry.lastAttemptAt ?? entry.enqueuedAt;
-  return Math.min(
-    deadlineDelayMs,
-    Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now),
-  );
+  return Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now);
 }
 
 function armSessionDeliveryId(id: string, delayMs: number, generation: number): void {
   if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  const job = runtime.scheduler.schedule({
+  runtime.scheduler.schedule({
     id: `session-delivery:${id}`,
     delayMs,
     mode: "earliest",
-    run: () => {
-      scheduledEntries.delete(id);
-      return runScheduledSessionDelivery(id, generation);
-    },
+    run: () => runScheduledSessionDelivery(id, generation),
   });
-  scheduledEntries.set(id, job);
 }
 
 function armSessionDelivery(
@@ -120,8 +97,7 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
   if (activeRuntime.runningEntries.has(id)) {
     return;
   }
-  const settled = createDeferredCore();
-  activeRuntime.runningEntries.set(id, settled.promise);
+  activeRuntime.runningEntries.add(id);
   let pending: QueuedSessionDelivery | null = null;
   try {
     pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
@@ -142,7 +118,6 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
     }
   } finally {
     activeRuntime.runningEntries.delete(id);
-    settled.resolve();
   }
   if (!runtime || generation !== runtimeGeneration) {
     return;
@@ -158,10 +133,11 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
 export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () => Promise<void> {
   runtimeGeneration += 1;
   const generation = runtimeGeneration;
-  clearScheduledEntries();
+  runtime?.scheduler.beginClose();
   const activeRuntime = {
     ...params,
-    runningEntries: new Map<string, Promise<void>>(),
+    scheduler: params.scheduler.scope(),
+    runningEntries: new Set<string>(),
     pendingSchedules: new Set<Promise<void>>(),
   };
   runtime = activeRuntime;
@@ -170,12 +146,11 @@ export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () 
     if (runtimeGeneration === generation) {
       runtimeGeneration += 1;
       runtime = undefined;
-      clearScheduledEntries();
     }
-    // A replacement owns its own work. Join this owner's reads and settlement
-    // writes before its queue database or environment can be disposed.
+    // Public scheduling reads begin outside scheduler callbacks and must also
+    // settle before this owner's queue database or environment is disposed.
     stopPromise ??= Promise.all([
-      ...activeRuntime.runningEntries.values(),
+      activeRuntime.scheduler.stop(),
       ...activeRuntime.pendingSchedules,
     ]).then(() => {});
     return stopPromise;

@@ -324,9 +324,9 @@ export function createLegacyStateMigrationPlan(params: {
   const plan = {
     schemaVersion: LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
     mutationAllowed: false as const,
-    outcome: refusal ? ("refused" as const) : ("planned" as const),
+    outcome: "refused" as const,
     warnings,
-    ...(refusal ? { refusal } : {}),
+    refusal,
     mode: params.mode,
     candidate,
     snapshot,

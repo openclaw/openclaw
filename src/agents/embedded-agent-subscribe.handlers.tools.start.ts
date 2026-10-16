@@ -1,9 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   emitAgentActivityEvent,
   projectAgentToolActivity,
@@ -13,14 +9,17 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
+import {
+  missingRequiredParamLabels,
+  REQUIRED_PARAM_GROUPS,
+  type RequiredParamGroup,
+} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -66,43 +65,26 @@ function reserveQuestionPromptDelivery(
   }
 }
 
-function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
-  const groups: readonly RequiredParamGroup[] | undefined =
-    TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-  if (!groups?.length) {
-    return [];
-  }
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  if (!record) {
-    return groups.map((group) => group.label ?? group.keys.join(" or "));
-  }
-  return groups
-    .filter((group) => {
-      const satisfied =
-        group.validator?.(record) ??
-        group.keys.some((key) => {
-          const value = record[key];
-          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
-        });
-      return !satisfied;
-    })
-    .map((group) => group.label ?? group.keys.join(" or "));
-}
-
-function buildToolExecutionStartTraceMeta(params: {
+function traceToolExecutionStart(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   toolCallId: string;
   args: unknown;
-}): Record<string, unknown> {
+}) {
+  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
+    return;
+  }
   const args = params.args;
   const argsType = Array.isArray(args) ? "array" : typeof args;
   const argsKeys =
     args && typeof args === "object" && !Array.isArray(args)
       ? Object.keys(args as Record<string, unknown>).toSorted()
       : undefined;
-  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
-  return {
+  const groups =
+    TRACE_REQUIRED_PARAM_GROUPS[params.toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  const requiredParamsMissing = groups?.length ? missingRequiredParamLabels(record, groups) : [];
+  params.ctx.log.trace("embedded run tool start", {
     event: "embedded_tool_execution_start",
     tags: ["tool_start", "embedded", "trace"],
     runId: params.ctx.params.runId,
@@ -114,32 +96,7 @@ function buildToolExecutionStartTraceMeta(params: {
     ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
     ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
     ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
-  };
-}
-
-function traceToolExecutionStart(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  toolCallId: string;
-  args: unknown;
-}) {
-  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
-    return;
-  }
-  params.ctx.log.trace("embedded run tool start", buildToolExecutionStartTraceMeta(params));
-}
-
-const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-
-function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
-  if (rawArgsPreview == null) {
-    return undefined;
-  }
-  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
-  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
-  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
-  return wasTruncated && preview ? `${preview}…` : preview;
+  });
 }
 
 type ToolStartRecord = {
@@ -157,25 +114,28 @@ export function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-/** Returns the number of active tool executions tracked for one embedded run. */
-export function countActiveToolExecutions(runId: string): number {
+function* iterateRunToolStarts(runId: string) {
   const prefix = `${runId}:`;
-  let count = 0;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      count += 1;
+  for (const entry of toolStartData) {
+    if (entry[0].startsWith(prefix)) {
+      yield entry;
     }
+  }
+}
+
+export function countActiveToolExecutions(runId: string): number {
+  const entries = iterateRunToolStarts(runId);
+  let count = 0;
+  while (!entries.next().done) {
+    count += 1;
   }
   return count;
 }
 
 /** Cleans up tool start data for a run that has been unsubscribed or aborted. */
 export function cleanupRunToolStartData(runId: string): void {
-  const prefix = `${runId}:`;
-  for (const key of toolStartData.keys()) {
-    if (key.startsWith(prefix)) {
-      toolStartData.delete(key);
-    }
+  for (const [key] of iterateRunToolStarts(runId)) {
+    toolStartData.delete(key);
   }
 }
 
@@ -208,16 +168,8 @@ export function buildCommandItemId(toolCallId: string): string {
   return `command:${toolCallId}`;
 }
 
-export function buildPatchItemId(toolCallId: string): string {
-  return `patch:${toolCallId}`;
-}
-
 export function buildCommandItemTitle(toolName: string, meta?: string): string {
   return meta ? `command ${meta}` : `${toolName} command`;
-}
-
-export function buildPatchItemTitle(meta?: string): string {
-  return meta ? `patch ${meta}` : "apply patch";
 }
 
 export function emitTrackedItemEvent(
@@ -232,30 +184,12 @@ export function emitTrackedItemEvent(
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  if (itemData.phase !== "update" || emitLiveUpdate) {
-    emitAgentActivityEvent({
-      runId: ctx.params.runId,
-      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-      stream: "item",
-      data: itemData,
-    });
-  }
   // Reply liveness and channel delivery still consume every original callback.
-  emitAgentEventCallbackBestEffort(ctx, {
-    stream: "item",
-    data: itemData,
-  });
-}
-
-function emitExecutionPhaseBestEffort(
-  ctx: ToolHandlerContext,
-  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
-): void {
-  runBestEffortCallback({
-    label: "tool execution phase",
-    log: ctx.log,
-    callback: () => ctx.params.onExecutionPhase?.(info),
-  });
+  if (itemData.phase !== "update" || emitLiveUpdate) {
+    emitToolActivityEvent(ctx, { stream: "item", data: itemData });
+  } else {
+    emitAgentEventCallbackBestEffort(ctx, { stream: "item", data: itemData });
+  }
 }
 
 export function emitAgentEventCallbackBestEffort(
@@ -283,19 +217,13 @@ export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWi
 }
 
 export function finalizeToolActivity(ctx: ToolHandlerContext): void {
-  const prefix = `${ctx.params.runId}:`;
-  const active = [...toolStartData].flatMap(([key, start]) =>
-    key.startsWith(prefix)
-      ? [
-          {
-            runId: ctx.params.runId,
-            callId: key.slice(prefix.length),
-            parentToolCallId: start.parentToolCallId,
-            activity: undefined,
-          },
-        ]
-      : [],
-  );
+  const runId = ctx.params.runId;
+  const active = [...iterateRunToolStarts(runId)].map(([key, start]) => ({
+    runId: ctx.params.runId,
+    callId: key.slice(runId.length + 1),
+    parentToolCallId: start.parentToolCallId,
+    activity: undefined,
+  }));
   // Keyed active state cannot represent overlapping duplicate starts. Keep the
   // original summaries when lifecycle accounting cannot prove a complete graph.
   if (
@@ -325,21 +253,11 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(toolName);
-  if (normalized !== "exec" && normalized !== "bash") {
-    return meta;
-  }
-  if (!args || typeof args !== "object") {
+  if (!isExecToolName(toolName) || !args || typeof args !== "object") {
     return meta;
   }
   const record = args as Record<string, unknown>;
-  const flags: string[] = [];
-  if (record.pty === true) {
-    flags.push("pty");
-  }
-  if (record.elevated === true) {
-    flags.push("elevated");
-  }
+  const flags = ["pty", "elevated"].filter((flag) => record[flag] === true);
   if (flags.length === 0) {
     return meta;
   }
@@ -347,7 +265,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -420,11 +337,16 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    emitExecutionPhaseBestEffort(ctx, {
-      phase: "tool_execution_started",
-      tool: toolName,
-      toolCallId,
-      source: "embedded-agent",
+    runBestEffortCallback({
+      label: "tool execution phase",
+      log: ctx.log,
+      callback: () =>
+        ctx.params.onExecutionPhase?.({
+          phase: "tool_execution_started",
+          tool: toolName,
+          toolCallId,
+          source: "embedded-agent",
+        }),
     });
 
     const startedAt = Date.now();
@@ -450,8 +372,6 @@ export function handleToolExecutionStart(
       const filePath = filePathValue.trim();
       if (!filePath) {
         const argsType = typeof args;
-        const rawArgsPreview = readStringValue(args);
-        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
@@ -471,13 +391,8 @@ export function handleToolExecutionStart(
         if (safeAgentId) {
           consoleMessageParts.push(`agentId=${safeAgentId}`);
         }
-        if (argsPreview) {
-          consoleMessageParts.push(`argsPreview=${argsPreview}`);
-        }
         const consoleMessage = consoleMessageParts.join(" ");
-        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
-          argsPreview ? ` argsPreview=${argsPreview}` : ""
-        }`;
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}`;
         ctx.log.warn(message, {
           event: "embedded_read_tool_start_warning",
           tags: ["tool_start", "read", "embedded", "validation"],
@@ -487,7 +402,6 @@ export function handleToolExecutionStart(
           ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
           ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
           ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
-          ...(argsPreview ? { argsPreview } : {}),
           consoleMessage,
         });
       }
@@ -538,7 +452,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
+        args: asOptionalObjectRecord(args),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });

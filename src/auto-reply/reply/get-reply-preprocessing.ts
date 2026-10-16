@@ -1,9 +1,10 @@
 // Optional utility preprocessing keeps its runtime loaders lazy and cancellation explicit.
+import type { ActiveMediaModel } from "../../../packages/media-understanding-common/src/active-model.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -21,10 +22,7 @@ const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 
 export function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.agentText;
-  if (!message) {
-    return false;
-  }
-  return /\bhttps?:\/\/\S+/i.test(message);
+  return Boolean(message && /\bhttps?:\/\/\S+/i.test(message));
 }
 
 export async function applyMediaUnderstandingIfNeeded(params: {
@@ -33,7 +31,7 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: { provider: string; model: string };
+  activeModel: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
@@ -44,7 +42,6 @@ export async function applyMediaUnderstandingIfNeeded(params: {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
     return await applyMediaUnderstanding(params);
   } catch (err) {
-    mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
@@ -73,17 +70,10 @@ export async function applyLinkUnderstandingIfNeeded(params: {
     if (isAbortError(err)) {
       throw err;
     }
-    linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
     return false;
-  }
-}
-
-export function assertReplyPreprocessingActive(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) {
-    throw createAbortError("Reply canceled during preprocessing", { cause: signal.reason });
   }
 }
 

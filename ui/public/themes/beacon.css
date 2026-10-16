@@ -10,6 +10,24 @@
  * toward the text. Beacon tints neutrally instead and lets the label carry the
  * contrast, which is what buys AAA on the status pairs.
  */
+:root[data-theme="beacon"],
+:root[data-theme="beacon-light"] {
+  /* Focus is 3px and fully opaque: a translucent ring is the first thing to
+     disappear on a poor panel, which is exactly this theme's audience. */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
+  --overlay-shadow: var(--shadow-md);
+  --overlay-border: var(--border-strong);
+
+  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
+     the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */
+  --font-body:
+    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: var(--font-body);
+}
+
 :root[data-theme="beacon"] {
   /*
    * Accent — high-visibility amber on pure black
@@ -29,12 +47,9 @@
   --primary: #ffc233;
   --primary-hover: #ffd45e;
   --primary-foreground: #000000;
+  --accent-foreground: #000000;
 
-  /* Focus is 3px and fully opaque: a translucent ring is the first thing to
-     disappear on a poor panel, which is exactly this theme's audience. */
   --focus: rgba(255, 194, 51, 0.35);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
 
   --bg: #000000;
   --bg-accent: #0a0a0a;
@@ -96,15 +111,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.9);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.9);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.95);
-  --overlay-shadow: var(--shadow-md);
-  --overlay-border: var(--border-strong);
 
   --grid-line: rgba(255, 255, 255, 0.08);
-  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
-     the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */
-  --font-body:
-    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: var(--font-body);
 }
 
 :root[data-theme="beacon-light"] {
@@ -124,11 +132,11 @@
   --accent-subtle: rgba(0, 0, 0, 0.07);
   --accent-glow: rgba(110, 74, 0, 0.2);
   --primary: #6e4a00;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
 
   --focus: rgba(110, 74, 0, 0.35);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
-  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
 
   --bg: #ffffff;
   --bg-accent: #f4f4f4;
@@ -191,13 +199,6 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.28);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.3);
-  --overlay-shadow: var(--shadow-md);
-  --overlay-border: var(--border-strong);
 
   --grid-line: rgba(0, 0, 0, 0.12);
-  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
-     the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */
-  --font-body:
-    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-chat: var(--font-body);
 }

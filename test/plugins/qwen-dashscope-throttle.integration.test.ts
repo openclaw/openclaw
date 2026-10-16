@@ -1,17 +1,20 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { beforeAll, describe, expect, it } from "vitest";
 import { readPersistedAuthProfileStateRaw } from "../../src/agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/auth-profiles/store-runtime.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
-import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
 import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createPluginMetadataSnapshot } from "../../src/config/plugin-auto-enable.test-helpers.js";
+import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { resolveProviderRuntimePluginHandle } from "../../src/plugins/provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
@@ -40,8 +43,19 @@ const model = {
 } satisfies Model<"openai-completions">;
 
 const registeredProviders = new Map<string, ProviderPlugin[]>();
+let availabilitySnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
 
 beforeAll(async () => {
+  const registry = loadPluginManifestRegistryCore({
+    installRecords: {},
+    candidates: ["qwen", "openrouter"].map((id) => ({
+      idHint: id,
+      rootDir: path.resolve("extensions", id),
+      source: path.resolve("extensions", id, "index.ts"),
+      origin: "bundled" as const,
+    })),
+  });
+  availabilitySnapshot = createPluginMetadataSnapshotFixture(registry);
   for (const pluginId of ["qwen", "openrouter"]) {
     const { default: plugin } = await loadBundledPluginFacade<{
       default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
@@ -146,12 +160,11 @@ async function runTransportError(params: {
   }
 }
 
-async function runThroughFailureRecovery(params: {
+async function runThroughFailureRecoveryInScope(params: {
   provider: string;
   providerOwner?: ProviderPlugin;
   fixture: ErrorFixture;
 }): Promise<{
-  reason: string | null;
   failureReason: unknown;
   usage: ProfileUsageReadback | undefined;
   affectedModelBlocked: boolean;
@@ -180,22 +193,32 @@ async function runThroughFailureRecovery(params: {
         runId,
         sessionId,
         sessionKey: `agent:main:${params.provider}:${params.fixture.code}`,
+        sessionFile: `${state.agentDir()}/session.jsonl`,
+        workspaceDir: state.agentDir(),
+        prompt: "hello",
+        timeoutMs: 60_000,
         config: {},
-      };
+      } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
       const failover = createEmbeddedRunFailoverRetryController({
-        runParams: runParams as never,
-        provider: params.provider,
-        modelId: MODEL_ID,
-        globalLane: "qwen-dashscope-throttle-test",
-        agentDir: state.agentDir(),
-        fallbackConfigured: false,
-        profileFailureStore: profileStore,
-        getLastProfileId: () => profileId,
+        runInput: {
+          runParams,
+          globalLane: "qwen-dashscope-throttle-test",
+          agentDir: state.agentDir(),
+          fallbackConfigured: false,
+        },
+        preparedRuntime: {
+          provider: params.provider,
+          modelId: MODEL_ID,
+          profileFailureStore: profileStore,
+          snapshot: () => ({
+            lastProfileId: profileId,
+            pluginHarnessOwnsTransport: false,
+            agentHarness: { id: "embedded" },
+          }),
+          getApiKeyInfo: () => null,
+          advanceAttemptAuthProfile: async () => false,
+        },
         getSessionId: () => sessionId,
-        harnessOwnsTransport: () => false,
-        getRuntimeAuthOwnerId: () => "embedded",
-        getApiKeyInfo: () => null,
-        advanceAuthProfile: async () => false,
       });
       const attempt = makeEmbeddedRunnerAttempt({
         lastAssistant: assistant,
@@ -210,36 +233,44 @@ async function runThroughFailureRecovery(params: {
       const suspensionReasons: string[] = [];
       try {
         await handleEmbeddedAssistantFailure({
-          runParams: runParams as never,
-          attempt,
-          attemptAssistant: assistant,
-          currentAttemptAssistant: assistant,
-          terminalState,
-          activeErrorContext: { provider: params.provider, model: MODEL_ID },
-          provider: params.provider,
+          runInput: {
+            runParams,
+            fallbackConfigured: false,
+            suspendForFailure: ({ reason }) => {
+              suspensionReasons.push(reason);
+            },
+            agentDir: state.agentDir(),
+            isProbeSession: false,
+          },
+          normalizedAttempt: {
+            attempt,
+            attemptAssistant: assistant,
+            currentAttemptAssistant: assistant,
+            terminalState,
+            activeErrorContext: { provider: params.provider, model: MODEL_ID },
+          },
+          preparedRuntime: {
+            provider: params.provider,
+            modelId: MODEL_ID,
+            model: { id: MODEL_ID },
+            attemptedThinking: new Set(["off"]),
+            attemptAuthProfileStore: profileStore,
+            maybeRefreshRuntimeAuthForAuthError: async () => false,
+          },
+          runtime: {
+            thinkLevel: "off",
+            pluginHarnessOwnsTransport: false,
+            lastProfileId: profileId,
+          },
           providerOwner: params.providerOwner,
-          modelId: MODEL_ID,
-          model: MODEL_ID,
-          thinkLevel: "off",
           getThinkLevel: () => "off",
-          attemptedThinking: new Set(["off"]),
-          fallbackConfigured: false,
-          pluginHarnessOwnsTransport: false,
-          authProfileId: profileId,
-          authProfileStore: profileStore,
           runtimeAuthRetry: false,
-          maybeRefreshRuntimeAuthForAuthError: async () => false,
           failover,
           emptyErrorRetries: 0,
           overloadProfileRotations: 0,
           previousRetryFailoverReason: null,
           traceAttempts: [],
-          suspendForFailure: ({ reason }) => {
-            suspensionReasons.push(reason);
-          },
           suspensionSessionId: sessionId,
-          agentDir: state.agentDir(),
-          isProbeSession: false,
         });
       } catch (error) {
         failureReason =
@@ -252,32 +283,26 @@ async function runThroughFailureRecovery(params: {
       } | null;
       const freshStore = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir());
       expect(freshStore.usageStats?.[profileId]).toEqual(persisted?.usageStats?.[profileId]);
-      const result = {
-        reason: classifyAssistantFailoverReason(assistant, {
-          providerOwner: params.providerOwner,
-        }),
+      return {
         failureReason,
         usage: persisted?.usageStats?.[profileId],
         affectedModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, MODEL_ID),
         otherModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, "qwen3.8-flash"),
         suspensionReasons,
       };
-      console.info(
-        "DASHSCOPE_PROFILE_PROOF",
-        JSON.stringify({
-          provider: params.provider,
-          code: params.fixture.code,
-          preparedOwner: params.providerOwner?.id ?? null,
-          ...result,
-        }),
-      );
-      return result;
     },
   );
 }
 
+function runThroughFailureRecovery(params: Parameters<typeof runThroughFailureRecoveryInScope>[0]) {
+  return withPluginMetadataSnapshotScope(
+    availabilitySnapshot,
+    () => runThroughFailureRecoveryInScope(params),
+    { trustConfigIdentity: true },
+  );
+}
+
 function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.reason).toBe("rate_limit");
   expect.soft(result.failureReason).toBe("rate_limit");
   expect.soft(result.usage).toMatchObject({
     cooldownReason: "rate_limit",
@@ -291,7 +316,6 @@ function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailur
 }
 
 function expectBillingState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.reason).toBe("billing");
   expect.soft(result.failureReason).toBe("billing");
   expect.soft(result.usage).toMatchObject({
     disabledReason: "billing",
@@ -306,129 +330,119 @@ function expectOpenRouterState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
   reason: "rate_limit" | "billing",
 ): void {
-  expect.soft(result.reason).toBe(reason);
   expect.soft(result.failureReason).toBe(reason);
   expect
     .soft(result.suspensionReasons)
     .toEqual([reason === "rate_limit" ? "quota_exhausted" : "manual"]);
-  // OpenRouter manages credential cooldowns; preserve the existing writer/reader bypass.
-  expect.soft(result.usage).toBeUndefined();
-  expect.soft(result.affectedModelBlocked).toBe(false);
-  expect.soft(result.otherModelBlocked).toBe(false);
+  if (reason === "billing") {
+    expectBillingState(result);
+  } else {
+    expect.soft(result.usage).toBeUndefined();
+    expect.soft(result.affectedModelBlocked).toBe(false);
+    expect.soft(result.otherModelBlocked).toBe(false);
+  }
 }
 
-describe("Qwen DashScope 429 profile classification", () => {
-  it("keeps registered OpenRouter wrapper errors in the rate-limit lane", async () => {
-    const providerOwner = prepareProviderOwner("openrouter", "openrouter");
-    expect(
-      providerOwner.classifyFailoverReason?.({
-        provider: "openrouter",
-        status: 429,
-        errorMessage: "Provider returned error",
-      }),
-    ).toBe("timeout");
-    const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner,
-      fixture: { status: 429, code: 429, message: "Provider returned error" },
-    });
-    expectOpenRouterState(result, "rate_limit");
+describe("self-managed provider HTTP recovery", () => {
+  const provider = "self-managed-fixture";
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: provider, providers: [provider], managesOwnAvailability: true }],
   });
-
-  it("keeps registered OpenRouter upstream billing inside metadata.raw in the billing lane", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner: prepareProviderOwner("openrouter", "openrouter"),
-      fixture: {
-        status: 429,
-        code: 429,
-        message: "Provider returned error",
-        metadata: { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
-      },
-    });
-    expectOpenRouterState(result, "billing");
-  });
-
-  it("preserves the registered OpenRouter explicit key-budget billing decision", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner: prepareProviderOwner("openrouter", "openrouter"),
-      fixture: { status: 429, code: 429, message: "API key budget limit exceeded" },
-    });
-    expectOpenRouterState(result, "billing");
-  });
-
   it.each([
-    {
-      provider: QWEN_TOKEN_PLAN_PROVIDER_ID,
-      code: "insufficient_quota",
-      message: "Allocated quota exceeded, please increase your quota limit.",
-    },
-    {
-      provider: "qwen",
-      code: "Throttling.AllocationQuota",
-      message: "Allocated quota exceeded, please increase your quota limit.",
-    },
-    {
-      provider: "bailian-token-plan",
-      code: "insufficient_quota",
-      message: "You exceeded your current quota, please check your plan and billing details.",
-    },
-  ])("keeps $provider $code in the model-scoped rate-limit lane", async (fixture) => {
-    const result = await runThroughFailureRecovery({
-      provider: fixture.provider,
-      providerOwner: prepareProviderOwner(fixture.provider),
-      fixture: { status: 429, code: fixture.code, message: fixture.message },
-    });
-    expectRateLimitState(result);
-  });
-
-  it.each(["PrepaidBillOverdue", "PostpaidBillOverdue"])(
-    "keeps explicit Qwen %s in the billing lane",
-    async (code) => {
-      const result = await runThroughFailureRecovery({
-        provider: "qwen",
-        providerOwner: prepareProviderOwner("qwen"),
-        fixture: {
-          status: 429,
-          code,
-          message: "The prepaid bill is overdue.",
-        },
-      });
-      expectBillingState(result);
+    { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
+    { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
+    { status: 401, message: "Invalid API key", reason: "auth", transient: false },
+    { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
+  ] as const)(
+    "enforces policy after HTTP $status",
+    async ({ status, message, reason, transient }) => {
+      const result = await withPluginMetadataSnapshotScope(
+        snapshot,
+        () =>
+          runThroughFailureRecoveryInScope({
+            provider,
+            fixture: { status, code: status, message },
+          }),
+        { trustConfigIdentity: true },
+      );
+      expect(result.failureReason).toBe(reason);
+      if (transient) {
+        expect(result.usage).toBeUndefined();
+      } else {
+        expect(result.usage).toMatchObject(
+          reason === "billing"
+            ? { disabledReason: reason, disabledUntil: expect.any(Number) }
+            : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
+        );
+      }
+      expect(result.affectedModelBlocked).toBe(!transient);
+      expect(result.otherModelBlocked).toBe(!transient);
     },
   );
+});
 
-  it("keeps an ordinary Qwen HTTP 429 in the generic rate-limit lane", async () => {
+describe("Qwen DashScope 429 profile classification", () => {
+  it.each<
+    [
+      provider: string,
+      code: ErrorFixture["code"],
+      message: string,
+      reason: "rate_limit" | "billing",
+      metadata?: ErrorFixture["metadata"],
+    ]
+  >([
+    ["openrouter", 429, "Provider returned error", "rate_limit"],
+    [
+      "openrouter",
+      429,
+      "Provider returned error",
+      "billing",
+      { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
+    ],
+    ["openrouter", 429, "API key budget limit exceeded", "billing"],
+    [
+      QWEN_TOKEN_PLAN_PROVIDER_ID,
+      "insufficient_quota",
+      "Allocated quota exceeded, please increase your quota limit.",
+      "rate_limit",
+    ],
+    [
+      "qwen",
+      "Throttling.AllocationQuota",
+      "Allocated quota exceeded, please increase your quota limit.",
+      "rate_limit",
+    ],
+    [
+      "bailian-token-plan",
+      "insufficient_quota",
+      "You exceeded your current quota, please check your plan and billing details.",
+      "rate_limit",
+    ],
+    ["qwen", "PrepaidBillOverdue", "The prepaid bill is overdue.", "billing"],
+    ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
+    [
+      "openai",
+      "insufficient_quota",
+      "You exceeded your current quota, please check your plan and billing details.",
+      "billing",
+    ],
+    ["qwen", "insufficient_quota", "Free allocated quota exceeded.", "billing"],
+    ["qwen", "insufficient_quota", "Unknown quota condition", "billing"],
+  ])("classifies %s %s (%s) as %s", async (provider, code, message, reason, metadata) => {
     const result = await runThroughFailureRecovery({
-      provider: "qwen",
-      providerOwner: prepareProviderOwner("qwen"),
-      fixture: { status: 429, code: "rate_limit_error", message: "Rate limit exceeded" },
+      provider,
+      providerOwner:
+        provider === "openai"
+          ? undefined
+          : prepareProviderOwner(provider, provider === "openrouter" ? "openrouter" : "qwen"),
+      fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
     });
-    expectRateLimitState(result);
-  });
-
-  it("does not reinterpret another provider's insufficient_quota semantics", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openai",
-      fixture: {
-        status: 429,
-        code: "insufficient_quota",
-        message: "You exceeded your current quota, please check your plan and billing details.",
-      },
-    });
-    expectBillingState(result);
-  });
-
-  it.each(["Free allocated quota exceeded.", "Unknown quota condition"])(
-    "does not reinterpret non-throttling quota evidence: %s",
-    async (message) => {
-      const result = await runThroughFailureRecovery({
-        provider: "qwen",
-        providerOwner: prepareProviderOwner("qwen"),
-        fixture: { status: 429, code: "insufficient_quota", message },
-      });
+    if (provider === "openrouter") {
+      expectOpenRouterState(result, reason);
+    } else if (reason === "rate_limit") {
+      expectRateLimitState(result);
+    } else {
       expectBillingState(result);
-    },
-  );
+    }
+  });
 });

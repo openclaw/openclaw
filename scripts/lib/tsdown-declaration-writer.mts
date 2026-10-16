@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
-  resolveStagedDeclarationConcurrency,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
@@ -44,6 +44,7 @@ export async function writeTsdownDeclarations(
   try {
     // The private child retains declared cwd ownership; snapshot/output paths are physical.
     await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -51,16 +52,18 @@ export async function writeTsdownDeclarations(
       const environment = TSDOWN_UNIFIED_CACHE_ENV.map((name) =>
         JSON.stringify([name, process.env[name] ?? ""]),
       );
-      const generatorInputs = resolveTsdownDeclarationGeneratorInputs(root, generatorEntry);
-      const snapshot = () =>
-        new CompilerInputSnapshot(root, {
-          toolchainFiles: resolveTsdownCompilerFiles(),
-          generatorInputs,
-          isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
-        });
-      // All groups share the same before/after reads of configuration, topology,
-      // tools and overlapping sources. Only compiler membership differs.
-      const before = snapshot();
+      const cacheEnabled = process.env.OPENCLAW_BUILD_CACHE !== "0";
+      const generatorInputs = cacheEnabled
+        ? resolveTsdownDeclarationGeneratorInputs(root, generatorEntry)
+        : [];
+      // All groups share configuration, topology, tools and overlapping source reads.
+      const before = cacheEnabled
+        ? new CompilerInputSnapshot(root, {
+            toolchainFiles: resolveTsdownCompilerFiles(),
+            generatorInputs,
+            isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+          })
+        : undefined;
       const liveDist = path.join(root, "dist");
       const prepared = groups.map((name) => {
         const config = configs.find((candidate: { name?: string }) => candidate.name === name);
@@ -74,7 +77,7 @@ export async function writeTsdownDeclarations(
         ) {
           throw new Error(`Missing canonical declaration group ${name}`);
         }
-        // Runtime worker entries are absolute; declaration partitions are checkout-relative.
+        // Runtime worker entries are absolute; declaration roots are checkout-relative.
         const entries = Object.entries(config.entry).map(
           ([entry, inputs]) =>
             [entry, [inputs].flat().map((input) => path.resolve(root, input))] as const,
@@ -104,29 +107,13 @@ export async function writeTsdownDeclarations(
         const stage = createStage();
         const groupOutput = path.join(stage, "dist");
         requestDeclarationInputs(groupOutput, name, config.dts.entry);
-        const plan = prepareTsdownBuildExecution(
-          {
-            args: ["--config", "tsdown.config.ts", "--filter", name, "--out-dir", groupOutput],
-          },
-          {
-            // Every compiler owns a fresh stage; live runtime outputs stay intact.
-            cleanup() {},
-            reportShortfall(shortfall) {
-              console.error(shortfall.message);
-            },
-          },
-        );
-        if (!plan) {
-          throw new Error("Insufficient memory for declaration build");
-        }
         const receipt = `compiler-inputs/${name}.json`;
         const step: BuildCacheStep = {
           label: `${label}-${name}`,
           cache: {
             env: TSDOWN_UNIFIED_CACHE_ENV,
             inputs: generatorInputs,
-            // An empty canonical partition still owns its successful compiler
-            // receipt. Ordinary cache records never admit an empty inventory.
+            // Successful publication includes the compiler membership receipt.
             outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }, receipt],
             requiredOutputs: [...required.map((entry) => `dist/${entry}`), receipt],
             restore: "always",
@@ -139,46 +126,57 @@ export async function writeTsdownDeclarations(
             ...process.env,
             OPENCLAW_BUILD_PRIVATE_QA: process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? "1" : "0",
           },
-          inputSignature: (inputs: string[]) =>
-            before.signature("tsconfig.json", identity, inputs, liveDist),
+          inputSignature: before
+            ? (inputs: string[]) => before.signature("tsconfig.json", identity, inputs, liveDist)
+            : undefined,
         };
-        const state =
-          process.env.OPENCLAW_BUILD_CACHE === "0"
-            ? undefined
-            : resolveBuildStepCacheState(step, params);
-        if (!state) {
-          params.inputSignature([]);
-        }
+        const state = before ? resolveBuildStepCacheState(step, params) : undefined;
         // Record the lookup before compilation replaces the signature and cache record.
         console.error(
           `[${label}] ${name}: cache ${state?.fresh ? "hit" : "miss"} (${state?.reason ?? "disabled"})`,
         );
-        return { name, output: groupOutput, required, identity, plan, step, params, state };
+        return { name, output: groupOutput, required, identity, step, params, state };
       });
       const required = prepared.flatMap((group) => group.required);
       if (!required.length) {
         throw new Error("Canonical declaration selection is empty");
       }
-      const startedAt = Date.now();
       for (const group of prepared) {
         if (group.state?.fresh && !restoreBuildStepCacheOutputs(group.state, group.params)) {
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Only nonempty single-compiler private stages may overlap. Publication
-      // still joins the complete batch before merging any group's declarations.
       const misses = prepared.filter((group) => !group.state?.fresh);
-      const concurrency = misses.every(
-        (group) => group.required.length > 0 && group.plan.invocations.length === 1,
-      )
-        ? resolveStagedDeclarationConcurrency(
-            misses.map((group) => ({ name: group.name, maxOldSpaceMb: group.plan.maxOldSpaceMb })),
-          )
-        : 1;
-      const plan = {
-        ...prepared[0]!.plan,
-        invocations: misses.flatMap((group) => group.plan.invocations),
-      };
+      let plan: ReturnType<typeof prepareTsdownBuildExecution> = null;
+      for (const group of misses) {
+        const next = prepareTsdownBuildExecution(
+          {
+            args: [
+              "--config",
+              "tsdown.config.ts",
+              "--filter",
+              group.name,
+              "--out-dir",
+              group.output,
+            ],
+          },
+          {
+            // Only cache misses launch compilers and need their memory admission.
+            cleanup() {},
+            reportShortfall(shortfall) {
+              console.error(shortfall.message);
+            },
+          },
+        );
+        if (!next) {
+          throw new Error("Insufficient memory for declaration build");
+        }
+        if (plan) {
+          plan.invocations.push(...next.invocations);
+        } else {
+          plan = next;
+        }
+      }
       await publishStagedDeclarations(
         plan,
         prepared.map((group) => ({ output: group.output, required: group.required })),
@@ -187,26 +185,19 @@ export async function writeTsdownDeclarations(
         required,
         previousOutputs(root).map((file) => portableRelativePath(liveDist, file)),
         () => {
-          const after = snapshot();
           for (const group of prepared) {
-            const sealed = after.seal(
-              "tsconfig.json",
-              group.identity,
-              readDeclarationInputs(group.output, group.name),
-              before,
-              startedAt,
-              liveDist,
-            );
-            if (group.state?.fresh && sealed.signature !== group.state.signature) {
-              throw new Error(`Cached declaration membership changed: ${group.name}`);
-            }
-            if (group.state) {
-              group.state.signature = sealed.signature;
-              group.state.consumedInputs = sealed.inputs;
+            const inputs = readDeclarationInputs(group.output, group.name);
+            if (group.state && before) {
+              group.state.signature = before.signature(
+                "tsconfig.json",
+                group.identity,
+                inputs,
+                liveDist,
+              );
+              group.state.consumedInputs = inputs;
             }
           }
         },
-        concurrency,
       );
       for (const group of prepared) {
         if (group.state && !group.state.fresh) {

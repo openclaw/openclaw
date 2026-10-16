@@ -123,6 +123,48 @@ function installQuestionAdapter(manager: QuestionManager) {
   };
 }
 
+const destination = { channel: "matrix", to: "!room:example", queuePolicy: "required" } as const;
+const unavailable = "Unavailable: request a new question.";
+
+async function assertStaleReaction(
+  manager: QuestionManager,
+  adapter: ReturnType<typeof installQuestionAdapter>,
+  messageId: string,
+  statusLine: string,
+  finalizedBeforeReaction = false,
+) {
+  expect(adapter.afterDeliverPayload).toHaveBeenCalledOnce();
+  if (finalizedBeforeReaction) {
+    expect(adapter.finalized).toHaveBeenCalledExactlyOnceWith(messageId, statusLine);
+  }
+  expect(manager.get(questionId)?.status).toBe("pending");
+  await expect(adapter.react(messageId, 1)).resolves.toBe(true);
+  expect(adapter.resolveReaction).not.toHaveBeenCalled();
+  expect(manager.get(questionId)?.status).toBe("pending");
+  expect(adapter.finalized).toHaveBeenCalledExactlyOnceWith(messageId, statusLine);
+}
+
+async function assertFreshReaction(
+  manager: QuestionManager,
+  adapter: ReturnType<typeof installQuestionAdapter>,
+  previousMessageId: string,
+  statusLine: string,
+) {
+  expect(adapter.afterDeliverPayload).toHaveBeenCalledTimes(2);
+  await expect(adapter.react("message-b", 1)).resolves.toBe(true);
+  expect(adapter.resolveReaction).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ questionId, optionValue: "Production" }),
+  );
+  expect(manager.get(questionId)).toMatchObject({
+    status: "answered",
+    answers: { answers: { target: ["Production"] } },
+  });
+  expect(adapter.finalized.mock.calls).toEqual([
+    [previousMessageId, statusLine],
+    ["message-b", "Answered: Production"],
+  ]);
+}
+
 describe("generic outbound question generation", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
 
@@ -156,14 +198,13 @@ describe("generic outbound question generation", () => {
       retention: "channel retention",
       reuseAfterMs: 24 * 60 * 60 * 1_000,
       skipQueue: true,
-      statusLine: "Unavailable: request a new question.",
+      statusLine: unavailable,
     },
   ])(
     "keeps old reactions inert for a held $delivery send after $retention",
     async ({ reuseAfterMs, skipQueue, statusLine }) => {
       const manager = new QuestionManager(scheduler);
-      const { afterDeliverPayload, finalized, resolveReaction, react } =
-        installQuestionAdapter(manager);
+      const adapter = installQuestionAdapter(manager);
       const sendEntered = createDeferredCore();
       const releaseSend = createDeferredCore();
       const sendMatrix = vi
@@ -176,11 +217,9 @@ describe("generic outbound question generation", () => {
       const send = () =>
         runOutboundDeliveryInternal({
           cfg: {},
-          channel: "matrix",
-          to: "!room:example",
+          ...destination,
           payloads: [payload],
           deps: { matrix: sendMatrix },
-          queuePolicy: "required",
           skipQueue,
         });
       let firstSend: ReturnType<typeof send> | undefined;
@@ -193,27 +232,10 @@ describe("generic outbound question generation", () => {
         releaseSend.resolve();
         await expect(firstSend).resolves.toMatchObject([{ messageId: "message-a" }]);
 
-        expect(afterDeliverPayload).toHaveBeenCalledOnce();
-        expect(manager.get(questionId)?.status).toBe("pending");
-        await expect(react("message-a", 1)).resolves.toBe(true);
-        expect(resolveReaction).not.toHaveBeenCalled();
-        expect(manager.get(questionId)?.status).toBe("pending");
-        expect(finalized).toHaveBeenCalledExactlyOnceWith("message-a", statusLine);
+        await assertStaleReaction(manager, adapter, "message-a", statusLine);
         await expect(send()).resolves.toMatchObject([{ messageId: "message-b" }]);
-        expect(afterDeliverPayload).toHaveBeenCalledTimes(2);
-        expect(finalized).toHaveBeenCalledOnce();
-        await expect(react("message-b", 1)).resolves.toBe(true);
-        expect(resolveReaction).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ questionId, optionValue: "Production" }),
-        );
-        expect(manager.get(questionId)).toMatchObject({
-          status: "answered",
-          answers: { answers: { target: ["Production"] } },
-        });
-        expect(finalized.mock.calls).toEqual([
-          ["message-a", statusLine],
-          ["message-b", "Answered: Production"],
-        ]);
+        expect(adapter.finalized).toHaveBeenCalledOnce();
+        await assertFreshReaction(manager, adapter, "message-a", statusLine);
         expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
       } finally {
         releaseSend.resolve();
@@ -224,158 +246,77 @@ describe("generic outbound question generation", () => {
     },
   );
 
-  it("does not bind a recovered id-only payload to a newer question generation", async () => {
-    const manager = new QuestionManager(scheduler);
-    const { afterDeliverPayload, finalized, resolveReaction, react } =
-      installQuestionAdapter(manager);
-    const deliveryId = "question-generation-recovery";
-    const sendMatrix = vi
-      .fn(async () => ({ messageId: "message-b" }))
-      .mockResolvedValueOnce({ messageId: "recovered-message-a" });
-    try {
-      request(manager, 50);
-      await expect(
-        enqueueDeliveryOnce(
-          {
-            channel: "matrix",
-            to: "!room:example",
-            payloads: [payload],
-            queuePolicy: "required",
-          },
-          deliveryId,
-          fixtures.tmpDir(),
-        ),
-      ).resolves.toEqual({ id: deliveryId, created: true });
-      await expireAndReuse(manager);
-      const deliver = vi.fn<DeliverFn>(async (params) =>
-        runOutboundDeliveryInternal({ ...params, deps: { matrix: sendMatrix } }),
-      );
-      await drainMatrixReconnect({ deliver, stateDir: fixtures.tmpDir() });
-
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
-      );
-      expect(sendMatrix).toHaveBeenCalledOnce();
-      expect(afterDeliverPayload).toHaveBeenCalledOnce();
-      expect(finalized).toHaveBeenCalledExactlyOnceWith(
-        "recovered-message-a",
-        "Unavailable: request a new question.",
-      );
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      expect(manager.get(questionId)?.status).toBe("pending");
-      await expect(react("recovered-message-a", 1)).resolves.toBe(true);
-      expect(resolveReaction).not.toHaveBeenCalled();
-      expect(manager.get(questionId)?.status).toBe("pending");
-
-      await expect(
+  it.each(["recovered id-only payload", "restored stable-intent custody"])(
+    "does not bind %s to a newer question generation, while a fresh send still binds",
+    async (custody) => {
+      const stableIntent = custody === "restored stable-intent custody";
+      const manager = new QuestionManager(scheduler);
+      const adapter = installQuestionAdapter(manager);
+      const deliveryId = "question-generation-recovery";
+      const oldPayload = stableIntent
+        ? { ...payload, text: "Original deployment question" }
+        : payload;
+      const newPayload = stableIntent
+        ? { ...payload, text: "Replacement deployment question" }
+        : payload;
+      const oldMessageId = stableIntent ? "retried-message-a" : "recovered-message-a";
+      const sendMatrix = vi
+        .fn(async () => ({ messageId: "message-b" }))
+        .mockResolvedValueOnce({ messageId: oldMessageId });
+      const send = (deliveryIntentId?: string) =>
         runOutboundDeliveryInternal({
           cfg: {},
-          channel: "matrix",
-          to: "!room:example",
-          payloads: [payload],
+          ...destination,
+          payloads: [newPayload],
           deps: { matrix: sendMatrix },
-          queuePolicy: "required",
-        }),
-      ).resolves.toMatchObject([{ messageId: "message-b" }]);
-      expect(afterDeliverPayload).toHaveBeenCalledTimes(2);
-      await expect(react("message-b", 1)).resolves.toBe(true);
-      expect(resolveReaction).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ questionId, optionValue: "Production" }),
-      );
-      expect(manager.get(questionId)).toMatchObject({
-        status: "answered",
-        answers: { answers: { target: ["Production"] } },
-      });
-      expect(finalized.mock.calls).toEqual([
-        ["recovered-message-a", "Unavailable: request a new question."],
-        ["message-b", "Answered: Production"],
-      ]);
-    } finally {
-      manager.close();
-      await drainGlobalSingletonLifecycleState("restart");
-    }
-  });
-
-  it("does not bind restored stable-intent custody to a newer question, while a fresh reusable intent still binds", async () => {
-    const manager = new QuestionManager(scheduler);
-    const { afterDeliverPayload, finalized, resolveReaction, react } =
-      installQuestionAdapter(manager);
-    const deliveryId = "question-generation-stable-retry";
-    const oldPayload = { ...payload, text: "Original deployment question" };
-    const newPayload = { ...payload, text: "Replacement deployment question" };
-    const sendMatrix = vi
-      .fn(async () => ({ messageId: "message-b" }))
-      .mockResolvedValueOnce({ messageId: "retried-message-a" });
-    const send = (deliveryIntentId: string) =>
-      runOutboundDeliveryInternal({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [newPayload],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryIntentId,
-        reusePendingDeliveryIntent: true,
-      });
-    try {
-      request(manager, 50);
-      await expect(
-        enqueueDeliveryOnce(
-          {
-            channel: "matrix",
-            to: "!room:example",
-            payloads: [oldPayload],
-            queuePolicy: "required",
-          },
-          deliveryId,
-          fixtures.tmpDir(),
-        ),
-      ).resolves.toEqual({ id: deliveryId, created: true });
-      await expireAndReuse(manager);
-
-      await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: "retried-message-a" }]);
-      expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
-        "!room:example",
-        oldPayload.text,
-        expect.any(Object),
-      );
-      expect(afterDeliverPayload).toHaveBeenCalledOnce();
-      expect(finalized).toHaveBeenCalledExactlyOnceWith(
-        "retried-message-a",
-        "Unavailable: request a new question.",
-      );
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      expect(manager.get(questionId)?.status).toBe("pending");
-      await expect(react("retried-message-a", 1)).resolves.toBe(true);
-      expect(resolveReaction).not.toHaveBeenCalled();
-      expect(manager.get(questionId)?.status).toBe("pending");
-
-      await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
-        { messageId: "message-b" },
-      ]);
-      expect(sendMatrix).toHaveBeenNthCalledWith(
-        2,
-        "!room:example",
-        newPayload.text,
-        expect.any(Object),
-      );
-      expect(afterDeliverPayload).toHaveBeenCalledTimes(2);
-      await expect(react("message-b", 1)).resolves.toBe(true);
-      expect(resolveReaction).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ questionId, optionValue: "Production" }),
-      );
-      expect(manager.get(questionId)).toMatchObject({
-        status: "answered",
-        answers: { answers: { target: ["Production"] } },
-      });
-      expect(finalized.mock.calls).toEqual([
-        ["retried-message-a", "Unavailable: request a new question."],
-        ["message-b", "Answered: Production"],
-      ]);
-      expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-    } finally {
-      manager.close();
-      await drainGlobalSingletonLifecycleState("restart");
-    }
-  });
+          ...(stableIntent ? { deliveryIntentId, reusePendingDeliveryIntent: true } : {}),
+        });
+      try {
+        request(manager, 50);
+        await expect(
+          enqueueDeliveryOnce(
+            { ...destination, payloads: [oldPayload] },
+            deliveryId,
+            fixtures.tmpDir(),
+          ),
+        ).resolves.toEqual({ id: deliveryId, created: true });
+        await expireAndReuse(manager);
+        if (stableIntent) {
+          await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
+          expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
+            "!room:example",
+            oldPayload.text,
+            expect.any(Object),
+          );
+        } else {
+          const deliver = vi.fn<DeliverFn>(async (params) =>
+            runOutboundDeliveryInternal({ ...params, deps: { matrix: sendMatrix } }),
+          );
+          await drainMatrixReconnect({ deliver, stateDir: fixtures.tmpDir() });
+          expect(deliver).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
+          );
+          expect(sendMatrix).toHaveBeenCalledOnce();
+        }
+        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+        await assertStaleReaction(manager, adapter, oldMessageId, unavailable, true);
+        await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
+          { messageId: "message-b" },
+        ]);
+        if (stableIntent) {
+          expect(sendMatrix).toHaveBeenNthCalledWith(
+            2,
+            "!room:example",
+            newPayload.text,
+            expect.any(Object),
+          );
+        }
+        await assertFreshReaction(manager, adapter, oldMessageId, unavailable);
+        expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
+      } finally {
+        manager.close();
+        await drainGlobalSingletonLifecycleState("restart");
+      }
+    },
+  );
 });

@@ -13,8 +13,12 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  readResidentUserProfileIdentity,
+  prepareUserProfileCatalog,
+} from "../state/user-profile-list.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -25,6 +29,7 @@ import {
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
@@ -33,11 +38,126 @@ import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("shares immutable unplaced facts until permission or activity publications replace them", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const query = { agentId: "main", key: "agent:main:shared-facts" };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key },
+      {
+        sessionId: "shared-facts",
+        updatedAt: 1,
+      },
+    );
+    const projection = await createSessionRowProjection({
+      cfg: { agents: { entries: { main: {} } } },
+      modelCatalog: [],
+    });
+    let releasePending: (() => void) | undefined;
+    try {
+      const facts = projection.describe(query)!.facts!;
+      const initial = facts.present();
+      expect(facts.present()).toBe(initial);
+      expect(Object.isFrozen(initial)).toBe(true);
+      releasePending = beginSessionPermissionChange("shared-facts");
+      const pending = facts.present();
+      expect(pending.permissionModePending).toBe(true);
+      expect(pending).not.toBe(initial);
+      expect(initial.permissionModePending).toBe(false);
+      expect(facts.present()).toBe(pending);
+      releasePending();
+      const settled = facts.present();
+      expect(settled.permissionModePending).toBe(false);
+      expect(pending.permissionModePending).toBe(true);
+      facts.refreshActivitySummary();
+      expect(facts.present()).not.toBe(settled);
+      expect(facts.present().sessionModelRevision).toBe(initial.sessionModelRevision);
+    } finally {
+      releasePending?.();
+      projection.dispose();
+    }
+  });
+});
+
+it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.gateway!.roles!.definitions.write!.sandbox = "required";
+    cfg.gateway!.roles!.definitions.restricted = {
+      sessions: { others: "write" },
+      agents: ["other"],
+      scopes: ["operator.read", "operator.write"],
+    };
+    cfg.session = {
+      sendPolicy: { rules: [{ action: "deny", match: { keyPrefix: "policy-blocked" } }] },
+    };
+    const clients = ["write", "view", "suggest", "restricted"].map((role) => {
+      const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
+      setUserProfileRole(profile.id, role);
+      return sharingPolicyClient({ user: profile.id });
+    });
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const client of clients) {
+      prepareGatewayRecipientProfile(client);
+    }
+    const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
+    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    for (const key of keys) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${key}` },
+        {
+          sessionId: key,
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: creatorId },
+          ...(key === "host" ? {} : { sandbox: "required" as const }),
+          ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
+        },
+      );
+    }
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      for (const [index, key, reason] of [
+        [
+          0,
+          "host",
+          'Your operator role requires a sandboxed session; create a new session instead of running in "agent:main:host".',
+        ],
+        [0, "sandbox", null],
+        [0, "entry-blocked", "send blocked by session policy"],
+        [0, "policy-blocked", "send blocked by session policy"],
+        [1, "sandbox", "session is shared for this connection"],
+        [2, "sandbox", "session is shared for this connection"],
+        [
+          3,
+          "sandbox",
+          'Your operator role cannot create sessions for agent "main"; choose an allowed agent or ask a gateway administrator to update your role.',
+        ],
+      ] as const) {
+        expect(
+          prepareProjectedSessionPresentation(projection, clients[index]!).snapshot({
+            agentId: "main",
+            key: `agent:main:${key}`,
+          }).row?.sendDisabledReason,
+        ).toBe(reason);
+      }
+      setUserProfileRole(creatorId, "view");
+      prepareGatewayRecipientProfile(clients[0]!);
+      expect(
+        prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+          agentId: "main",
+          key: "agent:main:host",
+        }).row?.sendDisabledReason,
+      ).toBeNull();
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
 it.each(["running", "queued", "capacity-wait"] as const)(
   "projects %s follow-up activity through completed subagent lineage outside the selected list page",
   async (state) => {
     using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       const parent = "agent:main:parent";
       const child = "agent:main:subagent:child";
@@ -199,7 +319,7 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         releaseWait?.();
         releaseAgentRunContext(runId, claim);
         projection.dispose();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
         }
@@ -212,12 +332,14 @@ it.each(["running", "queued", "capacity-wait"] as const)(
 );
 
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
-  using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("owner@presentation.test");
     const member = ensureProfileForEmail("member@presentation.test");
     const viewer = ensureProfileForEmail("viewer@presentation.test");
     setUserProfileRole(viewer.id, "none");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = [owner, member, viewer].map((profile) => {
       const client = Object.assign(sharingPolicyClient({ user: profile.id }), {
         connId: profile.id,
@@ -267,6 +389,9 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(
         prepareProjectedSessionPresentation(projection).present(captured)?.sharingRole,
       ).toBeUndefined();
+      expect(
+        prepareProjectedSessionPresentation(projection).present(captured)?.sendDisabledReason,
+      ).toBeUndefined();
       for (const [index, expectedRole, visible] of [
         [0, "owner", true],
         [1, "member", true],
@@ -276,7 +401,11 @@ it("presents current recipient roles without SQLite while rejecting source overr
         const presentation = prepareProjectedSessionPresentation(projection, client);
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) }),
-        ).toMatchObject({ sharingRole: expectedRole });
+        ).toMatchObject({
+          sharingRole: expectedRole,
+          sendDisabledReason:
+            expectedRole === "viewer" ? `Session "${query.key}" was not found.` : null,
+        });
         expect(
           presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) })
             ?.childSessions,
@@ -303,6 +432,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
               key: query.key,
               sessionId: entry.sessionId,
               label: null,
+              sendDisabledReason: "Untrusted source restriction",
               endedAt: null,
               status: "completed",
               activitySummary: { state: "stale", text: "Retained event summary" },
@@ -329,6 +459,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
             }),
           );
           expect(frame.payload.session).toEqual(JSON.parse(expectedWire));
+          expect(frame.payload.session.sendDisabledReason).toBeNull();
           expect(frame.payload.session).not.toMatchObject({ status: "completed", label: null });
         } else {
           expect(socket.send.mock.calls).toHaveLength(0);
@@ -485,19 +616,19 @@ it("presents current recipient roles without SQLite while rejecting source overr
       expect(socket.send.mock.calls).toHaveLength(0);
     } finally {
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
     }
   });
 });
 
 it("preserves selected account across role changes but rejects a changed merge identity without SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
     prepareGatewayRecipientProfile(client);
-    const release = retainUserProfileCatalog();
+    const release = (await prepareUserProfileCatalog()).release;
     try {
       const binding = (await createExpectedProfileBinding(source.id, client))!;
       const targetBinding = (await createExpectedProfileBinding(
@@ -522,7 +653,7 @@ it("preserves selected account across role changes but rejects a changed merge i
       const afterMerge = vi.spyOn(DatabaseSync.prototype, "prepare");
       expect(() => binding.assertCurrent()).toThrow(ExpectedProfileMismatchError);
       expect(() => targetBinding.assertCurrent()).not.toThrow();
-      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(afterMerge).not.toHaveBeenCalled();
     } finally {
       release();

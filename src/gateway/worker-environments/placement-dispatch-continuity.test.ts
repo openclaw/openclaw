@@ -10,11 +10,11 @@ describe("worker placement restart continuity", () => {
   support.setupWorkerEnvironmentServiceSuite();
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
-  const createTestHarness = (
+  const createTestHarness = async (
     options: Parameters<typeof createHarness>[2] = {},
     store: PlacementStore = placementStore,
   ) =>
-    createHarness(database, store, {
+    await createHarness(database, store, {
       workspacePath: path.join(support.testState.root, "workspace"),
       ...options,
     });
@@ -27,7 +27,7 @@ describe("worker placement restart continuity", () => {
   it.each(["stopped", "stop failed", "owner changed"] as const)(
     "recovers a previous-instance pending result on its surviving node only after the old runtime is stopped: %s",
     async (outcome) => {
-      const originalHarness = createTestHarness();
+      const originalHarness = await createTestHarness();
       const active = await originalHarness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
@@ -42,12 +42,12 @@ describe("worker placement restart continuity", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placementStore.markWorkspaceResultPending(claim);
+      await placementStore.markWorkspaceResultPending(claim);
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      const restarted = createTestHarness({}, restartedStore);
+      const restarted = await createTestHarness({}, restartedStore);
       restarted.markEnvironmentNodeDeviceId("surviving-node");
       vi.mocked(restarted.environments.stopTunnel).mockImplementation(async () => {
-        expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
         if (outcome === "stop failed") {
           throw new Error("worker has not confirmed stop");
@@ -72,14 +72,14 @@ describe("worker placement restart continuity", () => {
         turnClaim: outcome === "stopped" ? null : { claimId: claim.claimId },
       });
       if (outcome === "stopped") {
-        expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(restarted.placements.current()?.workspaceBaseManifestRef).toBe(
           restarted.reconciledManifestRef,
         );
         expect(restarted.log).toContain("workspace:resume");
         expect(restartedStore.validateTurnClaim(claim)).toBe(false);
       } else {
-        expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
       }
     },
@@ -88,7 +88,7 @@ describe("worker placement restart continuity", () => {
   it.each(["SSH", "node", "node stop failed"] as const)(
     "fences an interrupted worker turn after restart while preserving its surviving node: %s",
     async (scenario) => {
-      const original = createTestHarness();
+      const original = await createTestHarness();
       const active = await original.placements.seedActive(original.attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
@@ -103,9 +103,9 @@ describe("worker placement restart continuity", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placementStore.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      const restarted = createTestHarness({}, restartedStore);
+      const restarted = await createTestHarness({}, restartedStore);
       restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       if (scenario !== "SSH") {
         restarted.markEnvironmentNodeDeviceId("surviving-node");

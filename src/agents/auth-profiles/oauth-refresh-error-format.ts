@@ -1,13 +1,5 @@
 import { redactSensitiveText } from "../../logging/redact.js";
 
-function redactOAuthCredentialSecrets(message: string, secrets: string[]): string {
-  let redacted = message;
-  for (const secret of secrets) {
-    redacted = redacted.split(secret).join("[redacted]");
-  }
-  return redacted;
-}
-
 function formatRawErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     let formatted = error.message || error.name || "Error";
@@ -45,5 +37,9 @@ function formatRawErrorMessage(error: unknown): string {
 }
 
 export function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
-  return redactSensitiveText(redactOAuthCredentialSecrets(formatRawErrorMessage(error), secrets));
+  let redacted = formatRawErrorMessage(error);
+  for (const secret of secrets) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  return redactSensitiveText(redacted);
 }

@@ -144,8 +144,8 @@ describe("defaultRuntime terminal restoration", () => {
       stderr.push(String(chunk));
       return true;
     });
-    vi.spyOn(process, "exit").mockImplementation((code) => {
-      throw new ExitError(Number(code ?? 0));
+    vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("forced native exit");
     });
   });
 

@@ -20,42 +20,53 @@ import {
   stopDiagnosticHeartbeat,
 } from "./logging-core.js";
 
-it("uses the bound Gateway clock and stops only diagnostic work", async () => {
-  const previouslyEnabled = areDiagnosticsEnabledForProcess();
-  const clock = createGatewaySchedulerClock(Date.now());
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const host = new LegacyPluginSdkResourceHost();
-  host.bindScheduler(scheduler);
-  const peer = vi.fn();
-  const heartbeats: string[] = [];
-  const unsubscribe = onDiagnosticEvent((event) => {
-    if (event.type === "diagnostic.heartbeat") {
-      heartbeats.push(event.type);
+it.each(["heartbeat", "scheduler"] as const)(
+  "stops %s-owned diagnostics and permits a new generation",
+  async (stop) => {
+    const previouslyEnabled = areDiagnosticsEnabledForProcess();
+    const heartbeats: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.heartbeat") {
+        heartbeats.push(event.type);
+      }
+    });
+    try {
+      setDiagnosticsEnabledForProcess(true);
+      for (let generation = 0; generation < 2; generation++) {
+        const clock = createGatewaySchedulerClock(Date.now());
+        const scheduler = createTestGatewayScheduler(clock.clock);
+        const host = new LegacyPluginSdkResourceHost();
+        host.bindScheduler(scheduler);
+        const peer = vi.fn();
+        try {
+          scheduler.schedule({ id: "peer", delayMs: 30_000, everyMs: 30_000, run: peer });
+          host.run(() => startDiagnosticHeartbeat({}, { sampleLiveness: () => null }));
+          logWebhookReceived({ channel: "test" });
+          await clock.advanceBy(30_000);
+          await waitForDiagnosticEventsDrained();
+          expect(heartbeats).toHaveLength(generation + 1);
+          expect(peer).toHaveBeenCalledOnce();
+          if (stop === "heartbeat") {
+            host.run(stopDiagnosticHeartbeat);
+          } else {
+            await scheduler.stop();
+          }
+          await clock.advanceBy(30_000);
+          await waitForDiagnosticEventsDrained();
+          expect(heartbeats).toHaveLength(generation + 1);
+          expect(peer).toHaveBeenCalledTimes(stop === "heartbeat" ? 2 : 1);
+        } finally {
+          await host.close();
+          await scheduler.stop();
+        }
+      }
+    } finally {
+      stopDiagnosticHeartbeat();
+      unsubscribe();
+      setDiagnosticsEnabledForProcess(previouslyEnabled);
     }
-  });
-  try {
-    setDiagnosticsEnabledForProcess(true);
-    scheduler.schedule({ id: "peer", delayMs: 30_000, everyMs: 30_000, run: peer });
-    host.run(() => startDiagnosticHeartbeat({}, { sampleLiveness: () => null }));
-    logWebhookReceived({ channel: "test" });
-    await clock.advanceBy(30_000);
-    await waitForDiagnosticEventsDrained();
-    expect(heartbeats).toHaveLength(1);
-    expect(peer).toHaveBeenCalledOnce();
-
-    host.run(stopDiagnosticHeartbeat);
-    await clock.advanceBy(30_000);
-    await waitForDiagnosticEventsDrained();
-    expect(heartbeats).toHaveLength(1);
-    expect(peer).toHaveBeenCalledTimes(2);
-  } finally {
-    stopDiagnosticHeartbeat();
-    unsubscribe();
-    await host.close();
-    await scheduler.stop();
-    setDiagnosticsEnabledForProcess(previouslyEnabled);
-  }
-});
+  },
+);
 
 it("owns standalone diagnostics inside a retained SDK callback without replacing its resource host", async () => {
   const previouslyEnabled = areDiagnosticsEnabledForProcess();
@@ -106,38 +117,5 @@ it("rejects timed work from an explicit resource host whose scheduler was not bo
   } finally {
     stopDiagnosticHeartbeat();
     await host.close();
-  }
-});
-
-it("restarts diagnostic heartbeat after its bound scheduler ends", async () => {
-  const previouslyEnabled = areDiagnosticsEnabledForProcess();
-  const heartbeats: string[] = [];
-  const unsubscribe = onDiagnosticEvent((event) => {
-    if (event.type === "diagnostic.heartbeat") {
-      heartbeats.push(event.type);
-    }
-  });
-  try {
-    setDiagnosticsEnabledForProcess(true);
-    for (let generation = 0; generation < 2; generation++) {
-      const clock = createGatewaySchedulerClock(Date.now());
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const host = new LegacyPluginSdkResourceHost();
-      host.bindScheduler(scheduler);
-      try {
-        host.run(() => startDiagnosticHeartbeat({}, { sampleLiveness: () => null }));
-        logWebhookReceived({ channel: "test" });
-        await clock.advanceBy(30_000);
-        await waitForDiagnosticEventsDrained();
-        expect(heartbeats).toHaveLength(generation + 1);
-      } finally {
-        await scheduler.stop();
-        await host.close();
-      }
-    }
-  } finally {
-    stopDiagnosticHeartbeat();
-    unsubscribe();
-    setDiagnosticsEnabledForProcess(previouslyEnabled);
   }
 });

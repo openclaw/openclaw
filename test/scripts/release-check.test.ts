@@ -357,7 +357,8 @@ require("node:module").syncBuiltinESMExports();
         "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
       );
       expect(result.stderr).not.toContain("ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED");
-      expect(readFileSync(join(root, "compat-checked"), "utf8")).toBe("yes");
+      // Live npm updater coverage is not a packaging gate.
+      expect(existsSync(join(root, "compat-checked"))).toBe(false);
       expect(readFileSync(join(root, "package.json"), "utf8")).toBe(packageJson);
       expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(changelog);
       expect(existsSync(join(root, "dist/postinstall-inventory.json"))).toBe(true);
@@ -574,30 +575,6 @@ require("node:module").syncBuiltinESMExports();
     }
   });
 
-  it("writes an explicit local project for unpublished core package tarballs", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
-    try {
-      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [
-        "/tmp/openclaw-ai.tgz",
-        "/tmp/openclaw-gateway-client.tgz",
-        "/tmp/openclaw-gateway-protocol.tgz",
-      ]);
-      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-        dependencies?: Record<string, string>;
-        private?: boolean;
-      };
-      expect(manifest.private).toBe(true);
-      expect(manifest.dependencies).toEqual({
-        "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
-        "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
-        "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
-        openclaw: "file:///tmp/openclaw.tgz",
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("writes a gateway-packages-only local project when the root does not require AI", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
@@ -609,7 +586,9 @@ require("node:module").syncBuiltinESMExports();
       );
       const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         dependencies?: Record<string, string>;
+        private?: boolean;
       };
+      expect(manifest.private).toBe(true);
       expect(manifest.dependencies).toEqual({
         "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
         "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",

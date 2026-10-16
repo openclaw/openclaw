@@ -9,6 +9,17 @@ final class ControlUIDocumentHost {
     let webView: DashboardWebView
     var currentURL: URL
     var auth: DashboardWindowAuth
+    var nativeGatewayAuthProvider: DashboardNativeGatewayAuth.Provider? {
+        didSet { self.nativeGatewayAuthRevision &+= 1 }
+    }
+
+    var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials? {
+        didSet { self.observeNativeStartupCredentials() }
+    }
+
+    private(set) var nativeStartupObservation: Task<Void, Never>?
+    var nativeAuthScript: WKUserScript?
+    private(set) var nativeGatewayAuthRevision: UInt64 = 0
     let tlsParams: GatewayTLSParams?
     let browserSessionLease: DashboardBrowserSessionStore.Lease?
     private(set) var generation: UInt64 = 0
@@ -16,9 +27,12 @@ final class ControlUIDocumentHost {
     var hasLiveContent = false
     var isShowingFailurePage = false
     private(set) var pendingLoad: Task<Void, Never>?
-    private var loadGeneration: UInt64 = 0
     var isAvailable: () -> Bool = { true }
+    // A retained document may outlive its presentation while WebKit stops it.
+    var isNativeAuthAvailable: () -> Bool = { false }
     var onAuthenticationFailure: ((Error) -> Void)?
+    var downloads: [ObjectIdentifier: DashboardBrowserDownload] = [:]
+    var expectsDownloadPolicyInterruption = false
 
     init(
         url: URL,
@@ -26,23 +40,26 @@ final class ControlUIDocumentHost {
         websiteDataStore: WKWebsiteDataStore,
         tlsParams: GatewayTLSParams? = nil,
         browserSessionLease: DashboardBrowserSessionStore.Lease? = nil,
+        nativeAuthProvider: DashboardNativeGatewayAuth.Provider? = nil,
+        legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = nil,
         installCapabilities: (WKUserContentController) -> Void)
     {
         self.currentURL = url
         self.auth = auth
         self.tlsParams = tlsParams
         self.browserSessionLease = browserSessionLease
+        self.nativeGatewayAuthProvider = nativeAuthProvider
+        self.legacyNativeCredentials = legacyNativeCredentials
         let config = WKWebViewConfiguration()
         config.websiteDataStore = websiteDataStore
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.tabFocusesLinks = true
         config.userContentController = WKUserContentController()
+        let nativeAuthHandler = ControlUINativeGatewayAuthMessageHandler()
+        config.userContentController.addScriptMessageHandler(
+            nativeAuthHandler, contentWorld: .page, name: ControlUINativeGatewayAuthMessageHandler.name)
         installCapabilities(config.userContentController)
-        Self.installNativeAuthScript(
-            into: config.userContentController,
-            url: url,
-            auth: auth)
         self.webView = DashboardWebView(
             frame: NSRect(
                 origin: .zero,
@@ -54,8 +71,45 @@ final class ControlUIDocumentHost {
             forKey: "drawsBackground")
         self.webView.underPageBackgroundColor = .windowBackgroundColor
         self.webView.allowsBackForwardNavigationGestures = true
+        nativeAuthHandler.owner = self
         self.registerWindowChromeHandler()
         self.installWindowChromeScript()
+        self.installNativeAuthScript()
+        self.observeNativeStartupCredentials()
+    }
+
+    isolated deinit {
+        self.nativeStartupObservation?.cancel()
+        self.cancelDownloads()
+    }
+
+    var hasCurrentNativeStartupCredentials: Bool {
+        self.retireInvalidNativeStartupCredentials()
+        return self.auth.hasAcceptedNativeBinding
+    }
+
+    private func observeNativeStartupCredentials() {
+        self.nativeStartupObservation?.cancel()
+        self.nativeStartupObservation = nil
+        self.retireInvalidNativeStartupCredentials()
+        guard let credentials = self.legacyNativeCredentials,
+              let waitForInvalidation = credentials.waitForInvalidation else { return }
+        self.nativeStartupObservation = Task { @MainActor [weak self] in
+            await waitForInvalidation()
+            guard !Task.isCancelled, let self else { return }
+            self.retireInvalidNativeStartupCredentials()
+        }
+    }
+
+    private func retireInvalidNativeStartupCredentials() {
+        guard let credentials = self.legacyNativeCredentials, !credentials.isCurrent(),
+              case let .nativeDevice(gatewayUrl, token, password, accepted) = self.auth,
+              accepted != nil else { return }
+        // Retire only this projection, not the document, its route, or newer
+        // navigation intent. The challenge provider can follow native reconnect.
+        self.auth = .nativeDevice(gatewayUrl: gatewayUrl, token: token, password: password)
+        self.nativeGatewayAuthRevision &+= 1
+        self.installNativeAuthScript()
     }
 
     var browserSession: GatewayBrowserSession? {
@@ -74,27 +128,25 @@ final class ControlUIDocumentHost {
     }
 
     func load(_ url: URL) {
+        self.retireInvalidNativeStartupCredentials()
         self.retirePendingLoad()
         self.hasLiveContent = false
         self.isShowingFailurePage = false
-        let urlDescription = GatewayEndpointStore.diagnosticURLString(for: url)
-        dashboardWindowLogger.debug("dashboard load \(urlDescription, privacy: .public)")
         guard let browserSessionLease else {
             self.webView.load(URLRequest(url: url))
             return
         }
-        let generation = self.loadGeneration
         let controller = self.webView.configuration.userContentController
         self.pendingLoad = Task { @MainActor [weak self] in
             do {
                 try await browserSessionLease.prepare(
                     for: url,
                     in: controller)
-                guard let self, self.loadGeneration == generation, self.isAvailable() else { return }
+                guard !Task.isCancelled, let self, self.isAvailable() else { return }
                 self.pendingLoad = nil
                 self.webView.load(URLRequest(url: url))
             } catch {
-                guard !Task.isCancelled, let self, self.loadGeneration == generation else { return }
+                guard !Task.isCancelled, let self else { return }
                 self.pendingLoad = nil
                 self.onAuthenticationFailure?(error)
             }
@@ -102,12 +154,13 @@ final class ControlUIDocumentHost {
     }
 
     func retirePendingLoad() {
-        self.loadGeneration &+= 1
+        self.cancelDownloads()
         self.pendingLoad?.cancel()
         self.pendingLoad = nil
     }
 
     func retireDocument() {
+        self.cancelDownloads()
         self.generation &+= 1
         self.sourceID = UUID().uuidString
         self.hasLiveContent = false

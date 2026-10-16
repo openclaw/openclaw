@@ -1,5 +1,4 @@
-/* ── Escape hatch: Gateway host identity + metered stats grid ──
-   A genuine two-column stat grid with usage meters; stays flat (no nested
+/* A two-column stat grid with usage meters; stays flat (no nested
    borders/surfaces) inside one .settings-group with row-matched paddings. */
 
 .config-host {
@@ -10,7 +9,8 @@
   padding: var(--space-3) var(--space-4);
 }
 
-.config-host__identity {
+.config-host__identity,
+.config-host__stat {
   display: grid;
   align-content: start;
   gap: var(--space-1);
@@ -49,13 +49,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: var(--space-3);
-}
-
-.config-host__stat {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-width: 0;
 }
 
 .config-host__stat-label {

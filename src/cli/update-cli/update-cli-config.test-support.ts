@@ -35,7 +35,6 @@ export function createChangedPostCoreUpdateOptions(
       npm: { changed: true, outcomes: [] },
       integrityDrifts: [],
     },
-    freshDoctorRequired: true,
     yes: true,
     json: true,
     timeoutMs: 30_000,

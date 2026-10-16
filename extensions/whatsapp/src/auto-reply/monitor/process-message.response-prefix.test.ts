@@ -82,8 +82,6 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
           agents: {
             defaults: {
               workspace: path.join(root, "workspace"),
-              envelopeTimestamp: "off",
-              envelopeElapsed: "off",
             },
             entries: { main: { identity: { name: "Harbor" } } },
           },

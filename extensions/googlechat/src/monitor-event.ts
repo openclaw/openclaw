@@ -8,9 +8,9 @@ import type {
   GoogleChatUser,
 } from "./types.js";
 
-export class GoogleChatEventPayloadError extends Error {
-  constructor(message = "invalid payload") {
-    super(message);
+class GoogleChatEventPayloadError extends Error {
+  constructor() {
+    super("invalid payload");
     this.name = "GoogleChatEventPayloadError";
   }
 }

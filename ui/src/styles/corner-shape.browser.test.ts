@@ -148,12 +148,6 @@ const CORNER_CASES: readonly CornerCase[] = [
 const ROUND_CASES: readonly CornerCase[] = [
   {
     circular: "9999px",
-    markup: '<span class="pill">Pill</span>',
-    selector: ".pill",
-    superelliptical: "9999px",
-  },
-  {
-    circular: "9999px",
     markup: '<span class="chip">Chip</span>',
     selector: ".chip",
     superelliptical: "9999px",

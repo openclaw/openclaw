@@ -10,12 +10,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
 import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileRole,
-  resolveUserProfileId,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 
@@ -72,6 +71,7 @@ it.each(["person", "shared owner"] as const)(
       if (kind === "person") {
         setUserProfileRole(admin.id, "admin");
       }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -123,14 +123,14 @@ it.each(["person", "shared owner"] as const)(
         queries.mockRestore();
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      expect(getUserProfileRole(person.id)).toBe("admin");
-      expect(resolveUserProfileId(secondary.id)).toBe(person.id);
+      expect(readResidentUserProfileIdentity(person.id)?.role).toBe("admin");
+      expect(readResidentUserProfileIdentity(secondary.id)?.profileId).toBe(person.id);
     });
   },
 );
 
 it("rejects malformed or conflicting assignments without changing the saved binding", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const admin = ensureProfileForEmail("admin@example.test");
     const other = ensureProfileForEmail("other@example.test");
     const link = { profileId: admin.id, identity };

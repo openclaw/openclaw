@@ -1,6 +1,3 @@
-// Shared status output types.
-// These shapes are consumed by scan, summary, text report, and JSON status builders.
-
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
 
@@ -36,7 +33,6 @@ export type SessionStatus = {
   flags: string[];
 };
 
-/** Heartbeat schedule state for one agent. */
 export type HeartbeatStatus = {
   agentId: string;
   enabled: boolean;

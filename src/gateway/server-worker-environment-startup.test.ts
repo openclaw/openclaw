@@ -102,7 +102,7 @@ describe("gateway worker environment startup", () => {
           resolveGatewayContext: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
-          log: { child: () => ({ warn: () => {} }) },
+          log: { child: () => ({ info: () => {}, warn: () => {} }) },
         });
         try {
           if (cleanupFails) {
@@ -139,7 +139,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -207,7 +207,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -284,7 +284,7 @@ describe("gateway worker environment startup", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -384,7 +384,7 @@ describe("gateway worker environment startup", () => {
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       try {
@@ -494,7 +494,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
           }
         } else if (loss === "placement") {
           const placement = f.startup.placementStore.get(f.binding.sessionId)!;
-          f.startup.placementStore.transition({
+          await f.startup.placementStore.transition({
             sessionId: f.binding.sessionId,
             from: "syncing",
             to: "starting",

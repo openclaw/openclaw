@@ -21,7 +21,6 @@ export type QaScenarioRuntimeEnv<
 };
 
 type QaScenarioRuntimeApiDeps = {
-  sleep: (ms?: number) => Promise<unknown>;
   waitForTransportReady: (...args: never[]) => unknown;
 };
 
@@ -29,31 +28,6 @@ type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;
-};
-
-type QaScenarioRuntimeApi<
-  TEnv extends QaScenarioRuntimeEnv = QaScenarioRuntimeEnv,
-  TDeps extends QaScenarioRuntimeApiDeps = QaScenarioRuntimeApiDeps,
-> = TDeps & {
-  env: TEnv;
-  lab: TEnv["lab"];
-  transport: TEnv["transport"];
-  state: TEnv["transport"]["state"];
-  scenario: QaSeedScenarioWithSource;
-  config: Record<string, unknown>;
-  waitForCondition: TEnv["transport"]["waitForCondition"];
-  waitForChannelReady: TDeps["waitForTransportReady"];
-  waitForQaChannelReady: TDeps["waitForTransportReady"];
-  imageUnderstandingPngBase64: string;
-  imageUnderstandingLargePngBase64: string;
-  imageUnderstandingValidPngBase64: string;
-  getTransportSnapshot: TEnv["transport"]["state"]["getSnapshot"];
-  resetTransport: () => Promise<void>;
-  injectInboundMessage: TEnv["transport"]["sendInbound"];
-  injectOutboundMessage: TEnv["transport"]["state"]["addOutboundMessage"];
-  readTransportMessage: TEnv["transport"]["state"]["readMessage"];
-  resetBus: () => Promise<void>;
-  reset: () => Promise<void>;
 };
 
 export function createQaScenarioRuntimeApi<
@@ -64,12 +38,11 @@ export function createQaScenarioRuntimeApi<
   scenario: QaSeedScenarioWithSource;
   deps: TDeps;
   constants: QaScenarioRuntimeConstants;
-}): QaScenarioRuntimeApi<TEnv, TDeps> {
+}) {
   const transport = params.env.transport;
   const transportState = transport.state;
   const resetTransportState = async () => {
     await transport.reset();
-    await params.deps.sleep(100);
   };
 
   return {

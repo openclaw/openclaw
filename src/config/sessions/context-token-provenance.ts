@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionContextBudgetStatus, SessionEntry } from "./types.js";
 
@@ -17,10 +18,6 @@ type SessionContextSelection = {
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
 };
-
-function resolvePositiveContextTokens(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 function isExactProducerSelection(params: SessionContextSelection): boolean {
   const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
@@ -45,7 +42,7 @@ function resolveMatchingPersistedResolution(params: SessionContextSelection): nu
     return undefined;
   }
   return isExactProducerSelection(params)
-    ? resolvePositiveContextTokens(params.entry?.contextTokens)
+    ? asPositiveFiniteNumber(params.entry?.contextTokens)
     : undefined;
 }
 
@@ -53,7 +50,7 @@ function resolveMatchingPersistedResolution(params: SessionContextSelection): nu
 export function resolveTrustedSessionContextTokens(
   params: SessionContextSelection,
 ): number | undefined {
-  const contextTokens = resolvePositiveContextTokens(params.entry?.contextTokens);
+  const contextTokens = asPositiveFiniteNumber(params.entry?.contextTokens);
   if (contextTokens === undefined) {
     return undefined;
   }
@@ -86,8 +83,8 @@ export function resolveProjectedSessionContextTokens(
     authoredContextTokens?: number | null | undefined;
   },
 ): number | undefined {
-  const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
-  const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
+  const resolvedContextTokens = asPositiveFiniteNumber(params.resolvedContextTokens);
+  const authoredContextTokens = asPositiveFiniteNumber(params.authoredContextTokens);
   const trustedContextTokens = resolveTrustedSessionContextTokens(params);
   const persistedResolution =
     resolvedContextTokens === undefined && authoredContextTokens === undefined
@@ -126,7 +123,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
     !status ||
     !provider ||
     !model ||
-    resolvePositiveContextTokens(params.contextTokens) === undefined ||
+    asPositiveFiniteNumber(params.contextTokens) === undefined ||
     params.entry?.liveModelSwitchPending ||
     normalizeLowercaseStringOrEmpty(status.provider) !== provider ||
     normalizeLowercaseStringOrEmpty(status.model) !== model ||

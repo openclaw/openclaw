@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import {
+  GatewayServiceDefinitionBackupReceiptSchema,
+  matchesServiceFilePublication,
+} from "./service-stage.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -55,6 +59,86 @@ describe.skipIf(process.platform === "win32")("service publication permissions",
         xmlMode: 0o600,
         directoryMode: 0o700,
       });
+    },
+  );
+});
+
+describe("service backup receipt identity compatibility", () => {
+  it.each(["9007199254740992", "-9007199254740992"])(
+    "reads released numeric receipts and preserves full-width ID %s",
+    (ino) => {
+      const state = {
+        sha256: "a".repeat(64),
+        mode: 0o600,
+        dev: 7,
+        ino: 42,
+        size: 10,
+        mtimeMs: 1,
+        ctimeMs: 1,
+      };
+      const input = {
+        id: "00000000-0000-4000-8000-000000000000",
+        files: [{ sourcePath: path.resolve("legacy.service"), before: state, after: state }],
+        guards: [],
+      };
+      const legacy = GatewayServiceDefinitionBackupReceiptSchema.parse(input).files[0]!.after!;
+      expect(legacy).toMatchObject({ dev: 7, ino: 42 });
+      expect(matchesServiceFilePublication({ ...legacy, dev: "7", ino: "42" }, legacy)).toBe(true);
+
+      const fullWidth = { ...state, ino };
+      const exact = GatewayServiceDefinitionBackupReceiptSchema.parse({
+        ...input,
+        files: [{ ...input.files[0], after: fullWidth }],
+      }).files[0]!.after!;
+      expect(matchesServiceFilePublication({ ...exact }, exact)).toBe(true);
+      expect(
+        matchesServiceFilePublication({ ...exact, ino: (BigInt(ino) + 1n).toString() }, exact),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    { field: "ino", exactId: "9007199254740992", legacyId: 9007199254740992 },
+    { field: "ino", exactId: "-9223372036854775808", legacyId: 9223372036854775808 },
+    { field: "dev", exactId: "-9223372036854775808", legacyId: 9223372036854775808 },
+  ] as const)(
+    "keeps rounded legacy $field $exactId explicit while exact receipts detect a same-double replacement",
+    ({ field, exactId, legacyId }) => {
+      const state = {
+        sha256: "a".repeat(64),
+        mode: 0o600,
+        dev: "7",
+        ino: "42",
+        size: 10,
+        mtimeMs: 1,
+        ctimeMs: 1,
+        [field]: exactId,
+      };
+      const legacy = GatewayServiceDefinitionBackupReceiptSchema.parse({
+        id: "00000000-0000-4000-8000-000000000000",
+        files: [
+          {
+            sourcePath: path.resolve("legacy.service"),
+            before: null,
+            after: {
+              ...state,
+              dev: 7,
+              ino: 42,
+              [field]: legacyId,
+            },
+          },
+        ],
+        guards: [],
+      }).files[0]!.after!;
+      expect(legacy[field]).toBe(legacyId);
+      expect(matchesServiceFilePublication(state, legacy)).toBe(true);
+      expect(matchesServiceFilePublication({ ...state, [field]: legacyId }, legacy)).toBe(true);
+      expect(matchesServiceFilePublication(state, state)).toBe(true);
+      const replacedId = BigInt(exactId) + 1n;
+      const replaced = { ...state, [field]: replacedId.toString() };
+      expect(Number(BigInt.asUintN(64, replacedId))).toBe(legacyId);
+      expect(matchesServiceFilePublication(replaced, legacy)).toBe(true);
+      expect(matchesServiceFilePublication(replaced, state)).toBe(false);
     },
   );
 });

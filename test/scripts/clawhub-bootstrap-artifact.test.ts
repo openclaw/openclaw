@@ -56,6 +56,7 @@ function fixture() {
         packageDir: "extensions/meta",
         publishTag: "beta",
         bootstrapMode: "publish",
+        family: "",
         requiresManualOverride: false,
       },
       {
@@ -64,6 +65,7 @@ function fixture() {
         packageDir: "extensions/existing",
         publishTag: "beta",
         bootstrapMode: "configure-only",
+        family: "",
         requiresManualOverride: true,
       },
     ]),

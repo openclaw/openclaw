@@ -2,9 +2,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./setup-group-access.js";
 
-/**
- * Applies prompted group access config through channel-specific policy/allowlist hooks.
- */
 export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;

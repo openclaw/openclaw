@@ -1,5 +1,3 @@
-// Hook install service installs hook packages from archives and local sources.
-
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -10,6 +8,7 @@ import {
 } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmIntegrityDriftPayload as HookNpmIntegrityDriftParams } from "../infra/npm-integrity.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
   scanPackageInstallSource,
@@ -18,7 +17,6 @@ import {
 } from "../plugins/install-security-scan.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseHookFrontmatter } from "./frontmatter.js";
 
@@ -26,9 +24,6 @@ import { parseHookFrontmatter } from "./frontmatter.js";
 // malformed hook package from OOMing the install path.
 const HOOK_MD_MAX_BYTES = 1024 * 1024;
 
-const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
-
-/** Logger contract used by hook install and update operations. */
 type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
@@ -63,15 +58,7 @@ export const HOOK_INSTALL_ERROR_CODE = {
   EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
 } as const;
 
-type HookInstallErrorCode = (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
-
-/** Integrity drift payload surfaced when npm metadata no longer matches an install record. */
-export type HookNpmIntegrityDriftParams = {
-  spec: string;
-  expectedIntegrity: string;
-  actualIntegrity: string;
-  resolution: NpmSpecResolution;
-};
+export type { HookNpmIntegrityDriftParams };
 
 const defaultLogger: HookInstallLogger = {};
 
@@ -179,7 +166,6 @@ function validateHookId(hookId: string): string | null {
   return null;
 }
 
-/** Resolve the canonical local install directory for one hook pack id. */
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
   const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
   const hookIdError = validateHookId(hookId);
@@ -197,99 +183,11 @@ export function resolveHookInstallDir(hookId: string, hooksDir?: string): string
   return targetDirResult.path;
 }
 
-function resolveOpenClawHooks(
-  manifest: HookPackageManifest,
-): { ok: true; entries: string[] } | { ok: false; error: string; code: HookInstallErrorCode } {
-  const hooks = manifest[MANIFEST_KEY]?.hooks;
-  if (!Array.isArray(hooks)) {
-    return {
-      ok: false,
-      error: "package.json missing openclaw.hooks",
-      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
-    };
-  }
-  const list = normalizeTrimmedStringList(hooks);
-  if (list.length === 0) {
-    return {
-      ok: false,
-      error: "package.json openclaw.hooks is empty",
-      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
-    };
-  }
-  return { ok: true, entries: list };
-}
-
-function resolveHookPackageKind(
-  manifest: HookPackageManifest,
-  packageKind: "plugin-capable" | undefined,
-): "hook-only" | "plugin-capable" {
-  if (packageKind) {
-    return packageKind;
-  }
-  const extensions = manifest[MANIFEST_KEY]?.extensions;
-  if (extensions === undefined) {
-    return "hook-only";
-  }
-  return Array.isArray(extensions) && normalizeTrimmedStringList(extensions).length === 0
-    ? "hook-only"
-    : "plugin-capable";
-}
-
-function resolveHookInstallTargetPath(
-  id: string,
-  hooksDir?: string,
-): { ok: true; targetDir: string } | { ok: false; error: string } {
-  const baseHooksDir = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
-  const result = resolveSafeInstallDir({
-    baseDir: baseHooksDir,
-    id,
-    invalidNameMessage: "invalid hook name: path traversal detected",
-  });
-  return result.ok ? { ok: true, targetDir: result.path } : result;
-}
-
-type PreparedHookInstallTarget = {
-  targetDir: string;
-  effectiveMode: "install" | "update";
-};
-
-async function resolvePreparedHookInstallTarget(params: {
-  id: string;
-  hooksDir?: string;
-  requestedMode: "install" | "update";
-  alreadyExistsError: (targetDir: string) => string;
-}): Promise<{ ok: true; target: PreparedHookInstallTarget } | { ok: false; error: string }> {
-  const runtime = await loadHookInstallRuntime();
-  const targetDirResult = await runtime.resolveCanonicalInstallTarget({
-    baseDir: params.hooksDir ? resolveUserPath(params.hooksDir) : path.join(CONFIG_DIR, "hooks"),
-    id: params.id,
-    invalidNameMessage: "invalid hook name: path traversal detected",
-    boundaryLabel: "hooks directory",
-  });
-  if (!targetDirResult.ok) {
-    return targetDirResult;
-  }
-  const targetDir = targetDirResult.targetDir;
-  const effectiveMode =
-    params.requestedMode === "update" && (await runtime.fileExists(targetDir))
-      ? "update"
-      : "install";
-  const availability = await runtime.ensureInstallTargetAvailable({
-    mode: effectiveMode,
-    targetDir,
-    alreadyExistsError: params.alreadyExistsError(targetDir),
-  });
-  if (!availability.ok) {
-    return availability;
-  }
-  return { ok: true, target: { targetDir, effectiveMode } };
-}
-
 async function installFromResolvedHookDir(
   resolvedDir: string,
   params: HookInstallForwardParams,
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const manifestPath = path.join(resolvedDir, "package.json");
   const hasPluginManifest = await runtime.fileExists(
     path.join(resolvedDir, PLUGIN_MANIFEST_FILENAME),
@@ -315,7 +213,7 @@ async function installFromResolvedHookDir(
 }
 
 async function resolveHookNameFromDir(hookDir: string): Promise<string> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const hookMdPath = path.join(hookDir, "HOOK.md");
   if (!(await runtime.fileExists(hookMdPath))) {
     throw new Error(`HOOK.md missing in ${hookDir}`);
@@ -326,7 +224,7 @@ async function resolveHookNameFromDir(hookDir: string): Promise<string> {
 }
 
 async function validateHookDir(hookDir: string): Promise<{ handlerEntry: string }> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const hookMdPath = path.join(hookDir, "HOOK.md");
   if (!(await runtime.fileExists(hookMdPath))) {
     throw new Error(`HOOK.md missing in ${hookDir}`);
@@ -365,25 +263,37 @@ async function installValidatedHookDirectory(
     >;
   },
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const { logger, mode, dryRun, timeoutMs, workTimeoutMs } = source.options;
   const { hookPackId, version } = source.metadata;
+  const targetParams = {
+    baseDir: params.hooksDir ? resolveUserPath(params.hooksDir) : path.join(CONFIG_DIR, "hooks"),
+    id: hookPackId,
+    invalidNameMessage: "invalid hook name: path traversal detected",
+  };
   if (params.inspection === "package-kind") {
-    const target = resolveHookInstallTargetPath(hookPackId, params.hooksDir);
-    return target.ok ? { ...target, ...source.metadata } : target;
+    const target = resolveSafeInstallDir(targetParams);
+    return target.ok ? { ok: true, targetDir: target.path, ...source.metadata } : target;
   }
 
-  const preparedTarget = await resolvePreparedHookInstallTarget({
-    id: hookPackId,
-    hooksDir: params.hooksDir,
-    requestedMode: mode,
-    alreadyExistsError: (targetDir) =>
-      `${source.label} already exists: ${targetDir} (delete it first)`,
+  const target = await runtime.resolveCanonicalInstallTarget({
+    ...targetParams,
+    boundaryLabel: "hooks directory",
   });
-  if (!preparedTarget.ok) {
-    return preparedTarget;
+  if (!target.ok) {
+    return target;
   }
-  const { targetDir, effectiveMode } = preparedTarget.target;
+  const { targetDir } = target;
+  const effectiveMode =
+    mode === "update" && (await runtime.fileExists(targetDir)) ? "update" : "install";
+  const availability = await runtime.ensureInstallTargetAvailable({
+    mode: effectiveMode,
+    targetDir,
+    alreadyExistsError: `${source.label} already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
+  }
 
   const policyFailure = await runHookInstallScan({
     hookPackId,
@@ -440,7 +350,7 @@ async function installValidatedHookDirectory(
 async function installHookPackageFromDir(
   params: HookPackageInstallParams & { packageKind?: "plugin-capable" },
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const options = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
 
   const manifestPath = path.join(params.packageDir, "package.json");
@@ -455,15 +365,32 @@ async function installHookPackageFromDir(
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  const hookManifest = resolveOpenClawHooks(manifest);
-  if (!hookManifest.ok) {
-    return hookManifest;
+  const hooks = manifest[MANIFEST_KEY]?.hooks;
+  if (!Array.isArray(hooks)) {
+    return {
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    };
   }
-  const hookEntries = hookManifest.entries;
+  const hookEntries = normalizeTrimmedStringList(hooks);
+  if (hookEntries.length === 0) {
+    return {
+      ok: false,
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    };
+  }
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const hookPackId = pkgName ? unscopedPackageName(pkgName) : path.basename(params.packageDir);
-  const packageKind = resolveHookPackageKind(manifest, params.packageKind);
+  const extensions = manifest[MANIFEST_KEY]?.extensions;
+  const packageKind =
+    params.packageKind ??
+    (extensions === undefined ||
+    (Array.isArray(extensions) && normalizeTrimmedStringList(extensions).length === 0)
+      ? "hook-only"
+      : "plugin-capable");
   if (params.expectedPackageKind && packageKind !== params.expectedPackageKind) {
     return {
       ok: false,
@@ -532,7 +459,7 @@ async function installHookFromDir(
     packageKind?: "plugin-capable";
   } & HookInstallForwardParams,
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const options = {
     ...runtime.resolveInstallModeOptions(params, defaultLogger),
     timeoutMs: 120_000,
@@ -571,11 +498,10 @@ async function installHookFromDir(
   });
 }
 
-/** Install hooks from an archive after extracting and validating the archive root. */
 async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const { logger, timeoutMs, workTimeoutMs } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
@@ -611,7 +537,6 @@ async function installHooksFromArchive(
   });
 }
 
-/** Download, verify, and install an npm hook pack tarball. */
 export async function installHooksFromNpmSpec(
   params: {
     spec: string;
@@ -619,7 +544,7 @@ export async function installHooksFromNpmSpec(
     onIntegrityDrift?: (params: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   } & Omit<HookInstallForwardParams, "installPolicyRequest">,
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
@@ -654,11 +579,10 @@ export async function installHooksFromNpmSpec(
   });
 }
 
-/** Install a hook pack or single hook from a local directory/archive path. */
 export async function installHooksFromPath(
   params: HookPathInstallParams,
 ): Promise<InstallHooksResult> {
-  const runtime = await loadHookInstallRuntime();
+  const runtime = await import("./install.runtime.js");
   const pathResult = await runtime.resolveExistingInstallPath(params.path);
   if (!pathResult.ok) {
     return pathResult;

@@ -90,15 +90,15 @@ export async function createCompactedSessionFixture(dir: string) {
     },
     timestamp: Date.now(),
   });
-  session.appendMessage(userMessage);
-  session.appendMessage(assistantMessage);
+  await session.appendMessageAsync(userMessage);
+  await session.appendMessageAsync(assistantMessage);
   const preCompactionLeafId = session.getLeafId();
   if (!preCompactionLeafId) {
     throw new Error("expected persisted session leaf before compaction");
   }
   const sessionFile = path.join(dir, `${session.getSessionId()}.jsonl`);
   writeSessionFixture(sessionFile, session);
-  session.appendCompaction("compaction summary", preCompactionLeafId, 123, { ok: true });
+  await session.appendCompactionAsync("compaction summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {
     throw new Error("expected post-compaction leaf");

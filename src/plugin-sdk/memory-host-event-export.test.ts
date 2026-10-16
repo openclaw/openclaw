@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { root as createFsSafeRoot } from "../infra/fs-safe.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import * as eventStore from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
@@ -26,6 +26,157 @@ describe("memory host event export recovery", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { name: "safe v3", version: 3, identity: { dev: 7n, ino: 11n }, writable: true },
+    {
+      name: "rounded v3 inode",
+      version: 3,
+      identity: { dev: 7n, ino: 9_007_199_254_740_993n },
+      writable: true,
+    },
+    {
+      name: "rounded v3 device",
+      version: 3,
+      identity: { dev: 9_007_199_254_740_993n, ino: 11n },
+      writable: true,
+    },
+    {
+      name: "unsigned high-bit v3 IDs",
+      version: 3,
+      identity: { dev: -9_223_372_036_854_775_807n, ino: -9_223_372_036_854_775_805n },
+      writable: true,
+    },
+    {
+      name: "non-numeric-origin v3 spelling",
+      version: 3,
+      identity: { dev: 7n, ino: 9_007_199_254_740_993n },
+      exactLegacySpelling: true,
+      writable: false,
+    },
+    {
+      name: "large exact v4",
+      version: 4,
+      identity: { dev: 7n, ino: 9_007_199_254_740_992n },
+      writable: true,
+    },
+    {
+      name: "signed exact v4",
+      version: 4,
+      identity: { dev: -9_223_372_036_854_775_807n, ino: -9_223_372_036_854_775_805n },
+      writable: true,
+    },
+  ])(
+    "enforces ownership for a $name identity marker",
+    async ({ identity, version, writable, exactLegacySpelling }) => {
+      let observedIdentity = identity;
+      const state = await createOpenClawTestState({
+        layout: "state-only",
+        prefix: "memory-host-exact-export-",
+      });
+      const { workspaceDir } = state;
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
+      const event = {
+        type: "memory.recall.recorded" as const,
+        timestamp: "2026-09-10T12:00:00.000Z",
+        query: "first",
+        resultCount: 0,
+        results: [],
+      };
+      const createRoot = fsSafe.root;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const root = await createRoot(...args);
+        // Preserve real file I/O while modeling the dependency's platform identity receipt.
+        const open = root.open.bind(root);
+        vi.spyOn(root, "open").mockImplementation(async (relativePath, options) => {
+          const opened = await open(relativePath, options);
+          if (relativePath.endsWith("/memory-host-events.jsonl")) {
+            Object.defineProperty(opened, "exactIdentity", { value: observedIdentity });
+          }
+          return opened;
+        });
+        const openWritable = root.openWritable.bind(root);
+        vi.spyOn(root, "openWritable").mockImplementation(async (relativePath, options) => {
+          const opened = await openWritable(relativePath, options);
+          if (relativePath.endsWith("/memory-host-events.jsonl")) {
+            Object.defineProperty(opened, "exactIdentity", { value: observedIdentity });
+          }
+          return opened;
+        });
+        return root;
+      });
+      try {
+        await appendMemoryHostEvent(workspaceDir, event);
+        const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
+          (entry) => entry.kind === "event-log",
+        );
+        expect(artifact).toBeDefined();
+        if (!artifact) {
+          throw new Error("expected initial event export");
+        }
+        const ownerPath = path.join(
+          path.dirname(artifact.absolutePath),
+          ".openclaw-memory-host-events-owner.json",
+        );
+        const marker = JSON.parse(await fs.readFile(ownerPath, "utf8"));
+        expect(marker).toMatchObject({
+          schemaVersion: 4,
+          fileDev: String(identity.dev),
+          fileIno: String(identity.ino),
+        });
+        // The released v3 writer stringified number stats, after any rounding.
+        const ownerContent = `${JSON.stringify({
+          ...marker,
+          schemaVersion: version,
+          ...(version === 3 && !exactLegacySpelling
+            ? {
+                fileDev: String(Number(BigInt.asUintN(64, identity.dev))),
+                fileIno: String(Number(BigInt.asUintN(64, identity.ino))),
+              }
+            : {}),
+        })}\n`;
+        await fs.writeFile(ownerPath, ownerContent);
+        if (writable) {
+          // Even an unchanged export upgrades the marker to the exact observation.
+          expect(await listMemoryHostPublicArtifacts({ cfg })).toContainEqual(artifact);
+          expect(JSON.parse(await fs.readFile(ownerPath, "utf8"))).toMatchObject({
+            schemaVersion: 4,
+            fileDev: String(identity.dev),
+            fileIno: String(identity.ino),
+          });
+        }
+        await appendMemoryHostEvent(workspaceDir, { ...event, query: "second" });
+        const artifacts = await listMemoryHostPublicArtifacts({ cfg });
+        if (!writable) {
+          expect(artifacts).not.toContainEqual(artifact);
+          await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
+            `${JSON.stringify(event)}\n`,
+          );
+          await expect(fs.readFile(ownerPath, "utf8")).resolves.toBe(ownerContent);
+          return;
+        }
+        expect(artifacts).toContainEqual(artifact);
+        await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
+          `${JSON.stringify(event)}\n${JSON.stringify({ ...event, query: "second" })}\n`,
+        );
+        const exactOwnerContent = await fs.readFile(ownerPath, "utf8");
+        observedIdentity =
+          identity.dev > BigInt(Number.MAX_SAFE_INTEGER)
+            ? { ...identity, dev: identity.dev ^ 1n }
+            : { ...identity, ino: identity.ino ^ 1n };
+        await fs.rename(artifact.absolutePath, `${artifact.absolutePath}.previous`);
+        await fs.writeFile(artifact.absolutePath, "foreign replacement\n");
+        await appendMemoryHostEvent(workspaceDir, { ...event, query: "third" });
+        expect(await listMemoryHostPublicArtifacts({ cfg })).not.toContainEqual(artifact);
+        await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
+          "foreign replacement\n",
+        );
+        await expect(fs.readFile(ownerPath, "utf8")).resolves.toBe(exactOwnerContent);
+      } finally {
+        await state.cleanup();
+      }
+    },
+  );
+
   it.each([false, true])(
     "waits for journal reads before replacing an export (read fails: %s)",
     async (readFails) => {
@@ -34,7 +185,7 @@ describe("memory host event export recovery", () => {
         prefix: "memory-host-delayed-export-",
       });
       const { workspaceDir } = state;
-      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
       const event = {
         type: "memory.recall.recorded" as const,
         timestamp: "2026-09-10T12:00:00.000Z",
@@ -120,7 +271,7 @@ describe("memory host event export recovery", () => {
     try {
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, ownerRelativePath), expectedOwnerContent, "utf8");
-      const workspaceRoot = await createFsSafeRoot(workspaceDir, {
+      const workspaceRoot = await fsSafe.root(workspaceDir, {
         hardlinks: "reject",
         mkdir: true,
         mode: 0o600,
@@ -204,7 +355,7 @@ describe("memory host event export recovery", () => {
       await fs.writeFile(
         ownerPath,
         `${JSON.stringify({
-          schemaVersion: 3,
+          schemaVersion: 4,
           kind: "openclaw-memory-host-events-export",
           stateHash,
           workspaceHash,
@@ -216,7 +367,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(true);
@@ -280,7 +431,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);

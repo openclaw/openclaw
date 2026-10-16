@@ -34,6 +34,37 @@ describe("outbound message planning", () => {
       chunkMode: "newline",
       expected: ["first", "second"],
     },
+    ...[
+      { name: "U+2028", separator: "\u2028" },
+      { name: "U+2029", separator: "\u2029" },
+    ].flatMap(({ name, separator }) =>
+      [
+        {
+          name: "fenced JSON",
+          text: `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``,
+        },
+        { name: "inline code", text: `Copy \`first${separator}second\` exactly.` },
+      ].flatMap(({ name: codeName, text }) =>
+        (["length", "newline"] as const).map((chunkMode) => ({
+          name: `${name} in ${codeName} in ${chunkMode} mode`,
+          text,
+          limit: 4000,
+          chunker: chunkMarkdownText,
+          chunkerMode: "markdown" as const,
+          chunkMode,
+          expected: [text],
+        })),
+      ),
+    ),
+    ...[0, -1].map((limit) => ({
+      name: `Markdown paragraphs with disabled limit ${limit}`,
+      text: "```txt\ncontent\n```\n\nafter",
+      limit,
+      chunker: chunkMarkdownText,
+      chunkerMode: "markdown" as const,
+      chunkMode: "newline" as const,
+      expected: ["```txt\ncontent\n```\n\nafter"],
+    })),
     {
       name: "fenced Markdown",
       text: "```txt\naa\nbb\ncc\n```",
@@ -42,6 +73,15 @@ describe("outbound message planning", () => {
       chunkerMode: "markdown",
       chunkMode: "length",
       expected: ["```txt\naa\nbb\n```", "```txt\ncc\n```"],
+    },
+    {
+      name: "long fenced paragraphs with a text-mode chunker",
+      text: "intro\n\n```txt\naa\nbb\ncc\n```",
+      limit: 16,
+      chunker: chunkMarkdownText,
+      chunkerMode: "text",
+      chunkMode: "newline",
+      expected: ["intro", "```txt\naa\nbb\n```", "```txt\ncc\n```"],
     },
   ] as const)("plans $name with one implicit reply", (testCase) => {
     const policy = createReplyToDeliveryPolicy({
@@ -56,15 +96,11 @@ describe("outbound message planning", () => {
       chunkerMode: testCase.chunkerMode,
       chunkMode: testCase.chunkMode,
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(units).toEqual(
       testCase.expected.map((text, index) => ({
-        kind: "text",
         text,
         overrides: {
           replyToId: index === 0 ? "reply-1" : undefined,
@@ -88,15 +124,11 @@ describe("outbound message planning", () => {
       chunkMode,
       chunker: () => [],
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(units).toEqual([
       {
-        kind: "text",
         text: "visible reply",
         overrides: {
           replyToId: "reply-1",
@@ -117,19 +149,13 @@ describe("outbound message planning", () => {
     const firstUnits = planOutboundTextMessageUnits({
       text: "explicit",
       overrides: { replyToId: explicit.replyToId, replyToIdSource: explicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
     const implicit = policy.resolveCurrentReplyTo({});
     const secondUnits = planOutboundTextMessageUnits({
       text: "implicit",
       overrides: { replyToId: implicit.replyToId, replyToIdSource: implicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(firstUnits[0]?.overrides.replyToId).toBe("explicit-reply");
@@ -146,28 +172,20 @@ describe("outbound message planning", () => {
       caption: "caption",
       mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
       overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
+      consumeReplyTo: policy.applyReplyToConsumption,
     });
 
     expect(
-      units.map((unit) =>
-        unit.kind === "media"
-          ? [
-              unit.kind,
-              unit.caption,
-              unit.mediaUrl,
-              unit.overrides.replyToId,
-              unit.overrides.deliveryPartIndex,
-              unit.overrides.deliveryPartCount,
-            ]
-          : [unit.kind],
-      ),
+      units.map((unit) => [
+        unit.caption,
+        unit.mediaUrl,
+        unit.overrides.replyToId,
+        unit.overrides.deliveryPartIndex,
+        unit.overrides.deliveryPartCount,
+      ]),
     ).toEqual([
-      ["media", "caption", "https://example.com/1.png", "reply-1", 0, 2],
-      ["media", undefined, "https://example.com/2.png", undefined, 1, 2],
+      ["caption", "https://example.com/1.png", "reply-1", 0, 2],
+      [undefined, "https://example.com/2.png", undefined, 1, 2],
     ]);
   });
 
@@ -182,7 +200,6 @@ describe("outbound message planning", () => {
 
     expect(units).toEqual([
       {
-        kind: "text",
         text: "<b>bold</b>",
         overrides: {
           formatting: { parseMode: "HTML" },

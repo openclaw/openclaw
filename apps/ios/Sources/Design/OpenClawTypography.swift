@@ -6,101 +6,101 @@ enum OpenClawType {
     // MARK: - Display — Red Hat Display
 
     static var title1: Font {
-        scaledDisplay(weight: Display.heavyTitle, size: 34, relativeTo: .largeTitle)
+        scaledVariable(.display, weight: Display.heavyTitle, size: 34, relativeTo: .largeTitle)
     }
 
     static var title2: Font {
-        scaledDisplay(weight: Display.heavyTitle, size: 28, relativeTo: .title1)
+        scaledVariable(.display, weight: Display.heavyTitle, size: 28, relativeTo: .title1)
     }
 
     static var title3: Font {
-        scaledDisplay(weight: Display.opticalBold, size: 22, relativeTo: .title2)
+        scaledVariable(.display, weight: Display.opticalBold, size: 22, relativeTo: .title2)
     }
 
     static var title3SemiBold: Font {
-        scaledDisplay(weight: Display.opticalSemiBold, size: 22, relativeTo: .title2)
+        scaledVariable(.display, weight: Display.opticalSemiBold, size: 22, relativeTo: .title2)
     }
 
     static var headline: Font {
-        scaledDisplay(weight: Display.opticalSemiBold, size: 17, relativeTo: .headline)
+        scaledVariable(.display, weight: Display.opticalSemiBold, size: 17, relativeTo: .headline)
     }
 
     static var headlineBold: Font {
-        scaledDisplay(weight: Display.opticalBold, size: 17, relativeTo: .headline)
+        scaledVariable(.display, weight: Display.opticalBold, size: 17, relativeTo: .headline)
     }
 
     // MARK: - Body — Inter
 
     static var body: Font {
-        scaledBody(weight: Body.regular, size: 17, relativeTo: .body)
+        scaledVariable(.body, weight: Body.regular, size: 17, relativeTo: .body)
     }
 
     static var callout: Font {
-        scaledBody(weight: Body.regular, size: 16, relativeTo: .callout)
+        scaledVariable(.body, weight: Body.regular, size: 16, relativeTo: .callout)
     }
 
     static var subhead: Font {
-        scaledBody(weight: Body.regular, size: 15, relativeTo: .subheadline)
+        scaledVariable(.body, weight: Body.regular, size: 15, relativeTo: .subheadline)
     }
 
     static var subheadMedium: Font {
-        scaledBody(weight: Body.medium, size: 15, relativeTo: .subheadline)
+        scaledVariable(.body, weight: Body.medium, size: 15, relativeTo: .subheadline)
     }
 
     static var subheadSemiBold: Font {
-        scaledDisplay(weight: Display.opticalSemiBold, size: 15, relativeTo: .subheadline)
+        scaledVariable(.display, weight: Display.opticalSemiBold, size: 15, relativeTo: .subheadline)
     }
 
     static var subheadBold: Font {
-        scaledDisplay(weight: Display.opticalBold, size: 15, relativeTo: .subheadline)
+        scaledVariable(.display, weight: Display.opticalBold, size: 15, relativeTo: .subheadline)
     }
 
     static var footnote: Font {
-        scaledBody(weight: Body.regular, size: 13, relativeTo: .footnote)
+        scaledVariable(.body, weight: Body.regular, size: 13, relativeTo: .footnote)
     }
 
     static var footnoteSemiBold: Font {
-        scaledBody(weight: Body.semiBold, size: 13, relativeTo: .footnote)
+        scaledVariable(.body, weight: Body.semiBold, size: 13, relativeTo: .footnote)
     }
 
     static var caption: Font {
-        scaledBody(weight: Body.regular, size: 12, relativeTo: .caption1)
+        scaledVariable(.body, weight: Body.regular, size: 12, relativeTo: .caption1)
     }
 
     static var captionMedium: Font {
-        scaledBody(weight: Body.medium, size: 12, relativeTo: .caption1)
+        scaledVariable(.body, weight: Body.medium, size: 12, relativeTo: .caption1)
     }
 
     static var captionSemiBold: Font {
-        scaledBody(weight: Body.semiBold, size: 12, relativeTo: .caption1)
+        scaledVariable(.body, weight: Body.semiBold, size: 12, relativeTo: .caption1)
     }
 
     static var captionBold: Font {
-        scaledBody(weight: Body.bold, size: 12, relativeTo: .caption1)
+        scaledVariable(.body, weight: Body.bold, size: 12, relativeTo: .caption1)
     }
 
     static func avatar(size: CGFloat) -> Font {
-        self.scaledBody(weight: Body.bold, size: size, relativeTo: .caption1)
+        self.scaledVariable(.body, weight: Body.bold, size: size, relativeTo: .caption1)
     }
 
     static var caption2: Font {
-        scaledBody(weight: Body.regular, size: 11, relativeTo: .caption2)
+        scaledVariable(.body, weight: Body.regular, size: 11, relativeTo: .caption2)
     }
 
     static var caption2Medium: Font {
-        scaledBody(weight: Body.medium, size: 11, relativeTo: .caption2)
+        scaledVariable(.body, weight: Body.medium, size: 11, relativeTo: .caption2)
     }
 
     static var caption2SemiBold: Font {
-        scaledBody(weight: Body.semiBold, size: 11, relativeTo: .caption2)
+        scaledVariable(.body, weight: Body.semiBold, size: 11, relativeTo: .caption2)
     }
 
     static var caption2Bold: Font {
-        scaledDisplay(weight: Display.opticalBold, size: 11, relativeTo: .caption2)
+        scaledVariable(.display, weight: Display.opticalBold, size: 11, relativeTo: .caption2)
     }
 
     static var title2SemiBold: Font {
-        scaledDisplay(weight: Display.opticalSemiBold, size: 28, relativeTo: .title1)
+        scaledVariable(.display, weight: Display.opticalSemiBold, size: 28, relativeTo: .title1)
     }
 
     // MARK: - Mono — JetBrains Mono
@@ -147,47 +147,56 @@ enum OpenClawType {
 
     private static func makeUIKitAppearanceFonts() -> UIKitAppearanceFonts {
         UIKitAppearanceFonts(
-            inlineNavigationTitleFont: self.scaledDisplayUIFont(
+            inlineNavigationTitleFont: self.scaledVariableUIFont(
+                .display,
                 weight: Display.opticalSemiBold,
                 size: 17,
                 relativeTo: .headline,
                 maximumPointSize: 22),
-            largeNavigationTitleFont: self.scaledDisplayUIFont(
+            largeNavigationTitleFont: self.scaledVariableUIFont(
+                .display,
                 weight: Display.heavyTitle,
                 size: 34,
                 relativeTo: .largeTitle,
                 maximumPointSize: 44),
-            tabBarNormalFont: self.scaledBodyUIFont(
+            tabBarNormalFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.medium,
                 size: 11,
                 relativeTo: .caption2,
                 maximumPointSize: 13),
-            tabBarSelectedFont: self.scaledBodyUIFont(
+            tabBarSelectedFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.semiBold,
                 size: 11,
                 relativeTo: .caption2,
                 maximumPointSize: 13),
-            segmentedNormalFont: self.scaledBodyUIFont(
+            segmentedNormalFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.medium,
                 size: 13,
                 relativeTo: .footnote,
                 maximumPointSize: 16),
-            segmentedSelectedFont: self.scaledBodyUIFont(
+            segmentedSelectedFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.semiBold,
                 size: 13,
                 relativeTo: .footnote,
                 maximumPointSize: 16),
-            barButtonFont: self.scaledBodyUIFont(
+            barButtonFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.semiBold,
                 size: 17,
                 relativeTo: .body,
                 maximumPointSize: 22),
-            disabledBarButtonFont: self.scaledBodyUIFont(
+            disabledBarButtonFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.regular,
                 size: 17,
                 relativeTo: .body,
                 maximumPointSize: 22),
-            textInputFont: self.scaledBodyUIFont(
+            textInputFont: self.scaledVariableUIFont(
+                .body,
                 weight: Body.regular,
                 size: 17,
                 relativeTo: .body,
@@ -328,68 +337,29 @@ enum OpenClawType {
     private static let fontWeightAxis = NSNumber(value: 2_003_265_652) // "wght"
     private static let opticalSizeAxis = NSNumber(value: 1_869_640_570) // "opsz"
 
-    private static func scaledDisplay(
+    private static func scaledVariable(
+        _ family: VariableFont,
         weight: CGFloat,
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle) -> Font
     {
-        Font(
-            self.scaledDisplayUIFont(
-                weight: weight,
-                size: size,
-                relativeTo: textStyle))
+        Font(self.scaledVariableUIFont(family, weight: weight, size: size, relativeTo: textStyle))
     }
 
-    private static func scaledBody(
-        weight: CGFloat,
-        size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle) -> Font
-    {
-        Font(
-            self.scaledBodyUIFont(
-                weight: weight,
-                size: size,
-                relativeTo: textStyle))
-    }
-
-    private static func scaledDisplayUIFont(
-        weight: CGFloat,
-        size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle,
-        maximumPointSize: CGFloat? = nil) -> UIFont
-    {
-        self.scaledVariableUIFont(
-            name: Display.postScriptName,
-            size: size,
-            relativeTo: textStyle,
-            maximumPointSize: maximumPointSize,
-            variations: [self.fontWeightAxis: weight])
-    }
-
-    private static func scaledBodyUIFont(
-        weight: CGFloat,
-        size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle,
-        maximumPointSize: CGFloat? = nil) -> UIFont
-    {
-        self.scaledVariableUIFont(
-            name: Body.postScriptName,
-            size: size,
-            relativeTo: textStyle,
-            maximumPointSize: maximumPointSize,
-            variations: [
-                self.fontWeightAxis: weight,
-                self.opticalSizeAxis: min(max(size, 14), 32),
-            ])
-    }
+    private enum VariableFont { case display, body }
 
     private static func scaledVariableUIFont(
-        name: String,
+        _ family: VariableFont,
+        weight: CGFloat,
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle,
-        maximumPointSize: CGFloat? = nil,
-        variations: [NSNumber: CGFloat]) -> UIFont
+        maximumPointSize: CGFloat? = nil) -> UIFont
     {
+        let name = family == .display ? Display.postScriptName : Body.postScriptName
+        var variations = [self.fontWeightAxis: weight]
+        if family == .body {
+            variations[self.opticalSizeAxis] = min(max(size, 14), 32)
+        }
         guard UIFont(name: name, size: size) != nil else {
             let fallback = UIFont.systemFont(ofSize: size)
             return self.scaledUIFont(fallback, relativeTo: textStyle, maximumPointSize: maximumPointSize)

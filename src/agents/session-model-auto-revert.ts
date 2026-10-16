@@ -1,14 +1,21 @@
 /** One-run rollback for agent-selected session models. */
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentPatchedSessionModelFallback,
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
@@ -35,25 +42,31 @@ async function reconcileAgentPatchedSessionModel(params: {
   outcome: SessionModelRunOutcome;
   expectedMarkerTs?: number;
   validatedFallback?: AgentPatchedSessionModelFallback;
-  now?: number;
-}): Promise<"cleared" | "promoted" | "reverted" | "kept" | "none"> {
+  expectedSession?: { sessionId: string; lifecycleRevision?: string };
+}): Promise<void> {
   const reason = params.outcome.success
     ? undefined
     : (params.outcome.reason ?? resolveFailoverReasonFromError(params.outcome.error));
   if (!params.outcome.success && (!reason || !REVERT_REASONS.has(reason))) {
-    return "kept";
+    return;
   }
 
   let note: string | undefined;
   let sessionId: string | undefined;
-  let result: "cleared" | "promoted" | "reverted" | "none" = "none";
-  await patchSessionEntryCore(
+  const reconciledEntry = await patchSessionEntryCore(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     (entry) => {
+      if (
+        params.expectedSession &&
+        (entry.sessionId !== params.expectedSession.sessionId ||
+          entry.lifecycleRevision !== params.expectedSession.lifecycleRevision)
+      ) {
+        return null;
+      }
       const marker = entry.modelFallback;
       if (marker?.source !== "agent-patch") {
         return null;
@@ -65,7 +78,6 @@ async function reconcileAgentPatchedSessionModel(params: {
           marker.ts > params.expectedMarkerTs &&
           params.expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
         ) {
-          result = "promoted";
           return {
             modelFallback: {
               ...params.validatedFallback,
@@ -78,11 +90,9 @@ async function reconcileAgentPatchedSessionModel(params: {
       }
       sessionId = entry.sessionId;
       if (params.outcome.success) {
-        result = "cleared";
         return { modelFallback: undefined };
       }
       const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
-      result = "reverted";
       note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
       return {
         model: marker.prevModel,
@@ -105,13 +115,15 @@ async function reconcileAgentPatchedSessionModel(params: {
   );
   if (note && sessionId) {
     try {
-      const timestamp = params.now ?? Date.now();
+      const timestamp = Date.now();
       await appendTranscriptMessage(
         {
           agentId: params.agentId,
           sessionId,
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          expectedLifecycleRevision: reconciledEntry?.lifecycleRevision,
+          expectedWriterRunId: reconciledEntry?.activeWriterRunId,
         },
         {
           config: params.cfg,
@@ -122,35 +134,56 @@ async function reconcileAgentPatchedSessionModel(params: {
             display: true,
             timestamp,
           },
-          ...(params.now === undefined ? {} : { now: params.now }),
         },
       );
     } catch {
       // Rollback is authoritative; transcript note is best effort.
     }
   }
-  return result;
 }
 
-export function createAgentPatchedSessionModelRunGuard(params: {
+export async function createAgentPatchedSessionModelRunGuard(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
   sessionKey: string | undefined;
   storePath: string | undefined;
+  assertReadCurrent?: () => void;
   onError?: (error: unknown) => void;
 }) {
+  const source = params.sessionKey
+    ? captureSessionActorStorageOwner(params, {
+        assertCurrent() {
+          params.assertReadCurrent?.();
+        },
+        authorize() {},
+      })
+    : undefined;
+  const target = {
+    agentId: source?.agentId ?? params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: source?.path ?? params.storePath,
+  };
   let markerTs: number | undefined;
+  let expectedSession: { sessionId: string; lifecycleRevision?: string } | undefined;
   let validatedFallback: AgentPatchedSessionModelFallback | undefined;
   if (params.sessionKey) {
+    params.assertReadCurrent?.();
     try {
-      const entry = loadSessionEntry({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      });
+      const entry = source
+        ? readCapturedSessionActorEntry(source, params.sessionKey)
+        : await readSessionEntryInWorker({
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          });
+      params.assertReadCurrent?.();
       const marker = entry?.modelFallback;
       markerTs = marker?.source === "agent-patch" ? marker.ts : undefined;
       if (entry && markerTs !== undefined) {
+        expectedSession = {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        };
         const current = resolveSessionModelRef(params.cfg, entry, params.agentId);
         validatedFallback = createAgentPatchedSessionModelFallback({
           model: current.model,
@@ -159,7 +192,9 @@ export function createAgentPatchedSessionModelRunGuard(params: {
           ts: markerTs,
         });
       }
-    } catch {
+    } catch (error) {
+      rethrowIncognitoSessionError(error);
+      params.assertReadCurrent?.();
       markerTs = undefined;
     }
   }
@@ -185,20 +220,49 @@ export function createAgentPatchedSessionModelRunGuard(params: {
     return attempt ? captureFailure(new Error(attempt.error), attempt.reason) : undefined;
   };
   const reconcile = async (success: boolean) => {
-    if (reconciled || !params.sessionKey || markerTs === undefined) {
+    if (reconciled || !target.sessionKey || markerTs === undefined) {
       return;
     }
     reconciled = true;
     try {
-      await reconcileAgentPatchedSessionModel({
-        cfg: params.cfg,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        sessionKey: params.sessionKey,
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-        expectedMarkerTs: markerTs,
-        ...(validatedFallback ? { validatedFallback } : {}),
-        outcome: success ? { success: true } : { success: false, ...failure },
-      });
+      const sessionKey = target.sessionKey;
+      const reconcileModel = () =>
+        reconcileAgentPatchedSessionModel({
+          cfg: params.cfg,
+          agentId: target.agentId,
+          sessionKey,
+          storePath: target.storePath,
+          expectedMarkerTs: markerTs,
+          expectedSession,
+          ...(validatedFallback ? { validatedFallback } : {}),
+          outcome: success ? { success: true } : { success: false, ...failure },
+        });
+      if (source) {
+        const lifetime = { assertCurrent() {}, assertReadable() {} };
+        const actor = source.owner
+          ? await source.owner.acquireExisting(sessionKey, lifetime)
+          : source.binding
+            ? (
+                await acquireSessionActorStorage(
+                  { ...target, sessionActor: source.binding },
+                  {
+                    lifetime,
+                    authority: source.authority,
+                  },
+                )
+              )?.actor
+            : undefined;
+        if (!actor) {
+          return;
+        }
+        try {
+          await runWithSessionActorStorage({ ...source, actor }, reconcileModel);
+        } finally {
+          await actor.release();
+        }
+      } else {
+        await reconcileModel();
+      }
     } catch (error) {
       params.onError?.(error);
     }
@@ -210,8 +274,6 @@ export function createAgentPatchedSessionModelRunGuard(params: {
       captureFailure(error, reason);
       await reconcile(false);
     },
-    async finish(success: boolean) {
-      await reconcile(success);
-    },
+    finish: reconcile,
   };
 }

@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export function hasActiveAgentRuntimeAuthority(
@@ -39,7 +40,9 @@ export function createAgentRuntimeAuthorityGuard(
     commitGuard:
       assertCallerCurrent ||
       (client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority)
-        ? () => assertActiveAgentRuntimeAuthority(client, context, assertCallerCurrent)
+        ? composeSessionSourceAssertion([assertCallerCurrent], (assertCaller) =>
+            assertActiveAgentRuntimeAuthority(client, context, assertCaller),
+          )
         : undefined,
     ensureActive() {
       if (hasActive()) {

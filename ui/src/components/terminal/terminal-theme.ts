@@ -1,4 +1,3 @@
-// Maps the Control UI light/dark surfaces onto the terminal's 16-color theme.
 import type {
   CreateGhosttyTerminalOptions,
   TerminalDefaultColors,
@@ -63,7 +62,6 @@ export function terminalDynamicColors(): TerminalDefaultColors {
   };
 }
 
-/** Builds the terminal theme for the given Control UI color mode. */
 export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
   const colors = terminalDynamicColors();
   return {

@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { threadId, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "./database-engine/context.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type PoolFixtureInput = {
   label: string;
   readStartupOptions?: boolean;
+  readEngineSelection?: boolean;
   exchanges?: number;
+  opaqueRequest?: boolean;
   consumeInput?: boolean;
+  notifications?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
   exitCode?: number;
@@ -21,6 +28,7 @@ export type PoolFixtureResult = {
   previousBufferBytes?: number;
   relayedBufferBytes?: number;
   startupOptions?: { data: unknown; argv: string[] };
+  engineSelection?: DatabaseEngineSelection;
 };
 
 let previousBuffer: ArrayBuffer | undefined;
@@ -32,13 +40,18 @@ serveWorkerTasks<PoolFixtureResult>(
       assert.ok(typeof input.exitCode === "number");
       process.exit(input.exitCode);
     }
+    let counters: Int32Array | undefined;
     if (input.counters) {
       assert.ok(input.counters instanceof SharedArrayBuffer);
-      const counters = new Int32Array(input.counters);
+      counters = new Int32Array(input.counters);
       Atomics.add(counters, 0, 1);
-      if (input.wait) {
-        Atomics.wait(counters, 1, 0);
-      }
+    }
+    // Publish dispatch before a notification can trigger host-side cancellation.
+    for (let index = 0; index < Number(input.notifications ?? 0); index++) {
+      channel?.notify({ label: input.label, index });
+    }
+    if (input.wait && counters) {
+      Atomics.wait(counters, 1, 0);
     }
     let relayedBufferBytes: number | undefined;
     if (input.consumeInput) {
@@ -51,7 +64,11 @@ serveWorkerTasks<PoolFixtureResult>(
         const buffer =
           input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
         const response = await channel.request(
-          { label: input.label, buffer },
+          {
+            kind: input.opaqueRequest ? undefined : "fixture-exchange",
+            label: input.label,
+            buffer,
+          },
           buffer ? [buffer] : undefined,
         );
         if (buffer) {
@@ -70,6 +87,7 @@ serveWorkerTasks<PoolFixtureResult>(
     return {
       label: input.label,
       threadId,
+      ...(input.readEngineSelection ? { engineSelection: getDatabaseEngineSelection() } : {}),
       buffer: input.buffer,
       previousBufferBytes,
       relayedBufferBytes,

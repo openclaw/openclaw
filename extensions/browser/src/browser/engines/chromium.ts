@@ -42,9 +42,12 @@ export const chromiumEngine: BrowserEngineAdapter = {
             ? "remote-cdp"
             : "local-managed",
       isRemote,
-      // A loopback attach-only endpoint can terminate in Docker or a tunnel.
-      // Only an OpenClaw-owned browser is known to share this filesystem.
-      browserFilesystemLocal: usesExtension || (localManaged && !profile.attachOnly),
+      // A loopback attach-only endpoint can terminate in Docker or a tunnel, and a
+      // Store-installed extension's chrome.debugger client cannot read local files.
+      // Only an OpenClaw-owned local-managed browser is known to share this filesystem.
+      // Extension uploads therefore go through the byte-payload branch so no local path
+      // reaches DOM.setFileInputFiles (which Chrome rejects for packed extensions).
+      browserFilesystemLocal: localManaged && !profile.attachOnly,
       usesChromeMcp,
       usesPersistentPlaywright: usesExtension || isRemote,
       supportsPerTabWs: localManaged,

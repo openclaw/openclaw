@@ -1,11 +1,15 @@
-import { setImmediate } from "node:timers/promises";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "../../agents/mcp-ui-resource.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -29,21 +33,24 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { RespondFn } from "./types.js";
 
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+
 afterEach(() => {
   mcpUiResourceTesting.clearViewStore();
   vi.restoreAllMocks();
 });
 
 describe("MCP App source authority at board write admission", () => {
-  it.each([
-    { revoke: false, cancel: false, retire: false },
-    { revoke: true, cancel: false, retire: false },
-    { revoke: false, cancel: true, retire: false },
-    { revoke: false, cancel: false, retire: true },
+  it.for([
+    { revoke: false, cancel: false, retire: false, sharing: false },
+    { revoke: true, cancel: false, retire: false, sharing: false },
+    { revoke: false, cancel: true, retire: false, sharing: false },
+    { revoke: false, cancel: false, retire: true, sharing: false },
+    { revoke: false, cancel: false, retire: false, sharing: true },
   ])(
-    "retains only current source tool authority after queueing (revoke=$revoke, cancel=$cancel, retire=$retire)",
-    async ({ revoke, cancel, retire }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async ({ workspaceDir }) => {
+    "retains only current source tool authority after queueing (revoke=$revoke, cancel=$cancel, retire=$retire, sharing=$sharing)",
+    async ({ revoke, cancel, retire, sharing }, { signal: testSignal }) => {
+      await withOpenClawTestState(profileState, async ({ workspaceDir }) => {
         const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
         const cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
@@ -62,16 +69,28 @@ describe("MCP App source authority at board write admission", () => {
           connId: "mcp-admission-owner",
         };
         client.connect.scopes = ["operator.read", "operator.write", "operator.approvals"];
-        await upsertSessionEntryCore(target, {
+        const clientProfileId = client.authenticatedUserProfile!.profileId;
+        const creatorId = sharing
+          ? roleClient("view", "mcp-admission-other").authenticatedUserProfile!.profileId
+          : clientProfileId;
+        const entry = {
           sessionId: "mcp-admission-session",
           updatedAt: 1,
-          visibility: "draft",
+          visibility: sharing ? ("shared" as const) : ("draft" as const),
           createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
+            type: "human" as const,
+            source: "profile" as const,
+            id: creatorId,
           },
-        });
+        };
+        await upsertSessionEntryCore(target, entry);
+        if (sharing) {
+          addSessionMember(target, {
+            identityId: clientProfileId,
+            addedBy: creatorId,
+            addedAt: 1,
+          });
+        }
         const descriptor = {
           serverName: "server",
           toolName: "refresh",
@@ -209,23 +228,23 @@ describe("MCP App source authority at board write admission", () => {
         const database = openOpenClawAgentDatabase({ agentId: target.agentId });
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const reservation = runOpenClawAgentWorkerWrite(database, async () => {
-          entered.resolve();
-          await release.promise;
+        const putEntered = createDeferredCore();
+        const resumePut = createDeferredCore();
+        const putQueued = createDeferredCore();
+        const putWidget = boardStore.putWidget.bind(boardStore);
+        const put = vi.spyOn(boardStore, "putWidget").mockImplementation(async (...args) => {
+          putEntered.resolve();
+          await resumePut.promise;
+          // The real store method reserves synchronously before its first await.
+          const pending = putWidget(...args);
+          putQueued.resolve();
+          return pending;
         });
-        await entered.promise;
-        const remove = vi.spyOn(boardStore, "applyOps");
-        const put = vi.spyOn(boardStore, "putWidget");
+        let reservation: Promise<void> | undefined;
         let revocation: ReturnType<typeof invoke> | undefined;
         let pin: ReturnType<typeof invoke> | undefined;
+        let destinationBefore: ReturnType<typeof boardStore.readWidgetMcpApp> | undefined;
         try {
-          if (revoke) {
-            revocation = invoke("board.update", {
-              ops: [{ kind: "widget_remove", name: "source" }],
-            });
-            await setImmediate();
-            expect(remove).toHaveBeenCalledOnce();
-          }
           pin = invoke(
             "board.widget.put",
             {
@@ -234,10 +253,35 @@ describe("MCP App source authority at board write admission", () => {
             },
             controller.signal,
           );
-          await vi.waitFor(() => expect(put).toHaveBeenCalledOnce());
-          expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeUndefined();
-          pausePolicy = cancel || retire;
+          await withinTest(
+            awaitGateBeforeSettlement(putEntered.promise, pin, "pin skipped source preflight"),
+            testSignal,
+          );
+          expect(put).toHaveBeenCalledOnce();
+          if (revoke) {
+            // Revoke after source preflight, before the pending pin reaches its write.
+            // The registered request now prepares its reads before entering that queue.
+            revocation = invoke("board.update", {
+              ops: [{ kind: "widget_remove", name: "source" }],
+            });
+            expect((await revocation).mock.calls[0]?.[0]).toBe(true);
+          }
+          // Source preflight reads share the writer queue; finish them before holding it.
+          reservation = runOpenClawAgentWorkerWrite(database, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          await withinTest(entered.promise, testSignal);
+          destinationBefore = boardStore.readWidgetMcpApp(target, "destination");
+          void destinationBefore.catch(() => {});
+          resumePut.resolve();
+          await withinTest(
+            awaitGateBeforeSettlement(putQueued.promise, pin, "pin did not queue"),
+            testSignal,
+          );
+          pausePolicy = cancel || retire || sharing;
         } finally {
+          resumePut.resolve();
           release.resolve();
           await reservation;
           try {
@@ -250,6 +294,8 @@ describe("MCP App source authority at board write admission", () => {
               ]);
               if (cancel) {
                 controller.abort(new Error("request closed during source policy"));
+              } else if (sharing) {
+                expect(removeSessionMember(target, clientProfileId)).not.toBeNull();
               } else {
                 expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
                 expect(database.db.isOpen).toBe(false);
@@ -258,10 +304,12 @@ describe("MCP App source authority at board write admission", () => {
           } finally {
             releasePolicy.resolve();
           }
+          await Promise.allSettled([revocation, pin, destinationBefore]);
           await revocation;
           await pin;
         }
-        if (cancel || retire) {
+        await expect(destinationBefore).resolves.toBeUndefined();
+        if (cancel || retire || sharing) {
           expect((await pin)!.mock.calls.some(([ok]) => ok)).toBe(false);
           if (retire) {
             await closeOpenClawAgentDatabaseByPathAsync(database.path);

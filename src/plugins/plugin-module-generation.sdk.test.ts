@@ -145,8 +145,11 @@ describe("plugin module generation SDK identity", () => {
         "eager.ts",
         `import { once } from 'node:events';
          import { Worker } from 'node:worker_threads';
+         import { identity } from 'openclaw/plugin-sdk/identity';
          export * from 'openclaw/plugin-sdk/identity';
          export const generation = {};
+         export const readIdentity = () => identity;
+         export const readGeneration = () => generation;
          export async function readWorker() {
            const worker = new Worker(new URL('./worker.mjs', import.meta.url), { execArgv: [] });
            try {
@@ -210,7 +213,8 @@ describe("plugin module generation SDK identity", () => {
            const token = {};
            host.bind(token, 'host-issued');
            const first = load();
-           assert.equal(first.api.identity, host.identity);
+           // Namespace members are instance-bound views; method results expose the actual markers.
+           assert.equal(first.api.readIdentity(), host.identity);
            assert.equal(first.api.read(token), 'host-issued');
            assert.equal((await first.api.readResolvedSdk()).identity, host.identity);
            await assertWorker(first.api);
@@ -218,8 +222,8 @@ describe("plugin module generation SDK identity", () => {
            const lazy = first.instance.loadModule(${JSON.stringify(path.join(plugin, "lazy.ts"))});
            adoptProcessPluginCache(createPluginCache());
            const second = load();
-           assert.equal(second.api.identity, host.identity);
-           assert.notEqual(second.api.generation, first.api.generation);
+           assert.equal(second.api.readIdentity(), host.identity);
+           assert.notEqual(second.api.readGeneration(), first.api.readGeneration());
            assert.equal((await lazy.readSdk()).identity, host.identity);
            second.api.bind(token, 'plugin-written');
            assert.equal(host.read(token), 'plugin-written');

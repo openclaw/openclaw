@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   collectInstalledCpuProfile,
   prepareInstalledCpuProfile,
@@ -19,6 +19,41 @@ const wsServerUrl = pathToFileURL(
 ).href;
 const sourceSha = "1".repeat(40);
 const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+const readJson = async (file: string) => JSON.parse(await fs.readFile(file, "utf8"));
+
+async function readEvents(file: string) {
+  return (await fs.readFile(file, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+const acknowledged = { acknowledgment: { accepted: true } };
+const measurementIndexes = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+type Events = Awaited<ReturnType<typeof readEvents>>;
+const eventsOf = (events: Events, type: string) => events.filter((event) => event.type === type);
+function expectRequests(events: Events, index: number) {
+  expect(
+    eventsOf(events, "request")
+      .filter((event) => event.index === index)
+      .map((event) => event.method),
+  ).toEqual(["connect", "status", "health"]);
+}
+
+async function expectLaunches(target: { events: string; stateRoot: string }, profiled: boolean[]) {
+  const events = await readEvents(target.events);
+  const starts = eventsOf(events, "start");
+  expect(starts.map(({ index, home }) => ({ index, home }))).toEqual(
+    profiled.map((_, index) => ({ index, home: target.stateRoot })),
+  );
+  expect(starts.map((event) => event.execArgv.includes("--cpu-prof"))).toEqual(profiled);
+  expect(eventsOf(events, "stop")).toHaveLength(profiled.length);
+  expect(eventsOf(events, "descendant").map((event) => event.listeners)).toEqual(
+    profiled.map(() => 0),
+  );
+  return { events, starts };
+}
 
 async function fixture(
   mode: "healthy" | "rpc-error" | "established-rpc-error" | "lingering" | "hold-health" = "healthy",
@@ -28,11 +63,8 @@ async function fixture(
   const installRoot = path.join(root, "install");
   const packageRoot = path.join(installRoot, "node_modules", "openclaw");
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await fs.writeFile(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-  );
-  await fs.writeFile(path.join(packageRoot, "dist", "build-info.json"), JSON.stringify({ commit }));
+  await writeJson(path.join(packageRoot, "package.json"), { name: "openclaw", version: "1.0.0" });
+  await writeJson(path.join(packageRoot, "dist", "build-info.json"), { commit });
   const events = path.join(root, "events.jsonl");
   await fs.writeFile(
     path.join(packageRoot, "openclaw.mjs"),
@@ -108,71 +140,60 @@ if (process.argv.includes("--descendant")) {
   );
   const tarball = path.join(root, "fixture.tgz");
   await fs.writeFile(tarball, `synthetic package ${commit}; installation is fixture-owned`);
-  await fs.writeFile(
-    path.join(installRoot, "package-lock.json"),
-    JSON.stringify({
-      name: "install",
-      lockfileVersion: 3,
-      requires: true,
-      packages: {
-        "": { dependencies: { openclaw: "file:../fixture.tgz" } },
-        "node_modules/openclaw": {
-          version: "1.0.0",
-          resolved: "file:../fixture.tgz",
-          integrity: `sha512-${createHash("sha512")
-            .update(await fs.readFile(tarball))
-            .digest("base64")}`,
-        },
-        "node_modules/fixture-dependency": {
-          version: "1.0.0",
-          resolved: "https://registry.npmjs.org/fixture-dependency/-/fixture-dependency-1.0.0.tgz",
-          integrity: "sha512-synthetic-dependency",
-          optional: true,
-          os: ["win32"],
-        },
+  await writeJson(path.join(installRoot, "package-lock.json"), {
+    lockfileVersion: 3,
+    packages: {
+      "": { dependencies: { openclaw: "file:../fixture.tgz" } },
+      "node_modules/openclaw": {
+        version: "1.0.0",
+        resolved: "file:../fixture.tgz",
+        integrity: `sha512-${createHash("sha512")
+          .update(await fs.readFile(tarball))
+          .digest("base64")}`,
       },
-    }),
-  );
+      "node_modules/fixture-dependency": {
+        version: "1.0.0",
+        resolved: "https://registry.npmjs.org/fixture-dependency/-/fixture-dependency-1.0.0.tgz",
+        integrity: "sha512-synthetic-dependency",
+        optional: true,
+        os: ["win32"],
+      },
+    },
+  });
   const input = path.join(root, "input.json");
   const stateRoot = path.join(root, "state");
-  await fs.writeFile(
-    input,
-    JSON.stringify({
-      sourceSha: commit,
-      toolingSha: sourceSha,
-      tarball,
-      installRoot,
-      stateRoot,
-      candidate: {
-        name: "openclaw",
-        packageSourceSha: commit,
-        version: "1.0.0",
-        sha256: hash(await fs.readFile(tarball)),
-      },
-      runtime: { version: process.version, sha256: hash(await fs.readFile(process.execPath)) },
-      artifact: {
-        id: 1,
-        runId: 1,
-        runAttempt: 1,
-        workflowSha: sourceSha,
-        digest: `sha256:${"2".repeat(64)}`,
-      },
-    }),
-  );
+  await writeJson(input, {
+    sourceSha: commit,
+    toolingSha: sourceSha,
+    tarball,
+    installRoot,
+    stateRoot,
+    candidate: {
+      name: "openclaw",
+      packageSourceSha: commit,
+      version: "1.0.0",
+      sha256: hash(await fs.readFile(tarball)),
+    },
+    runtime: { version: process.version, sha256: hash(await fs.readFile(process.execPath)) },
+    artifact: {
+      id: 1,
+      runId: 1,
+      runAttempt: 1,
+      workflowSha: sourceSha,
+      digest: `sha256:${"2".repeat(64)}`,
+    },
+  });
   const output = path.join(root, "report.json");
-  return { root, packageRoot, input, output, stateRoot, events };
+  return { packageRoot, input, output, stateRoot, events };
 }
 
 async function comparisonFixture(mode: Parameters<typeof fixture>[0] = "healthy") {
   const baseline = await fixture();
   const candidate = await fixture(mode, "3".repeat(40));
-  await fs.writeFile(
-    baseline.input,
-    JSON.stringify({
-      ...JSON.parse(await fs.readFile(baseline.input, "utf8")),
-      comparison: JSON.parse(await fs.readFile(candidate.input, "utf8")),
-    }),
-  );
+  await writeJson(baseline.input, {
+    ...(await readJson(baseline.input)),
+    comparison: await readJson(candidate.input),
+  });
   return { baseline, candidate };
 }
 
@@ -206,465 +227,362 @@ async function runFixture(
   );
 }
 
-describe("installed Gateway startup benchmark entry", () => {
-  it("retains signed profile samples and rejects malformed capture data", async () => {
-    const root = tempDirs.make("openclaw-installed-profile-");
-    const capture = await prepareInstalledCpuProfile(path.join(root, "result.json"), "fixture.mjs");
-    const attachment = {
-      pid: process.pid,
-      parentPid: process.pid,
+it("retains signed profile samples and rejects malformed capture data", async () => {
+  const root = tempDirs.make("openclaw-installed-profile-");
+  const capture = await prepareInstalledCpuProfile(path.join(root, "result.json"), "fixture.mjs");
+  const phase = (monotonicUs: number, performanceMs: number) => ({
+    phase: "fixture",
+    durationMs: 1,
+    totalMs: 1,
+    monotonicUs,
+    performanceMs,
+  });
+  const attachment = {
+    pid: process.pid,
+    parentPid: process.pid,
+    mainThread: true,
+    threadId: 0,
+    entry: capture.entry,
+    execArgv: capture.nodeArgs,
+    attachedMonotonicUs: 1_000_100,
+    attachedPerformanceMs: 100,
+    timeOrigin: 1,
+    exitedMonotonicUs: 1_009_900,
+    code: 0,
+    phases: [phase(1_000_200, 101), phase(1_000_300, 102)],
+    droppedPhases: 0,
+    observerErrors: [],
+  };
+  await writeJson(capture.attachmentPath, attachment);
+  const file = path.join(capture.directory, `CPU.20260918.000000.${process.pid}.0.001.cpuprofile`);
+  const profile = {
+    // Native profile timestamps have their own origin, independent of hrtime.
+    startTime: 7_000_001_000_000,
+    endTime: 7_000_001_010_000,
+    nodes: [1, 2].map((id) => ({ id, callFrame: { functionName: "fixture" } })),
+    samples: [1, 2, 1],
+    timeDeltas: [1_000, -100, 2_000],
+  };
+  const raw = JSON.stringify(profile);
+  await fs.writeFile(file, raw);
+  const result = await collectInstalledCpuProfile(capture, process.pid);
+  expect(result).toMatchObject({
+    samples: 3,
+    negativeTimeDeltas: 1,
+    profiles: [expect.objectContaining({ sha256: hash(raw) })],
+    clockDomains: {
+      controller: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+      gateway: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+      nativeProfile: { origin: "runtime-defined", unit: "microseconds" },
+      alignment: "not-established",
+    },
+  });
+  expect(await fs.readFile(file, "utf8")).toBe(raw);
+  for (const invalid of [
+    { ...attachment, exitedMonotonicUs: attachment.attachedMonotonicUs - 1 },
+    {
+      ...attachment,
+      phases: [{ ...attachment.phases[0], monotonicUs: attachment.exitedMonotonicUs + 1 }],
+    },
+    { ...attachment, phases: attachment.phases.toReversed() },
+    {
+      ...attachment,
+      phases: [attachment.phases[0], { ...attachment.phases[1], performanceMs: 100.5 }],
+    },
+  ]) {
+    await writeJson(capture.attachmentPath, invalid);
+    await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
+      /monotonic|performance clock/u,
+    );
+  }
+  await writeJson(capture.attachmentPath, attachment);
+  await writeJson(file, { ...profile, samples: [1, 3, 1] });
+  await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
+    "CPU sample references an unknown node",
+  );
+  await fs.writeFile(file, raw.replace("-100", "1e999"));
+  await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow("timeDeltas");
+});
+
+it.for(["healthy", "established-rpc-error"] as const)(
+  "retains the established CPU profile and both settled launches with %s",
+  async (mode, { signal }) => {
+    const target = await fixture(mode);
+    const result = await runFixture(target, signal, undefined, ["--installed-cpu-diagnostic"]);
+    const failed = mode === "established-rpc-error";
+    expect(result.status, JSON.stringify(result)).toBe(failed ? 1 : 0);
+    const report = await readJson(target.output);
+    expect(report).toMatchObject({
+      outcome: failed ? "failed" : "passed",
+      measurementMode: "cpu-diagnostic",
+      establishedReadySummary: null,
+      comparisonSummary: null,
+      outerSettlement: { beforeCleanup: "dead", joined: true, exitCode: failed ? 1 : 0 },
+    });
+    expect(report.after).toEqual(report.before);
+    expect(report.samples).toMatchObject([{ phase: "fresh" }, { phase: "established" }]);
+    const { events, starts } = await expectLaunches(target, [false, true]);
+    for (const sample of report.samples) {
+      expect(sample).toMatchObject({
+        outcome: failed && sample.index === 1 ? "failed" : "passed",
+        observations: {
+          stateBefore: { backupExists: false, configSha256: expect.any(String) },
+          stateAfter: { backupExists: false },
+          shutdown: acknowledged,
+        },
+      });
+      expectRequests(events, sample.index);
+    }
+    const [fresh, established] = report.samples;
+    expect(fresh.observations.cpuProfile).toBeUndefined();
+    const capture = established.observations.cpuProfile;
+    expect(established.observations.health.response.ok).toBe(!failed);
+    expect(established.errors).toHaveLength(failed ? 1 : 0);
+    for (const [stream, messages] of [
+      ["stdout", ["fixture console info", "fixture console debug", "fixture direct stdout"]],
+      ["stderr", ["fixture console warn", "fixture console error", "fixture direct stderr"]],
+    ] as const) {
+      expect(
+        established[stream].split("\n").filter((line: string) => line.startsWith("fixture ")),
+      ).toEqual(messages);
+    }
+    expect(capture.attachment).toMatchObject({
+      pid: starts[1].pid,
       mainThread: true,
       threadId: 0,
-      entry: capture.entry,
-      execArgv: capture.nodeArgs,
-      attachedMonotonicUs: 1_000_100,
-      attachedPerformanceMs: 100,
-      timeOrigin: 1,
-      exitedMonotonicUs: 1_009_900,
       code: 0,
-      phases: [
-        {
-          phase: "first",
-          durationMs: 1,
-          totalMs: 1,
-          monotonicUs: 1_000_200,
-          performanceMs: 101,
-        },
-        {
-          phase: "second",
-          durationMs: 1,
-          totalMs: 2,
-          monotonicUs: 1_000_300,
-          performanceMs: 102,
-        },
-      ],
       droppedPhases: 0,
       observerErrors: [],
-    };
-    await fs.writeFile(capture.attachmentPath, JSON.stringify(attachment));
-    const file = path.join(
-      capture.directory,
-      `CPU.20260918.000000.${process.pid}.0.001.cpuprofile`,
-    );
-    const profile = {
-      // Native profile timestamps have their own origin, independent of hrtime.
-      startTime: 7_000_001_000_000,
-      endTime: 7_000_001_010_000,
-      nodes: [
-        { id: 1, callFrame: { functionName: "first" } },
-        { id: 2, callFrame: { functionName: "second" } },
-      ],
-      samples: [1, 2, 1],
-      timeDeltas: [1_000, -100, 2_000],
-    };
-    const raw = JSON.stringify(profile);
-    await fs.writeFile(file, raw);
-    const result = await collectInstalledCpuProfile(capture, process.pid);
-    expect(result).toMatchObject({
-      samples: 3,
-      negativeTimeDeltas: 1,
-      profiles: [expect.objectContaining({ sha256: hash(raw) })],
-      clockDomains: {
-        controller: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
-        gateway: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
-        nativeProfile: { origin: "runtime-defined", unit: "microseconds" },
-        alignment: "not-established",
-      },
     });
-    expect(await fs.readFile(file, "utf8")).toBe(raw);
-    for (const invalid of [
-      { ...attachment, exitedMonotonicUs: attachment.attachedMonotonicUs - 1 },
-      {
-        ...attachment,
-        phases: [{ ...attachment.phases[0], monotonicUs: attachment.exitedMonotonicUs + 1 }],
-      },
-      {
-        ...attachment,
-        phases: [attachment.phases[1], attachment.phases[0]],
-      },
-      {
-        ...attachment,
-        phases: [attachment.phases[0], { ...attachment.phases[1], performanceMs: 100.5 }],
-      },
-    ]) {
-      await fs.writeFile(capture.attachmentPath, JSON.stringify(invalid));
-      await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
-        /monotonic|performance clock/u,
-      );
-    }
-    await fs.writeFile(capture.attachmentPath, JSON.stringify(attachment));
-    await fs.writeFile(file, JSON.stringify({ ...profile, samples: [1, 3, 1] }));
-    await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow(
-      "CPU sample references an unknown node",
-    );
-    await fs.writeFile(file, raw.replace("-100", "1e999"));
-    await expect(collectInstalledCpuProfile(capture, process.pid)).rejects.toThrow("timeDeltas");
-  });
-
-  it.for(["healthy", "established-rpc-error"] as const)(
-    "retains the established CPU profile and both settled launches with %s",
-    async (mode, { signal }) => {
-      const target = await fixture(mode);
-      const result = await runFixture(target, signal, undefined, ["--installed-cpu-diagnostic"]);
-      const failed = mode === "established-rpc-error";
-      expect(result.status, JSON.stringify(result)).toBe(failed ? 1 : 0);
-      const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-      expect(report).toMatchObject({
-        outcome: failed ? "failed" : "passed",
-        measurementMode: "cpu-diagnostic",
-        establishedReadySummary: null,
-        comparisonSummary: null,
-        outerSettlement: { beforeCleanup: "dead", joined: true, exitCode: failed ? 1 : 0 },
-      });
-      expect(report.after).toEqual(report.before);
-      expect(report.samples.map((sample: { phase: string }) => sample.phase)).toEqual([
-        "fresh",
-        "established",
-      ]);
-      const events = (await fs.readFile(target.events, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      const starts = events.filter((event) => event.type === "start");
-      expect(starts.map((event) => event.index)).toEqual([0, 1]);
-      expect(starts.map((event) => event.home)).toEqual([target.stateRoot, target.stateRoot]);
-      expect(starts.map((event) => event.execArgv.includes("--cpu-prof"))).toEqual([false, true]);
-      expect(events.filter((event) => event.type === "stop")).toHaveLength(2);
-      expect(
-        events.filter((event) => event.type === "descendant").map((event) => event.listeners),
-      ).toEqual([0, 0]);
-      for (const sample of report.samples) {
-        expect(sample).toMatchObject({
-          outcome: failed && sample.index === 1 ? "failed" : "passed",
-          observations: {
-            stateBefore: { backupExists: false, configSha256: expect.any(String) },
-            stateAfter: { backupExists: false },
-            shutdown: { acknowledgment: { accepted: true } },
-          },
-        });
-        expect(
-          events
-            .filter((event) => event.type === "request" && event.index === sample.index)
-            .map((event) => event.method),
-        ).toEqual(["connect", "status", "health"]);
-      }
-      expect(report.samples[0].observations.cpuProfile).toBeUndefined();
-      const capture = report.samples[1].observations.cpuProfile;
-      expect(report.samples[1].observations.health.response.ok).toBe(!failed);
-      expect(report.samples[1].errors.length).toBe(failed ? 1 : 0);
-      expect(
-        report.samples[1].stdout.split("\n").filter((line: string) => line.startsWith("fixture ")),
-      ).toEqual(["fixture console info", "fixture console debug", "fixture direct stdout"]);
-      expect(
-        report.samples[1].stderr.split("\n").filter((line: string) => line.startsWith("fixture ")),
-      ).toEqual(["fixture console warn", "fixture console error", "fixture direct stderr"]);
-      expect(capture.attachment).toMatchObject({
-        pid: starts[1].pid,
-        mainThread: true,
-        threadId: 0,
-        code: 0,
-        droppedPhases: 0,
-        observerErrors: [],
-      });
-      expect(capture.attachment.phases).toEqual([
-        expect.objectContaining({ phase: "fixture.cpu", durationMs: 60, startMs: 5, calls: 2 }),
-      ]);
-      const profile = JSON.parse(
-        await fs.readFile(path.join(capture.directory, capture.mainProfile), "utf8"),
-      );
-      expect(profile.samples.length).toBeGreaterThan(0);
-      expect(
-        profile.nodes.some(
-          (node: { callFrame: { functionName: string } }) =>
-            node.callFrame.functionName === "fixtureStartupCpuWork",
-        ),
-      ).toBe(true);
-      expect(report.samples[1].observations.stateBefore).toEqual(
-        report.samples[0].observations.stateAfter,
-      );
-    },
-  );
-
-  it("refuses a paired CPU diagnostic before either installation launches", async ({ signal }) => {
-    const { baseline, candidate } = await comparisonFixture();
-    const result = await runFixture(baseline, signal, undefined, ["--installed-cpu-diagnostic"]);
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("CPU diagnostics require one installed package");
-    for (const target of [baseline, candidate]) {
-      await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-  });
-
-  it("compares alternating pairs with independent retained state and complete first requests", async ({
-    signal,
-  }) => {
-    const { baseline, candidate } = await comparisonFixture();
-    const result = await runFixture(baseline, signal);
-    const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
-    expect(result.status, JSON.stringify({ result, report })).toBe(0);
-    expect(report.outcome).toBe("passed");
-    expect(report.samples.map((sample: { arm: string }) => sample.arm)).toEqual([
-      "baseline",
-      "candidate",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
-      "baseline",
-      "candidate",
-      "candidate",
-      "baseline",
+    expect(capture.attachment.phases).toEqual([
+      expect.objectContaining({ phase: "fixture.cpu", durationMs: 60, startMs: 5, calls: 2 }),
     ]);
-    expect(report.after).toEqual(report.before);
-    expect(report.comparison.after).toEqual(report.comparison.before);
-    expect(report.dependencyParity.packages).toBe(3);
-    expect(report.establishedReadySummary).toBeNull();
-    for (const [arm, target] of [
-      ["baseline", baseline],
-      ["candidate", candidate],
-    ] as const) {
-      const samples = report.samples.filter((sample: { arm: string }) => sample.arm === arm);
-      expect(samples.map((sample: { armIndex: number }) => sample.armIndex)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-      ]);
-      const events = (await fs.readFile(target.events, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(events.filter((event) => event.type === "start").map((event) => event.index)).toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7, 8,
-      ]);
-      expect(
-        new Set(events.filter((event) => event.type === "start").map((event) => event.home)),
-      ).toEqual(new Set([target.stateRoot]));
-      expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
-      for (const sample of samples) {
-        expect(sample).toMatchObject({
-          outcome: "passed",
-          errors: [],
-          observations: {
-            status: { response: { ok: true } },
-            health: { response: { ok: true } },
-            shutdown: { acknowledgment: { accepted: true } },
-          },
-        });
-      }
-    }
-    expect(report.outerSettlement).toMatchObject({
-      beforeCleanup: "dead",
-      joined: true,
-      exitCode: 0,
-    });
-  });
+    const profile = await readJson(path.join(capture.directory, capture.mainProfile));
+    expect(profile.samples.length).toBeGreaterThan(0);
+    expect(profile.nodes).toContainEqual(
+      expect.objectContaining({
+        callFrame: expect.objectContaining({ functionName: "fixtureStartupCpuWork" }),
+      }),
+    );
+    expect(established.observations.stateBefore).toEqual(fresh.observations.stateAfter);
+  },
+);
 
-  it.for(["version", "integrity", "optional"])(
-    "refuses dependency %s drift before either package starts",
-    async (field, { signal }) => {
-      const { baseline, candidate } = await comparisonFixture();
-      const lockPath = path.join(candidate.packageRoot, "..", "..", "package-lock.json");
-      const lock = JSON.parse(await fs.readFile(lockPath, "utf8"));
-      lock.packages["node_modules/fixture-dependency"][field] =
-        field === "optional" ? false : "changed";
-      await fs.writeFile(lockPath, JSON.stringify(lock));
-      const result = await runFixture(baseline, signal);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("Installed dependency records differ");
-      const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
-      expect(report.samples).toHaveLength(18);
+it.for(["paired-cpu", "dependency-integrity", "pending-lifecycle"] as const)(
+  "refuses %s before launching any installation",
+  async (mode, { signal }) => {
+    const { baseline, candidate } =
+      mode === "pending-lifecycle"
+        ? { baseline: await fixture(), candidate: undefined }
+        : await comparisonFixture();
+    if (mode === "pending-lifecycle") {
+      await fs.writeFile(path.join(baseline.packageRoot, ".openclaw-lifecycle-pending"), "pending");
+    } else if (mode === "dependency-integrity") {
+      const lockPath = path.join(candidate!.packageRoot, "..", "..", "package-lock.json");
+      const lock = await readJson(lockPath);
+      lock.packages["node_modules/fixture-dependency"].integrity = "changed";
+      await writeJson(lockPath, lock);
+    }
+    const result = await runFixture(
+      baseline,
+      signal,
+      undefined,
+      mode === "paired-cpu" ? ["--installed-cpu-diagnostic"] : [],
+    );
+    expect(result.status, result.stderr).toBe(1);
+    if (mode === "paired-cpu") {
+      expect(result.stderr).toContain("CPU diagnostics require one installed package");
+    } else {
+      const report = await readJson(baseline.output);
+      if (mode === "dependency-integrity") {
+        expect(result.stderr).toContain("Installed dependency records differ");
+        expect(report.samples).toHaveLength(18);
+      } else {
+        expect(report.outcome).toBe("failed");
+      }
       expect(
         report.samples.every((sample: { outcome: string }) => sample.outcome === "not-run"),
       ).toBe(true);
-      for (const target of [baseline, candidate]) {
-        await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-    },
-  );
+    }
+    for (const target of candidate ? [baseline, candidate] : [baseline]) {
+      await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
 
-  it("retains nine real launches, first RPCs and acknowledged exits in one state directory", async ({
-    signal,
-  }) => {
-    const target = await fixture();
-    const result = await runFixture(target, signal);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
+it.for(["single", "paired"] as const)(
+  "retains settled launches and state in a %s cohort",
+  async (mode, { signal }) => {
+    const { baseline, candidate } =
+      mode === "paired"
+        ? await comparisonFixture()
+        : { baseline: await fixture(), candidate: undefined };
+    const result = await runFixture(baseline, signal);
+    const report = await readJson(baseline.output);
     expect(result.error).toBeUndefined();
     expect(result.status, JSON.stringify({ stderr: result.stderr, report })).toBe(0);
     expect(result.stdout).toContain('"name":"launch"');
     expect(result.stdout).toContain('"name":"health"');
-    expect(report.outcome).toBe("passed");
-    expect(report.outerSettlement).toMatchObject({
-      beforeCleanup: "dead",
-      exitCode: 0,
-      joined: true,
+    expect(report).toMatchObject({
       outcome: "passed",
+      outerSettlement: { beforeCleanup: "dead", exitCode: 0, joined: true, outcome: "passed" },
     });
     expect(report.after).toEqual(report.before);
-    expect(report.samples).toHaveLength(9);
-    const events = (await fs.readFile(target.events, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(events.filter((event) => event.type === "start").map((event) => event.index)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8,
-    ]);
-    expect(
-      new Set(events.filter((event) => event.type === "start").map((event) => event.home)),
-    ).toEqual(new Set([target.stateRoot]));
-    expect(
-      events.filter((event) => event.type === "descendant").map((event) => event.listeners),
-    ).toEqual(Array(9).fill(0));
-    expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
-    expect(
-      events
-        .filter((event) => event.type === "start")
-        .every((event) => !event.execArgv.includes("--cpu-prof")),
-    ).toBe(true);
-    await expect(fs.access(`${target.output}.profiles`)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const [index, sample] of report.samples.entries()) {
-      expect(sample).toMatchObject({
-        index,
-        phase: index === 0 ? "fresh" : "established",
-        outcome: "passed",
-        errors: [],
-        observations: {
-          shutdown: { acknowledgment: { accepted: true } },
-          health: { response: { ok: true, payload: { ok: true, plugins: { unavailable: 1 } } } },
-        },
+    if (candidate) {
+      // A fresh pair followed by four established ABBA blocks.
+      const expectedArms = [
+        "baseline",
+        "candidate",
+        ...Array.from({ length: 4 }, () => [
+          "baseline",
+          "candidate",
+          "candidate",
+          "baseline",
+        ]).flat(),
+      ];
+      expect(report.samples.map((sample: { arm: string }) => sample.arm)).toEqual(expectedArms);
+      expect(report.comparison.after).toEqual(report.comparison.before);
+      expect(report).toMatchObject({
+        dependencyParity: { packages: 3 },
+        establishedReadySummary: null,
       });
-      expect(
-        events
-          .filter((event) => event.type === "request" && event.index === index)
-          .map((event) => event.method),
-      ).toEqual(["connect", "status", "health"]);
+    } else {
+      expect(report.samples).toHaveLength(9);
+      expect(report.establishedReadySummary).not.toBeNull();
     }
-    expect(report.establishedReadySummary).not.toBeNull();
-  });
-
-  it("retains a failed first request and all unrun slots without reporting an established summary", async ({
-    signal,
-  }) => {
-    const target = await fixture("rpc-error");
-    const result = await runFixture(target, signal);
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-    expect(report.samples[0], JSON.stringify({ stderr: result.stderr, report })).toMatchObject({
-      observations: { health: { response: { ok: false } } },
-    });
-    expect(report.outcome).toBe("failed");
-    expect(report.samples.map((sample: { outcome: string }) => sample.outcome)).toEqual([
-      "failed",
-      ...Array(8).fill("not-run"),
-    ]);
-    expect(report.samples[0].observations.health.response).toMatchObject({
-      ok: false,
-      error: { message: "fixture rejection" },
-    });
-    expect(report.samples[0].observations.shutdown.acknowledgment.accepted).toBe(true);
-    expect(report.establishedReadySummary).toBeNull();
-  });
-
-  it("retains the active comparison arm and joins descendants when canceled during candidate health", async ({
-    signal,
-  }) => {
-    const { baseline: target } = await comparisonFixture("hold-health");
-    const cancellation = new AbortController();
-    let observedHealthWait = false;
-    const result = await runFixture(
-      target,
-      AbortSignal.any([signal, cancellation.signal]),
-      (child, readOutput) => {
-        const cancelWhenObserved = () => {
-          const output = readOutput();
-          if (
-            output.stdout.includes("fixture-health-wait") &&
-            output.stderr.includes("fixture-health-diagnostic")
-          ) {
-            observedHealthWait = true;
-            cancellation.abort();
-          }
-        };
-        child.stdout?.on("data", cancelWhenObserved);
-        child.stderr?.on("data", cancelWhenObserved);
-      },
-    );
-    expect(observedHealthWait, JSON.stringify(result)).toBe(true);
-    expect(result.error).toBeDefined();
-    expect(result.stdout).toContain("fixture-health-wait");
-    expect(result.stderr).toContain("fixture-health-diagnostic");
-    const observations = result.stdout
-      .split("\n")
-      .filter((line) => line.startsWith("[gateway-startup-observation] "))
-      .map((line) => JSON.parse(line.slice("[gateway-startup-observation] ".length)));
-    expect(observations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          index: 1,
-          arm: "candidate",
-          phase: "fresh",
-          name: "readyz",
-          value: expect.objectContaining({ status: 200 }),
-        }),
-        expect.objectContaining({
-          index: 1,
-          arm: "candidate",
-          name: "status",
-          value: expect.objectContaining({ response: expect.objectContaining({ ok: true }) }),
-        }),
-      ]),
-    );
-    const launches = observations.filter((observation) => observation.name === "launch");
-    expect(launches.map((launch) => launch.arm)).toEqual(["baseline", "candidate"]);
-    for (const launch of launches) {
-      expect(isProcessAlive(launch.value.pid)).toBe(false);
-      expect(isProcessAlive(launch.value.controllerPid)).toBe(false);
-    }
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-    expect(report.outcome).not.toBe("passed");
-    expect(report.establishedReadySummary).toBeNull();
-    expect(
-      report.samples.slice(2).every((sample: { outcome: string }) => sample.outcome === "not-run"),
-    ).toBe(true);
-  });
-
-  it("refuses an unsettled normal installation before launching any sample", async ({ signal }) => {
-    const target = await fixture();
-    await fs.writeFile(path.join(target.packageRoot, ".openclaw-lifecycle-pending"), "pending");
-    const result = await runFixture(target, signal);
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-    expect(report.outcome).toBe("failed");
-    expect(
-      report.samples.every((sample: { outcome: string }) => sample.outcome === "not-run"),
-    ).toBe(true);
-    await expect(fs.access(target.events)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it.runIf(process.platform === "win32")(
-    "does not treat forced outer Job cleanup as successful Gateway settlement",
-    async ({ signal }) => {
-      const target = await fixture("lingering");
-      const result = await runFixture(target, signal);
-      const report = JSON.parse(await fs.readFile(target.output, "utf8"));
-      expect(result.status, JSON.stringify({ result, report })).toBe(1);
-      expect(report.outerSettlement.beforeCleanup).toBe("indeterminate");
-      expect(report.outcome).toBe("failed");
-      expect(report.establishedReadySummary).toBeNull();
-      const lingering = (await fs.readFile(target.events, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .filter((event) => event.type === "lingering");
-      expect(lingering).toHaveLength(9);
-      for (const { childPid } of lingering) {
-        expect(isProcessAlive(childPid)).toBe(false);
+    const targets = candidate
+      ? ([
+          ["baseline", baseline],
+          ["candidate", candidate],
+        ] as const)
+      : ([[undefined, baseline]] as const);
+    for (const [arm, target] of targets) {
+      const samples = candidate
+        ? report.samples.filter((sample: { arm: string }) => sample.arm === arm)
+        : report.samples;
+      if (candidate) {
+        expect(samples.map((sample: { armIndex: number }) => sample.armIndex)).toEqual(
+          measurementIndexes,
+        );
       }
+      const { events } = await expectLaunches(
+        target,
+        measurementIndexes.map(() => false),
+      );
+      await expect(fs.access(`${target.output}.profiles`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      for (const [index, sample] of samples.entries()) {
+        expect(sample).toMatchObject({
+          phase: index === 0 ? "fresh" : "established",
+          outcome: "passed",
+          errors: [],
+          observations: {
+            status: { response: { ok: true } },
+            shutdown: acknowledged,
+            health: {
+              response: { ok: true, payload: { ok: true, plugins: { unavailable: 1 } } },
+            },
+          },
+        });
+        if (!candidate) {
+          expect(sample.index).toBe(index);
+        }
+        expectRequests(events, index);
+      }
+    }
+  },
+);
+
+it("keeps failed fresh health and unrun slots without an established summary", async ({
+  signal,
+}) => {
+  const target = await fixture("rpc-error");
+  const result = await runFixture(target, signal);
+  expect(result.status, result.stderr).toBe(1);
+  const report = await readJson(target.output);
+  expect(report).toMatchObject({ outcome: "failed", establishedReadySummary: null });
+  expect(report.samples.map((sample: { outcome: string }) => sample.outcome)).toEqual([
+    "failed",
+    ...Array(8).fill("not-run"),
+  ]);
+  expect(report.samples[0].observations).toMatchObject({
+    health: { response: { ok: false, error: { message: "fixture rejection" } } },
+    shutdown: acknowledged,
+  });
+});
+
+it("joins descendants and retains the canceled candidate arm", async ({ signal }) => {
+  const { baseline: target } = await comparisonFixture("hold-health");
+  const cancellation = new AbortController();
+  const result = await runFixture(
+    target,
+    AbortSignal.any([signal, cancellation.signal]),
+    (child, readOutput) => {
+      const cancelWhenObserved = () => {
+        const output = readOutput();
+        if (
+          output.stdout.includes("fixture-health-wait") &&
+          output.stderr.includes("fixture-health-diagnostic")
+        ) {
+          cancellation.abort();
+        }
+      };
+      child.stdout?.on("data", cancelWhenObserved);
+      child.stderr?.on("data", cancelWhenObserved);
     },
   );
+  expect(cancellation.signal.aborted, JSON.stringify(result)).toBe(true);
+  expect(result.error).toBeDefined();
+  expect(result.stdout).toContain("fixture-health-wait");
+  expect(result.stderr).toContain("fixture-health-diagnostic");
+  const observations = result.stdout
+    .split("\n")
+    .filter((line) => line.startsWith("[gateway-startup-observation] "))
+    .map((line) => JSON.parse(line.slice("[gateway-startup-observation] ".length)));
+  for (const expected of [
+    { name: "readyz", phase: "fresh", value: expect.objectContaining({ status: 200 }) },
+    {
+      name: "status",
+      value: expect.objectContaining({ response: expect.objectContaining({ ok: true }) }),
+    },
+  ]) {
+    expect(observations).toContainEqual(
+      expect.objectContaining({ index: 1, arm: "candidate", ...expected }),
+    );
+  }
+  const launches = observations.filter((observation) => observation.name === "launch");
+  expect(launches.map((launch) => launch.arm)).toEqual(["baseline", "candidate"]);
+  for (const { value } of launches) {
+    expect([value.pid, value.controllerPid].map((pid) => isProcessAlive(pid))).toEqual([
+      false,
+      false,
+    ]);
+  }
+  const report = await readJson(target.output);
+  expect(report.outcome).not.toBe("passed");
+  expect(report.establishedReadySummary).toBeNull();
+  expect(
+    report.samples.slice(2).every((sample: { outcome: string }) => sample.outcome === "not-run"),
+  ).toBe(true);
 });
+
+it.runIf(process.platform === "win32")(
+  "does not treat forced outer Job cleanup as successful Gateway settlement",
+  async ({ signal }) => {
+    const target = await fixture("lingering");
+    const result = await runFixture(target, signal);
+    const report = await readJson(target.output);
+    expect(result.status, JSON.stringify({ result, report })).toBe(1);
+    expect(report).toMatchObject({
+      outerSettlement: { beforeCleanup: "indeterminate" },
+      outcome: "failed",
+      establishedReadySummary: null,
+    });
+    const lingering = eventsOf(await readEvents(target.events), "lingering");
+    expect(lingering).toHaveLength(9);
+    for (const { childPid } of lingering) {
+      expect(isProcessAlive(childPid)).toBe(false);
+    }
+  },
+);

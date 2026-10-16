@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -27,6 +29,117 @@ describe("before_agent_reply runner boundary", () => {
   beforeEach(() => {
     hookRunner.hasHooks.mockReset().mockReturnValue(true);
     hookRunner.runBeforeAgentReply.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each(["settled", "failed", "revoked"] as const)(
+    "settles attribution before observer or reply-claim effects (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      let active = true;
+      const beforeDispatch = vi.fn(async () => undefined);
+      const afterDispatch = vi.fn(async (result) => result);
+      const pending = withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
+        runBeforeAgentReplyForTurn({
+          runId: `attribution-${outcome}`,
+          trigger: "user",
+          event: { cleanedBody: "hello" },
+          context: { trigger: "user" },
+          awaitSessionDiffBaseline: async () => {
+            entered.resolve();
+            await baseline.promise;
+          },
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("reply authority ended");
+            }
+          },
+        }),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Reply hook bypassed attribution",
+        );
+        expect(beforeDispatch).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+        if (outcome === "failed") {
+          baseline.reject(new Error("attribution failed"));
+          await expect(pending).rejects.toThrow("attribution failed");
+        } else {
+          active = outcome !== "revoked";
+          baseline.resolve();
+          if (active) {
+            await pending;
+            expect(beforeDispatch).toHaveBeenCalledOnce();
+            expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledOnce();
+          } else {
+            await expect(pending).rejects.toThrow("reply authority ended");
+          }
+        }
+        if (outcome !== "settled") {
+          expect(beforeDispatch).not.toHaveBeenCalled();
+          expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+        }
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it("does not wait for attribution when no reply-claim hook applies", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const awaitSessionDiffBaseline = vi.fn(async () => {});
+    await expect(
+      runBeforeAgentReplyForTurn({
+        runId: "attribution-no-hook",
+        trigger: "user",
+        event: { cleanedBody: "hello" },
+        context: { trigger: "user" },
+        awaitSessionDiffBaseline,
+      }),
+    ).resolves.toBeUndefined();
+    expect(awaitSessionDiffBaseline).not.toHaveBeenCalled();
+  });
+
+  it("keeps authority through observer finalization and rejects revoked effects", async () => {
+    let current = true;
+    let finalAuthority: (() => void) | undefined;
+    const effect = vi.fn();
+    hookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
+    await expect(
+      withBeforeAgentReplyObserver(
+        {
+          beforeDispatch: async () => undefined,
+          afterDispatch: async (result) => {
+            finalAuthority = captureGuardedFetchRequestAuthority();
+            expect(finalAuthority).toBeTypeOf("function");
+            finalAuthority?.();
+            current = false;
+            await Promise.resolve();
+            finalAuthority?.();
+            effect();
+            return result;
+          },
+        },
+        () =>
+          runBeforeAgentReplyForTurn({
+            runId: "finalization-authority",
+            trigger: "cron",
+            event: { cleanedBody: "hello" },
+            context: { trigger: "cron" },
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("root reassigned");
+              }
+            },
+          }),
+      ),
+    ).rejects.toThrow("root reassigned");
+    expect(effect).not.toHaveBeenCalled();
+    expect(finalAuthority).toThrow("no longer active");
   });
 
   it("preserves the complete reply payload", () => {

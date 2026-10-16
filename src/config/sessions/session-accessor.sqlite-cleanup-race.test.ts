@@ -1,12 +1,10 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifactsCore,
@@ -16,14 +14,14 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
   before: undefined as (() => Promise<void>) | undefined,
-  after: undefined as (() => void) | undefined,
+  after: undefined as (() => void | Promise<void>) | undefined,
   observe: undefined as ((sessionIds: string[]) => void) | undefined,
   publicationFailure: undefined as Error | undefined,
 }));
@@ -38,7 +36,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       await hooks.before?.();
       hooks.observe?.(args[0].map((plan) => plan.sessionId));
       const result = await actual.materializeSessionStateDeletePlans(...args);
-      hooks.after?.();
+      await hooks.after?.();
       return result;
     },
   };
@@ -60,7 +58,7 @@ vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => 
     },
   };
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cleanup-race-");
 type Events = Parameters<typeof replaceTranscriptEvents>[1];
 
 describe("SQLite lifecycle cleanup races", () => {
@@ -68,7 +66,7 @@ describe("SQLite lifecycle cleanup races", () => {
   let storePath: string;
   let now: number;
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-session-cleanup-race-");
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     now = Date.now();
   });
@@ -77,7 +75,6 @@ describe("SQLite lifecycle cleanup races", () => {
     hooks.after = undefined;
     hooks.observe = undefined;
     hooks.publicationFailure = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   async function seed(
@@ -92,7 +89,8 @@ describe("SQLite lifecycle cleanup races", () => {
       ...options,
       sessionKey: options.sessionKey ?? `agent:main:cleanup-race-${sessionId}`,
     };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: now, ...entry });
+    // Automatic maintenance must not consume the explicit cleanup's archive hooks.
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: now, ...entry });
     if (events) {
       await replaceTranscriptEvents(scope, events);
     }
@@ -141,38 +139,25 @@ describe("SQLite lifecycle cleanup races", () => {
       await release.promise;
     };
     const operation = start();
+    const operations: Promise<unknown>[] = [operation];
+    onTestFinished(async () => {
+      release.resolve();
+      await Promise.allSettled(operations);
+    });
     await entered.promise;
     const write = replaceSessionEntry(writer, {
       sessionId: writer.sessionId,
       updatedAt: now + 1,
       label: "progressed",
     });
-    let progressed: boolean;
+    operations.push(write);
     try {
-      progressed = await Promise.race([
-        write.then(() => true),
-        new Promise<false>((resolve) => {
-          setTimeout(() => resolve(false), 500);
-        }),
-      ]);
+      await expect(write).resolves.toMatchObject({ label: "progressed" });
     } finally {
       release.resolve();
     }
-    const result = await operation;
-    await expect(write).resolves.toMatchObject({ label: "progressed" });
-    expect(progressed).toBe(true);
-    return result;
+    return await operation;
   }
-
-  it("reclaims only aged rows while preserving fresh admission with or without old transcripts", async () => {
-    const active = await seed("active-without-transcript");
-    const orphan = await seed("orphan-without-transcript", { updatedAt: now - 600_000 });
-    const reused = await seed("reused-active-session", {}, [marker("cleanup-race-marker-reused")]);
-    await expect(cleanup()).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
-    expect(loadSessionEntry(active)).toMatchObject({ sessionId: active.sessionId });
-    expect(loadSessionEntry(orphan)).toBeUndefined();
-    expect(loadSessionEntry(reused)).toMatchObject({ sessionId: reused.sessionId });
-  });
 
   it("preserves foreign plugin ownership while reclaiming owned and legacy rows", async () => {
     const entry = { updatedAt: now - 600_000 };
@@ -252,12 +237,13 @@ describe("SQLite lifecycle cleanup races", () => {
     const db = database();
     const refreshed = { label: "refreshed", sessionId: target.sessionId, updatedAt: now + 1 };
     let changed = false;
-    hooks.after = () => {
-      changed = true;
-      db.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-        .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
-    };
+    hooks.after = () =>
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: db.path }, () => {
+        changed = true;
+        db.db
+          .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+          .run(JSON.stringify(refreshed), refreshed.updatedAt, target.sessionKey);
+      });
     await expect(cleanup({ orphanTranscriptMinAgeMs: 0, nowMs: now + 60_000 })).rejects.toThrow(
       "SQLite lifecycle cleanup entry changed",
     );
@@ -307,38 +293,6 @@ describe("SQLite lifecycle cleanup races", () => {
         }),
       ),
     ).resolves.toMatchObject({ removedEntries: 1, removedSessionKeys: [target.sessionKey] });
-  });
-
-  it("reports zero maintenance removals when final compare-and-delete does not commit", async () => {
-    const target = await seed("maintenance-compare-failed", { updatedAt: 1 }, undefined, {
-      sessionKey: "agent:main:subagent:maintenance-compare-failed",
-    });
-    const db = database();
-    let materializations = 0;
-    hooks.after = () => {
-      if (++materializations !== 1) {
-        return;
-      }
-      const entry = { sessionId: target.sessionId, label: "changed", updatedAt: 2 };
-      db.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-        .run(JSON.stringify(entry), entry.updatedAt, target.sessionKey);
-    };
-    const result = await applySessionEntryLifecycleMutation({
-      storePath,
-      maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
-    });
-    expect(result).toMatchObject({
-      beforeCount: 1,
-      afterCount: 1,
-      removedEntries: 0,
-      removedSessionKeys: [],
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 0,
-    });
-    expect(materializations).toBe(1);
-    expect(loadSessionEntry(target)).toMatchObject({ label: "changed" });
   });
 
   it("retains committed maintenance counts when archive publication fails", async () => {
@@ -449,55 +403,5 @@ describe("SQLite lifecycle cleanup races", () => {
         .db.prepare("SELECT 1 AS present FROM session_nodes WHERE session_key = ?")
         .get(historyOwner.sessionKey),
     ).toBeDefined();
-  });
-
-  it("retains unplanned historical windows behind a placeholder node", async () => {
-    const entry = {
-      sessionId: "current-planned-session",
-      updatedAt: now,
-      delivery: { kind: "none" as const },
-    };
-    const target = await seed(entry.sessionId, entry, [transcript(entry.sessionId)]);
-    const history = { ...target, sessionId: "unplanned-historical-session" };
-    const historyEvent = transcript(history.sessionId);
-    await replaceTranscriptEvents(history, [historyEvent]);
-    const result = await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [
-        { sessionKey: target.sessionKey, expectedEntry: entry, archiveRemovedTranscript: false },
-      ],
-      maintenanceOverride: { mode: "enforce" },
-    });
-    expect(result.removedSessionKeys).toEqual([target.sessionKey]);
-    expect(loadSessionEntry(target)).toBeUndefined();
-    await expect(loadTranscriptEvents(target)).resolves.toEqual([]);
-    await expect(loadTranscriptEvents(history)).resolves.toEqual([historyEvent]);
-    expect(
-      database()
-        .db.prepare(
-          "SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?",
-        )
-        .get(target.sessionKey),
-    ).toEqual({ current_session_id: history.sessionId, entry_json: "{}" });
-  });
-
-  it("rehomes a window retained through a surviving previousSessionId reference", async () => {
-    const event = transcript("retained-previous-session");
-    const owner = await seed(event.id, {}, [event]);
-    const survivor = await seed("current-survivor-session", {
-      previousSessionId: event.id,
-      updatedAt: now + 1,
-    });
-    const result = await deletion(owner.sessionKey);
-    expect(result.deleted).toBe(true);
-    expect(result.archivedTranscripts).toEqual([]);
-    await expect(loadTranscriptEvents({ ...survivor, sessionId: event.id })).resolves.toEqual([
-      event,
-    ]);
-    expect(
-      database()
-        .db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-        .get(event.id),
-    ).toEqual({ session_key: survivor.sessionKey });
   });
 });

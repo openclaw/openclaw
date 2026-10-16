@@ -1,17 +1,18 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOpenAIResponsesReplayContext } from "./openai-responses-compaction-replay.js";
 import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
 } from "./openai-responses-continuation.js";
+import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
 } from "./openai-responses-replay-messages-internal.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 import { sha256Hex } from "./transport-utils.js";
@@ -24,12 +25,6 @@ const TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function inputReplay(message: AssistantMessage) {
-  const value =
-    "openclawResponsesInputReplay" in message ? message.openclawResponsesInputReplay : undefined;
-  return isRecord(value) ? value : undefined;
-}
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -95,7 +90,7 @@ export function recordResponsesContextUsage(
     totalTokens: usage.totalTokens,
   };
   Object.assign(message, {
-    openclawResponsesInputReplay: { ...inputReplay(message), contextUsage },
+    openclawResponsesInputReplay: { ...readResponsesInputReplayState(message), contextUsage },
   });
 }
 
@@ -111,7 +106,7 @@ export function resolveResponsesContextUsageBoundary(
     if (!message || !isAssistant(message)) {
       continue;
     }
-    const state = inputReplay(message)?.contextUsage;
+    const state = readResponsesInputReplayState(message)?.contextUsage;
     const usage = message.usage.contextUsage;
     if (!isRecord(state) || usage?.state !== "available") {
       continue;
@@ -119,7 +114,7 @@ export function resolveResponsesContextUsageBoundary(
     const { projection, prefixHash, prefixLength, promptTokens, totalTokens, includeSystemPrompt } =
       state;
     if (
-      !isOpenAIResponsesReplayContext(state) ||
+      !isProviderReplayContext(state) ||
       !providerReplayContextMatches(state, buildProviderReplayContext(model, identity)) ||
       message.provider !== model.provider ||
       message.api !== model.api ||

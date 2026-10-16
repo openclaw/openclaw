@@ -4,7 +4,6 @@ import {
   validatePluginsInstallParams,
   validatePluginsReloadParams,
   validatePluginsSetEnabledParams,
-  validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/validator-registry.js";
 import {
   captureAgentPluginRuntimeRefresh,
@@ -33,47 +32,33 @@ describe("plugins tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { outcome: "success", oversized: false },
-    { outcome: "committed-error", oversized: true },
-    { outcome: "uncommitted-error", oversized: true },
-  ])(
-    "reports $outcome without an absent continuation consumer (oversized: $oversized)",
-    async ({ outcome, oversized }) => {
-      const applied = outcome !== "uncommitted-error";
-      const warnings = oversized ? ["Cleanup pending: " + "🦞".repeat(2_000)] : [];
-      if (outcome === "success") {
-        callGateway.mockResolvedValue({ runtime, warnings });
-      } else {
-        callGateway.mockRejectedValue(
-          new GatewayClientRequestError({
-            code: "UNAVAILABLE",
-            message: "Plugin activation failed",
-            details: { runtime: { ...runtime, committed: applied, phase: "activate" }, warnings },
-          }),
-        );
-      }
-      await refresh.run(async () => {
-        const result = await createPluginsTool().execute("unsupported-runtime", {
-          action: "reload",
-          pluginId: "local-tool",
-        });
-        if (applied) {
-          expect(result.details).toMatchObject({
-            next: expect.stringContaining("new conversation"),
-          });
-          expect(JSON.stringify(result.details)).toContain("do not repeat");
-        } else {
-          expect(JSON.stringify(result.details)).not.toContain("new conversation");
-        }
-        expect(
-          Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
-        ).toBeLessThanOrEqual(3_840);
-        expect(result.terminate).toBeUndefined();
-        expect(captureAgentPluginRuntimeRefresh().isRequested()).toBe(false);
+  it("reports a committed error without an absent continuation consumer", async () => {
+    callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Plugin activation failed",
+        details: {
+          runtime: { ...runtime, committed: true, phase: "activate" },
+          warnings: ["Cleanup pending: " + "🦞".repeat(2_000)],
+        },
+      }),
+    );
+    await refresh.run(async () => {
+      const result = await createPluginsTool().execute("unsupported-runtime", {
+        action: "reload",
+        pluginId: "local-tool",
       });
-    },
-  );
+      expect(result.details).toMatchObject({
+        next: expect.stringContaining("new conversation"),
+      });
+      expect(JSON.stringify(result.details)).toContain("do not repeat");
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
+      expect(result.terminate).toBeUndefined();
+      expect(captureAgentPluginRuntimeRefresh().isRequested()).toBe(false);
+    });
+  });
 
   it("keeps saved-install and earlier-publication facts when a later failure exceeds the budget", async () => {
     callGateway.mockRejectedValue(
@@ -109,34 +94,10 @@ describe("plugins tool", () => {
 
   it.each([
     {
-      args: { action: "reload", pluginId: "local-tool" },
-      method: "plugins.reload",
-      validate: validatePluginsReloadParams,
-      params: { plugins: [{ pluginId: "local-tool" }] },
-    },
-    {
       args: { action: "enable", pluginId: "local-tool" },
       method: "plugins.setEnabled",
       validate: validatePluginsSetEnabledParams,
       params: { pluginId: "local-tool", enabled: true },
-    },
-    {
-      args: { action: "disable", pluginId: "local-tool" },
-      method: "plugins.setEnabled",
-      validate: validatePluginsSetEnabledParams,
-      params: { pluginId: "local-tool", enabled: false },
-    },
-    {
-      args: { action: "uninstall", pluginId: "local-tool" },
-      method: "plugins.uninstall",
-      validate: validatePluginsUninstallParams,
-      params: { pluginId: "local-tool" },
-    },
-    {
-      args: { action: "install", source: "official", pluginId: "local-tool" },
-      method: "plugins.install",
-      validate: validatePluginsInstallParams,
-      params: { source: "official", pluginId: "local-tool" },
     },
     {
       args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
@@ -252,21 +213,14 @@ describe("plugins tool", () => {
         declared: { tools: Array.from({ length: 600 }, () => "x") },
         reviewToken: "complete-review-only",
       },
-      expected: {},
     },
     {
       action: "search",
       payload: { results: [{ package: { name: "large", summary: "🦞".repeat(2_000) } }] },
-      expected: {},
-    },
-    {
-      action: "disable",
-      payload: { restartRequired: true, warnings: ["Cleanup pending: " + "🦞".repeat(2_000)] },
-      expected: { restartRequired: true, warnings: ["Cleanup pending: " + "🦞".repeat(71)] },
     },
   ])(
     "bounds the complete $action result without exposing a partial review",
-    async ({ action, payload, expected }) => {
+    async ({ action, payload }) => {
       callGateway.mockResolvedValue(payload);
       const result = await createPluginsTool().execute("large-result", {
         action,
@@ -274,7 +228,7 @@ describe("plugins tool", () => {
         query: "large",
       });
       expect(result).toMatchObject({
-        details: { ok: true, detailsOmitted: "response_budget_exceeded", ...expected },
+        details: { ok: true, detailsOmitted: "response_budget_exceeded" },
         content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
       });
       expect(
@@ -285,105 +239,86 @@ describe("plugins tool", () => {
     },
   );
 
-  it.each([
-    { oversized: false, restartRequired: false },
-    { oversized: true, restartRequired: true },
-  ])(
-    "keeps selected-entry guidance with compact=$oversized and restart=$restartRequired",
-    async ({ oversized, restartRequired }) => {
-      callGateway.mockResolvedValue({
-        ok: true,
-        runtime: {
-          ...runtime,
-          selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+  it("keeps selected-entry guidance when a compact result requires a restart", async () => {
+    callGateway.mockResolvedValue({
+      ok: true,
+      runtime: {
+        ...runtime,
+        selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+      },
+      restartRequired: true,
+      warnings: ["x".repeat(4_000)],
+    });
+    const result = await createPluginsTool().execute("reload", {
+      action: "reload",
+      pluginId: "local-tool",
+    });
+    expect(result).toMatchObject({
+      details: {
+        restartRequired: true,
+        runtime: { generation: runtime.generation },
+        next: expect.stringContaining(
+          "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+        ),
+      },
+    });
+    expect(result.details).toMatchObject({
+      next: expect.stringMatching(/restart the Gateway/i),
+    });
+    expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+    expect(Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8")).toBeLessThanOrEqual(
+      3_840,
+    );
+  });
+
+  it("retains committed publication and continuation when mutation details exceed the budget", async () => {
+    const application = {
+      ...runtime,
+      committed: true,
+      phase: "activate",
+    };
+    const oversized = {
+      restartRequired: false,
+      warnings: ["🦞".repeat(2_000), "界".repeat(2_000), "Additional cleanup warning"],
+    };
+    callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Activation failed",
+        details: {
+          runtime: application,
+          ...oversized,
+          capabilityConsent: { reviewToken: "complete-review-only" },
         },
-        restartRequired,
-        warnings: oversized ? ["x".repeat(4_000)] : [],
-      });
-      const result = await createPluginsTool().execute("reload", {
+      }),
+    );
+    await refresh.run(async () => {
+      captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+      const owner = captureAgentPluginRuntimeRefresh();
+      const result = await createPluginsTool().execute("large-mutation", {
         action: "reload",
         pluginId: "local-tool",
       });
       expect(result).toMatchObject({
         details: {
-          restartRequired,
-          runtime: { generation: runtime.generation },
-          next: expect.stringContaining(
-            "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
-          ),
+          ok: false,
+          runtime: { generation: runtime.generation, committed: true, phase: "activate" },
+          restartRequired: false,
+          warnings: ["🦞".repeat(80), "界".repeat(160)],
+          omittedWarningCount: 1,
+          detailsOmitted: "response_budget_exceeded",
         },
+        content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
       });
-      if (restartRequired) {
-        expect(result.details).toMatchObject({
-          next: expect.stringMatching(/restart the Gateway/i),
-        });
-        expect(JSON.stringify(result)).not.toContain("Start a new conversation");
-      }
+      expect(result).toMatchObject({ isError: true });
       expect(
         Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
       ).toBeLessThanOrEqual(3_840);
-    },
-  );
-
-  it.each([undefined, false, true])(
-    "retains the publication outcome and continuation when mutation details exceed the budget (%s)",
-    async (committed) => {
-      const application = {
-        ...runtime,
-        ...(committed === undefined ? {} : { committed, phase: "activate" }),
-      };
-      const oversized = {
-        restartRequired: false,
-        warnings: ["🦞".repeat(2_000), "界".repeat(2_000), "Additional cleanup warning"],
-      };
-      if (committed === undefined) {
-        callGateway.mockResolvedValue({ ok: true, runtime: application, ...oversized });
-      } else {
-        callGateway.mockRejectedValue(
-          new GatewayClientRequestError({
-            code: "UNAVAILABLE",
-            message: "Activation failed",
-            details: {
-              runtime: application,
-              ...oversized,
-              capabilityConsent: { reviewToken: "complete-review-only" },
-            },
-          }),
-        );
-      }
-      await refresh.run(async () => {
-        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
-        const owner = captureAgentPluginRuntimeRefresh();
-        const result = await createPluginsTool().execute("large-mutation", {
-          action: "reload",
-          pluginId: "local-tool",
-        });
-        expect(result).toMatchObject({
-          details: {
-            ok: committed === undefined,
-            runtime: { generation: runtime.generation, committed: committed ?? true },
-            restartRequired: false,
-            warnings: ["🦞".repeat(80), "界".repeat(160)],
-            omittedWarningCount: 1,
-            detailsOmitted: "response_budget_exceeded",
-          },
-          content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
-        });
-        if (committed !== undefined) {
-          expect(result).toMatchObject({
-            isError: true,
-            details: { runtime: { phase: "activate" } },
-          });
-        }
-        expect(
-          Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
-        ).toBeLessThanOrEqual(3_840);
-        expect(JSON.stringify(result)).not.toContain("complete-review-only");
-        expect(result.terminate === true).toBe(committed ?? true);
-        expect(owner.isPending()).toBe(committed ?? true);
-      });
-    },
-  );
+      expect(JSON.stringify(result)).not.toContain("complete-review-only");
+      expect(result.terminate).toBe(true);
+      expect(owner.isPending()).toBe(true);
+    });
+  });
 
   it("bounds inventory and narrows it without hiding the omitted count", async () => {
     const plugins = Array.from({ length: 25 }, (_, index) => ({

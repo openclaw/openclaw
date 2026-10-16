@@ -8,7 +8,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
-import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.js";
+import type { ExecApprovalRecord } from "../exec-approval-manager.js";
+import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
@@ -38,6 +39,21 @@ export function deleteDurableApproval(
   executeSqliteQuerySync(
     database.db,
     stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
+  );
+}
+
+export function corruptDurableApprovalPresentation(
+  databaseOptions: OpenClawStateDatabaseOptions,
+  id: string,
+): void {
+  const database = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .updateTable("operator_approvals")
+      .set({ presentation_json: "{}" })
+      .where("approval_id", "=", id),
   );
 }
 
@@ -96,7 +112,10 @@ type ApprovalInvocationParams = {
     | "approval.resolve"
     | "exec.approval.get"
     | "exec.approval.list"
+    | "exec.approval.grants.list"
+    | "exec.approval.grants.revoke"
     | "exec.approval.resolve"
+    | "exec.approval.waitDecision"
     | "plugin.approval.list"
     | "plugin.approval.resolve";
   body: Record<string, unknown>;
@@ -183,4 +202,13 @@ export async function handleApprovalResolve<
   };
   using authority = createApprovalRequestAuthority(options);
   return await handleOwnedApprovalResolve({ ...params, context, authority });
+}
+
+export function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  return {
+    id: record.id,
+    request: record.request,
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
 }

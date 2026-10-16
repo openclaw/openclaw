@@ -13,14 +13,9 @@ import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  buildPluginCompatibilitySnapshotNotices,
-  formatPluginCompatibilityNotice,
-} from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 type ConfigValidationOptions = {
-  includeCompatibilityAdvisory?: boolean;
   observe?: boolean;
   skipPluginValidation?: boolean;
   adoptPluginMetadata?: boolean;
@@ -42,7 +37,7 @@ export async function requireValidConfigFileSnapshot(
         ).readCommandConfigSnapshot(readOptions)
       ).snapshot
     : await readConfigFileSnapshot(Object.keys(readOptions).length > 0 ? readOptions : undefined);
-  return validateConfigFileSnapshot(snapshot, runtime, opts?.includeCompatibilityAdvisory);
+  return validateConfigFileSnapshot(snapshot, runtime);
 }
 
 /** Preserve native read-time ownership through commands that can write after awaits. */
@@ -78,7 +73,6 @@ export async function withCommandPluginMetadata<T>(
 async function validateConfigFileSnapshot(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
-  includeCompatibilityAdvisory = false,
 ): Promise<ConfigFileSnapshot | null> {
   if (snapshot.exists && !snapshot.valid) {
     if (isJsonOutputModeActive(process.argv)) {
@@ -101,22 +95,6 @@ async function validateConfigFileSnapshot(
     runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
     runtime.exit(1);
     return null;
-  }
-  if (!includeCompatibilityAdvisory) {
-    return snapshot;
-  }
-  const compatibility = buildPluginCompatibilitySnapshotNotices({ config: snapshot.config });
-  if (compatibility.length > 0) {
-    runtime.log(
-      [
-        `Plugin compatibility: ${compatibility.length} notice${compatibility.length === 1 ? "" : "s"}.`,
-        ...compatibility
-          .slice(0, 3)
-          .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
-        ...(compatibility.length > 3 ? [`- ... +${compatibility.length - 3} more`] : []),
-        `Review: ${formatCliCommand("openclaw doctor")}`,
-      ].join("\n"),
-    );
   }
   return snapshot;
 }

@@ -22,7 +22,7 @@ function linkedText(output: string) {
   return spans;
 }
 
-it.each([
+it.for([
   { label: "VS Code", termProgram: "vscode", cols: 100, labelPath: "label" },
   {
     label: "wrapped VS Code",
@@ -33,7 +33,8 @@ it.each([
   { label: "unidentified terminal", termProgram: "", cols: 36, labelPath: "label" },
 ])(
   "preserves authored link targets in $label",
-  async ({ label, termProgram, cols, labelPath }) => {
+  { timeout: 30_000 },
+  async ({ label, termProgram, cols, labelPath }, { signal }) => {
     const target = "https://example.test/actual-destination";
     const plainTarget = "https://example.test/documentation";
     const visibleUrl = `https://example.test/${labelPath}`;
@@ -59,6 +60,7 @@ it.each([
       await fixture.run.write(`${message}\r`, { delay: false });
       await fixture.waitForLogEntry(
         (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+        signal,
       );
       await fixture.run.waitForOutput("PTY_RESPONSE:", 20_000);
       const raw = fixture.run.output();
@@ -107,5 +109,4 @@ it.each([
       await fixture.cleanup();
     }
   },
-  30_000,
 );

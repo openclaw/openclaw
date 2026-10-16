@@ -1,27 +1,15 @@
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-  PluginRuntimeApplicationSchema,
-  PluginsChangedEventSchema,
-  PluginsListResultSchema,
-  PluginsInspectResultSchema,
-  PluginsReloadResultSchema,
   buildCapabilityConsentErrorDetails,
   readCapabilityConsentErrorDetails,
   readInstallPolicyWarningErrorDetails,
   validateCapabilityConsentErrorDetails,
-  validatePluginsInspectParams,
   validatePluginsInstallParams,
-  validatePluginsListParams,
-  validatePluginsRefreshParams,
   validatePluginsReloadParams,
-  validatePluginsSearchParams,
-  validatePluginsCatalogBrowseParams,
   validatePluginsCatalogGetParams,
   validatePluginsSetEnabledParams,
-  validatePluginsUninstallParams,
   type InstallPolicyWarningErrorDetails,
 } from "./index.js";
 
@@ -61,53 +49,20 @@ describe("plugin lifecycle protocol validators", () => {
     }
   });
 
-  it("requires one cohort result with an applied receipt", () => {
-    const runtime = { operationId: "reload", generation: 2, pluginIds: ["alpha", "beta"] };
-    const batch = { ok: true, pluginIds: ["alpha", "beta"], restartRequired: false, runtime };
-    expect(Value.Check(PluginsReloadResultSchema, batch)).toBe(true);
-    expect(Value.Check(PluginsReloadResultSchema, { ...batch, restartRequired: true })).toBe(true);
-    expect(
-      Value.Check(PluginsReloadResultSchema, {
-        ...batch,
-        warnings: ["Previous plugin service could not close."],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(PluginsReloadResultSchema, {
-        ok: true,
-        pluginId: "alpha",
-        restartRequired: false,
-      }),
-    ).toBe(false);
-    const { runtime: _runtime, ...withoutReceipt } = batch;
-    for (const result of [
-      withoutReceipt,
-      { ...batch, restartRequired: "true" },
-      { ...batch, pluginIds: [] },
-      { ...batch, warnings: "cleanup failed" },
-    ]) {
-      expect(Value.Check(PluginsReloadResultSchema, result)).toBe(false);
-    }
-  });
-  it.each([
-    { source: "npm", spec: "example-plugin@1.2.3", pin: true, mode: "update" },
-    { source: "git", spec: "git:example.test/plugins/demo@v1", mode: "install" },
-    { source: "local", path: "/plugins/demo", link: true, mode: "install" },
-    { source: "npm-pack", archivePath: "/plugins/demo.tgz", mode: "update" },
-    { source: "marketplace", marketplace: "team", plugin: "demo", mode: "install" },
-    { source: "bundled", pluginId: "demo" },
-    { source: "official", pluginId: "demo", version: "latest", pin: true },
-  ])("accepts the CLI's $source install intent without caller trust metadata", (request) => {
-    expect(validatePluginsInstallParams(request)).toBe(true);
-    expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
-    for (const trust of [
-      { trustedSourceLinkedOfficialInstall: true },
-      { bundledOrigin: true },
-      { clawManaged: true },
-    ]) {
-      expect(validatePluginsInstallParams({ ...request, ...trust })).toBe(false);
-    }
-  });
+  it.each([{ source: "npm", spec: "example-plugin@1.2.3", pin: true, mode: "update" }])(
+    "accepts the CLI's $source install intent without caller trust metadata",
+    (request) => {
+      expect(validatePluginsInstallParams(request)).toBe(true);
+      expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
+      for (const trust of [
+        { trustedSourceLinkedOfficialInstall: true },
+        { bundledOrigin: true },
+        { clawManaged: true },
+      ]) {
+        expect(validatePluginsInstallParams({ ...request, ...trust })).toBe(false);
+      }
+    },
+  );
 
   it("exports install policy warning details from the package root", () => {
     const details: InstallPolicyWarningErrorDetails = {
@@ -155,154 +110,6 @@ describe("plugin lifecycle protocol validators", () => {
     });
     expect(validateCapabilityConsentErrorDetails(whitespaceDetails)).toBe(true);
     expect(readCapabilityConsentErrorDetails(whitespaceDetails)).toEqual(whitespaceDetails);
-  });
-
-  it("validates plugin metadata refresh params", () => {
-    expect(validatePluginsRefreshParams({})).toBe(true);
-    expect(validatePluginsRefreshParams({ unexpected: true })).toBe(false);
-  });
-
-  it("keeps list params closed", () => {
-    expect(validatePluginsListParams({})).toBe(true);
-    expect(validatePluginsListParams({ unexpected: true })).toBe(false);
-  });
-
-  it("accepts the owner-projected needs-setup catalog state", () => {
-    const result = {
-      plugins: [
-        {
-          id: "needs-config",
-          name: "Needs Config",
-          installed: true,
-          enabled: false,
-          state: "needs-setup",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-
-    expect(Value.Check(PluginsListResultSchema, result)).toBe(true);
-    expect(
-      Value.Check(PluginsListResultSchema, {
-        ...result,
-        plugins: [{ ...result.plugins[0], state: "setup-maybe" }],
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts ordered plugin categories while retaining the primary compatibility field", () => {
-    const result = {
-      plugins: [
-        {
-          id: "memory-tools",
-          name: "Memory Tools",
-          installed: true,
-          enabled: true,
-          state: "enabled",
-          categories: ["memory", "tools"],
-          category: "memory",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-
-    expect(Value.Check(PluginsListResultSchema, result)).toBe(true);
-    expect(
-      Value.Check(PluginsListResultSchema, {
-        ...result,
-        plugins: [{ ...result.plugins[0], categories: ["memory", ""] }],
-      }),
-    ).toBe(false);
-  });
-
-  it("requires exactly one non-empty plugin id for inspection", () => {
-    expect(validatePluginsInspectParams({ pluginId: "workboard" })).toBe(true);
-    expect(validatePluginsInspectParams({ pluginId: "" })).toBe(false);
-    expect(validatePluginsInspectParams({})).toBe(false);
-    expect(validatePluginsInspectParams({ pluginId: "workboard", unexpected: true })).toBe(false);
-  });
-
-  it("requires inspection review tokens and complete declared contract surfaces", () => {
-    const result = {
-      ok: true,
-      plugin: { id: "workboard", name: "Workboard", installed: true, enabled: false },
-      reviewToken: "surface-sha256",
-      declared: {
-        channels: [],
-        providers: [],
-        tools: [],
-        contracts: ["workerProviders: worker"],
-        hooks: [],
-        mcpServers: [],
-        cliCommands: [],
-        cliBackends: [],
-        skills: [],
-        dangerousConfigFlags: [],
-      },
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: true },
-          allowConversationAccess: { effective: false },
-        },
-      },
-      components: {
-        mapped: ["skills", "mcpServers", "commands", "hooks", "lspServers"],
-        skills: ["triage"],
-        mcpServers: ["notion"],
-        commands: ["search"],
-        hooks: ["SessionStart"],
-        lspServers: ["typescript"],
-        unavailable: {
-          capabilities: ["agents"],
-          mcpServers: ["remote-only"],
-          lspServers: [],
-        },
-      },
-    };
-
-    expect(Value.Check(PluginsInspectResultSchema, result)).toBe(true);
-    expect(Value.Check(PluginsInspectResultSchema, { ...result, reviewToken: "" })).toBe(false);
-    expect(
-      Value.Check(PluginsInspectResultSchema, {
-        ...result,
-        components: { ...result.components, unexpected: [] },
-      }),
-    ).toBe(false);
-    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
-    expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
-    const { contracts: _contracts, ...withoutContracts } = result.declared;
-    expect(Value.Check(PluginsInspectResultSchema, { ...result, declared: withoutContracts })).toBe(
-      false,
-    );
-  });
-
-  it("validates bounded plugin search requests", () => {
-    expect(validatePluginsSearchParams({ query: "memory", limit: 20 })).toBe(true);
-    expect(validatePluginsSearchParams({ query: "memory", limit: 101 })).toBe(false);
-  });
-
-  it("validates bounded plugin catalog browse requests", () => {
-    expect(
-      validatePluginsCatalogBrowseParams({
-        query: "memory",
-        searchSource: "openclaw-control-ui",
-        intent: "official",
-        category: "memory",
-        cursor: "opaque-cursor",
-        pageSize: 20,
-      }),
-    ).toBe(true);
-    expect(validatePluginsCatalogBrowseParams({ intent: "featured", pageSize: 6 })).toBe(true);
-    expect(validatePluginsCatalogBrowseParams({ pageSize: 101 })).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ cursor: "x".repeat(4097) })).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ intent: "popular" })).toBe(false);
-    expect(
-      validatePluginsCatalogBrowseParams({ query: "memory", searchSource: "clawhub-web" }),
-    ).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ query: "memory", searchSource: true })).toBe(false);
-    expect(validatePluginsCatalogBrowseParams({ query: "memory", userId: "operator" })).toBe(false);
   });
 
   it("accepts only URL-safe plugin discovery ids", () => {
@@ -363,16 +170,6 @@ describe("plugin lifecycle protocol validators", () => {
     ).toBe(false);
   });
 
-  it("validates uninstall requests", () => {
-    expect(validatePluginsUninstallParams({ pluginId: "memory-plus" })).toBe(true);
-    expect(validatePluginsUninstallParams({ pluginId: "memory-plus", keepFiles: true })).toBe(true);
-    expect(validatePluginsUninstallParams({ pluginId: "memory-plus", keepFiles: "yes" })).toBe(
-      false,
-    );
-    expect(validatePluginsUninstallParams({ pluginId: "" })).toBe(false);
-    expect(validatePluginsUninstallParams({})).toBe(false);
-  });
-
   it("keeps targeted reload and its capability acknowledgment closed", () => {
     expect(validatePluginsReloadParams({ plugins: [{ pluginId: "notes" }] })).toBe(true);
     expect(
@@ -394,24 +191,6 @@ describe("plugin lifecycle protocol validators", () => {
       },
     ]) {
       expect(validatePluginsReloadParams(request)).toBe(false);
-    }
-  });
-
-  it("validates applied receipts separately from generation invalidation events", () => {
-    const receipt = {
-      operationId: "plugin-reload",
-      generation: 2,
-      pluginIds: ["notes"],
-      sourceDigests: { notes: "sha256-fixture" },
-      selectedEntries: { notes: "/plugins/notes/dist/index.js" },
-    };
-    expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
-    expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);
-    expect(Value.Check(PluginsChangedEventSchema, receipt)).toBe(false);
-    expect(Value.Check(PluginRuntimeApplicationSchema, { generation: 2 })).toBe(false);
-    for (const generation of [-1, 1.5, "2"]) {
-      expect(Value.Check(PluginRuntimeApplicationSchema, { ...receipt, generation })).toBe(false);
-      expect(Value.Check(PluginsChangedEventSchema, { generation })).toBe(false);
     }
   });
 

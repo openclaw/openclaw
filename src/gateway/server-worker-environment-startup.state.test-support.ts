@@ -1,3 +1,7 @@
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -8,6 +12,7 @@ export async function withGatewayWorkerEnvironmentStartupState<T>(
 ): Promise<T> {
   const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
   return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    setRuntimeConfigSnapshot({});
     let result: T;
     try {
       result = await run();
@@ -26,5 +31,5 @@ export async function withGatewayWorkerEnvironmentStartupState<T>(
     }
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     return result;
-  });
+  }).finally(clearRuntimeConfigSnapshot);
 }

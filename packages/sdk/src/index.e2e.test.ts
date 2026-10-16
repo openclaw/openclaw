@@ -10,7 +10,7 @@ import {
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
-import { GatewayClientTransport, OpenClaw } from "./index.js";
+import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 
 type JsonObject = Record<string, unknown>;
 type FakeGatewayRequest = {
@@ -522,16 +522,14 @@ describe("OpenClaw SDK real Gateway e2e", () => {
 
       const run = await oc.runs.get(runId);
       const eventsPromise = (async () => {
-        const seen: string[] = [];
-        const sessionKeys: Array<string | undefined> = [];
+        const seen: OpenClawEvent[] = [];
         for await (const event of run.events()) {
-          seen.push(event.type);
-          sessionKeys.push(event.sessionKey);
+          seen.push(event);
           if (event.type === "run.completed") {
             break;
           }
         }
-        return { seen, sessionKeys };
+        return seen;
       })();
 
       emitAgentEvent({
@@ -550,14 +548,28 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         data: { phase: "end", endedAt: 222 },
       });
 
-      const { seen, sessionKeys } = await withTimeout(eventsPromise, 2_000, {
+      const seen = await withTimeout(eventsPromise, 2_000, {
         message: "timed out waiting for real Gateway SDK events",
       });
-      expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
-      expect(sessionKeys).toEqual([
-        "agent:main:dashboard:sdk-real-gateway",
-        "agent:main:dashboard:sdk-real-gateway",
-        "agent:main:dashboard:sdk-real-gateway",
+      expect(seen).toMatchObject([
+        {
+          type: "run.started",
+          sessionKey: "agent:main:dashboard:sdk-real-gateway",
+          data: { phase: "start" },
+          raw: { event: "agent" },
+        },
+        {
+          type: "assistant.delta",
+          sessionKey: "agent:main:dashboard:sdk-real-gateway",
+          data: { text: "hello from real gateway", delta: "hello from real gateway" },
+          raw: { event: "agent" },
+        },
+        {
+          type: "run.completed",
+          sessionKey: "agent:main:dashboard:sdk-real-gateway",
+          data: { phase: "end" },
+          raw: { event: "agent" },
+        },
       ]);
 
       registerAgentRunContext(replayRunId, {

@@ -1,4 +1,8 @@
-export { getAcpSessionManager, isAcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+export {
+  getAcpSessionManager,
+  isAcpRuntimeError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 export {
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,

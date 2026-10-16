@@ -1,6 +1,10 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import * as terminalState from "../../sessions/subagent-terminal-state.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -17,8 +21,10 @@ import {
 
 describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   function setupParentedTurn(childSessionKey: string) {
+    setRuntimeConfigSnapshot(baseCfg);
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -63,7 +69,9 @@ describe("ACP terminal state signals", () => {
         requestId: "cancelled-state-turn",
       });
 
-      expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
+      expect(
+        (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events,
+      ).toMatchObject([
         { kind: "human_direct_message", runId: "human-state-turn" },
         { kind: "run_completed", runId: "human-state-turn" },
         { kind: "run_completed", runId: "system-state-turn" },
@@ -121,10 +129,12 @@ describe("ACP terminal state signals", () => {
       }
       expect(settled).toBe(true);
       expect(
-        listSessionStateEventsSince(childSessionKey, "main", 0, 200).events.map((event) => ({
-          kind: event.kind,
-          runId: event.runId,
-        })),
+        (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events.map(
+          (event) => ({
+            kind: event.kind,
+            runId: event.runId,
+          }),
+        ),
       ).toEqual([
         { kind: "run_completed", runId: "warm-terminal-worker" },
         { kind: "run_completed", runId: "contended-terminal" },

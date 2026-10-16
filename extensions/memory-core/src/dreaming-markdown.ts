@@ -16,9 +16,10 @@ import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
 import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
-  light: "## Light Sleep",
-  rem: "## REM Sleep",
+const PHASE_TITLES: Record<MemoryDreamingPhaseName, string> = {
+  light: "Light Sleep",
+  rem: "REM Sleep",
+  deep: "Deep Sleep",
 };
 
 function resolveDailyMemoryPath(workspaceDir: string, epochMs: number, timezone?: string): string {
@@ -69,21 +70,33 @@ export async function replaceDreamingMarkdownFile(
   });
 }
 
-export async function writeDailyDreamingPhaseBlock(params: {
+type DreamingReportParams = {
   workspaceDir: string;
-  phase: Exclude<MemoryDreamingPhaseName, "deep">;
   bodyLines: string[];
   hasContent: boolean;
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
-}): Promise<{ inlinePath?: string; reportPath?: string }> {
+};
+
+async function writeDreamingReport(
+  params: DreamingReportParams & { phase: MemoryDreamingPhaseName },
+): Promise<{ inlinePath?: string; reportPath?: string }> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No notable updates.";
+  const body =
+    params.bodyLines.length > 0
+      ? params.bodyLines.join("\n")
+      : params.phase === "deep"
+        ? "- No durable changes."
+        : "- No notable updates.";
   let inlinePath: string | undefined;
   let reportPath: string | undefined;
 
-  if (shouldWriteInline(params.storage)) {
+  if (params.phase === "deep") {
+    if (params.hasContent) {
+      inlinePath = await updateDeepDreamsFile(params);
+    }
+  } else if (shouldWriteInline(params.storage)) {
     const candidatePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
     const original = await readWorkspaceText(params.workspaceDir, candidatePath).catch(
       (err: unknown) => {
@@ -98,7 +111,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       inlinePath = candidatePath;
       const updated = replaceManagedMarkdownBlock({
         original: original ?? "",
-        heading: DAILY_PHASE_HEADINGS[params.phase],
+        heading: `## ${PHASE_TITLES[params.phase]}`,
         startMarker: `<!-- openclaw:dreaming:${params.phase}:start -->`,
         endMarker: `<!-- openclaw:dreaming:${params.phase}:end -->`,
         body,
@@ -118,12 +131,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       nowMs,
       params.timezone,
     );
-    const report = [
-      `# ${params.phase === "light" ? "Light Sleep" : "REM Sleep"}`,
-      "",
-      body,
-      "",
-    ].join("\n");
+    const report = `# ${PHASE_TITLES[params.phase]}\n\n${body}\n`;
     await replaceDreamingMarkdownFile(reportPath, report, params.workspaceDir);
   }
 
@@ -132,7 +140,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: params.phase,
     outcome: "completed",
-    ...(inlinePath ? { inlinePath } : {}),
+    ...(params.phase === "deep" || inlinePath ? { inlinePath } : {}),
     ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
     storageMode: params.storage.mode,
@@ -144,36 +152,14 @@ export async function writeDailyDreamingPhaseBlock(params: {
   };
 }
 
-export async function writeDeepDreamingReport(params: {
-  workspaceDir: string;
-  bodyLines: string[];
-  hasContent: boolean;
-  nowMs?: number;
-  timezone?: string;
-  storage: MemoryDreamingStorageConfig;
-}): Promise<string | undefined> {
-  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const inlinePath = params.hasContent
-    ? await updateDeepDreamsFile({
-        workspaceDir: params.workspaceDir,
-        bodyLines: params.bodyLines,
-      })
-    : undefined;
-  let reportPath: string | undefined;
-  if (params.hasContent && shouldWriteSeparate(params.storage)) {
-    reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-    await replaceDreamingMarkdownFile(reportPath, `# Deep Sleep\n\n${body}\n`, params.workspaceDir);
-  }
-  await appendMemoryHostEvent(params.workspaceDir, {
-    type: "memory.dream.completed",
-    timestamp: resolveMemoryCoreTimestamp(nowMs),
-    phase: "deep",
-    outcome: "completed",
-    inlinePath,
-    ...(reportPath ? { reportPath } : {}),
-    lineCount: params.bodyLines.length,
-    storageMode: params.storage.mode,
-  });
-  return reportPath;
+export async function writeDailyDreamingPhaseBlock(
+  params: DreamingReportParams & { phase: Exclude<MemoryDreamingPhaseName, "deep"> },
+): Promise<{ inlinePath?: string; reportPath?: string }> {
+  return await writeDreamingReport(params);
+}
+
+export async function writeDeepDreamingReport(
+  params: DreamingReportParams,
+): Promise<string | undefined> {
+  return (await writeDreamingReport({ ...params, phase: "deep" })).reportPath;
 }

@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
@@ -54,7 +55,7 @@ describe("Doctor historical row repair", () => {
     initial
       .prepare("INSERT INTO task_delivery_state (task_id, requester_origin_json) VALUES (?, ?)")
       .run("missing-task", '{"channel":"synthetic"}');
-    removePreparedWorkerOwnershipColumns(initial);
+    removePreparedWorkerOwnershipColumns(requireNativeSqliteDatabase(initial));
     initial.exec("PRAGMA user_version = 16; UPDATE schema_meta SET schema_version = 16;");
     closeOpenClawStateDatabaseForTest();
 
@@ -104,64 +105,6 @@ describe("Doctor historical row repair", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get(transientHistoryTable),
     ).toBeUndefined();
-  });
-
-  it("leaves the shipped reason unchanged on open until Doctor repairs it", () => {
-    const stateDir = tempDirs.make("openclaw-subagent-suspension-backfill-");
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const initial = openOpenClawStateDatabase(options);
-    const runId = "legacy-retry-limit";
-    initial.db
-      .prepare(
-        `INSERT INTO subagent_runs (
-          run_id, child_session_key, requester_session_key, created_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(
-        runId,
-        "agent:main:subagent:legacy",
-        "agent:main:main",
-        100,
-        JSON.stringify({
-          runId,
-          childSessionKey: "agent:main:subagent:legacy",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "legacy retry limit",
-          cleanup: "keep",
-          createdAt: 100,
-          execution: { status: "terminal" },
-          completion: { required: true },
-          delivery: { status: "suspended", suspendedReason: "retry-limit" },
-        }),
-      );
-    initial.db
-      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-      .run("2026.7.0");
-    closeOpenClawStateDatabaseForTest();
-
-    const runtime = openOpenClawStateDatabase(options);
-    expect(
-      runtime.db
-        .prepare(
-          "SELECT json_extract(payload_json, '$.delivery.suspendedReason') AS reason FROM subagent_runs WHERE run_id = ?",
-        )
-        .get(runId),
-    ).toEqual({ reason: "retry-limit" });
-    closeOpenClawStateDatabaseForTest();
-    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-    const firstOpen = openOpenClawStateDatabase(options);
-    const firstStored = firstOpen.db
-      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
-      .get(runId) as { payload_json: string };
-    expect(JSON.parse(firstStored.payload_json).delivery.suspendedReason).toBe("permanent_failure");
-    closeOpenClawStateDatabaseForTest();
-
-    const secondOpen = openOpenClawStateDatabase(options);
-    const secondStored = secondOpen.db
-      .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
-      .get(runId);
-    expect(secondStored).toEqual(firstStored);
   });
 });
 

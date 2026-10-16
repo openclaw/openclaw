@@ -1,21 +1,32 @@
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { callGateway as GatewayCaller } from "../../../gateway/call.js";
-/**
- * Runtime dependency barrel for subagent announcement/output collection.
- *
- * Keeping these imports behind one module lets tests replace gateway/session
- * IO without changing the announce logic itself.
- */
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 export { getRuntimeConfig } from "../../../config/config.js";
-export {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
+export { resolveSessionStorePathCore } from "../../../config/sessions.js";
 
-export function readSubagentSessionEntry(storePath: string, sessionKey: string) {
-  return loadSessionEntry({ storePath, sessionKey });
+export async function readSubagentSessionEntry(
+  storePath: string,
+  sessionKey: string,
+  explicitAgentId?: string,
+) {
+  const agentId = resolveSubagentChildAgentId({
+    childSessionKey: sessionKey,
+    childAgentId: explicitAgentId,
+  });
+  if (!agentId) {
+    return undefined;
+  }
+  return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) =>
+    source
+      ? source.actor.snapshot(source.authority)?.entry
+      : isIncognitoSessionKey(sessionKey)
+        ? undefined
+        : readSessionEntryReadOnlyInWorker({ storePath, sessionKey, agentId }),
+  );
 }
 export const callSubagentLifecycleGateway: typeof GatewayCaller = (request) =>
   bindGatewayLifecycleRequest()(request);

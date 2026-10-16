@@ -37,7 +37,6 @@ import {
   SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
 import {
-  isMissingSecretRefResolutionError,
   isProviderScopedSecretResolutionError,
   isSecretResolutionError,
   providerResolutionError,
@@ -73,7 +72,7 @@ type ResolveSecretRefOptions = {
 
 type ProviderResolutionOutput = Map<string, unknown>;
 
-export { isMissingSecretRefResolutionError, isProviderScopedSecretResolutionError };
+export { isProviderScopedSecretResolutionError };
 
 function throwUnknownProviderResolutionError(params: {
   source: SecretRefSource;
@@ -110,11 +109,8 @@ function resolveConfiguredProvider(params: {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
   if (isBuiltInDefaultSecretProviderRef(config, ref)) {
-    if (ref.source === "env") {
-      return { source: "env" };
-    }
-    if (ref.source === "store") {
-      return { source: "store" };
+    if (ref.source === "env" || ref.source === "store") {
+      return { source: ref.source };
     }
   }
   if (!providerConfig) {
@@ -263,11 +259,7 @@ async function resolveFileRefs(params: {
   providerConfig: FileSecretProviderConfig;
   cache?: SecretRefResolveCache;
 }): Promise<ProviderResolutionOutput> {
-  const payload = await readFileProviderPayload({
-    providerName: params.providerName,
-    providerConfig: params.providerConfig,
-    cache: params.cache,
-  });
+  const payload = await readFileProviderPayload(params);
   const mode = params.providerConfig.mode ?? "json";
   const resolved = new Map<string, unknown>();
   if (mode === "singleValue") {
@@ -316,13 +308,16 @@ function parseExecValues(params: {
   stdout: string;
   jsonOnly: boolean;
 }): Record<string, unknown> {
-  const trimmed = params.stdout.trim();
-  if (!trimmed) {
+  function invalidResponse(detail: string): never {
     throw providerResolutionError({
       source: "exec",
       provider: params.providerName,
-      message: `Exec provider "${params.providerName}" returned empty stdout.`,
+      message: `Exec provider "${params.providerName}" ${detail}`,
     });
+  }
+  const trimmed = params.stdout.trim();
+  if (!trimmed) {
+    invalidResponse("returned empty stdout.");
   }
 
   let parsed: unknown;
@@ -332,37 +327,21 @@ function parseExecValues(params: {
     if (!params.jsonOnly && params.ids.length === 1) {
       return { [expectDefined(params.ids[0], "ids entry at 0")]: trimmed };
     }
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" returned invalid JSON.`,
-    });
+    invalidResponse("returned invalid JSON.");
   }
 
   if (!isRecord(parsed)) {
     if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
       return { [expectDefined(params.ids[0], "ids entry at 0")]: parsed };
     }
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" response must be an object.`,
-    });
+    invalidResponse("response must be an object.");
   }
   if (parsed.protocolVersion !== 1) {
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" protocolVersion must be 1.`,
-    });
+    invalidResponse("protocolVersion must be 1.");
   }
   const responseValues = parsed.values;
   if (!isRecord(responseValues)) {
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" response missing "values".`,
-    });
+    invalidResponse('response missing "values".');
   }
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
@@ -468,32 +447,21 @@ async function resolveExecRefs(params: {
       timeoutMs,
     },
   );
+  let failure: string | undefined;
   if (result.termination === "timeout") {
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" timed out after ${timeoutMs}ms.`,
-    });
+    failure = `Exec provider "${params.providerName}" timed out after ${timeoutMs}ms.`;
+  } else if (result.termination === "no-output-timeout") {
+    failure = `Exec provider "${params.providerName}" produced no output for ${noOutputTimeoutMs}ms.`;
+  } else if (result.outputLimitExceeded) {
+    failure = `Exec provider output exceeded maxOutputBytes (${maxOutputBytes}).`;
+  } else if (result.code !== 0) {
+    failure = `Exec provider "${params.providerName}" exited with code ${String(result.code)}.`;
   }
-  if (result.termination === "no-output-timeout") {
+  if (failure !== undefined) {
     throw providerResolutionError({
       source: "exec",
       provider: params.providerName,
-      message: `Exec provider "${params.providerName}" produced no output for ${noOutputTimeoutMs}ms.`,
-    });
-  }
-  if (result.outputLimitExceeded) {
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider output exceeded maxOutputBytes (${maxOutputBytes}).`,
-    });
-  }
-  if (result.code !== 0) {
-    throw providerResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" exited with code ${String(result.code)}.`,
+      message: failure,
     });
   }
 
@@ -516,29 +484,28 @@ async function resolveProviderRefs(params: {
   options: ResolveSecretRefOptions;
 }): Promise<ProviderResolutionOutput> {
   try {
+    const common = {
+      refs: params.refs,
+      providerName: params.providerName,
+      onRefError: params.onRefError,
+    };
     if (params.providerConfig.source === "env") {
       return await resolveEnvRefs({
-        refs: params.refs,
-        providerName: params.providerName,
-        onRefError: params.onRefError,
+        ...common,
         providerConfig: params.providerConfig,
         env: params.options.env ?? process.env,
       });
     }
     if (params.providerConfig.source === "file") {
       return await resolveFileRefs({
-        refs: params.refs,
-        providerName: params.providerName,
-        onRefError: params.onRefError,
+        ...common,
         providerConfig: params.providerConfig,
         cache: params.options.cache,
       });
     }
     if (params.providerConfig.source === "store") {
-      return resolveStoreRefs({
-        refs: params.refs,
-        providerName: params.providerName,
-        onRefError: params.onRefError,
+      return await resolveStoreRefs({
+        ...common,
         database: { env: params.options.env ?? process.env },
       });
     }
@@ -551,9 +518,7 @@ async function resolveProviderRefs(params: {
         });
       }
       return await resolveExecRefs({
-        refs: params.refs,
-        providerName: params.providerName,
-        onRefError: params.onRefError,
+        ...common,
         providerConfig: params.providerConfig,
         env: params.options.env ?? process.env,
       });
@@ -750,4 +715,3 @@ export async function resolveSecretRefString(
   }
   return resolved;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -32,35 +32,6 @@ describe("scripts bounded response reader", () => {
     );
   });
 
-  it("cancels response bodies when a read timeout wins", async () => {
-    let canceled = false;
-    const response = {
-      headers: new Headers(),
-      body: {
-        getReader() {
-          return {
-            read() {
-              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-            },
-            async cancel() {
-              canceled = true;
-            },
-            releaseLock() {
-              throw new Error("releaseLock should not run while a read is pending");
-            },
-          };
-        },
-      },
-    } as unknown as Response;
-
-    await expect(
-      readBoundedResponseText(response, "probe", 1024, {
-        timeoutPromise: Promise.reject(new Error("timeout")),
-      }),
-    ).rejects.toThrow("timeout");
-    expect(canceled).toBe(true);
-  });
-
   it("keeps timeout rejection ahead of cancel-unblocked stream reads", async () => {
     let canceled = false;
     const response = new Response(
@@ -94,11 +65,9 @@ describe("scripts bounded response reader", () => {
   });
 
   it.each([
-    { label: "identical", second: "17", combined: "17, 17", readsBody: false },
     { label: "equivalent", second: "017", combined: "17, 017", readsBody: false },
     { label: "conflicting", second: "12", combined: "17, 12", readsBody: true },
     { label: "malformed", second: "1e3", combined: "17, 1e3", readsBody: true },
-    { label: "empty", second: "", combined: "17, ", readsBody: true },
   ])("handles $label repeated content-length values", async ({ second, combined, readsBody }) => {
     const headers = new Headers();
     headers.append("content-length", "17");

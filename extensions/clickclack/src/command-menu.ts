@@ -89,8 +89,6 @@ export async function syncClickClackCommandMenu(params: {
   log?: ClickClackCommandMenuLogger;
 }): Promise<void> {
   try {
-    // Native specs are the Phase 7c scope. Skill, plugin, and custom command
-    // catalogs can be added later when their ClickClack semantics are defined.
     const specs = listNativeCommandSpecsForConfig(params.cfg, { provider: "clickclack" });
     const commands = mapNativeCommandSpecsToClickClackMenu(specs, params.log);
     await params.client.setBotCommands(commands);

@@ -35,10 +35,15 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
   const service = new VisitorAccessService(
     config,
     store,
-    new VisitorPolicyClient(config, fetch, lifetime.signal),
+    new VisitorPolicyClient(
+      config,
+      fetch,
+      lifetime.signal,
+      () => api.runtime.config.current().gateway?.auth?.trustedProxy?.cloudflareAccessOidc,
+    ),
     api.logger,
     createVisitorAccessReader(api.runtime),
-    fetch,
+    api.runtime.gateway.resolveGitHubAccount,
     lifetime.signal,
   );
   const runtime: VisitorRuntime = {
@@ -48,7 +53,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
 
   api.registerGatewayAccessPolicy({
     resume({ profile, grantId }) {
-      return service.resume(profile.emails, grantId);
+      return service.resume(profile.emails, grantId, profile.githubAccountIds);
     },
     authorize({ config: currentConfig, profile, requiredByRole }) {
       const roles = currentConfig.gateway?.roles;
@@ -59,16 +64,15 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
         return undefined;
       }
       resolveVisitorRole(currentConfig);
-      return service.authorize(profile.emails);
+      return service.authorize(profile.emails, profile.githubAccountIds);
     },
   });
 
   let interval: ReturnType<typeof setInterval> | undefined;
   let sweeping: Promise<void> | undefined;
-  let startupSweep: Promise<void> | undefined;
+  let starting: Promise<void> | undefined;
   const sweep = () => {
-    sweeping ??= service
-      .sweep()
+    sweeping ??= (api.lifecycle.runInBackgroundContext?.(() => service.sweep()) ?? service.sweep())
       .catch((error: unknown) => {
         if (!lifetime.signal.aborted) {
           api.logger.error(
@@ -87,7 +91,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     if (active && active !== runtime) {
       throw new Error("A visitor-access Gateway service is already running.");
     }
-    return (startupSweep ??= (async () => {
+    return (starting ??= (async () => {
       await service.initialize();
       lifetime.signal.throwIfAborted();
       const current = visitorRuntimeStore.tryGetRuntime();
@@ -100,7 +104,8 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
         void sweep();
       }, 3_600_000);
       interval.unref();
-      await sweep();
+      // Admission checks the loaded grant's expiry; provider cleanup need not delay connects.
+      void sweep();
     })());
   };
   api.on("gateway_start", start);
@@ -114,6 +119,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
       service.close();
       lifetime.abort();
       await service.waitForIdle();
+      await sweeping;
       if (visitorRuntimeStore.tryGetRuntime() === runtime) {
         visitorRuntimeStore.clearRuntime();
       }

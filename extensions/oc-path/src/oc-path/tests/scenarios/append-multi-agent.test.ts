@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { JsoncValue } from "../../jsonc/ast.js";
 import { appendJsonlOcPath } from "../../jsonl/edit.js";
-import { emitJsonl } from "../../jsonl/emit.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 
 function event(name: string, n: number): JsoncValue {
@@ -22,9 +21,7 @@ describe("jsonl append + multi-agent session sim", () => {
       const agent = i % 2 === 0 ? "a" : "b";
       ast = appendJsonlOcPath(ast, event(agent, i));
     }
-    const lines = emitJsonl(ast)
-      .split("\n")
-      .filter((l) => l.length > 0);
+    const lines = ast.raw.split("\n").filter((l) => l.length > 0);
     expect(lines).toHaveLength(10);
     for (let i = 0; i < 10; i++) {
       const expected = i % 2 === 0 ? "a" : "b";
@@ -35,7 +32,7 @@ describe("jsonl append + multi-agent session sim", () => {
   it("append after a malformed line preserves both", () => {
     let ast = parseJsonl('{"a":1}\nbroken\n').ast;
     ast = appendJsonlOcPath(ast, event("start", 1));
-    const out = emitJsonl(ast);
+    const out = ast.raw;
     expect(out).toContain("broken");
     expect(out).toContain('"event":"start"');
   });

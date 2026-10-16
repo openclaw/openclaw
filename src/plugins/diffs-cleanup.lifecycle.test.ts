@@ -13,7 +13,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
@@ -93,13 +93,15 @@ it.each([false, true])(
       const writeEntered = createDeferredCore();
       const siblingFinished = createDeferredCore();
       const failure = new Error("fixture Blob lookup failed");
-      const register = vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(async () => {
-        writeEntered.resolve();
-        await releaseQuota.promise;
-        throw Object.assign(new Error("fixture namespace quota reached"), {
-          code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+      const register = vi
+        .spyOn(store, "registerIfAbsentWithReceipt")
+        .mockImplementationOnce(async () => {
+          writeEntered.resolve();
+          await releaseQuota.promise;
+          throw Object.assign(new Error("fixture namespace quota reached"), {
+            code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+          });
         });
-      });
       const lookup = store.lookup.bind(store);
       vi.spyOn(store, "lookup").mockImplementation(async (key) => {
         if (key === failedId) {

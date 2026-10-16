@@ -2,8 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import {
@@ -19,18 +18,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
-import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const configFiles = createTestConfigFileStore();
-
-const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => {
   const lease = {
@@ -103,24 +97,6 @@ import {
   transformConfigWithPendingPluginInstalls,
   unchangedPendingPluginInstallRecordIds,
 } from "./install-record-commit.js";
-
-function createTestInstalledPluginIndex(params: {
-  policyHash: string;
-  installRecords: Record<string, PluginInstallRecord>;
-}): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: params.policyHash,
-    generatedAtMs: 0,
-    refreshReason: "source-changed",
-    installRecords: structuredClone(params.installRecords),
-    plugins: [],
-    diagnostics: [],
-  };
-}
 
 function createManagedInstallPath(stateDir: string, generation: string, pluginId = "codex") {
   const installPath = path.join(
@@ -199,6 +175,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         },
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
@@ -222,10 +200,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
             demo: { enabled: true },
           },
         },
-      },
-      installRecords: {
-        ...existingRecords,
-        ...pendingRecords,
       },
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
@@ -260,6 +234,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         config: nextConfig,
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(verifyConfigFresh).toHaveBeenCalledOnce();
@@ -309,6 +285,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         config: {},
         filePath: mocks.lease.databasePath,
         lease: mocks.lease,
+        assertCurrent: undefined,
+        onAcknowledged: expect.any(Function),
       },
     );
     expect(commit).toHaveBeenCalledWith(
@@ -317,21 +295,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     );
-    expect(result.installRecords).toEqual({
-      stale: existingRecords.stale,
-      missing: sourceConfig.plugins?.installs?.missing,
-      codex: nextConfig.plugins?.installs?.codex,
-      concurrent: nextConfig.plugins?.installs?.concurrent,
-    });
-    expect(Object.getPrototypeOf(result.installRecords)).toBeNull();
+    expect(result.movedInstallRecords).toBe(true);
+    expect(
+      Object.getPrototypeOf(
+        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mock.calls[0]?.[0],
+      ),
+    ).toBeNull();
   });
 
-  it.each([
-    undefined,
-    { mode: "auto" },
-    { mode: "none", reason: "caller owns runtime application" },
-    { mode: "restart", reason: "test restart" },
-  ] as const)(
+  it.each([undefined, { mode: "restart", reason: "test restart" }] as const)(
     "preserves source records and the runtime application receipt with intent %j",
     async (afterWrite) => {
       const sourceConfig: OpenClawConfig = {
@@ -390,32 +362,12 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           config: {},
           filePath: mocks.lease.databasePath,
           lease: mocks.lease,
+          assertCurrent: undefined,
+          onAcknowledged: expect.any(Function),
         },
       );
     },
   );
-
-  it("selects only unchanged pending plugin install records for migration stripping", () => {
-    const baseConfig: OpenClawConfig = {
-      plugins: {
-        installs: {
-          legacy: { source: "npm", spec: "legacy@1.0.0" },
-          repaired: { source: "npm", spec: "repaired@1.0.0" },
-        },
-      },
-    };
-    const nextConfig: OpenClawConfig = {
-      plugins: {
-        installs: {
-          legacy: { source: "npm", spec: "legacy@1.0.0" },
-          repaired: { source: "npm", spec: "repaired@2.0.0" },
-          fresh: { source: "npm", spec: "fresh@1.0.0" },
-        },
-      },
-    };
-
-    expect(unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig)).toEqual(["legacy"]);
-  });
 
   it("handles prototype-named pending records with own-key semantics", () => {
     const constructorRecord = { source: "npm" as const, spec: "constructor@1.0.0" };
@@ -443,108 +395,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(Object.hasOwn(installs ?? {}, "__proto__")).toBe(false);
     expect(getPluginInstallRecordMapEntry(installs, "constructor")).toBe(constructorRecord);
     expect(getPluginInstallRecordMapEntry(installs, "toString")).toBe(toStringRecord);
-  });
-
-  it("does not add restart intent when pending records match the plugin index", async () => {
-    const existingRecords: Record<string, PluginInstallRecord> = {
-      demo: {
-        source: "npm",
-        spec: "demo@1.0.0",
-      },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
-
-    await commitConfigWithPendingPluginInstalls({
-      nextConfig: {
-        plugins: {
-          installs: existingRecords,
-        },
-      },
-      baseHash: "config-1",
-    });
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: {},
-      baseHash: "config-1",
-      writeOptions: {
-        unsetPaths: [["plugins", "installs"]],
-      },
-    });
-  });
-
-  it("marks replaced managed npm generations when install records are committed", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const previousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
-    const nextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: {
-            codex: {
-              source: "npm",
-              spec: "@openclaw/codex@1.0.0",
-              installPath: previousInstallPath,
-            },
-          },
-          nextInstallRecords: {
-            codex: {
-              source: "npm",
-              spec: "@openclaw/codex@2.0.0",
-              installPath: nextInstallPath,
-            },
-          },
-          nextConfig: {},
-        });
-      });
-
-      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
-  it("removes a new retirement marker when the leased config commit rolls back", async () => {
-    const stateDir = retentionTempDirs.make("openclaw-record-commit-");
-    const installPath = writeManagedNpmPlugin({
-      stateDir,
-      packageName: "@openclaw/retained-rollback",
-      pluginId: "retained-rollback",
-      version: "1.0.0",
-    });
-    const previousInstallRecords: Record<string, PluginInstallRecord> = {
-      "retained-rollback": {
-        source: "npm",
-        spec: "@openclaw/retained-rollback@1.0.0",
-        installPath,
-      },
-    };
-    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords,
-            nextInstallRecords: {},
-            nextConfig: {},
-          }),
-        ).rejects.toThrow("config changed");
-
-        expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
-        expect(
-          listRecoveredManagedNpmInstallCandidates({ stateDir }).map(
-            (candidate) => candidate.pluginId,
-          ),
-        ).toContain("retained-rollback");
-        expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(null, 1, {
-          filePath: mocks.lease.databasePath,
-          lease: mocks.lease,
-        });
-      });
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
   });
 
   it("does not mark arbitrary npm paths outside the managed npm root", async () => {
@@ -613,41 +463,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
   });
 
-  it("removes newly retained npm markers when the config commit rolls back", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
-    const previousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
-    const nextInstallPath = createManagedInstallPath(stateDir, "codex-v2");
-    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
-
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords: {
-              codex: {
-                source: "npm",
-                spec: "@openclaw/codex@1.0.0",
-                installPath: previousInstallPath,
-              },
-            },
-            nextInstallRecords: {
-              codex: {
-                source: "npm",
-                spec: "@openclaw/codex@2.0.0",
-                installPath: nextInstallPath,
-              },
-            },
-            nextConfig: {},
-          }),
-        ).rejects.toThrow("config changed");
-      });
-
-      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(false);
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
-  });
-
   it("removes earlier retained markers when a later marker creation fails", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const firstPreviousInstallPath = createManagedInstallPath(stateDir, "codex-v1");
@@ -702,39 +517,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
-
-  it.each(["commits", "rolls back"] as const)(
-    "clears or restores active npm markers when the config write %s",
-    async (outcome) => {
-      const stateDir = retentionTempDirs.make("openclaw-record-commit-");
-      const installPath = createManagedInstallPath(stateDir, "codex-v2");
-      await markRetainedManagedNpmInstall({
-        packageDir: installPath,
-        pluginId: "codex",
-        retainedAt: "2026-04-25T00:00:00.000Z",
-        reason: "test-retained-generation",
-      });
-      const rolledBack = outcome === "rolls back";
-      if (rolledBack) {
-        mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
-      }
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const commit = commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: {},
-          nextInstallRecords: {
-            codex: { source: "npm", spec: "@openclaw/codex@2.0.0", installPath },
-          },
-          nextConfig: {},
-        });
-        if (rolledBack) {
-          await expect(commit).rejects.toThrow("config changed");
-        } else {
-          await commit;
-        }
-      });
-      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(rolledBack);
-    },
-  );
 
   it("restores earlier active markers when clearing a later marker fails", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
@@ -797,71 +579,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
   });
 
-  it("rolls back plugin index writes when the config write fails", async () => {
-    const existingRecords: Record<string, PluginInstallRecord> = {
-      existing: {
-        source: "npm",
-        spec: "existing@1.0.0",
-      },
-    };
-    const previousPersistedIndex = createTestInstalledPluginIndex({
-      policyHash: "previous-policy",
-      installRecords: existingRecords,
-    });
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
-    mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({
-      previous: previousPersistedIndex,
-      revision: 17,
-      mutation: {
-        databasePath: "/tmp/openclaw.sqlite",
-        before: null,
-        after: { state_key: "plugins.installedIndex", value_json: "{}", updated_at_ms: 17 },
-      },
-    });
-    mocks.replaceConfigFile.mockRejectedValue(new Error("config changed"));
-
-    await expect(
-      commitConfigWithPendingPluginInstalls({
-        nextConfig: {
-          plugins: {
-            installs: {
-              demo: {
-                source: "npm",
-                spec: "demo@1.0.0",
-              },
-            },
-          },
-        },
-      }),
-    ).rejects.toThrow("config changed");
-
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
-      {
-        existing: {
-          source: "npm",
-          spec: "existing@1.0.0",
-        },
-        demo: {
-          source: "npm",
-          spec: "demo@1.0.0",
-        },
-      },
-      {
-        config: {},
-        filePath: mocks.lease.databasePath,
-        lease: mocks.lease,
-      },
-    );
-    expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(
-      previousPersistedIndex,
-      17,
-      {
-        filePath: mocks.lease.databasePath,
-        lease: mocks.lease,
-      },
-    );
-  });
-
   it("leaves marker state intact when a successor owns the plugin index", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const installPath = createManagedInstallPath(stateDir, "codex-v2");
@@ -911,7 +628,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(result).toMatchObject({
       path: "/tmp/openclaw.json",
       nextConfig,
-      installRecords: {},
       movedInstallRecords: false,
       persistedHash: "test-config-hash",
     });

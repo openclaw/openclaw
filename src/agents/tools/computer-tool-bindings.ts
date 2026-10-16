@@ -185,7 +185,7 @@ export async function resolveComputerBinding(params: {
       (prepared?.configured === false && params.target !== "gateway");
     const gateway =
       (usePrepared ? prepared : undefined) ??
-      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
       const close = await bindGatewayComputerCleanup({

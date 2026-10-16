@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -174,29 +175,13 @@ beforeEach(() => {
 });
 
 describe("ollama web search guarded fetch", () => {
-  it("cancels a stalled 401 body before guarded release", async () => {
+  it.each([
+    [401, "ollama signin"],
+    [403, "unavailable"],
+  ] as const)("cancels a stalled %i body before guarded release", async (status, message) => {
+    loopback.status = status;
     const tool = createSearchTool();
-
-    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow(
-      "ollama signin",
-    );
-
-    expect(loopback.releases.length).toBeGreaterThan(0);
-    for (const release of loopback.releases) {
-      expect(release).toEqual({
-        bodyIsNull: false,
-        bodyUsed: true,
-        socketClosedBeforeGuardRelease: true,
-      });
-    }
-  });
-
-  it("cancels a stalled 403 body before guarded release", async () => {
-    loopback.status = 403;
-    const tool = createSearchTool();
-
-    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow("unavailable");
-
+    await expect(tool.execute({ query: "latest openclaw release" })).rejects.toThrow(message);
     expect(loopback.releases.length).toBeGreaterThan(0);
     for (const release of loopback.releases) {
       expect(release).toEqual({

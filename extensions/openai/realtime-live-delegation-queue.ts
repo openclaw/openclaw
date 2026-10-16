@@ -2,7 +2,7 @@ const INPUT_WAIT_MS = 15_000;
 const MAX_PENDING_DELEGATIONS = 32;
 const MAX_SESSION_DELEGATIONS = 4_096;
 
-/** Claims public delegation notices until their transcript is available or the call retires. */
+/** Owns delegation identity for one connection, including public notices awaiting transcript. */
 export class OpenAILiveDelegationQueue {
   private readonly claimed = new Set<string>();
   private readonly pending = new Map<string, ReturnType<typeof setTimeout>>();
@@ -18,9 +18,9 @@ export class OpenAILiveDelegationQueue {
     },
   ) {}
 
-  enqueue(id: string): void {
+  claim(id: string): boolean {
     if (this.stopped || !this.options.isActive() || this.claimed.has(id)) {
-      return;
+      return false;
     }
     if (
       id.length > 512 ||
@@ -29,10 +29,18 @@ export class OpenAILiveDelegationQueue {
     ) {
       this.stop();
       this.options.onError(new Error("GPT-Live delegation notice limit exceeded"));
+      return false;
+    }
+    // Claim before control classification, transcript consumption or host callbacks.
+    // Completion never releases an identity within this connection.
+    this.claimed.add(id);
+    return true;
+  }
+
+  enqueue(id: string): void {
+    if (!this.claim(id)) {
       return;
     }
-    // Claim before any callback can deliver the same notice reentrantly.
-    this.claimed.add(id);
     const timeout = setTimeout(() => {
       this.pending.delete(id);
       if (this.stopped || !this.options.isActive()) {

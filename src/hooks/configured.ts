@@ -1,20 +1,21 @@
-// Configured hook helpers combine config and install records into active hooks.
-import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import { shouldIncludeHook } from "./config.js";
 import { resolveHookKey } from "./frontmatter.js";
+import { readHookInstallsAsync } from "./installs.js";
 import type { HookPolicyEntry } from "./types.js";
 
-/** Capture discovery and explicit selection from one config/install snapshot. */
-export function resolveInternalHookSelection(config: OpenClawConfig): {
+export type InternalHookSelection = {
   configured: boolean;
   names: Set<string> | null;
   declaredNames: Set<string>;
-} {
+};
+
+/** Capture discovery and explicit selection from one config/install snapshot. */
+export async function resolveInternalHookSelection(
+  config: OpenClawConfig,
+): Promise<InternalHookSelection> {
   const internal = config.hooks?.internal;
-  const installs =
-    readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
+  const installs = await readHookInstallsAsync();
   const names = new Set<string>();
   const declaredNames = new Set<string>();
   let open = (internal?.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0);

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import * as retry from "@openclaw/retry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,7 +9,6 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
-import * as historyRetry from "./chat-history-retry.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -171,78 +171,63 @@ it.each(["previous-terminal", "identity-less"] as const)(
   },
 );
 
-it("retires existing ghost custody from a fresh idle cursor without borrowing another run's outcome", async () => {
-  const h = await fixture();
-  try {
-    const live = h.start("missed-terminal-run");
-    const read = h.arm();
-    const refresh = h.refresh();
-    await read.issued.promise;
-    read.response.resolve(
-      delta({
-        ...idle,
-        snapshotAt: 200,
-        lastRunId: "later-server-run",
-        status: "failed",
-        lastRunError: "Only the later run failed.",
-      }),
-    );
-    await refresh;
-    expect(h.state.chatRunId).toBeNull();
-    expect(h.state.chatStream).toBeNull();
-    expect(h.state.toolStreamById.has(live.toolIdentity)).toBe(false);
-    expect(isChatBusy(h.state)).toBe(false);
-    expect(h.state.chatRunStatus ?? null).toBeNull();
-    expect(h.state.chatRunError ?? null).toBeNull();
-  } finally {
-    await h.finish();
-  }
-});
-
-it.each(["retry", "reset-fallback"] as const)(
-  "observes a run that started before the next history %s attempt",
+it.each(["fresh", "retry", "reset-fallback"] as const)(
+  "retires custody observed at the history %s attempt without borrowing another run's outcome",
   async (attempt) => {
     const h = await fixture();
     const retryRequested = createDeferred();
     const resumeRetry = createDeferred();
-    const sleep = vi.spyOn(historyRetry, "sleep").mockImplementation(() => {
-      retryRequested.resolve();
-      return resumeRetry.promise;
-    });
+    const sleep =
+      attempt === "fresh"
+        ? undefined
+        : vi.spyOn(retry, "sleepWithAbort").mockImplementation(() => {
+            retryRequested.resolve();
+            return resumeRetry.promise;
+          });
     try {
+      const initialRun = attempt === "fresh" ? h.start("missed-terminal-run") : undefined;
       const first = h.arm();
-      const next = h.arm();
+      const next = attempt === "fresh" ? first : h.arm();
       const refresh = h.refresh();
       await first.issued.promise;
-      const live = h.start("run-between-history-attempts");
-      if (attempt === "retry") {
-        first.response.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "History is rebuilding",
-            retryable: true,
-            retryAfterMs: 250,
-            details: { method: "chat.history" },
-          }),
-        );
-        await retryRequested.promise;
-        resumeRetry.resolve();
-      } else {
-        first.response.resolve({ kind: "reset" });
+      const live = initialRun ?? h.start("run-between-history-attempts");
+      if (attempt !== "fresh") {
+        if (attempt === "retry") {
+          first.response.reject(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "History is rebuilding",
+              retryable: true,
+              retryAfterMs: 250,
+              details: { method: "chat.history" },
+            }),
+          );
+          await retryRequested.promise;
+          resumeRetry.resolve();
+        } else {
+          first.response.resolve({ kind: "reset" });
+        }
       }
       const [, params] = await next.issued.promise;
       const row = {
         ...idle,
         snapshotAt: 200,
-        lastRunId: "later-run",
-        status: "done",
+        ...(attempt === "fresh"
+          ? {
+              lastRunId: "later-server-run",
+              status: "failed" as const,
+              lastRunError: "Only the later run failed.",
+            }
+          : { lastRunId: "later-run", status: "done" as const }),
       } satisfies GatewaySessionRow;
-      if (attempt === "retry") {
-        expect(params).toHaveProperty("cursor", "cursor-custody-before");
-        next.response.resolve(delta(row));
-      } else {
+      if (attempt === "reset-fallback") {
         expect(params).not.toHaveProperty("cursor");
         next.response.resolve(page(row));
+      } else {
+        if (attempt === "retry") {
+          expect(params).toHaveProperty("cursor", "cursor-custody-before");
+        }
+        next.response.resolve(delta(row));
       }
       await refresh;
       expect(h.state.chatRunId).toBeNull();
@@ -250,9 +235,12 @@ it.each(["retry", "reset-fallback"] as const)(
       expect(h.state.toolStreamById.has(live.toolIdentity)).toBe(false);
       expect(isChatBusy(h.state)).toBe(false);
       expect(h.state.chatRunStatus ?? null).toBeNull();
+      if (attempt === "fresh") {
+        expect(h.state.chatRunError ?? null).toBeNull();
+      }
     } finally {
       resumeRetry.resolve();
-      sleep.mockRestore();
+      sleep?.mockRestore();
       await h.finish();
     }
   },

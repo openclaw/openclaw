@@ -1,6 +1,7 @@
 // Shared process-test harness: mock Gateway servers used by CLI exit-code proofs.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { isLoopbackIpAddress, isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { expect } from "vitest";
 import { WebSocketServer } from "ws";
@@ -11,10 +12,7 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
+import { pickMatchingExternalInterfaceAddress } from "../infra/network-interfaces.js";
 
 const activeServers = new Set<WebSocketServer>();
 
@@ -309,7 +307,7 @@ export async function startGatewayStabilityRpcServer(
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
   // A private non-loopback target keeps shared-secret auth from bypassing device identity.
-  const host = pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+  const host = pickMatchingExternalInterfaceAddress(os.networkInterfaces(), {
     family: "IPv4",
     matches: (candidate) =>
       isPrivateOrLoopbackIpAddress(candidate) && !isLoopbackIpAddress(candidate),

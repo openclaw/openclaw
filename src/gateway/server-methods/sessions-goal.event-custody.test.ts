@@ -8,6 +8,7 @@ const edge = vi.hoisted(() => ({
   record: vi.fn(),
   emit: vi.fn(),
   current: vi.fn(),
+  fingerprint: vi.fn(),
   forbidden: vi.fn((): never => {
     throw new Error("Pure Goal RPC control crossed a native or process boundary");
   }),
@@ -35,7 +36,8 @@ vi.mock("../../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../../infra/kysely-sync.js", () => ({
+vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
@@ -59,20 +61,45 @@ vi.mock("../session-plugin-ownership.js", () => ({
 vi.mock("../session-request-agent.js", () => ({
   resolveRequestedSessionAgentId: () => ({ ok: true, agentId: "main" }),
 }));
+// mock-isolation: Goal-event fixtures control the sharing target and its revocation during delivery.
 vi.mock("../session-sharing.js", () => ({
   resolveSessionMutationAuthorization: () => ({
     authorization: { assertCurrent: edge.current },
     error: null,
   }),
-  resolveSessionSharingTarget: () => edge.target,
-  SessionMutationAuthorizationChangedError: class extends Error {},
+  resolveSessionSharingTargetAsync: async () => edge.target,
+  SessionMutationAuthorizationChangedError: class extends Error {
+    constructor(public error: { code: string; message: string }) {
+      super(error.message);
+    }
+  },
+}));
+// mock-isolation: Event delivery does not need routing configuration.
+vi.mock("../session-sharing-preparation.js", () => ({
+  captureSessionMutationRouting: () => () => {},
+}));
+// mock-isolation: Goal-event fixtures supply revocable authorization without loading sharing storage.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: async () => ({
+    authorization: { assertCurrent: edge.current },
+    error: null,
+  }),
+}));
+// mock-isolation: Goal-event tests retain fixture rows and explicitly revoke their custody.
+vi.mock("../../config/sessions/session-entry-current-check.js", () => ({
+  captureSessionEntryCurrentCheckAsyncInternal: async () => ({
+    entry: edge.target.entry,
+    source: edge.current,
+    release() {},
+  }),
 }));
 vi.mock("./gateway-client-identity.js", () => ({
   gatewayClientSessionCreator: () => ({ type: "human", id: "operator" }),
 }));
 vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: edge.emit }));
+// mock-isolation: Fingerprint settlement is controlled without creating a process device identity.
 vi.mock("./session-goal-request.js", () => ({
-  fingerprintSessionGoalRequest: () => "fingerprint",
+  fingerprintSessionGoalRequest: edge.fingerprint,
 }));
 
 function invoke() {
@@ -105,6 +132,9 @@ function invoke() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  edge.target.storeKey = "agent:main:goal";
+  edge.target.canonicalKey = "agent:main:goal";
+  edge.fingerprint.mockReturnValue("fingerprint");
   edge.record.mockResolvedValue(undefined);
   edge.emit.mockImplementation(() => undefined);
   edge.mutate.mockResolvedValue({

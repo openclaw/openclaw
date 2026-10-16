@@ -39,6 +39,8 @@ function installTraceStop(
   return stop;
 }
 
+const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
+
 describe("traceStopViaPlaywright", () => {
   beforeEach(async () => {
     await fs.rm(traceTestState.rootDir, { recursive: true, force: true });
@@ -59,8 +61,7 @@ describe("traceStopViaPlaywright", () => {
     });
 
     const committedPath = await traceStopViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "tab-1",
+      ...target,
       path: requestedPath,
     });
 
@@ -80,8 +81,7 @@ describe("traceStopViaPlaywright", () => {
 
     await expect(
       traceStopViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
+        ...target,
         path: path.join(traceTestState.rootDir, "publication-failure.zip"),
       }),
     ).rejects.toBeInstanceOf(Error);
@@ -98,8 +98,7 @@ describe("traceStopViaPlaywright", () => {
 
     await expect(
       traceStopViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "tab-1",
+        ...target,
         path: path.join(traceTestState.rootDir, "stop-failure.zip"),
       }),
     ).rejects.toBe(stopError);

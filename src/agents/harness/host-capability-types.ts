@@ -12,6 +12,8 @@ type AgentHarnessHostApprovalResult = Readonly<{
 type AgentHarnessPreparedEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
   localIdentityEnv: Readonly<Record<string, string>>;
+  /** Append to effective Git parameters only in an owned local execution environment. */
+  localGitConfigParameters?: string;
   /** Local child destination facts; must not be projected into a remote or sandbox process. */
   localProcessEnv?: Readonly<Record<string, string>>;
   /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
@@ -20,10 +22,14 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
+  /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
+  hostExecutionRequired?: true;
 }>;
 
 type AgentHarnessToolSurfaceOptions = Omit<
-  NonNullable<Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingTools"]>[0]>,
+  NonNullable<
+    Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingToolsAsync"]>[0]
+  >,
   "operationalRunInstance"
 >;
 
@@ -36,6 +42,18 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
+  captureRequestCustody?: () =>
+    | import("../../infra/exec-request-context.js").ExecRequestCustody
+    | undefined;
+  /** Native runtimes must install pre-tool admission for these pending workspace operations. */
+  workspaceReadiness?: Readonly<{
+    toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
+  }>;
+  /** Native delegation without person selection must remain unambiguous at admission. */
+  assertNativeSubagentSpawnAllowed?: () => void;
   /** Binds the actual native model; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
@@ -58,6 +76,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   annotateCurrentUserTurn?: (
     annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
   ) => Promise<void>;
+  /** Detached admitted originals before inline projection; file readers still enforce custody. */
+  resolveInputAttachmentMedia?: () => Promise<
+    readonly Readonly<import("../../media/media-facts.js").MediaFact>[]
+  >;
   /** Execution-only document paths after the harness confirms unsandboxed local placement. */
   prepareInputAttachments?: (request: {
     placement: "local-host";
@@ -121,11 +143,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */
   bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
-  /** Creates and binds core tools without exposing admitted-run correlation to the plugin. */
+  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
     bindingOptions?: Readonly<{ cwd?: string }>,
   ) => AnyAgentTool[];
+  /** Prepares fresh exec policy, then creates and binds tools to this exact live host. */
+  createToolSurfaceAsync?: (
+    options: AgentHarnessToolSurfaceOptions,
+    bindingOptions?: Readonly<{ cwd?: string }>,
+  ) => Promise<AnyAgentTool[]>;
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
     | {

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
@@ -176,25 +177,26 @@ describe("iMessage approval reaction poller", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
-  it("does not scan recent chats during fast polling with no pending targets", async () => {
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { allowRecentChatDiscovery: true }),
-    );
-
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not scan recent chats during fast polling for handle-only targets", async () => {
-    await registerTarget({
-      conversation: { handle: "+15551230000" },
+  it("does not resolve reactions from a history response after its account retires", async () => {
+    await registerTarget();
+    const history = createDeferred<{ messages: ReturnType<typeof buildGroupApprovalMessage>[] }>();
+    const requested = createDeferred<void>();
+    const request = vi.fn(() => {
+      requested.resolve();
+      return history.promise;
     });
-    const request = vi.fn();
-
-    await pollPendingIMessageApprovalReactions(buildPollParams(request));
-
-    expect(request).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    const polling = pollPendingIMessageApprovalReactions(
+      buildPollParams(request, {
+        signal: controller.signal,
+      }),
+    );
+    await requested.promise;
+    controller.abort();
+    history.resolve({ messages: [buildGroupApprovalMessage()] });
+    await polling;
+    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("discovers typed handle-only targets through recent chat history", async () => {

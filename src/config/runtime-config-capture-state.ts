@@ -1,13 +1,16 @@
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import {
-  getRetainedLegacyDefaultAgentId,
-  setRetainedLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner-state.js";
+  createNormalizedPluginsConfig,
+  type NormalizedPluginsConfig,
+} from "../plugins/config-state.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type RuntimeConfigCapture = Readonly<{ source: OpenClawConfig; origin: OpenClawConfig }>;
+type RuntimeConfigCapture = Readonly<{
+  source: OpenClawConfig;
+  origin: OpenClawConfig;
+  plugins: NormalizedPluginsConfig;
+}>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
 
@@ -22,29 +25,24 @@ export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
 ): OpenClawConfig {
-  const clone = (value: OpenClawConfig) => {
-    const captured = cloneConfigWithResolutionFacts(value);
-    setRetainedLegacyDefaultAgentId(captured, getRetainedLegacyDefaultAgentId(value));
-    return freezeJsonSnapshot(captured);
-  };
+  const clone = (value: OpenClawConfig) =>
+    freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
   const captured = clone(config);
   const capturedSource = source === config ? captured : clone(source);
-  captures.set(captured, { source: capturedSource, origin: config });
+  // Captures own cloned payloads, so policy must resolve against this revision, not live config.
+  captures.set(captured, {
+    source: capturedSource,
+    origin: config,
+    plugins: createNormalizedPluginsConfig(captured.plugins),
+  });
   if (capturedSource !== captured) {
-    captures.set(capturedSource, { source: capturedSource, origin: source });
+    captures.set(capturedSource, {
+      source: capturedSource,
+      origin: source,
+      plugins: createNormalizedPluginsConfig(capturedSource.plugins),
+    });
   }
   return captured;
 }
 
 export type CapturedRuntimeConfigRead = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
-
-/** Retain effective environment alongside the selected config/source publication. */
-export function captureRuntimeConfigRead(
-  config: OpenClawConfig,
-  source: OpenClawConfig,
-): CapturedRuntimeConfigRead {
-  return {
-    config: captureRuntimeConfigWithSource(config, source),
-    env: cloneEnvWithPlatformSemantics(process.env),
-  };
-}

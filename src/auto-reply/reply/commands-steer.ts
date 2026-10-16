@@ -25,14 +25,14 @@ export const handleSteerCommand: CommandHandler = defineAuthorizedTextCommand(
     });
     if (!steerTargetSessionKey) {
       logVerbose("steer: no active run; continuing with /steer payload as a normal prompt");
-      applyCommandTextToParams(params, message);
-      return { shouldContinue: true };
     }
     // Session routing resolves the active :direct:/:dm: alias before session
     // preparation. From here the ordinary prepared reply path owns media,
     // transcript persistence, stable queue identity, cancellation, lifecycle
     // adoption, and fallback if the active run disappears before admission.
     applyCommandTextToParams(params, message);
-    return { shouldContinue: true, queueModeOverride: "steer" };
+    return steerTargetSessionKey
+      ? { shouldContinue: true, queueModeOverride: "steer" }
+      : { shouldContinue: true };
   },
 );

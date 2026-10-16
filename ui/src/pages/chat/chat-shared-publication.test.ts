@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   options,
   requestId,
@@ -8,7 +9,7 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
+import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
 const accepted = {
   requestId,
@@ -28,6 +29,28 @@ const published = {
 const completed = { result: published, confirmation: null };
 
 describe("shared publication observation", () => {
+  it("retires an obsolete shared failure when discovery confirms it is no longer actionable", async () => {
+    const failure = {
+      result: {
+        requestId,
+        publisher: shared,
+        status: "failed" as const,
+        code: "unavailable" as const,
+        message: "GitHub publication failed.",
+        nextAction: "Inspect the unpublished changes.",
+      },
+      confirmation: null,
+    };
+    const { controller, request } = setup({ ...options, latestShared: failure });
+    expect((await settled(controller)).result).toEqual(failure.result);
+    request.mockResolvedValue(options);
+    controller.view()?.onRefresh();
+    expect((await settled(controller)).result).toBeNull();
+    controller.view()?.onRefresh();
+    expect((await settled(controller)).result).toBeNull();
+    expect(request.mock.calls.every(([method]) => method === "sessions.github.options")).toBe(true);
+  });
+
   it("restores a terminal shared receipt after reconnect and acknowledges it without a write", async () => {
     const { controller, request } = setup({ ...options, latestShared: completed });
     const restored = await settled(controller);
@@ -58,8 +81,13 @@ describe("shared publication observation", () => {
       throw new Error("An observation must not execute publication");
     });
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     try {
-      render(renderGitHubPublicationAction(controller.view()!), container);
+      unmount = mountSolid(
+        () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
+        { container },
+      ).unmount;
+      flush();
       container.querySelector<HTMLButtonElement>("button.chat-pr__create")!.click();
       expect((await settled(controller)).result).toEqual(published);
       expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
@@ -71,8 +99,22 @@ describe("shared publication observation", () => {
         request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
       ).toHaveLength(1);
     } finally {
-      render(null, container);
+      unmount?.();
     }
+  });
+
+  it("reports failed account discovery as unavailable options until a read succeeds", async () => {
+    const { controller, request } = setup();
+    await settled(controller);
+    request.mockRejectedValueOnce(new Error("GitHub publication options timed out"));
+    controller.view()?.onRefresh();
+    const failed = await settled(controller);
+    expect(failed.optionsUnavailable).toBe(true);
+    expect(failed.error).toBe("GitHub publication options timed out");
+    controller.view()?.onRefresh();
+    const recovered = await settled(controller);
+    expect(recovered.optionsUnavailable).toBe(false);
+    expect(recovered.error).toBeNull();
   });
 
   it("recovers an unknown shared outcome only through its exact invocation key", async () => {
@@ -80,7 +122,9 @@ describe("shared publication observation", () => {
     await settled(controller);
     request.mockRejectedValueOnce(new Error("The acknowledgement was lost"));
     controller.view()?.onPublish?.();
-    expect((await settled(controller)).locked).toBe(true);
+    const unknown = await settled(controller);
+    expect(unknown.locked).toBe(true);
+    expect(unknown.optionsUnavailable).toBe(false);
     const key = request.mock.calls.at(-1)![1].idempotencyKey;
     request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
       if (method !== "sessions.github.options") {

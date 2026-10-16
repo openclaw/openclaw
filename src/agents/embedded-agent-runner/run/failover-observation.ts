@@ -5,7 +5,7 @@ import {
   buildApiErrorObservationFields,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { log } from "../logger.js";
 
 type FailoverDecisionLoggerInput = {

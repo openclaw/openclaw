@@ -25,9 +25,14 @@ export function createControlUiMockSessionSubscriptions(
   };
   return {
     canonicalKey,
-    createClient() {
+    createClient(lifecycle?: {
+      isOpen: () => boolean;
+      startRepeatingEvents: () => void;
+      stopRepeatingEvents: () => void;
+    }) {
       const keys = new Set<string>();
       let scoped = false;
+      let observesSessions = false;
       const hasSubscription = (payload: unknown): boolean => {
         const source = isRecord(payload)
           ? [payload, payload.suggestion, payload.request].find(
@@ -50,23 +55,35 @@ export function createControlUiMockSessionSubscriptions(
         },
         clear() {
           keys.clear();
+          observesSessions = false;
         },
-        recordRequest(method: string, params: unknown) {
-          if (!isRecord(params)) {
+        recordRequest(method: string, params: unknown, result?: unknown) {
+          if ((lifecycle && !lifecycle.isOpen()) || !isRecord(params)) {
             return;
           }
           if (method === "connect") {
             scoped = Array.isArray(params.caps) && params.caps.includes("session-scoped-events");
+          } else if (method === "sessions.subscribe") {
+            observesSessions = isRecord(result) && result.subscribed === true;
           } else if (typeof params.key === "string" && params.key.trim()) {
             const key = subscriptionKey(params.key, params.agentId);
             if (method === "sessions.messages.subscribe") {
               keys.add(key);
+              lifecycle?.startRepeatingEvents();
             } else if (method === "sessions.messages.unsubscribe") {
               keys.delete(key);
+              if (keys.size === 0) {
+                lifecycle?.stopRepeatingEvents();
+              }
             }
           }
         },
         allows(event: string, payload: unknown): boolean {
+          // The real observer audience includes broad session-list subscribers,
+          // while tool arguments and transcript events still require a child subscription.
+          if (event === "session.observer" && observesSessions) {
+            return true;
+          }
           if (event !== "session.typing" && !(scoped && scopedEvents.has(event))) {
             return true;
           }

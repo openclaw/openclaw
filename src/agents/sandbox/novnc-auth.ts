@@ -26,19 +26,6 @@ const NO_VNC_OBSERVER_TOKENS = createOneTimeTicketStore<NoVncObserverTokenPayloa
   ttlMs: NOVNC_TOKEN_TTL_MS,
 });
 
-function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: number }) {
-  return (
-    resolveExpiresAtMsFromDurationMs(params.ttlMs, {
-      nowMs: params.nowMs,
-      minRemainingMs: 1,
-    }) ??
-    resolveExpiresAtMsFromDurationMs(NOVNC_TOKEN_TTL_MS, {
-      nowMs: params.nowMs,
-      minRemainingMs: 1,
-    })
-  );
-}
-
 export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
   return params.noVncEnabled && !params.headless;
 }
@@ -63,10 +50,9 @@ export function issueNoVncObserverToken(params: {
     typeof params.ttlMs === "number" && params.ttlMs <= MAX_NOVNC_TOKEN_TTL_MS
       ? params.ttlMs
       : undefined;
-  const expiresAt = resolveNoVncObserverTokenExpiresAt({
-    ttlMs: requestedTtlMs,
-    nowMs: now,
-  });
+  const expiresAt =
+    resolveExpiresAtMsFromDurationMs(requestedTtlMs, { nowMs: now, minRemainingMs: 1 }) ??
+    resolveExpiresAtMsFromDurationMs(NOVNC_TOKEN_TTL_MS, { nowMs: now, minRemainingMs: 1 });
   if (expiresAt === undefined) {
     // An unusable clock yields a token nothing can redeem.
     return crypto.randomBytes(24).toString("hex");

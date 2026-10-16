@@ -5,24 +5,18 @@ type ToolTerminalState = {
   lastToolError?: ToolErrorSummary;
 };
 
-type ToolErrorState = {
-  read: () => ToolTerminalState;
-  recordFailure: (failure: ToolErrorSummary) => ToolTerminalState;
-  recordSuccess: (toolName: string) => ToolTerminalState;
-};
-
 /** Track the run's last tool failure until the same tool succeeds. */
-export function createToolErrorState(): ToolErrorState {
+export function createToolErrorState() {
   let lastToolError: ToolErrorSummary | undefined;
   const terminalState = (): ToolTerminalState => (lastToolError ? { lastToolError } : {});
 
   return {
     read: terminalState,
-    recordFailure(failure) {
+    recordFailure(failure: ToolErrorSummary) {
       lastToolError = failure;
       return terminalState();
     },
-    recordSuccess(toolName) {
+    recordSuccess(toolName: string) {
       if (
         lastToolError &&
         normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===

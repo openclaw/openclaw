@@ -23,30 +23,39 @@ function makeResult(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgen
 describe("logical requester settlement", () => {
   beforeEach(() => {
     assertCurrent.mockReset();
-    registry.markYielded.mockReset().mockReturnValue(1);
-    registry.settle.mockReset().mockReturnValue(true);
+    registry.markYielded.mockReset().mockResolvedValue(1);
+    registry.settle.mockReset().mockResolvedValue(true);
   });
 
-  it.each([true, false])(
-    "acknowledges only a committed explicit yield (settled: %s)",
-    (settled) => {
-      registry.settle.mockReturnValue(settled);
-      const result = makeResult({ yielded: true });
-      if (settled) {
-        settleRequesterRun(requester, result, assertCurrent);
-        expect(result.requesterContinuationSettled).toBe(true);
-      } else {
-        expect(() => settleRequesterRun(requester, result, assertCurrent)).toThrow(
-          "could not transfer",
-        );
-        expect(result.requesterContinuationSettled).toBeUndefined();
-      }
-    },
-  );
+  it.each([
+    ["committed", undefined],
+    ["refused", "could not transfer"],
+    ["storage failure", "storage unavailable"],
+    ["revoked", "requester replaced"],
+  ] as const)("acknowledges only a committed explicit yield: %s", async (outcome, error) => {
+    registry.settle.mockResolvedValue(outcome !== "refused");
+    if (outcome === "storage failure" || outcome === "revoked") {
+      (outcome === "revoked" ? assertCurrent : registry.settle).mockImplementation(() => {
+        throw new Error(error);
+      });
+    }
+    const result = makeResult({ yielded: true });
+    if (error === undefined) {
+      await settleRequesterRun(requester, result, assertCurrent);
+      expect(result.requesterContinuationSettled).toBe(true);
+    } else {
+      await expect(settleRequesterRun(requester, result, assertCurrent)).rejects.toThrow(error);
+      expect(result.requesterContinuationSettled).toBeUndefined();
+    }
+    if (outcome === "revoked") {
+      expect(registry.markYielded).not.toHaveBeenCalled();
+      expect(registry.settle).not.toHaveBeenCalled();
+    }
+  });
 
-  it("leaves implicit continuation gated on outbox status delivery", () => {
+  it("leaves implicit continuation gated on outbox status delivery", async () => {
     const result = makeResult({ continuationPending: true });
-    settleRequesterRun(requester, result, assertCurrent);
+    await settleRequesterRun(requester, result, assertCurrent);
     expect(registry.markYielded).toHaveBeenCalledOnce();
     expect(registry.settle).not.toHaveBeenCalled();
     expect(result.requesterContinuationSettled).toBeUndefined();
@@ -62,7 +71,11 @@ describe("logical requester settlement", () => {
         meta: { durationMs: 1, yielded: true },
       };
 
-      settleRequesterRun({ ...requester, preparedRunAdmission: admission }, result, assertCurrent);
+      await settleRequesterRun(
+        { ...requester, preparedRunAdmission: admission },
+        result,
+        assertCurrent,
+      );
 
       expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
         requesterSessionKey: requester.sessionKey,
@@ -70,6 +83,7 @@ describe("logical requester settlement", () => {
         requesterTurnRunId: requester.runId,
         requesterYielded: true,
         acceptedSessionSpawns,
+        assertCurrent: expect.any(Function),
       });
       expect(result.requesterContinuationSettled).toBe(true);
     } finally {
@@ -77,33 +91,9 @@ describe("logical requester settlement", () => {
     }
   });
 
-  it("surfaces failed persistence without acknowledging a successor", () => {
-    registry.settle.mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-    const result = makeResult({ yielded: true });
-    expect(() => settleRequesterRun(requester, result, assertCurrent)).toThrow(
-      "storage unavailable",
-    );
-    expect(result.requesterContinuationSettled).toBeUndefined();
-  });
-
-  it("fences a revoked requester before handoff", () => {
-    assertCurrent.mockImplementation(() => {
-      throw new Error("requester replaced");
-    });
-    const result = makeResult({ yielded: true });
-    expect(() => settleRequesterRun(requester, result, assertCurrent)).toThrow(
-      "requester replaced",
-    );
-    expect(registry.markYielded).not.toHaveBeenCalled();
-    expect(registry.settle).not.toHaveBeenCalled();
-    expect(result.requesterContinuationSettled).toBeUndefined();
-  });
-
-  it.each(["cancelled", "aborted"] as const)("does not transfer %s ownership", (kind) => {
+  it.each(["cancelled", "aborted"] as const)("does not transfer %s ownership", async (kind) => {
     const result = makeResult({ yielded: true, ...(kind === "aborted" ? { aborted: true } : {}) });
-    settleRequesterRun(
+    await settleRequesterRun(
       {
         ...requester,
         ...(kind === "cancelled" ? { abortSignal: AbortSignal.abort() } : {}),
@@ -157,7 +147,7 @@ describe("logical requester settlement", () => {
         if (owner === "cancelled") {
           abort.abort();
         }
-        settleFailedRequesterRun(params, new Error("provider failed"));
+        await settleFailedRequesterRun(params, new Error("provider failed"));
         if (owner === "active") {
           expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
             requesterSessionKey: requester.sessionKey,
@@ -165,6 +155,7 @@ describe("logical requester settlement", () => {
             requesterTurnRunId: requester.runId,
             requesterYielded: false,
             acceptedSessionSpawns,
+            assertCurrent: expect.any(Function),
           });
         } else {
           expect(registry.settle).not.toHaveBeenCalled();
@@ -187,11 +178,11 @@ describe("logical requester settlement", () => {
         throw failure;
       });
       const original = new Error("provider failed");
-      const combined = settleFailedRequesterRun(params, original);
+      const combined = await settleFailedRequesterRun(params, original);
       expect(combined).toBeInstanceOf(AggregateError);
       expect(combined).toMatchObject({ errors: [original, failure], cause: original });
       expect(registry.settle).toHaveBeenCalledOnce();
-      expect(settleFailedRequesterRun(params, combined)).toBe(combined);
+      expect(await settleFailedRequesterRun(params, combined)).toBe(combined);
       expect(registry.settle).toHaveBeenCalledOnce();
     } finally {
       admission.close();
@@ -202,13 +193,13 @@ describe("logical requester settlement", () => {
     const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "assertion-test");
     try {
       await admission.admit("embedded");
-      expect(() =>
+      await expect(
         settleRequesterRun(
           { ...requester, preparedRunAdmission: admission },
           makeResult({ yielded: true }),
           () => admission.close(),
         ),
-      ).toThrow("settlement is closed");
+      ).rejects.toThrow("settlement is closed");
       expect(registry.settle).not.toHaveBeenCalled();
     } finally {
       admission.close();

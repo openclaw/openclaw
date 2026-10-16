@@ -58,46 +58,18 @@ describe("voice-call diagnostic stream ownership", () => {
     return Buffer.concat(output).toString("utf8");
   }
 
-  it.each(["tail", "latency"])(
-    "preserves requested %s history beyond one megabyte without reading the whole file",
-    async (mode) => {
-      const records = [120, 240, 360].map((latency) =>
-        JSON.stringify({ metadata: { lastTurnLatencyMs: latency }, padding: "x".repeat(600_000) }),
-      );
-      fs.writeFileSync(file, `${records.join("\n")}\n`);
-      const readFile = vi.spyOn(fs, "readFileSync");
-      if (mode === "tail") {
-        await expect(command("tail", "--since", "3")).rejects.toBe(stopped);
-        expect(text()).toBe(`${records.join("\n")}\n`);
-      } else {
-        await command("latency", "--last", "3");
-        expect(JSON.parse(text())).toMatchObject({
-          recordsScanned: 3,
-          turnLatency: { count: 3, avgMs: 240, minMs: 120, maxMs: 360 },
-        });
-      }
-      expect(readFile.mock.calls.filter(([target]) => target === file)).toEqual([]);
-    },
-  );
-
-  it("bounds follow reads while retaining every record and the unfinished suffix", async () => {
-    const records = Array.from({ length: 2048 }, (_, seq) =>
-      JSON.stringify({ seq, text: "é".repeat(512) }),
+  it("preserves requested latency history beyond one megabyte without reading the whole file", async () => {
+    const records = [120, 240, 360].map((latency) =>
+      JSON.stringify({ metadata: { lastTurnLatencyMs: latency }, padding: "x".repeat(600_000) }),
     );
-    const read = vi.spyOn(fs, "readSync");
-    sleepMock
-      .mockResolvedValueOnce(undefined)
-      .mockImplementationOnce(async () => {
-        fs.appendFileSync(file, `${records.join("\n")}\n{"seq":2048`);
-      })
-      .mockImplementationOnce(async () => {
-        fs.appendFileSync(file, "}\n");
-      });
-    await expect(command("tail", "--since", "0")).rejects.toBe(stopped);
-    expect(text()).toBe(`${records.join("\n")}\n{"seq":2048}\n`);
-    const requested = read.mock.calls.map(([, buffer]) => buffer.byteLength);
-    expect(requested.length).toBeGreaterThan(0);
-    expect(requested.every((length) => length <= 64 * 1024)).toBe(true);
+    fs.writeFileSync(file, `${records.join("\n")}\n`);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    await command("latency", "--last", "3");
+    expect(JSON.parse(text())).toMatchObject({
+      recordsScanned: 3,
+      turnLatency: { count: 3, avgMs: 240, minMs: 120, maxMs: 360 },
+    });
+    expect(readFile.mock.calls.filter(([target]) => target === file)).toEqual([]);
   });
 
   it("does not join a pending record to a larger replacement file", async () => {

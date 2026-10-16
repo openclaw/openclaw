@@ -58,6 +58,14 @@ describe("legacy-operator already-current update", () => {
       accepted: true,
     },
     {
+      name: "accepts reworded service guidance",
+      report: {
+        ...noop,
+        steps: [{ ...advisory, advisory: { ...advisory.advisory, message: "Rerun elsewhere." } }],
+      },
+      accepted: true,
+    },
+    {
       name: "rejects a package mutation",
       report: { ...noop, steps: [{ name: "global install swap", exitCode: 0, durationMs: 0 }] },
     },
@@ -65,7 +73,28 @@ describe("legacy-operator already-current update", () => {
       name: "rejects unrelated maintenance",
       report: {
         ...noop,
-        steps: [{ ...advisory, advisory: { ...advisory.advisory, message: "ownership conflict" } }],
+        steps: [
+          { ...advisory, name: "managed-service", command: "openclaw gateway status --deep" },
+        ],
+      },
+    },
+    {
+      name: "rejects a different advisory kind",
+      report: {
+        ...noop,
+        steps: [
+          {
+            ...advisory,
+            advisory: { ...advisory.advisory, kind: "candidate-runtime-unavailable" },
+          },
+        ],
+      },
+    },
+    {
+      name: "rejects an unexplained advisory",
+      report: {
+        ...noop,
+        steps: [{ ...advisory, advisory: { ...advisory.advisory, message: " " } }],
       },
     },
     {

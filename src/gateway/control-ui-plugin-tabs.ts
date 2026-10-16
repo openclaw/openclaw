@@ -102,7 +102,6 @@ export type ControlUiPluginTabAuthGrant = {
   profileId?: string;
 };
 
-/** Pure projection of tab descriptors visible to the presented scopes. */
 function projectControlUiPluginTabs(
   entries: Readonly<PluginRegistry["controlUiDescriptors"]>,
   scopes: readonly string[],
@@ -135,7 +134,6 @@ function projectControlUiPluginTabs(
   );
 }
 
-/** Lists active plugins' tab descriptors visible to the presented scopes. */
 export function listControlUiPluginTabs(
   scopes: readonly string[],
   opts: { requireGatewayAuthGrant?: boolean } = {},
@@ -170,7 +168,6 @@ export function listControlUiPluginTabs(
   });
 }
 
-/** Lists active plugins' trusted widget kinds visible to the presented scopes. */
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {

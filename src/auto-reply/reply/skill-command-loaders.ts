@@ -19,18 +19,10 @@ export function createSkillCommandLoaders(
     loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   },
 ): Pick<HandleCommandsParams, "loadSkillCommands" | "loadBundledSkillCommand"> {
-  const context = {
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    skillFilter: params.skillFilter,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    execOverrides: params.execOverrides,
-  };
+  const { loadSkillCommands, ...context } = params;
   return {
     loadSkillCommands:
-      params.loadSkillCommands ??
+      loadSkillCommands ??
       (async () => (await loadRuntime()).prepareSkillCommandsForWorkspace(context)),
     loadBundledSkillCommand: async (skillName) =>
       (await loadRuntime()).prepareBundledSkillCommandForWorkspace({

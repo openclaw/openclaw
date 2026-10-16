@@ -129,7 +129,6 @@ Example:
     },
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },
@@ -236,7 +235,7 @@ file type eligible for host-local attachment reads.
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)
+openclaw status --deep   # check channels (WhatsApp Web + Telegram + Discord + Slack + Signal)
 openclaw health --json   # gateway health snapshot over the WS connection
 ```
 

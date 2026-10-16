@@ -2,8 +2,10 @@ import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import type { Duplex } from "node:stream";
 import type { SecureContextOptions } from "node:tls";
+import { LruCache } from "../../infra/lru-cache.js";
 import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 
+const MAX_CACHED_LEAVES = 128;
 const LEAF_RENEWAL_MARGIN_MS = 60 * 60_000;
 const CA_WARNING_MARGIN_MS = 7 * 24 * 60 * 60_000;
 const CERTIFICATE_RETRY_MESSAGE =
@@ -14,6 +16,7 @@ const CA_RESTART_MESSAGE =
 export class SecretEgressCertificateError extends Error {}
 
 type CertificateValidity = { notBefore: number; notAfter: number };
+type CachedLeaf = { cert: Buffer; key: Buffer; validity: CertificateValidity };
 export type SecretEgressCertificateStatus = {
   state: "ready" | "degraded";
   caExpiresAt: string;
@@ -48,13 +51,44 @@ export async function createSecretEgressCertificates(certDir: string) {
   const caPem = fs.readFileSync(ca.certPath, "utf8");
   const caValidity = readValidity(caPem);
   const caExpiresAt = new Date(caValidity.notAfter).toISOString();
-  const preparations = new Set<Promise<SecretEgressTlsEndpoint | undefined>>();
+  const leaves = new LruCache<CachedLeaf>(MAX_CACHED_LEAVES);
+  const preparations = new Map<string, Promise<CachedLeaf>>();
   let failedCertificates = 0;
 
   const assertCaValid = () => {
     if (!validAt(caValidity, Date.now())) {
       throw new SecretEgressCertificateError(CA_RESTART_MESSAGE);
     }
+  };
+
+  const getLeaf = (hostname: string): Promise<CachedLeaf> => {
+    assertCaValid();
+    const leaf = leaves.get(hostname);
+    const now = Date.now();
+    if (
+      leaf &&
+      validAt(leaf.validity, now) &&
+      leaf.validity.notAfter - now > LEAF_RENEWAL_MARGIN_MS
+    ) {
+      return Promise.resolve(leaf);
+    }
+    let pending = preparations.get(hostname);
+    if (!pending) {
+      pending = generateLocalProxyLeaf({ certDir, ca, hostname })
+        .then((material) => {
+          assertCaValid();
+          const validity = readValidity(material.cert);
+          if (!validAt(validity, Date.now())) {
+            throw new SecretEgressCertificateError(CERTIFICATE_RETRY_MESSAGE);
+          }
+          const issued = { ...material, validity };
+          leaves.set(hostname, issued);
+          return issued;
+        })
+        .finally(() => preparations.delete(hostname));
+      preparations.set(hostname, pending);
+    }
+    return pending;
   };
 
   return {
@@ -81,8 +115,7 @@ export async function createSecretEgressCertificates(certDir: string) {
       isActive: () => boolean;
       createServer: (leaf: { cert: Buffer; key: Buffer }) => SecretEgressTlsEndpoint;
     }): SecretEgressTlsContext => {
-      let ready: { server: SecretEgressTlsEndpoint; validity: CertificateValidity } | undefined;
-      let preparation: Promise<SecretEgressTlsEndpoint | undefined> | undefined;
+      let ready: { server: SecretEgressTlsEndpoint; leaf: CachedLeaf } | undefined;
       let failed = false;
       const setFailed = (value: boolean) => {
         failedCertificates += Number(value) - Number(failed);
@@ -93,59 +126,37 @@ export async function createSecretEgressCertificates(certDir: string) {
           if (!params.isActive()) {
             return undefined;
           }
-          assertCaValid();
-          if (preparation) {
-            return preparation;
-          }
-          const now = Date.now();
-          if (
-            ready &&
-            validAt(ready.validity, now) &&
-            ready.validity.notAfter - now > LEAF_RENEWAL_MARGIN_MS
-          ) {
-            return ready.server;
-          }
-          const pending = generateLocalProxyLeaf({ certDir, ca, hostname: params.hostname })
-            .then((leaf) => {
-              // Revoked/replaced runs cannot publish a new context after awaited
-              // OpenSSL work. Check the clock again too: sleep may span issuance.
-              if (!params.isActive()) {
-                return undefined;
-              }
-              assertCaValid();
-              const validity = readValidity(leaf.cert);
-              if (!validAt(validity, Date.now())) {
-                throw new SecretEgressCertificateError(CERTIFICATE_RETRY_MESSAGE);
-              }
-              if (ready) {
+          try {
+            const leaf = await getLeaf(params.hostname);
+            // Certificate material belongs to the CA; endpoints and authority
+            // still belong to this registration, including after shared issuance.
+            if (!params.isActive()) {
+              return undefined;
+            }
+            assertCaValid();
+            if (!validAt(leaf.validity, Date.now())) {
+              throw new SecretEgressCertificateError(CERTIFICATE_RETRY_MESSAGE);
+            }
+            if (ready) {
+              if (ready.leaf !== leaf) {
                 // Only new handshakes use the replacement; active TLS streams
                 // and the registration-bound HTTP listener retain their owner.
                 ready.server.setSecureContext(leaf);
-                ready.validity = validity;
-              } else {
-                ready = { server: params.createServer(leaf), validity };
+                ready.leaf = leaf;
               }
-              setFailed(false);
-              return ready.server;
-            })
-            .catch(() => {
-              if (!params.isActive()) {
-                return undefined;
-              }
-              setFailed(true);
-              // Never expose OpenSSL output, paths, or key material to clients.
-              assertCaValid();
-              throw new SecretEgressCertificateError(CERTIFICATE_RETRY_MESSAGE);
-            });
-          preparation = pending;
-          preparations.add(pending);
-          try {
-            return await pending;
-          } finally {
-            // A failed attempt is not a permanently cached rejection. The next
-            // request may retry, without a retry loop or stale-certificate fallback.
-            preparation = undefined;
-            preparations.delete(pending);
+            } else {
+              ready = { server: params.createServer(leaf), leaf };
+            }
+            setFailed(false);
+            return ready.server;
+          } catch {
+            if (!params.isActive()) {
+              return undefined;
+            }
+            setFailed(true);
+            // Never expose OpenSSL output, paths, or key material to clients.
+            assertCaValid();
+            throw new SecretEgressCertificateError(CERTIFICATE_RETRY_MESSAGE);
           }
         },
         close: () => {
@@ -154,6 +165,9 @@ export async function createSecretEgressCertificates(certDir: string) {
         },
       };
     },
-    waitForPreparations: () => Promise.allSettled(preparations),
+    close: async () => {
+      await Promise.allSettled(preparations.values());
+      leaves.clear();
+    },
   };
 }

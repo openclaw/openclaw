@@ -1,4 +1,3 @@
-import chokidar from "chokidar";
 import { expect, it, vi, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -18,7 +17,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -35,7 +34,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 
 it("retains resident rows across projection-neutral commits and unchanged admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const count = Number(process.env.OPENCLAW_PROJECTION_BENCH_ROWS ?? 16);
+    const count = 16;
     await state.writeConfig({
       agents: { entries: { main: {} } },
       channels: { slack: { streaming: { mode: "off" } } },
@@ -48,10 +47,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     for (let index = 0; index < count; index++) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:config-${index}` },
-        {
-          sessionId: `config-${index}`,
-          updatedAt: index + 1,
-        },
+        { sessionId: `config-${index}`, updatedAt: index + 1 },
       );
     }
     const release = retainSessionListForegroundWork();
@@ -60,9 +56,8 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       getConfig: () => getRuntimeConfigSnapshot()!,
       modelCatalog: [],
     });
-    const watcher = createWatcherMock();
-    const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher as never);
-    onTestFinished(() => watch.mockRestore());
+    const watcher = installWatcherMock();
+    onTestFinished(watcher.restore);
     let applied = createDeferred<GatewayReloadPlan>();
     let dirtyAtCommit = 0;
     const commit: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"] = async (
@@ -105,82 +100,77 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
         error: (message) => applied.reject(new Error(message)),
       },
     });
+    const reload = async (update: OpenClawConfig) => {
+      applied = createDeferred<GatewayReloadPlan>();
+      await state.writeConfig({ ...cfg, ...update });
+      watcher.emit("change", state.configPath);
+      expect((await applied.promise).restartGateway).toBe(false);
+    };
+    const list = (archived?: "all") =>
+      listProjectedSessions({ projection, opts: { archived, limit: 247 } });
+    const verifyRows = async (event: string, before: number, expected = 0, archived?: "all") => {
+      const dirtyRows = dirtyAtCommit;
+      const result = await list(archived);
+      await projection.ensureMaterialized();
+      expect(result.totalCount).toBe(count);
+      expect.soft(dirtyRows, event).toBe(expected);
+      expect.soft(projection.materializedCount - before, event).toBe(expected);
+      expect(projection.state.cfg).toBe(cfg);
+      return result;
+    };
+    const readmit = async () => {
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "main",
+        paths: [resolveOpenClawAgentSqlitePath({ agentId: "main" })],
+        pending: true,
+        reason: "Reverification",
+      });
+      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
+      dirtyAtCommit = projection.dirtyRowCount;
+    };
     try {
       await reloader.ready;
-      const readmit = async () => {
-        const refusal = createAgentDatabaseInspectionRefusal({
-          agentId: "main",
-          paths: [resolveOpenClawAgentSqlitePath({ agentId: "main" })],
-          pending: true,
-          reason: "Reverification",
-        });
-        recordAgentDatabaseAdmissions([refusal], { source: "startup" });
-        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
-      };
       await projection.ensureMaterialized();
-      for (const event of [
-        "channel streaming",
-        "ui.prefs",
-        "unchanged admission",
-        "agent roster",
-      ] as const) {
+      for (const [event, update, expected] of [
+        ["channel streaming", { channels: { slack: { streaming: { mode: "partial" } } } }, 0],
+        ["ui.prefs", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, 0],
+        ["unchanged admission", undefined, 0],
+        [
+          "agent roster",
+          { agents: { ...cfg.agents, ownership: "explicit", entries: { main: {}, other: {} } } },
+          count,
+        ],
+      ] satisfies [string, OpenClawConfig | undefined, number][]) {
         const before = projection.materializedCount;
-        const started = performance.now();
-        if (event === "unchanged admission") {
-          await readmit();
+        if (update) {
+          await reload(update);
         } else {
-          const next: OpenClawConfig = {
-            ...cfg,
-            ...(event === "channel streaming"
-              ? { channels: { slack: { streaming: { mode: "partial" as const } } } }
-              : event === "ui.prefs"
-                ? { ui: { prefs: { sidebarEntries: ["sessions"] } } }
-                : {
-                    agents: {
-                      ...cfg.agents,
-                      ownership: "explicit",
-                      entries: { main: {}, other: {} },
-                    },
-                  }),
-          };
-          applied = createDeferred<GatewayReloadPlan>();
-          await state.writeConfig(next);
-          watcher.emit("change", state.configPath);
-          const plan = await applied.promise;
-          expect(plan.restartGateway).toBe(false);
+          await readmit();
         }
-        const dirtyRows =
-          event === "unchanged admission" ? projection.dirtyRowCount : dirtyAtCommit;
-        const result = await listProjectedSessions({ projection, opts: { limit: 247 } });
-        await projection.ensureMaterialized();
-        const materializations = projection.materializedCount - before;
-        console.log(
-          JSON.stringify({
-            event,
-            count,
-            dirtyRows,
-            materializations,
-            elapsedMs: performance.now() - started,
-          }),
-        );
-        expect(result.totalCount).toBe(count);
-        expect.soft(dirtyRows, event).toBe(event === "agent roster" ? count : 0);
-        expect.soft(materializations, event).toBe(event === "agent roster" ? count : 0);
-        expect(projection.state.cfg).toBe(cfg);
+        await verifyRows(event, before, expected);
       }
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:config-0" },
-        {
-          sessionId: "config-0",
-          updatedAt: count + 1,
-          archivedAt: 1,
-        },
+      const scope = { agentId: "main", sessionKey: "agent:main:config-0" };
+      replaceSessionEntrySync(scope, {
+        sessionId: "config-0",
+        updatedAt: count + 1,
+        archivedAt: 1,
+      });
+      assignSessionOwner(scope, {
+        owner: { type: "agent", id: "main" },
+        assignedBy: { type: "system", id: "test" },
+      });
+      const residentRows = (await list("all")).sessions.map(
+        ({ snapshotAt: _snapshotAt, ...row }) => row,
       );
-      assignSessionOwner(
-        { agentId: "main", sessionKey: "agent:main:config-0" },
-        { owner: { type: "agent", id: "main" }, assignedBy: { type: "system", id: "test" } },
-      );
-      await listProjectedSessions({ projection, opts: { archived: "all", limit: 247 } });
+      for (const model of ["unit-test/talk-a", "unit-test/talk-b", undefined]) {
+        const before = projection.materializedCount;
+        await reload({ talk: { realtime: model === undefined ? {} : { model } } });
+        const result = await verifyRows(`Talk model: ${model}`, before, 0, "all");
+        expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
+          residentRows,
+        );
+      }
       const beforeRename = projection.materializedCount;
       const previousConfig = cfg;
       cfg = {
@@ -195,18 +185,10 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       };
       copyConfigResolutionFacts(previousConfig, cfg);
       setRuntimeConfigSnapshot(cfg);
-      const renamed = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", limit: 247 },
-      });
-      expect(renamed.sessions[0]?.owner?.actor.label).toBe("After");
+      expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
       expect(projection.materializedCount).toBe(beforeRename);
       await readmit();
-      const retained = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", limit: 247 },
-      });
-      expect(retained.sessions[0]?.owner?.actor.label).toBe("After");
+      expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
       expect(projection.dirtyRowCount).toBe(0);
       expect(projection.materializedCount).toBe(beforeRename);
     } finally {

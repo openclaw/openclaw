@@ -415,40 +415,4 @@ describe("Feishu read authority over the real Lark SDK transport", () => {
       }
     },
   );
-  it("preserves active-scope provider error diagnostics", async () => {
-    const scope = createReadScope();
-    await scope.run(() => read("om_warmup"));
-    requests.length = 0;
-    const message = "synthetic active provider error";
-    handleRequest = (request, response) => {
-      if (request.path !== `${MESSAGE_PATH}/om_active_error`) {
-        return false;
-      }
-      response.writeHead(503, { "content-type": "application/json" });
-      response.end(JSON.stringify({ code: 503001, msg: message }));
-      return true;
-    };
-    let diagnostics = "";
-    const output = new Writable({
-      write(chunk: Buffer, _encoding, callback) {
-        diagnostics += chunk.toString();
-        callback();
-      },
-    });
-    const capturedConsole = new Console({ stdout: output, stderr: output });
-    const log = vi
-      .spyOn(console, "log")
-      .mockImplementation((...args: unknown[]) => capturedConsole.log(...args));
-    try {
-      await expect(scope.run(() => read("om_active_error"))).rejects.toMatchObject({
-        response: { status: 503, data: { code: 503001, msg: message } },
-      });
-      expect(requests.map((request) => request.path)).toEqual([`${MESSAGE_PATH}/om_active_error`]);
-      expect(diagnostics).toContain(message);
-    } finally {
-      scope.close();
-      log.mockRestore();
-      output.destroy();
-    }
-  });
 });

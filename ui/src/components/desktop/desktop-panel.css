@@ -1,0 +1,400 @@
+openclaw-desktop-panel {
+  .desktop-apps {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 3px;
+  }
+  .desktop-app-button,
+  .desktop-toolbar-action,
+  .desktop-toolbar-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 0;
+    border-radius: 4px;
+    padding: 5px 7px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .desktop-app-button {
+    color: var(--text);
+  }
+  .desktop-app-button:hover:not(:disabled),
+  .desktop-toolbar-action:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--text);
+  }
+  .desktop-app-button:focus-visible,
+  .desktop-toolbar-action:focus-visible {
+    outline: 2px solid var(--focus, var(--accent));
+    outline-offset: 1px;
+  }
+  .desktop-app-button:disabled,
+  .desktop-toolbar-action:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+  .desktop-app-button__icon {
+    display: inline-flex;
+    width: 15px;
+    height: 15px;
+  }
+  .desktop-app-button__icon svg {
+    width: 100%;
+    height: 100%;
+    stroke-width: 1.75;
+  }
+  .desktop-app-button__icon--launching {
+    animation: desktop-app-launch 900ms linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .desktop-app-button__icon--launching {
+      animation: none;
+    }
+  }
+
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .bp--bottom {
+    left: var(--shell-nav-width, 0);
+    right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
+    bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  }
+  .bp--right {
+    top: var(--shell-topbar-height, 0);
+    right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));
+    bottom: calc(var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px));
+  }
+  .bp-title {
+    min-width: 0;
+  }
+  .bp-icon[aria-disabled="true"] {
+    opacity: 0.4;
+  }
+  .desktop-toolbar-action > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .desktop-audio-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .desktop-audio-button > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .desktop-audio-button:disabled,
+  .desktop-audio-button[aria-disabled="true"] {
+    opacity: 0.5;
+  }
+  .desktop-touch-toolbar .desktop-audio-label {
+    display: none;
+  }
+  .desktop-fullscreen-icon > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .bp:fullscreen {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  .desktop-content {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .desktop-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .desktop-toolbar--connection {
+    flex-wrap: wrap;
+    min-height: 42px;
+    gap: 12px;
+  }
+  .desktop-toolbar__spacer {
+    flex: 1;
+  }
+  .desktop-sizing {
+    width: 88px;
+    height: 32px;
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .desktop-touch-toolbar .desktop-sizing {
+    height: 44px;
+  }
+  .desktop-button {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .desktop-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+  .desktop-button--primary {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .desktop-button:disabled,
+  .desktop-touch-action:disabled {
+    opacity: 0.5;
+  }
+  .desktop-session {
+    overflow: hidden;
+    max-width: 100%;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .desktop-note {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .desktop-note--error {
+    color: var(--danger);
+  }
+  .desktop-picker,
+  .desktop-status {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    padding: 14px;
+    background: var(--panel);
+  }
+  .desktop-status {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted);
+  }
+  .desktop-credentials {
+    display: flex;
+    width: min(320px, 100%);
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+  }
+  .desktop-credentials__label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .desktop-credentials__input {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+  }
+  .desktop-environment {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .desktop-environment__details {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .desktop-environment__id {
+    overflow: hidden;
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .desktop-environment__meta,
+  .desktop-environment__sessions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .desktop-stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .desktop-surface {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+  }
+  /* View-only affordance: clicking anywhere on the desktop takes control. */
+  .desktop-stage__take-control {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: var(--cursor-action, pointer);
+  }
+  .desktop-stage__take-control:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  /* The inset sizes this to the viewport on its own. Do not reintroduce viewport
+     height units: Android WebView hosts the Control UI in a container that
+     resolves dvh/vh/svh/lvh to 0, which collapses the viewer to a blank page. */
+  .desktop-document {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    overflow: hidden;
+    box-sizing: border-box;
+    background: var(--bg);
+  }
+  .desktop-document .desktop-content,
+  .desktop-document .desktop-stage {
+    width: 100%;
+  }
+  .desktop-touch-toolbar {
+    position: absolute;
+    z-index: 3;
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: 12px;
+    display: flex;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin: 0 auto;
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg) 84%, transparent);
+    box-shadow: var(--overlay-shadow);
+    backdrop-filter: blur(16px);
+  }
+  .desktop-touch-action {
+    display: inline-flex;
+    min-width: 48px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 9px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+  }
+  .desktop-touch-action[aria-pressed="true"] {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  .desktop-touch-action:focus-visible {
+    outline: 2px solid var(--focus, var(--accent));
+    outline-offset: 1px;
+  }
+  .desktop-touch-action > svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .desktop-touch-action__icon {
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
+  }
+  .desktop-touch-action__icon svg {
+    width: 100%;
+    height: 100%;
+    stroke-width: 1.8;
+  }
+  .desktop-keyboard-input {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    height: 1px;
+    border: 0;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  @media (max-width: 560px) {
+    .desktop-touch-action {
+      min-width: 44px;
+      padding: 0 7px;
+    }
+    .desktop-touch-action__label {
+      display: none;
+    }
+  }
+  @media (max-width: 400px) {
+    .desktop-touch-toolbar {
+      display: grid;
+      width: calc(100% - 24px);
+      grid-template-columns: repeat(3, minmax(44px, 1fr));
+    }
+    .desktop-touch-toolbar .desktop-sizing {
+      box-sizing: border-box;
+      width: 100%;
+    }
+  }
+}
+
+@keyframes desktop-app-launch {
+  50% {
+    opacity: 0.6;
+    transform: rotate(180deg) scale(0.92);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}

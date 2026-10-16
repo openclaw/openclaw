@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
-import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import {
   detectAndLoadPromptImages,
   hydratePromptMediaMessages,
@@ -30,12 +29,9 @@ import {
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import {
-  cloneImageContent,
-  cloneTextContent,
-  isWorkerTranscriptMessageFrameSafe,
-} from "../../worker/transcript-message.js";
+import { projectWorkerTextOrImageContent } from "../../worker/assistant-message-projection.js";
+import { DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED } from "../../worker/node-workspace-protocol.js";
+import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
@@ -75,12 +71,7 @@ export async function prepareWorkerTurnMedia(params: {
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
   signal: AbortSignal;
-}): Promise<{
-  prompt: WorkerLaunchPlan["assignment"]["prompt"];
-  history: AgentMessage[];
-  images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
-  imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
-}> {
+}) {
   const { turn, signal } = params;
   const assertCurrent = () => {
     signal.throwIfAborted();
@@ -96,6 +87,7 @@ export async function prepareWorkerTurnMedia(params: {
   const recordedMedia = recorded ? readPersistedMediaFacts(recorded) : undefined;
   const media = recordedMedia?.length ? recordedMedia : (turn.media ?? []);
   const localWorkspace = params.workspace.kind === "local" ? params.workspace.path : undefined;
+  const deviceFolder = params.workspace.kind === "device-folder";
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
     cfg: turn.config,
     agentId: turn.agentId,
@@ -132,8 +124,7 @@ export async function prepareWorkerTurnMedia(params: {
       `Cloud worker could not load ${currentImages.failedMediaCount} image attachment(s); resend the attachment and retry.`,
     );
   }
-  const pruned = pruneProcessedHistoryImages(params.history) ?? params.history;
-  const history = await hydratePromptMediaMessages(pruned, mediaOptions);
+  const history = await hydratePromptMediaMessages(params.history, mediaOptions);
   assertCurrent();
 
   const current = prepareInput(
@@ -194,7 +185,9 @@ export async function prepareWorkerTurnMedia(params: {
       stagedPaths.add(remotePath);
       return remotePath;
     };
-    for (const input of inputs) {
+    // A device folder cannot receive staged files. Replayed history keeps its text but is not
+    // staged, so one refused attachment cannot make every later turn fail.
+    for (const input of deviceFolder ? [current] : inputs) {
       for (const fact of input.media) {
         const ref = resolveMediaFactLocalRef(fact);
         if (!ref) {
@@ -240,6 +233,9 @@ export async function prepareWorkerTurnMedia(params: {
         input.files.add(await stageFile(data, identity, "image"));
       }
     }
+    if (staging && deviceFolder) {
+      throw new Error(DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED);
+    }
     if (staging) {
       if (!params.tunnel.stageAttachments) {
         throw new Error(
@@ -266,11 +262,12 @@ export async function prepareWorkerTurnMedia(params: {
   };
   const projectInput = (input: ReturnType<typeof prepareInput>) => {
     // Gateway bookkeeping is not part of the closed worker content contract.
-    const parts = input.parts.map((part) =>
-      part.type === "text"
-        ? { ...cloneTextContent(part), text: projectText(part.text) }
-        : cloneImageContent(part),
-    );
+    const parts = input.parts.map(projectWorkerTextOrImageContent);
+    for (const part of parts) {
+      if (part.type === "text") {
+        part.text = projectText(part.text);
+      }
+    }
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
     const notes = [...input.files]
       .filter((file) => !text.includes(file))

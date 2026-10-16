@@ -108,8 +108,14 @@ enum ExecHostExecutor {
             executionCommand = validatedRequest.command
         }
 
-        if let errorResponse = await self.ensureScreenRecordingAccess(request.needsScreenRecording) {
-            return errorResponse
+        if request.needsScreenRecording == true,
+           let error = await PermissionManager.missingPermissions([.screenRecording])
+        {
+            return self.errorResponse(ExecHostError(
+                code: error.code.rawValue,
+                message: error.message,
+                reason: "permission:screenRecording",
+                details: error.details), type: "exec-res")
         }
 
         // Awaited policy, approval, and permission work cannot revive a closed caller.
@@ -124,7 +130,10 @@ enum ExecHostExecutor {
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let env = context.env
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
-            return self.approvalStoreErrorResponse()
+            return self.errorResponse(
+                code: "UNAVAILABLE",
+                message: "SYSTEM_RUN_DENIED: exec approvals update unavailable",
+                reason: "approval-store-unavailable")
         }
 
         // The store commit linearizes authorization. Enqueue before the next
@@ -168,25 +177,5 @@ enum ExecHostExecutor {
                     ? nil
                     : ExecCommandResolution.approvalCwdDriftDeniedMessage
             })
-    }
-
-    private static func approvalStoreErrorResponse() -> ExecHostResponse {
-        self.errorResponse(
-            code: "UNAVAILABLE",
-            message: "SYSTEM_RUN_DENIED: exec approvals update unavailable",
-            reason: "approval-store-unavailable")
-    }
-
-    private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
-        guard needsScreenRecording == true else { return nil }
-        let authorized = await PermissionManager
-            .grantedStatus([.screenRecording])[.screenRecording] ?? false
-        if authorized {
-            return nil
-        }
-        return self.errorResponse(
-            code: "UNAVAILABLE",
-            message: "PERMISSION_MISSING: screenRecording",
-            reason: "permission:screenRecording")
     }
 }

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { PROVIDER_ID, HARNESS_ID } from "./prepared-model-catalog-worker.test-support.js";
 import {
@@ -24,8 +24,11 @@ const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 const UNSEEN_NATIVE_PROVIDER = "native-only-fixture";
 
-it("admits cold native discovery during expired fleet provider renewal and preserves both publications", async () => {
+it("preserves native and provider renewals and explicitly refreshes scoped warm catalogs", async ({
+  signal,
+}) => {
   let revision = 0;
+  let metadataRequests = 0;
   let clock = Date.now();
   let held: ReturnType<typeof createDeferred<void>> | undefined;
   let entered: ReturnType<typeof createDeferred<void>> | undefined;
@@ -68,6 +71,12 @@ it("admits cold native discovery during expired fleet provider renewal and prese
       createServer((request, response) => {
         const url = new URL(request.url!, "http://fixture.invalid");
         const agent = url.searchParams.get("agent")!;
+        if (url.pathname === "/metadata") {
+          metadataRequests += 1;
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify({ revision }));
+          return;
+        }
         if (url.pathname === "/native") {
           const nativeRevision = revision;
           const release = nativeHeld;
@@ -152,6 +161,7 @@ it("admits cold native discovery during expired fleet provider renewal and prese
             id: PROVIDER_ID,
             providers: [PROVIDER_ID],
             cliBackends: [HARNESS_ID],
+            providerCatalogEntry: "./provider-discovery.cjs",
             modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
             configSchema: { type: "object", additionalProperties: false },
           }),
@@ -160,7 +170,6 @@ it("admits cold native discovery during expired fleet provider renewal and prese
           path.join(seed.root, "plugin", "index.cjs"),
           `
 const fs = require("node:fs");
-const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId, filename: __filename }) + "\\n");
   api.registerAgentHarness({
@@ -168,10 +177,25 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
     loadModelCatalog: async (params) => (await fetch(${JSON.stringify(endpoint + "/native?agent=")} + encodeURIComponent(params.agentId))).json(),
   });
-  api.registerProvider({
+  api.registerProvider(require("./provider-discovery.cjs"));
+} };\n`,
+        );
+        // Catalog discovery and runtime registration consume the same provider definition.
+        // Replacing the seed manifest must preserve its declared discovery entry.
+        fs.writeFileSync(
+          path.join(seed.root, "plugin", "provider-discovery.cjs"),
+          `
+const fs = require("node:fs");
+const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
+module.exports = {
     id: ${JSON.stringify(PROVIDER_ID)}, label: "Fleet proof", auth: [],
     catalog: { async run(ctx) {
       const credential = ctx.resolveProviderAuth(${JSON.stringify(PROVIDER_ID)}).discoveryApiKey;
+      await getCachedLiveCatalogValue({
+        keyParts: ["fleet-public-metadata", ${JSON.stringify(endpoint)}], ttlMs: 60_000,
+        now: () => Number(fs.readFileSync(${JSON.stringify(clockFile)}, "utf8")),
+        load: async () => (await fetch(${JSON.stringify(endpoint + "/metadata")})).json(),
+      });
       return getCachedLiveCatalogValue({
         keyParts: [ctx.agentDir, credential], ttlMs: 1000,
         now: () => Number(fs.readFileSync(${JSON.stringify(clockFile)}, "utf8")),
@@ -180,16 +204,42 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         })).json(),
       });
     } },
-  });
-} };\n`,
+};\n`,
         );
       },
       true,
       { agentCount: 2 },
     );
     snapshots = fixture.snapshots;
-    await Promise.all(snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-    expect(requests).toHaveLength(2);
+    const initialCatalogs = await Promise.all(
+      snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
+    );
+    expect(
+      requests,
+      JSON.stringify({
+        metadataRequests,
+        initialCatalogs,
+        registrations: fs.readFileSync(registrations, "utf8"),
+        owners: snapshots.map((snapshot) => ({
+          agentId: snapshot.agentId,
+          authModes: snapshot.authModes,
+          metadataPlugins: snapshot.metadataSnapshot.index.plugins.map((plugin) => ({
+            id: plugin.pluginId,
+            enabled: plugin.enabled,
+            origin: plugin.origin,
+            source: plugin.source,
+          })),
+          metadataDiagnostics: snapshot.metadataSnapshot.diagnostics,
+          registryDiagnostics: snapshot.metadataSnapshot.registryDiagnostics,
+          runtimePlugins: snapshot.pluginRegistry?.plugins.map(({ id, status, error }) => ({
+            id,
+            status,
+            error,
+          })),
+          runtimeDiagnostics: snapshot.pluginRegistry?.diagnostics,
+        })),
+      }),
+    ).toHaveLength(2);
     for (const snapshot of snapshots) {
       expect(snapshot.readFullModelCatalog?.()?.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "provider-0" }),
@@ -304,6 +354,36 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         }
       }
     }
+    // The worker and its SDK cache stay alive after TTL renewal. Explicit refresh must
+    // carry its intent across that boundary without expiring another agent's credential key.
+    expect(requests).toHaveLength(8);
+    // Short account-list expiry must not force a still-fresh shared metadata feed.
+    expect(metadataRequests).toBe(1);
+    const selected = snapshots[0]!;
+    await selected.loadFullModelCatalog!();
+    await selected.loadFullModelCatalog!({ changedOnly: true });
+    expect(requests).toHaveLength(8);
+    const refreshed = createDeferred();
+    const stopObservingRefresh = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "catalog-published") {
+        refreshed.resolve();
+      }
+    });
+    try {
+      await selected.loadFullModelCatalog!({ refresh: true, providerIds: [PROVIDER_ID] });
+      await withinTest(refreshed.promise, signal);
+    } finally {
+      stopObservingRefresh();
+    }
+    expect(requests).toHaveLength(9);
+    expect(metadataRequests).toBe(2);
+    expect(requests.at(-1)).toMatchObject({ agent: fixture.agentIds[0], revision: 4 });
+    expect(selected.readFullModelCatalog!()!.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "provider-4" }),
+    );
+    expect(snapshots[1]!.readFullModelCatalog!()!.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "provider-3" }),
+    );
     for (const request of requests) {
       expect(request.authorization).toBe(`Bearer synthetic-catalog-${request.agent}`);
     }

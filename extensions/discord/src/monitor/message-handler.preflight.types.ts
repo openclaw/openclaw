@@ -46,11 +46,13 @@ type DiscordMessagePreflightSharedFields = {
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
   turnAdoptionLifecycle?: DiscordIngressLifecycle;
+  data: DiscordMessageEvent;
+  client: Client;
+  threadBindings: DiscordThreadBindingLookup;
+  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
-  data: DiscordMessageEvent;
-  client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId: string;
   author: User;
@@ -108,9 +110,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
-
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
@@ -120,10 +119,6 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  threadBindings: DiscordThreadBindingLookup;
-  discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
-  data: DiscordMessageEvent;
-  client: Client;
 };

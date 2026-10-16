@@ -1,14 +1,3 @@
-/**
- * Twitch access token resolution with environment variable support.
- *
- * Supports reading Twitch OAuth access tokens from config or environment variable.
- * The OPENCLAW_TWITCH_ACCESS_TOKEN env var is only used for the default account.
- *
- * Token resolution priority:
- * 1. Account access token from merged config (accounts.{id} or base-level for default)
- * 2. Environment variable: OPENCLAW_TWITCH_ACCESS_TOKEN (default account only)
- */
-
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -23,9 +12,6 @@ export type TwitchTokenResolution = {
   source: TwitchTokenSource;
 };
 
-/**
- * Normalize a Twitch OAuth token - ensure it has the oauth: prefix
- */
 function normalizeTwitchToken(raw?: string | null): string | undefined {
   if (!raw) {
     return undefined;
@@ -34,45 +20,27 @@ function normalizeTwitchToken(raw?: string | null): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  // Twitch tokens should have oauth: prefix
   return trimmed.startsWith("oauth:") ? trimmed : `oauth:${trimmed}`;
 }
 
-/**
- * Resolve Twitch access token from config or environment variable.
- *
- * Priority:
- * 1. Account access token (from merged config - base-level for default, or accounts.{accountId})
- * 2. Environment variable: OPENCLAW_TWITCH_ACCESS_TOKEN (default account only)
- *
- * The getAccountConfig function handles merging base-level config with accounts.default,
- * so this logic works for both simplified and multi-account patterns.
- *
- * @param cfg - OpenClaw config
- * @param opts - Options including accountId and optional envToken override
- * @returns Token resolution with source
- */
+// Root credentials precede accounts.default; the environment is a default-account fallback only.
 export function resolveTwitchToken(
   cfg?: OpenClawConfig,
   opts: { accountId?: string | null; envToken?: string | null } = {},
 ): TwitchTokenResolution {
   const accountId = normalizeAccountId(opts.accountId);
 
-  // Get merged account config (handles both simplified and multi-account patterns)
   const twitchCfg = cfg?.channels?.twitch;
   const accounts = twitchCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
   const accountCfg = resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 
-  // For default account, also check base-level config
   let token: string | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    // Base-level config takes precedence
     token = normalizeTwitchToken(
       (typeof twitchCfg?.accessToken === "string" ? twitchCfg.accessToken : undefined) ||
         (accountCfg?.accessToken as string | undefined),
     );
   } else {
-    // Non-default accounts only use accounts object
     token = normalizeTwitchToken(accountCfg?.accessToken as string | undefined);
   }
 
@@ -80,7 +48,6 @@ export function resolveTwitchToken(
     return { token, source: "config" };
   }
 
-  // Environment variable (default account only)
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv
     ? normalizeTwitchToken(opts.envToken ?? process.env.OPENCLAW_TWITCH_ACCESS_TOKEN)

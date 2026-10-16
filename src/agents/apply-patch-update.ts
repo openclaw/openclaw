@@ -5,11 +5,12 @@
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
+import { ToolInputError } from "./tool-input-error.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
 const DOUBLE_QUOTE_PUNCTUATION = /[\u201C-\u201F]/g;
-const SPACE_PUNCTUATION = /[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g;
+const SPACE_PUNCTUATION = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 export type UpdateFileChunk = {
   changeContext?: string;
@@ -35,17 +36,13 @@ type SourceFile = {
 
 type Replacement = [number, number, SourceLine[]];
 
-async function defaultReadFile(filePath: string): Promise<string> {
-  return fs.readFile(filePath, "utf8");
-}
-
 /** Apply parsed update chunks to one file and return the new file contents. */
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
   options?: { readFile?: (filePath: string) => Promise<string> },
 ): Promise<string> {
-  const reader = options?.readFile ?? defaultReadFile;
+  const reader = options?.readFile ?? ((target: string) => fs.readFile(target, "utf8"));
   const originalContents = await reader(filePath).catch((err: unknown) => {
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
@@ -70,12 +67,12 @@ function computeReplacements(
     if (chunk.changeContext) {
       const contextSearch = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
       if (contextSearch.kind === "ambiguous") {
-        throw new Error(
+        throw new ToolInputError(
           `Found ${contextSearch.occurrences} occurrences of context '${chunk.changeContext}' in ${filePath}. The context must be unique; use a more specific @@ context line.`,
         );
       }
       if (contextSearch.kind === "missing") {
-        throw new Error(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
+        throw new ToolInputError(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
       }
       lineIndex = contextSearch.index + 1;
     }
@@ -118,12 +115,12 @@ function computeReplacements(
     }
 
     if (search.kind === "ambiguous") {
-      throw new Error(
+      throw new ToolInputError(
         `Found ${search.occurrences} occurrences of these lines in ${filePath}. The lines must be unique; include more surrounding lines in the hunk:\n${chunk.oldLines.join("\n")}`,
       );
     }
     if (search.kind === "missing") {
-      throw new Error(
+      throw new ToolInputError(
         `Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`,
       );
     }
@@ -243,14 +240,10 @@ function parseSourceFile(contents: string): SourceFile {
 }
 
 function splitLineEnding(line: string): SourceLine {
-  if (line.endsWith("\r\n")) {
-    return { text: line.slice(0, -2), ending: "\r\n" };
-  }
-  if (line.endsWith("\r")) {
-    return { text: line.slice(0, -1), ending: "\r" };
-  }
-  if (line.endsWith("\n")) {
-    return { text: line.slice(0, -1), ending: "\n" };
+  for (const ending of ["\r\n", "\r", "\n"] as const) {
+    if (line.endsWith(ending)) {
+      return { text: line.slice(0, -ending.length), ending };
+    }
   }
   return { text: line, ending: "" };
 }

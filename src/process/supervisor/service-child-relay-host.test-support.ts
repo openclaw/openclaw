@@ -42,7 +42,7 @@ export function createWritableRelayChild() {
 }
 
 export async function createRelayFixture(
-  platform: "linux" | "darwin" | "win32",
+  platform: "darwin" | "win32",
   retainLineage: boolean,
   configureSpawn: (child: ChildProcess) => void,
   onCleanup: (cleanup: () => void) => void,
@@ -90,6 +90,9 @@ export async function createRelayFixture(
   const start = firstMockArg(stub.sendMock, "service start");
   if (!isRecord(start) || typeof start.generation !== "string") {
     throw new Error("Expected an admitted service generation");
+  }
+  if (start.treeOwnership !== undefined) {
+    throw new Error("Process-group fixture cannot certify native descendant extinction");
   }
   const generation = start.generation;
   let sequence = 0;
@@ -155,18 +158,6 @@ export async function createRelayFixture(
     start,
     cancellations,
     acknowledgements,
-    acknowledgeRetirement: () => {
-      const request = stub.sendMock.mock.calls.at(-1)?.[0];
-      if (!isRecord(request) || request.type !== "cancel") {
-        throw new Error("Expected the relay retirement request");
-      }
-      stub.child.emit("message", {
-        type: "retirement",
-        generation,
-        sequence: request.sequence,
-        anchorExited: true,
-      });
-    },
     emit,
     completeRoot,
     endOutput,

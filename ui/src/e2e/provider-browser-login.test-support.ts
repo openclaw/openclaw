@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:https";
+import { createServer as createTcpServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.ts";
@@ -8,7 +9,7 @@ import {
   PROXY_FIXTURE_CERTIFICATE,
   PROXY_FIXTURE_KEY,
 } from "../../../src/test-helpers/proxy-tls-fixture.ts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -63,6 +64,7 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
   const authorizations: Array<{ state: string; redirect: string }> = [];
   const codes = new Map<string, string>();
   const requests: string[] = [];
+  let edgeReservation: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
   const provider = createServer(
     { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
     (request, response) => {
@@ -184,11 +186,18 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
         }
       },
       () => instance.cleanup(),
+      () => (edgeReservation?.listener.listening ? edgeReservation.releaseListener() : undefined),
+      () => edgeReservation?.claim.release(),
     );
   };
   try {
     await fs.mkdir(root);
-    const edgePort = await getFreePort();
+    const reservation = await reserveTestPortListener({
+      offsets: [0],
+      createListener: createTcpServer,
+    });
+    edgeReservation = reservation;
+    const edgePort = reservation.claim.port;
     await fs.writeFile(certPath, PROXY_FIXTURE_CERTIFICATE);
     await fs.writeFile(keyPath, PROXY_FIXTURE_KEY, { mode: 0o600 });
     const shim = fileURLToPath(
@@ -251,6 +260,10 @@ export async function startProviderBrowserLoginFixture(options: ProviderBrowserL
           slots: { memory: "none" },
         },
       });
+      // Hand off the socket while retaining its safe-port claim across Gateway restarts.
+      if (reservation.listener.listening) {
+        await reservation.releaseListener();
+      }
       await instance.startGateway();
       await fs.access(edgeReceipt);
     };

@@ -355,6 +355,7 @@ suite.define(() => {
             await diagnostic.waitFor({ state: "visible" });
             expect(await diagnostic.textContent()).toBe(expected);
             expect(await alert.locator("img").count()).toBe(0);
+            await capture(page, `05-${failedState}-${width}-expanded-before-geometry.png`);
             const bounds = await diagnostic.evaluate((node) => {
               const box = node.getBoundingClientRect();
               return {

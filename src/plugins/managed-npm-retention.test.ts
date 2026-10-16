@@ -160,6 +160,22 @@ describe("managed npm retention", () => {
         reason: "test-retired-generation",
       });
 
+      const refused = new Error("cleanup lease was replaced");
+      const onError = vi.fn();
+      await expect(
+        cleanupRetainedManagedNpmInstallGenerations({
+          npmDir,
+          activeInstallPaths: [activePackageDir],
+          assertCurrent: async () => {
+            await Promise.resolve();
+            throw refused;
+          },
+          onError,
+        }),
+      ).resolves.toBe(0);
+      expect(fs.existsSync(oldProjectRoot)).toBe(true);
+      expect(onError).toHaveBeenCalledWith(refused, oldProjectRoot);
+
       await expect(
         cleanupRetainedManagedNpmInstallGenerations({
           npmDir,
@@ -182,6 +198,19 @@ describe("managed npm retention", () => {
       pluginId: "codex",
       reason: "test-legacy-generation",
     });
+
+    const refused = new Error("cleanup lease was replaced");
+    await expect(
+      cleanupRetainedManagedNpmInstallGenerations({
+        npmDir,
+        assertCurrent: async () => {
+          await Promise.resolve();
+          throw refused;
+        },
+      }),
+    ).resolves.toBe(0);
+    expect(fs.existsSync(packageDir)).toBe(true);
+    expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
 
     await expect(
       cleanupRetainedManagedNpmInstallGenerations({

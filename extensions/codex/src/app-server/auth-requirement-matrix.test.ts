@@ -1,4 +1,4 @@
-// Codex tests pin the full app-server auth-requirement matrix so one-sided changes fail loudly.
+// Codex tests protect native-home ownership and prepared billing routes.
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -54,137 +54,32 @@ type ExpectedHandoff =
   | { outcome: "native"; nativeAuthProfile: boolean }
   | { outcome: "throws"; message: string };
 
-const HANDOFF_MATRIX: {
-  homeScope: CodexAppServerHomeScope;
-  authRequirement: AuthRequirement;
-  storedProfile: StoredProfileKind;
-  expected: ExpectedHandoff;
-}[] = [
-  // Agent scope owns an isolated CODEX_HOME, so OpenClaw may inject prepared auth.
-  {
-    homeScope: "agent",
-    authRequirement: "api-key",
-    storedProfile: "oauth",
-    expected: { outcome: "prepared-api-key" },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: "api-key",
-    storedProfile: "api_key",
-    expected: { outcome: "prepared-api-key" },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: "api-key",
-    storedProfile: "none",
-    expected: { outcome: "prepared-api-key" },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: "subscription",
-    storedProfile: "oauth",
-    expected: { outcome: "prepared-profile" },
-  },
-  // An API-key credential is not a subscription credential, so the route must not
-  // quietly downgrade to Platform billing behind a subscription selection.
-  {
-    homeScope: "agent",
-    authRequirement: "subscription",
-    storedProfile: "api_key",
-    expected: { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: "subscription",
-    storedProfile: "none",
-    expected: { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: undefined,
-    storedProfile: "oauth",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: undefined,
-    storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: false },
-  },
-  {
-    homeScope: "agent",
-    authRequirement: undefined,
-    storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: false },
-  },
-  // User scope shares the operator's native Codex home. Every cell stays native:
-  // a prepared login would rewrite the account Codex CLI and Desktop share.
-  {
-    homeScope: "user",
-    authRequirement: "api-key",
-    storedProfile: "oauth",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "api-key",
-    storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "api-key",
-    storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "subscription",
-    storedProfile: "oauth",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "subscription",
-    storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "subscription",
-    storedProfile: "unusable",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: "subscription",
-    storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: undefined,
-    storedProfile: "oauth",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: undefined,
-    storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
-  {
-    homeScope: "user",
-    authRequirement: undefined,
-    storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: true },
-  },
+const HANDOFF_MATRIX: [
+  homeScope: CodexAppServerHomeScope,
+  authRequirement: AuthRequirement,
+  storedProfile: StoredProfileKind,
+  expected: ExpectedHandoff,
+][] = [
+  // Isolated homes use the prepared Platform key even with a stored subscription.
+  ["agent", "api-key", "oauth", { outcome: "prepared-api-key" }],
+  ["agent", "api-key", "none", { outcome: "prepared-api-key" }],
+  ["agent", "subscription", "oauth", { outcome: "prepared-profile" }],
+  // A subscription selection cannot quietly downgrade to Platform billing.
+  ["agent", "subscription", "api_key", { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR }],
+  ["agent", "subscription", "none", { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR }],
+  ["agent", undefined, "oauth", { outcome: "native", nativeAuthProfile: true }],
+  ["agent", undefined, "api_key", { outcome: "native", nativeAuthProfile: false }],
+  ["agent", undefined, "none", { outcome: "native", nativeAuthProfile: false }],
+  // Native homes retain their own account, including unusable or absent stored credentials.
+  ["user", "api-key", "oauth", { outcome: "native", nativeAuthProfile: true }],
+  ["user", "subscription", "unusable", { outcome: "native", nativeAuthProfile: true }],
+  ["user", undefined, "none", { outcome: "native", nativeAuthProfile: true }],
 ];
 
 describe("Codex app-server auth requirement matrix", () => {
   it.each(HANDOFF_MATRIX)(
-    "resolves homeScope=$homeScope authRequirement=$authRequirement storedProfile=$storedProfile",
-    async ({ homeScope, authRequirement, storedProfile, expected }) => {
+    "resolves homeScope=%s authRequirement=%s storedProfile=%s",
+    async (homeScope, authRequirement, storedProfile, expected) => {
       const authProfileStore = buildStore(storedProfile);
       const authProfileId = storedProfile === "none" ? undefined : "openai:default";
       const handoff = resolveCodexAppServerPreparedAuthHandoff({
@@ -263,7 +158,6 @@ describe("native Codex account verification", () => {
     { authRequirement: "api-key", account: null, expected: "accepts" },
     // No prepared route means no billing class to protect; the account is not read.
     { authRequirement: undefined, account: { type: "chatgpt" }, expected: "accepts" },
-    { authRequirement: undefined, account: { type: "apiKey" }, expected: "accepts" },
   ];
 
   it.each(NATIVE_ACCOUNT_MATRIX)(

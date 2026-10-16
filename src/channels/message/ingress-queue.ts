@@ -6,6 +6,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
+import { invalidateChannelIngressHealth } from "./ingress-queue-health-cache.js";
 import {
   baseRecord,
   claimedRecord,
@@ -51,9 +52,6 @@ function idFrom(value: string | { id: string }): string {
     throw new Error("Channel ingress event id cannot be empty");
   }
   return id;
-}
-function tokenFrom(value: string | { id: string; claim?: { token: string } }): string | null {
-  return typeof value === "string" ? null : (value.claim?.token ?? null);
 }
 function requiredRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
@@ -120,9 +118,11 @@ export function createChannelIngressQueue<
     context = capture(),
     signal?: AbortSignal,
     isClaimSelectionCurrent?: () => boolean,
+    assertOperationCurrent?: () => void,
   ) => {
     const assertActive = () => {
       assertQueueCurrent(context);
+      assertOperationCurrent?.();
       signal?.throwIfAborted();
     };
     const claimClock =
@@ -164,7 +164,16 @@ export function createChannelIngressQueue<
               }
             : createSqliteWorkerWriteAdmission(assertActive, [context.admission.databasePath]),
       },
-    );
+    ).finally(() => {
+      if (
+        type !== "channelIngress.list" &&
+        type !== "channelIngress.claimSnapshot" &&
+        type !== "channelIngress.staleClaims"
+      ) {
+        // A failed reply may follow a committed write; refresh diagnostic facts either way.
+        invalidateChannelIngressHealth(context);
+      }
+    });
     // Mutations settle under their commit grant; prepared facts still need a live reader.
     if (
       type === "channelIngress.list" ||
@@ -189,7 +198,7 @@ export function createChannelIngressQueue<
   const mutation = (value: string | { id: string; claim?: { token: string } }, at: number) => ({
     queueName,
     id: idFrom(value),
-    token: tokenFrom(value),
+    token: typeof value === "string" ? null : (value.claim?.token ?? null),
     now: at,
   });
 
@@ -334,11 +343,20 @@ export function createChannelIngressQueue<
     }
   };
 
-  return {
-    async enqueue(id, payload, enqueueOptions) {
-      const eventId = idFrom(id);
-      const receivedAt = enqueueOptions?.receivedAt ?? now();
-      const result = await execute("channelIngress.enqueue", {
+  const enqueue = async (
+    id: string,
+    payload: TPayload,
+    enqueueOptions?: Parameters<
+      ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"]
+    >[2],
+    assertOperationCurrent?: () => void,
+  ): ReturnType<ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"]> => {
+    assertOperationCurrent?.();
+    const eventId = idFrom(id);
+    const receivedAt = enqueueOptions?.receivedAt ?? now();
+    const result = await execute(
+      "channelIngress.enqueue",
+      {
         ...scope,
         id: eventId,
         payloadJson: JSON.stringify(payload),
@@ -347,33 +365,49 @@ export function createChannelIngressQueue<
         receivedAt,
         now: now(),
         laneKey: enqueueOptions?.laneKey,
-      });
-      const row = result.row;
-      if (result.accepted) {
-        return {
-          kind: "accepted",
-          duplicate: false,
-          record: requiredRecord<TPayload, TMetadata>(row),
-        };
+      },
+      capture(),
+      undefined,
+      undefined,
+      assertOperationCurrent,
+    );
+    const row = result.row;
+    if (result.accepted) {
+      return {
+        kind: "accepted",
+        duplicate: false,
+        record: requiredRecord<TPayload, TMetadata>(row),
+      };
+    }
+    if (row.status === "completed") {
+      return {
+        kind: "completed",
+        duplicate: true,
+        record: completedRecord<TCompletedMetadata>(row),
+      };
+    }
+    if (row.status === "failed") {
+      return { kind: "failed", duplicate: true, record: failedRecord<TPayload, TMetadata>(row) };
+    }
+    if (row.status === "claimed") {
+      const record = claimedRecord<TPayload, TMetadata>(row);
+      if (!record) {
+        throw new Error(`Corrupt claimed channel ingress event ${queueName}/${eventId}`);
       }
-      if (row.status === "completed") {
-        return {
-          kind: "completed",
-          duplicate: true,
-          record: completedRecord<TCompletedMetadata>(row),
-        };
+      return { kind: "claimed", duplicate: true, record };
+    }
+    return { kind: "pending", duplicate: true, record: requiredRecord<TPayload, TMetadata>(row) };
+  };
+  return {
+    enqueue,
+    enqueueAuthorized: (id, payload, authorizedOptions) => {
+      if (typeof authorizedOptions.assertCurrent !== "function") {
+        return Promise.reject(
+          new TypeError("Authorized ingress requires a current-owner assertion"),
+        );
       }
-      if (row.status === "failed") {
-        return { kind: "failed", duplicate: true, record: failedRecord<TPayload, TMetadata>(row) };
-      }
-      if (row.status === "claimed") {
-        const record = claimedRecord<TPayload, TMetadata>(row);
-        if (!record) {
-          throw new Error(`Corrupt claimed channel ingress event ${queueName}/${eventId}`);
-        }
-        return { kind: "claimed", duplicate: true, record };
-      }
-      return { kind: "pending", duplicate: true, record: requiredRecord<TPayload, TMetadata>(row) };
+      const { assertCurrent: assertOperationCurrent, ...enqueueOptions } = authorizedOptions;
+      return enqueue(id, payload, enqueueOptions, assertOperationCurrent);
     },
     async listPending(listOptions) {
       return (await readRows({ status: "pending", ...listOptions })).map((row) =>

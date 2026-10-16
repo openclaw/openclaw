@@ -1,7 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { emitModelTransportDebug, resolveModelSseDebugMode } from "./model-transport-debug.js";
-import { stringifyRedactedEvent } from "./openai-responses-debug.js";
+import { emitModelTransportDebug } from "./model-transport-debug.js";
+import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-internal.js";
 import { log } from "./openai-transport-shared.js";
 import { iterateModelStream } from "./transport-stream-shared.js";
@@ -49,14 +49,56 @@ export async function* observeResponsesStream<TEvent>(
   stream: AsyncIterable<TEvent>,
   model: Model,
   requestStartedAt?: number,
+  request?: Pick<OpenAIResponsesRequestParams, "service_tier" | "max_output_tokens">,
+  transport: "sse" | "websocket" = "sse",
 ): AsyncGenerator<TEvent> {
   const startedAt = Date.now();
   const eventTypes = new Map<string, number>();
-  const debugMode = resolveModelSseDebugMode();
   let eventCount = 0;
+  let responseId: string | undefined;
+  let servedTier: string | undefined;
+  let outputTokens: number | undefined;
+  let reasoningTokens: number | undefined;
+  let terminalType: string | undefined;
+  let incompleteReason: string | undefined;
+  const requestDetails =
+    `transport=${transport} requestedTier=${request?.service_tier ?? "unspecified"} ` +
+    `max_output_tokens=${request?.max_output_tokens ?? "provider-default"}`;
+  emitModelTransportDebug(
+    log,
+    `[responses] stream_start provider=${model.provider} api=${model.api} model=${model.id} ${requestDetails}`,
+  );
   try {
     for await (const event of stream) {
-      const type = isRecord(event) && typeof event.type === "string" ? event.type : "unknown";
+      const record = isRecord(event) ? event : undefined;
+      const type = typeof record?.type === "string" ? record.type : "unknown";
+      const response = isRecord(record?.response) ? record.response : undefined;
+      if (typeof response?.id === "string") {
+        responseId = response.id;
+      }
+      if (typeof response?.service_tier === "string") {
+        servedTier = response.service_tier;
+      }
+      if (isRecord(response?.usage)) {
+        if (typeof response.usage.output_tokens === "number") {
+          outputTokens = response.usage.output_tokens;
+        }
+        const details = response.usage.output_tokens_details;
+        if (isRecord(details) && typeof details.reasoning_tokens === "number") {
+          reasoningTokens = details.reasoning_tokens;
+        }
+      }
+      if (
+        type === "response.completed" ||
+        type === "response.incomplete" ||
+        type === "response.failed"
+      ) {
+        terminalType = type;
+        const details = response?.incomplete_details;
+        if (isRecord(details) && typeof details.reason === "string") {
+          incompleteReason = details.reason;
+        }
+      }
       eventCount += 1;
       eventTypes.set(type, (eventTypes.get(type) ?? 0) + 1);
       if (eventCount === 1) {
@@ -64,13 +106,7 @@ export async function* observeResponsesStream<TEvent>(
           log,
           `[responses] first_event provider=${model.provider} api=${model.api} model=${model.id} ` +
             `elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
-            `headersToEventMs=${Date.now() - startedAt} type=${type}`,
-        );
-      }
-      if (debugMode === "peek" && eventCount <= 5) {
-        emitModelTransportDebug(
-          log,
-          `[responses] event_peek provider=${model.provider} api=${model.api} model=${model.id} index=${eventCount} type=${type} event=${stringifyRedactedEvent(event)}`,
+            `headersToEventMs=${Date.now() - startedAt} type=${type} responseId=${responseId ?? "unknown"}`,
         );
       }
       yield event;
@@ -79,7 +115,11 @@ export async function* observeResponsesStream<TEvent>(
     const types = [...eventTypes].map(([type, count]) => `${type}:${count}`).join(",");
     emitModelTransportDebug(
       log,
-      `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} elapsedMs=${Date.now() - startedAt} events=${eventCount} types=${types}`,
+      `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} ` +
+        `${requestDetails} responseId=${responseId ?? "unknown"} servedTier=${servedTier ?? "unknown"} ` +
+        `outputTokens=${outputTokens ?? "unknown"} reasoningTokens=${reasoningTokens ?? "unknown"} ` +
+        `streamDurationMs=${Date.now() - startedAt} elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
+        `terminal=${terminalType ?? "none"} incompleteReason=${incompleteReason ?? "none"} events=${eventCount} types=${types}`,
     );
   }
 }

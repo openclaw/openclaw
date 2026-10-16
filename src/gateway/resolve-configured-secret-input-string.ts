@@ -25,13 +25,10 @@ function buildUnresolvedReason(params: {
   kind: "unresolved" | "non-string" | "empty";
   refLabel: string;
 }): string {
-  if (params.style === "generic") {
-    return `${params.path} SecretRef is unresolved (${params.refLabel}).`;
-  }
-  if (params.kind === "non-string") {
+  if (params.style !== "generic" && params.kind === "non-string") {
     return `${params.path} SecretRef resolved to a non-string value.`;
   }
-  if (params.kind === "empty") {
+  if (params.style !== "generic" && params.kind === "empty") {
     return `${params.path} SecretRef resolved to an empty value.`;
   }
   return `${params.path} SecretRef is unresolved (${params.refLabel}).`;
@@ -123,7 +120,7 @@ async function resolveConfiguredSecretInput(params: ConfiguredSecretInputParams)
   }
 }
 
-export async function resolveConfiguredSecretInputString(
+export async function resolveCanonicalConfiguredSecretInputString(
   params: ConfiguredSecretInputParams,
 ): Promise<{
   value?: string;
@@ -134,7 +131,7 @@ export async function resolveConfiguredSecretInputString(
   return resolved;
 }
 
-export async function resolveConfiguredSecretInputWithFallback(
+export async function resolveCanonicalConfiguredSecretInputWithFallback(
   params: ConfiguredSecretInputParams & {
     readFallback?: () => string | undefined;
   },
@@ -146,26 +143,11 @@ export async function resolveConfiguredSecretInputWithFallback(
   secretRefConfigured: boolean;
 }> {
   const resolved = await resolveConfiguredSecretInput(params);
-  const configValue = !resolved.refConfigured ? resolved.value : undefined;
-  if (configValue) {
-    return {
-      value: configValue,
-      source: "config",
-      secretRefConfigured: false,
-    };
-  }
   if (!resolved.refConfigured) {
-    const fallback = normalizeOptionalString(params.readFallback?.());
-    if (fallback) {
-      // Fallbacks are only returned after direct config is absent, preserving
-      // explicit config precedence while still allowing credential stores.
-      return {
-        value: fallback,
-        source: "fallback",
-        secretRefConfigured: false,
-      };
-    }
-    return { secretRefConfigured: false };
+    const value = resolved.value || normalizeOptionalString(params.readFallback?.());
+    return value
+      ? { value, source: resolved.value ? "config" : "fallback", secretRefConfigured: false }
+      : { secretRefConfigured: false };
   }
 
   if (resolved.value) {
@@ -183,7 +165,7 @@ export async function resolveConfiguredSecretInputWithFallback(
   };
 }
 
-export async function resolveRequiredConfiguredSecretRefInputString(
+export async function resolveCanonicalRequiredConfiguredSecretRefInputString(
   params: ConfiguredSecretInputParams,
 ): Promise<string | undefined> {
   const resolved = await resolveConfiguredSecretInput(params);

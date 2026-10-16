@@ -4,8 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -122,7 +122,6 @@ function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
 }
 
 afterEach(async () => {
-  pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -140,10 +139,11 @@ describe("legacy state migration caller mode", () => {
     });
 
     const before = snapshotFiles(fixture.root);
-    const pluginLoader = vi.fn(() => {
-      throw new Error("copied planning must not load plugins");
-    });
-    pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = pluginLoader;
+    const pluginLoader = vi
+      .spyOn(pluginSetupModule, "getPluginSetupModuleLoader")
+      .mockImplementation(() => {
+        throw new Error("copied planning must not load plugins");
+      });
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
       candidate: candidateAt(candidateRoot),
@@ -284,7 +284,7 @@ describe("legacy state migration caller mode", () => {
     "excludes copied %s agent inputs without overriding live shared-auth authority",
     async (overrideKey) => {
       const fixture = await makeFixture();
-      const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
       openOpenClawStateDatabase({ env: fixture.env });
       const sources = writeAgentScopedLegacySources(fixture.stateDir);
@@ -518,78 +518,6 @@ describe("legacy state migration caller mode", () => {
       expect(snapshotExternalArtifacts()).toEqual(externalArtifactsBeforeExecution);
     } finally {
       database.close();
-    }
-  });
-  it("keeps agent-scoped plan and receipt items for the standard state root", async () => {
-    const fixture = await makeFixture();
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    writeAgentScopedLegacySources(fixture.stateDir);
-    const env: NodeJS.ProcessEnv = {
-      ...fixture.env,
-      OPENCLAW_AGENT_DIR: undefined,
-      PI_CODING_AGENT_DIR: undefined,
-    };
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env,
-    });
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expect([
-      ...result.stepReceipts.map((receipt) => receipt.id),
-      result.postSessionPluginMigration?.step.id,
-    ]).toEqual(plan.steps.map((step) => step.id));
-    const standardAgentDatabasePath = path.join(
-      fixture.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    expect(plan.steps.find((step) => step.id === "shared-auth-store")?.source).toEqual([
-      { kind: "sqlite", path: standardAgentDatabasePath },
-    ]);
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")?.source,
-    ).toEqual(plan.steps.find((step) => step.id === "shared-auth-store")?.source);
-    const plannedAcp = plan.steps.find((step) => step.id === "acp-session-metadata");
-    expect(plannedAcp?.source).not.toContainEqual({
-      kind: "sqlite",
-      path: standardAgentDatabasePath,
-    });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata")?.source,
-    ).toEqual(plannedAcp?.source);
-    for (const stepId of ["media-persistence", "transcript-directives"]) {
-      expect(plan.steps.find((step) => step.id === stepId)?.source).toContainEqual({
-        kind: "sqlite",
-        path: standardAgentDatabasePath,
-      });
-      expect(result.stepReceipts.find((receipt) => receipt.id === stepId)?.source).toEqual(
-        plan.steps.find((step) => step.id === stepId)?.source,
-      );
-    }
-    const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
-    expect(plan.steps.find((step) => step.id === "meeting-transcripts")?.source).toContainEqual({
-      kind: "sqlite",
-      path: stateDatabasePath,
-    });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "meeting-transcripts")?.source,
-    ).toEqual(plan.steps.find((step) => step.id === "meeting-transcripts")?.source);
-    for (const stepId of ["sessions", "acp-session-metadata", "agent-dir"]) {
-      expect(plan.steps.find((step) => step.id === stepId)).toBeDefined();
-      expect(result.stepReceipts.find((receipt) => receipt.id === stepId)).toBeDefined();
     }
   });
 });

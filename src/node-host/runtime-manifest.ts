@@ -1,5 +1,6 @@
 /** The node-local command surface owns both advertised commands and their capabilities. */
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -10,16 +11,14 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
-import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 
-export type NodeHostManifest = {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  pathEnv?: string;
-};
+export const preferMacAppExecHost =
+  process.platform === "darwin" &&
+  process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+
+export type NodeHostManifest = ReturnType<typeof buildNodeHostManifest>;
 
 export function buildNodeHostManifest(params: {
   pluginManifest: ReturnType<typeof listRegisteredNodeHostCapsAndCommands>;
@@ -29,9 +28,10 @@ export function buildNodeHostManifest(params: {
   desktopStreamingEnabled: boolean;
   ephemeral: boolean;
   pathEnv: string;
-}): NodeHostManifest {
+}) {
   const { pluginManifest, commandAllowlist } = params;
   const builtins: Array<[string, readonly string[]]> = [
+    [SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY, preferMacAppExecHost ? [] : ["system.run"]],
     [
       "system",
       [
@@ -86,16 +86,13 @@ export function buildNodeHostManifest(params: {
   };
 }
 
-export type NodeHostInventory = {
-  skills: unknown[] | null;
-  pluginTools: NodePluginToolDescriptor[];
-};
+export type NodeHostInventory = ReturnType<typeof createNodeHostInventory>;
 
 export function createNodeHostInventory(
   skills: unknown[] | null,
   pluginTools: readonly NodePluginToolDescriptor[],
   mcpDescriptors: readonly NodePluginToolDescriptor[] = [],
-): NodeHostInventory {
+) {
   const sortedPluginTools = [...pluginTools, ...mcpDescriptors].toSorted((left, right) => {
     return left.pluginId.localeCompare(right.pluginId) || left.name.localeCompare(right.name);
   });

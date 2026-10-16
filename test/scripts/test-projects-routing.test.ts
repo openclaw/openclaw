@@ -238,8 +238,18 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/translator.stop-reason.test.ts",
+      target: "src/utils.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes Gemini embedding auth to its host broker owner",
+      target: "extensions/google/embedding-provider.test.ts",
+      config: "test/vitest/vitest.extension-database-workers.config.ts",
+    },
+    {
+      title: "routes ACP event ledger consumers to their host broker owner",
+      target: "src/acp/translator.stop-reason.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes ACP session signals to their host broker owner",
@@ -254,6 +264,11 @@ describe("test-projects args", () => {
     {
       title: "routes raw-source SQLite cache probes to the process owner",
       target: "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
+    },
+    {
+      title: "routes native Windows argv proof to the process owner",
+      target: "src/daemon/schtasks-process.windows.test.ts",
       config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
@@ -347,13 +362,19 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-    for (const target of [
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
-    ]) {
+    for (const [target, config] of [
+      [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "test/vitest/vitest.auto-reply.config.ts",
+      ],
+      [
+        "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
+        "test/vitest/vitest.infra.config.ts",
+      ],
+    ] as const) {
       expect(buildVitestRunPlans([target])).toEqual([
         {
-          config: "test/vitest/vitest.auto-reply.config.ts",
+          config,
           forwardedArgs: [],
           includePatterns: [target],
           watchMode: false,
@@ -371,11 +392,7 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-output.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
-          "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-          "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
         watchMode: false,
       },
@@ -576,13 +593,17 @@ describe("test-projects args", () => {
     );
     expect(grep.status).toBe(0);
     using parser = createNativeTypeScriptParser();
-    const directImporterTests = grep.stdout
+    const candidates = grep.stdout
       .split("\n")
       .map((line) => line.trim())
-      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
-      .filter((file) => {
-        const source = fs.readFileSync(file, "utf8");
-        return collectModuleReferencesFromSource(parser.parseSourceFile(file, source), {
+      .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"));
+    const directImporterTests = parser
+      .parseSourceFiles(
+        candidates.map((fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") })),
+      )
+      .flatMap((sourceFile) => {
+        const file = path.relative(process.cwd(), sourceFile.fileName).replaceAll("\\", "/");
+        const references = collectModuleReferencesFromSource(sourceFile, {
           acceptSpecifier: (specifier) => {
             if (!specifier.startsWith(".")) {
               return false;
@@ -592,7 +613,8 @@ describe("test-projects args", () => {
             );
             return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
           },
-        }).some(({ kind }) => kind === "import" || kind === "export");
+        });
+        return references.some(({ kind }) => kind === "import" || kind === "export") ? [file] : [];
       });
     expect(directImporterTests.length).toBeGreaterThan(0);
     expect(directImporterTests.filter((file) => !expandedFiles.includes(file))).toEqual([]);

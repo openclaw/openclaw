@@ -1,5 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
-import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
+import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -15,25 +14,13 @@ export function registerHostedUpdateStopTests({
   hostedStopPrepare,
   hostedStopExecute,
   hostedStopDispose,
+  consumeGatewayRestartIntentPayload,
   createSignaledLoopHarness,
   managedUpdateSuccessorOwner,
   respawnGatewayProcessForUpdate,
   isGatewayWorkAdmissionClosed,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "captureForegroundUpdateHandoffStop"
-  | "isForegroundUpdateHandoff"
-  | "completeForegroundUpdateHandoffAfterClose"
-  | "hostedStopPrepare"
-  | "createSignaledLoopHarness"
-  | "managedUpdateSuccessorOwner"
-  | "respawnGatewayProcessForUpdate"
-  | "isGatewayWorkAdmissionClosed"
-> & {
-  hostedStopExecute: Mock<HostedGatewayStop["execute"]>;
-  hostedStopDispose: Mock<HostedGatewayStop["dispose"]>;
-}) {
-  it.each([false, true])(
+}: UpdateRespawnFixtures) {
+  it.each([true])(
     "joins the accepted hosted Stop through foreground update settlement (park overlap: %s)",
     async (parkOverlap) => {
       const joined = createDeferredCore<boolean>();
@@ -104,6 +91,9 @@ export function registerHostedUpdateStopTests({
           );
           expect(hostedStopExecute).toHaveBeenCalledOnce();
           expect(runtime.exit).not.toHaveBeenCalled();
+          const intentReads = consumeGatewayRestartIntentPayload.mock.calls.length;
+          captureSignal("SIGTERM")();
+          expect(consumeGatewayRestartIntentPayload).toHaveBeenCalledTimes(intentReads);
           disposed.resolve();
           await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);

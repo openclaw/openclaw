@@ -1,8 +1,24 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { getWorkboardLifecycle } from "./lifecycle.ts";
-import type { WorkboardCard, WorkboardHealthKey, WorkboardUiState } from "./types.ts";
+import type {
+  WorkboardCard,
+  WorkboardHealthKey,
+  WorkboardStatus,
+  WorkboardUiState,
+} from "./types.ts";
 
 const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function groupWorkboardCardsByStatus(
+  cards: readonly WorkboardCard[],
+  statuses: readonly WorkboardStatus[],
+) {
+  const groups = new Map<WorkboardStatus, WorkboardCard[]>(statuses.map((status) => [status, []]));
+  for (const card of cards) {
+    groups.get(card.status)?.push(card);
+  }
+  return groups;
+}
 
 function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
   return Boolean(
@@ -12,39 +28,16 @@ function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
   );
 }
 
-function countCardFailedAttempts(card: WorkboardCard): number {
-  if (card.metadata?.failureCount !== undefined) {
-    return card.metadata.failureCount;
-  }
-  return (
-    card.metadata?.attempts?.filter(
-      (attempt) =>
-        attempt.status === "failed" || attempt.status === "blocked" || attempt.status === "stopped",
-    ).length ?? 0
-  );
-}
-
 export function workboardCardMatchesHealthKey(
   card: WorkboardCard,
   key: WorkboardHealthKey,
   sessions: readonly GatewaySessionRow[],
 ): boolean {
   switch (key) {
-    case "running":
-      return card.status === key || getWorkboardLifecycle(card, sessions).state === key;
-    case "blocked":
-      return card.status === "blocked";
     case "stale":
       return Boolean(card.metadata?.stale || getWorkboardLifecycle(card, sessions).state === key);
-    case "readyUnassigned":
-      return card.status === "ready" && !card.agentId?.trim() && !card.metadata?.claim;
     case "missingProof":
       return card.status === "done" && !hasWorkboardProofEvidence(card);
-    case "failedAttempts":
-      return (
-        countCardFailedAttempts(card) > 0 ||
-        getWorkboardLifecycle(card, sessions).state === "failed"
-      );
   }
   return false;
 }

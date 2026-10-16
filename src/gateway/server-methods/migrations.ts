@@ -1,6 +1,5 @@
-// Gateway handlers expose reviewed, memory-only migration plans to trusted operators.
-import crypto from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -54,22 +53,6 @@ function memoryApplyInflightMap(dedupe: object): Map<string, InFlightMemoryApply
   return active;
 }
 
-function memoryApplyRequestFingerprint(params: {
-  agentId: string;
-  providerId: string;
-  planFingerprint: string;
-  itemIds: string[];
-  overwrite?: boolean;
-}): string {
-  return stableStringify({
-    agentId: params.agentId,
-    providerId: params.providerId,
-    planFingerprint: params.planFingerprint,
-    itemIds: params.itemIds,
-    overwrite: params.overwrite === true,
-  });
-}
-
 function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
   if (!value || typeof value !== "object") {
     return false;
@@ -106,20 +89,17 @@ function fingerprintMemoryPlan(params: {
   overwrite?: boolean;
   plan: MigrationPlan;
 }): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      stableStringify({
-        version: 3,
-        agentId: params.agentId,
-        workspace: params.workspace,
-        providerId: params.providerId,
-        overwrite: params.overwrite === true,
-        // Apply receives the full plan, so every provider-visible field must bind to the review.
-        plan: params.plan,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    stableStringify({
+      version: 3,
+      agentId: params.agentId,
+      workspace: params.workspace,
+      providerId: params.providerId,
+      overwrite: params.overwrite === true,
+      // Apply receives the full plan, so every provider-visible field must bind to the review.
+      plan: params.plan,
+    }),
+  );
 }
 
 function targetAgentOrRespond(
@@ -132,7 +112,7 @@ function targetAgentOrRespond(
     return undefined;
   }
   const agentId = normalizeAgentId(rawAgentId);
-  if (!new Set(listAgentIds(config)).has(agentId)) {
+  if (!listAgentIds(config).includes(agentId)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
     return undefined;
   }
@@ -151,12 +131,7 @@ async function planMemoryProvider(params: {
     ...(params.provider.description ? { description: params.provider.description } : {}),
   };
   try {
-    const { detection, plan } = await planProviderMemoryImport({
-      provider: params.provider,
-      config: params.config,
-      agentId: params.agentId,
-      overwrite: params.overwrite,
-    });
+    const { detection, plan } = await planProviderMemoryImport(params);
     if (detection && !detection.found) {
       return {
         ...base,
@@ -247,17 +222,21 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       if (!agentId) {
         return;
       }
-      const requestFingerprint = memoryApplyRequestFingerprint({
+      const requestFingerprint = stableStringify({
         agentId,
         providerId: params.providerId,
         planFingerprint: params.planFingerprint,
         itemIds: params.itemIds,
-        overwrite: params.overwrite,
+        overwrite: params.overwrite === true,
       });
       const dedupeKey = `${MEMORY_APPLY_DEDUPE_PREFIX}${params.idempotencyKey}`;
       const cached = context.dedupe.get(dedupeKey);
-      if (cached && isCachedMemoryApply(cached.payload)) {
-        if (cached.payload.requestFingerprint !== requestFingerprint) {
+      const previous =
+        cached && isCachedMemoryApply(cached.payload)
+          ? cached.payload
+          : memoryApplyInflightMap(context.dedupe).get(dedupeKey);
+      if (previous) {
+        if (previous.requestFingerprint !== requestFingerprint) {
           respond(
             false,
             undefined,
@@ -265,23 +244,11 @@ export const migrationsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        respondMemoryApply(cached.payload.outcome, respond, true);
+        const outcome = "outcome" in previous ? previous.outcome : await previous.completion;
+        respondMemoryApply(outcome, respond, true);
         return;
       }
       const inFlightMap = memoryApplyInflightMap(context.dedupe);
-      const inFlight = inFlightMap.get(dedupeKey);
-      if (inFlight) {
-        if (inFlight.requestFingerprint !== requestFingerprint) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "memory import idempotency key was reused"),
-          );
-          return;
-        }
-        respondMemoryApply(await inFlight.completion, respond, true);
-        return;
-      }
       const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
       inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import {
   asPositiveSafeInteger as pullRequestNumber,
@@ -20,6 +21,7 @@ import {
 } from "./session-catalog-tree-watch.js";
 
 export const MAX_STRING_LENGTH = 4096;
+const log = createSubsystemLogger("anthropic-session-catalog");
 const MAX_SESSION_PULL_REQUESTS = 20;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
@@ -231,10 +233,10 @@ export async function readDesktopOverlay(
     dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
-    setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
+    setBoundedCache(desktopOverlays, homeDir, entry, 8);
     return entry.overlay;
   }
-  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir));
+  const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir), 3);
   const current: DesktopOverlayCacheEntry = {
     watch,
     refreshedAt: Date.now(),
@@ -245,7 +247,7 @@ export async function readDesktopOverlay(
     const stat = await fs.stat(desktopSessionsDir(homeDir)).catch(() => undefined);
     if (!stat?.isDirectory()) {
       // An absent Desktop store is rechecked on the 60s overlay TTL, never on each CLI poll.
-      watch.close();
+      await watch.close();
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
@@ -253,6 +255,10 @@ export async function readDesktopOverlay(
   })().finally(() => {
     current.refreshing = false;
   });
-  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => evicted.watch?.close());
+  setBoundedCache(desktopOverlays, homeDir, current, 8, (evicted) => {
+    void evicted.watch?.close().catch((error: unknown) => {
+      log.warn(`Claude Desktop catalog watcher cleanup failed: ${String(error)}`);
+    });
+  });
   return current.overlay;
 }

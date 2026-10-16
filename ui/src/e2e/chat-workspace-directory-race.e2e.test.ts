@@ -99,7 +99,7 @@ suite.define(() => {
     const artifacts = createControlUiE2eArtifactDir("files-directory-selection");
     await suite.withPage({}, async ({ page }) => {
       const rootListing = {
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         root: "/workspace",
         files: [],
         browser: { path: "", entries: [{ kind: "directory", name: "reports", path: "reports" }] },
@@ -121,7 +121,7 @@ suite.define(() => {
           "artifacts.list": { artifacts: [] },
           "sessions.files.list": rootListing,
           "sessions.files.get": {
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             root: "/workspace",
             file: {
               name: "inventory.csv",

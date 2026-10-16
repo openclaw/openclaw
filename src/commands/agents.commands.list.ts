@@ -15,7 +15,7 @@ import {
   type AgentProvenance,
 } from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
-import { describeBinding } from "./agents.bindings.js";
+import { describeBinding } from "./agents.binding-format.js";
 import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
@@ -161,7 +161,7 @@ export async function agentsListCommand(
     for (const summary of summaries) {
       const bindings = bindingMap.get(summary.id) ?? [];
       if (bindings.length > 0) {
-        summary.bindingDetails = bindings.map((binding) => describeBinding(binding));
+        summary.bindingDetails = bindings.map(describeBinding);
       }
     }
   }

@@ -1,6 +1,8 @@
-import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 
 export type ResolvedTranscriptReadTarget = {
   agentId?: string;
@@ -13,12 +15,24 @@ export type ResolvedTranscriptReadTarget = {
 export async function resolveTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
 ): Promise<ResolvedTranscriptReadTarget> {
-  const storePath = resolveConcreteSessionStorePath(scope.storePath);
-  const target = storePath
-    ? resolveSessionTranscriptReadTargetCore({ ...scope, storePath })
-    : (
-        await import("../config/sessions/session-accessor.transcript-target.js")
-      ).resolveSessionTranscriptReadTarget(scope);
+  const memory = captureSessionActorTranscriptRead(scope);
+  const target =
+    memory?.target ??
+    (() => {
+      const prepared = prepareSessionTranscriptReadTargetCore(
+        scope,
+        resolveSessionStorePathForScope,
+      );
+      // This descriptor only needs canonical key spelling; the transcript reader owns validation.
+      return {
+        agentId: prepared.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: prepared.entryValidationScope
+          ? resolveSqliteSessionKey(prepared.entryValidationScope.sessionKey, prepared.agentId)
+          : prepared.sessionKey,
+        storePath: prepared.storePath,
+      };
+    })();
   return {
     agentId: target.agentId,
     sessionFile: target.sessionKey ?? target.sessionId,

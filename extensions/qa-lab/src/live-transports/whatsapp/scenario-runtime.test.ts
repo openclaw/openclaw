@@ -168,10 +168,6 @@ describe("WhatsApp negative scenario deadline", () => {
         },
         scenario: readQaScenarioById(scenarioId),
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: () => null,
-        formatErrorMessage: String,
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
         constants: {
           imageUnderstandingPngBase64: "",
           imageUnderstandingLargePngBase64: "",

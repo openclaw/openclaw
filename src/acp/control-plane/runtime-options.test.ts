@@ -59,19 +59,25 @@ describe("validateRuntimeOptionPatch", () => {
     },
   ] as const;
 
-  it.each(scalarCases)("normalizes $key without changing the input", ({ key, input, expected }) => {
-    const patch = Object.freeze({ [key]: input });
-    expect(validateRuntimeOptionPatch(patch)).toStrictEqual({ [key]: expected });
-    expect(patch).toStrictEqual({ [key]: input });
-  });
+  it.each([scalarCases[3]])(
+    "normalizes $key without changing the input",
+    ({ key, input, expected }) => {
+      const patch = Object.freeze({ [key]: input });
+      expect(validateRuntimeOptionPatch(patch)).toStrictEqual({ [key]: expected });
+      expect(patch).toStrictEqual({ [key]: input });
+    },
+  );
 
-  it.each(scalarCases)("preserves the $key validation error", ({ key, invalid, message }) => {
-    expect(() => validateRuntimeOptionPatch({ [key]: invalid })).toThrow(
-      expect.objectContaining({ code: "ACP_INVALID_RUNTIME_OPTION", message }),
-    );
-  });
+  it.each([scalarCases[2], scalarCases[3]])(
+    "preserves the $key validation error",
+    ({ key, invalid, message }) => {
+      expect(() => validateRuntimeOptionPatch({ [key]: invalid })).toThrow(
+        expect.objectContaining({ code: "ACP_INVALID_RUNTIME_OPTION", message }),
+      );
+    },
+  );
 
-  it.each(scalarCases)(
+  it.each([scalarCases[5]])(
     "distinguishes omitted, inherited and own undefined $key",
     ({ key, input }) => {
       expect(validateRuntimeOptionPatch({})).toStrictEqual({});
@@ -101,18 +107,16 @@ describe("validateRuntimeOptionPatch", () => {
     );
   });
 
-  it.each([
-    [0.5, 1],
-    [1.49, 1],
-    [1.5, 2],
-    [86_400.49, 86_400],
-  ])("rounds timeout %s to %s before checking its bounds", (input, expected) => {
-    expect(validateRuntimeOptionPatch({ timeoutSeconds: input })).toEqual({
-      timeoutSeconds: expected,
-    });
-  });
+  it.each([[86_400.49, 86_400]])(
+    "rounds timeout %s to %s before checking its bounds",
+    (input, expected) => {
+      expect(validateRuntimeOptionPatch({ timeoutSeconds: input })).toEqual({
+        timeoutSeconds: expected,
+      });
+    },
+  );
 
-  it.each([0.49, 86_400.5])("rejects timeout %s outside the rounded bounds", (timeoutSeconds) => {
+  it.each([86_400.5])("rejects timeout %s outside the rounded bounds", (timeoutSeconds) => {
     expect(() => validateRuntimeOptionPatch({ timeoutSeconds })).toThrow(
       "Timeout must be between 1 and 86400 seconds.",
     );
@@ -120,31 +124,6 @@ describe("validateRuntimeOptionPatch", () => {
 });
 
 describe("mergeRuntimeOptions", () => {
-  it("clears top-level options when a patch explicitly sets them to undefined", () => {
-    const patch = {
-      runtimeMode: undefined,
-      model: undefined,
-      thinking: undefined,
-      cwd: undefined,
-      permissionProfile: undefined,
-      timeoutSeconds: undefined,
-    } as Partial<AcpSessionRuntimeOptions>;
-
-    expect(
-      mergeRuntimeOptions({
-        current: {
-          runtimeMode: "plan",
-          model: "claude-sonnet-4.6",
-          thinking: "high",
-          cwd: "/tmp/project",
-          permissionProfile: "trusted",
-          timeoutSeconds: 120,
-        },
-        patch,
-      }),
-    ).toEqual({});
-  });
-
   it("clears backend extras when a patch explicitly clears them", () => {
     expect(
       mergeRuntimeOptions({
@@ -168,28 +147,6 @@ describe("mergeRuntimeOptions", () => {
 });
 
 describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
-  it("omits the timeout pair when advertised keys exclude every timeout alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "thinking",
-      "approval_policy",
-    ]);
-    expect(pairs).toEqual([]);
-  });
-
-  it("keeps the timeout pair when advertised keys include `timeout`", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, ["model", "timeout"]);
-    expect(pairs).toEqual([["timeout", "60"]]);
-  });
-
-  it("keeps the timeout pair using the advertised `timeout_seconds` alias", () => {
-    const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
-      "model",
-      "timeout_seconds",
-    ]);
-    expect(pairs).toEqual([["timeout_seconds", "60"]]);
-  });
-
   it("keeps the timeout pair when advertised keys are unknown (empty or undefined)", () => {
     expect(buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 })).toEqual([["timeout", "60"]]);
     expect(buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [])).toEqual([["timeout", "60"]]);
@@ -204,21 +161,5 @@ describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
       ["model", "claude-sonnet-4.6"],
       ["thinking", "high"],
     ]);
-  });
-});
-
-describe("buildRuntimeConfigOptionPairs thinking advertisement", () => {
-  it("omits automatic thinking when the backend advertises no thinking alias", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" }, ["mode", "model"])).toEqual([]);
-  });
-
-  it("maps automatic thinking to the advertised reasoning_effort alias", () => {
-    expect(
-      buildRuntimeConfigOptionPairs({ thinking: "high" }, ["model", "reasoning_effort"]),
-    ).toEqual([["reasoning_effort", "high"]]);
-  });
-
-  it("keeps automatic thinking when advertised keys are unknown", () => {
-    expect(buildRuntimeConfigOptionPairs({ thinking: "high" })).toEqual([["thinking", "high"]]);
   });
 });

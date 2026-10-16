@@ -17,15 +17,6 @@ function envHasAny(env: NodeJS.ProcessEnv, names: readonly string[] | undefined)
   return names?.some((name) => Boolean(env[name]?.trim())) ?? false;
 }
 
-function envHasChannelCandidate(
-  env: NodeJS.ProcessEnv,
-  channel: OfficialExternalPluginCatalogManifest["channel"],
-): boolean {
-  const allOf = channel?.configuredState?.env?.allOf ?? [];
-  const anyOf = channel?.configuredState?.env?.anyOf ?? [];
-  return envHasAny(env, [...(channel?.envVars ?? []), ...allOf, ...anyOf]);
-}
-
 export function hasOfficialExternalProviderTarget(params: {
   providerIds: Iterable<string>;
   env: NodeJS.ProcessEnv;
@@ -89,7 +80,11 @@ export function hasOfficialExternalChannelTarget(params: {
     const channelConfig = channels?.[channelId];
     return (
       (isRecord(channelConfig) && channelConfig.enabled !== false) ||
-      envHasChannelCandidate(params.env, channel)
+      envHasAny(params.env, [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ])
     );
   });
 }

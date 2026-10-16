@@ -1,6 +1,10 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { BoardStore } from "../../boards/board-store.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createBoardHandlers } from "./board.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -102,12 +106,14 @@ export function createBoardHarness(
     getMcpAppSandboxPort: () => 18790,
     getSessionEventSubscriberConnIds: () => [],
     getRuntimeConfig: () => ({
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       mcp: { apps: { enabled: true } },
       tools: { exec: { mode: "ask" } },
     }),
     ...contextOverrides,
   } as unknown as GatewayRequestContext;
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  onTestFinished(() => clearRuntimeConfigSnapshot());
   context.resolveGatewayContext ??= () => context;
   const invoke = async (method: string, params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();

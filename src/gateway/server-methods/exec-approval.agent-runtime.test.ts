@@ -6,8 +6,9 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -15,11 +16,13 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { sanitizeSystemRunParamsForForwarding } from "../node-invoke-system-run-approval.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -156,7 +159,7 @@ describe("exec approval signed agent runtime", () => {
           ],
           ["active", { activeOwnerEpoch: 3 }],
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId: source.sessionId,
             from: placement.state,
             to,
@@ -256,6 +259,7 @@ describe("exec approval signed agent runtime", () => {
         env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
       },
       async () => {
+        setRuntimeConfigSnapshot({});
         clearSubagentRunsReadCacheForTest();
         const child = "agent:main:subagent:incognito-approval-child";
         const parent = "agent:main:dashboard:incognito-approval-parent";
@@ -267,7 +271,7 @@ describe("exec approval signed agent runtime", () => {
           completion: { required: false },
           delivery: { status: "not_required" },
         });
-        subagentStore.saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: parent },
           {
@@ -278,7 +282,7 @@ describe("exec approval signed agent runtime", () => {
           },
         );
         const hostRegistryReads = trackSqliteStatementExecutions(
-          openOpenClawStateDatabase().db,
+          requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
           ["registryPayload"],
           (sql) =>
             /\bfrom\s+"?subagent_runs\b/iu.test(sql) && /\bpayload_json\b/iu.test(sql)
@@ -341,6 +345,83 @@ describe("exec approval signed agent runtime", () => {
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
         message: expect.stringContaining("no longer active"),
+      });
+    });
+  });
+
+  it("records an omitted node session before approved replay", async (testContext) => {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
+      if (!handler) {
+        throw new Error("exec approval request handler is missing");
+      }
+      const runtimeIdentity = identity(false);
+      const options = requestOptions(runtimeIdentity);
+      const command = ["/usr/bin/echo", "ok"];
+      const commandText = "/usr/bin/echo ok";
+      Object.assign(options.params, {
+        host: "node",
+        nodeId: "node-1",
+        command: commandText,
+        systemRunPlan: {
+          argv: command,
+          commandText,
+          cwd: "/tmp",
+          agentId: "main",
+          sessionKey: null,
+          policySnapshot: {
+            security: "allowlist",
+            ask: "always",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [],
+          },
+        },
+      });
+      const { pending } = await waitForApprovalRequested(
+        options.context,
+        "exec.approval.requested",
+        () => fixture.track(Promise.resolve(handler(options))),
+      );
+      const record = (await manager.listPendingRecords())[0];
+      if (!record) {
+        throw new Error("registered node approval is missing");
+      }
+      await manager.resolve(record.id, "allow-once");
+      await pending;
+
+      const result = await sanitizeSystemRunParamsForForwarding({
+        nodeId: "node-1",
+        rawParams: {
+          runId: record.id,
+          approved: true,
+          command,
+          rawCommand: commandText,
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+        },
+        client: options.client,
+        execApprovalManager: manager,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        params: {
+          cwd: "/tmp",
+          agentId: runtimeIdentity.agentId,
+          sessionKey: runtimeIdentity.sessionKey,
+          systemRunPlan: {
+            argv: command,
+            commandText,
+            cwd: "/tmp",
+            agentId: runtimeIdentity.agentId,
+            sessionKey: runtimeIdentity.sessionKey,
+          },
+        },
       });
     });
   });

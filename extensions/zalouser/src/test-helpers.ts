@@ -1,5 +1,5 @@
 // Zalouser helper module supports test helpers behavior.
-import type { RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 export function createZalouserRuntimeEnv(): RuntimeEnv {

@@ -1,4 +1,5 @@
 import {
+  normalizeSessionProjectionRunId,
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
@@ -13,17 +14,9 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import {
-  latestPersistedSteerBoundary,
-  latestStreamBoundaryRunId,
-  persistedSteerTargetRunId,
-  rolloverChatStream,
-} from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { maybeResetToolStreamRun } from "./stream-reconciliation.ts";
-import {
-  prunePersistedAssistantStreamSegments,
-  reconcilePersistedAssistantStream,
-} from "./stream-segment-pruning.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -71,6 +64,7 @@ export function applySessionMessagePayload(
   const event = asNonArrayRecord(payload);
   const sourceMessage = event.message;
   const sourceRecord = asNonArrayRecord(sourceMessage);
+  const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);
   const incoming = readSessionMessageIdentity(sourceMessage, event);
   if (!incoming) {
     return;
@@ -84,9 +78,11 @@ export function applySessionMessagePayload(
     source.activeRunId &&
     incoming.runId !== source.activeRunId,
   );
-  // Only the producer's explicit run ID admits an assistant before its run
-  // ends; clientRunId describes the session event, not transcript ownership.
-  const producerRunId = incoming.runId === event.runId ? incoming.runId : null;
+  // Interim tool-use rows retain producer ownership in transcript metadata;
+  // the outer run ID is only published for terminal assistant rows.
+  // Client correlation keys cannot establish ownership, nor override a conflict.
+  const explicitRunId = normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId);
+  const producerRunId = incoming.runId === explicitRunId ? incoming.runId : null;
   const assistantOwnerRunId =
     incoming.role === "assistant" &&
     incoming.id &&
@@ -130,7 +126,6 @@ export function applySessionMessagePayload(
   if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
     return;
   }
-  const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);
   const message = {
     ...sourceRecord,
     __openclaw: {
@@ -157,26 +152,16 @@ export function applySessionMessagePayload(
       state.chatStreamStartedAt = null;
       maybeResetToolStreamRun(state, assistantOwnerRunId);
     }
-    reconcilePersistedAssistantStream(state);
   }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;
-  const persistedSteerBoundary = steerTargetRunId
-    ? latestPersistedSteerBoundary(projection.messages, steerTargetRunId)
-    : null;
   if (
     incoming.role === "user" &&
     (runActive === true || (runActive === undefined && currentRunId === steerTargetRunId)) &&
     incoming.runId &&
     steerTargetRunId &&
-    (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&
-    persistedSteerBoundary?.runId === incoming.runId &&
-    latestStreamBoundaryRunId(state) !== incoming.runId
+    (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId)
   ) {
     state.chatRunId = steerTargetRunId;
-    rolloverChatStream(state, {
-      runId: steerTargetRunId,
-      boundaryRunId: incoming.runId,
-    });
   }
 }

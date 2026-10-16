@@ -1,4 +1,3 @@
-/** In-process execution of non-mutating Doctor lint health checks. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,11 +10,13 @@ import {
 } from "../config/config.js";
 import { maybeLoadDotEnvForConfig } from "../config/io.runtime-env.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { DoctorHealthCheckContext } from "../flows/doctor-health-contribution-types.js";
 import {
+  stateSchemaHealthCheck,
   exitCodeFromFindings,
   runDoctorLintChecks,
   selectUpdateReadinessChecks,
@@ -47,8 +48,12 @@ import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
-import { pluginSourceCaptureStateDir } from "../plugins/plugin-source-capture-context.js";
+import {
+  getPluginSourceCaptureStorage,
+  withPluginSourceCaptureStorage,
+} from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
   withArtifactPreservingStateReads,
@@ -58,6 +63,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import {
+  createDeferredInspectionExecution,
   createStateSnapshotFailureExecution,
   createStateSnapshotFailureFinding,
   detectDoctorLintOutputMode,
@@ -96,11 +102,11 @@ class DoctorLintStateSnapshotError extends Error {
   }
 }
 
-/** The rehearsal worker keeps its private state alive after publishing the check result. */
+/** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
 export async function runDoctorLintCliInProcess(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
-  reportBeforeDisposal = false,
+  worker?: { commandStartedAtMs?: number },
 ): Promise<number> {
   let reported: DoctorLintExecution | undefined;
   const report = (execution: DoctorLintExecution) => {
@@ -108,8 +114,15 @@ export async function runDoctorLintCliInProcess(
     reported = execution;
   };
   try {
-    const execution = await withArtifactPreservingStateReads(() =>
-      prepareDoctorLintExecution(runtime, opts, reportBeforeDisposal ? report : undefined),
+    const execution = await withArtifactPreservingStateReads(
+      () =>
+        prepareDoctorLintExecution(
+          runtime,
+          opts,
+          worker ? report : undefined,
+          worker?.commandStartedAtMs,
+        ),
+      { agentDatabases: true },
     );
     if (!reported) {
       report(execution);
@@ -132,8 +145,9 @@ export async function runDoctorLintCliInProcess(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await withArtifactPreservingStateReads(() =>
-    prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+  const execution = await withArtifactPreservingStateReads(
+    () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+    { agentDatabases: true },
   );
   return execution.findings;
 }
@@ -142,6 +156,7 @@ async function prepareDoctorLintExecution(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
   onChecksComplete?: (execution: DoctorLintExecution) => void,
+  commandStartedAtMs?: number,
 ): Promise<DoctorLintExecution> {
   const sevMin =
     opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
@@ -160,32 +175,18 @@ async function prepareDoctorLintExecution(
       pluginValidation: "core-only",
     }).readConfigFileSnapshot();
     if (snapshot.valid) {
-      const budget = await resolveDoctorUpdateBudget({ cfg: snapshot.config, env: sourceEnv });
+      const budget = await resolveDoctorUpdateBudget({
+        cfg: snapshot.config,
+        env: sourceEnv,
+        commandStartedAtMs,
+      });
       if (
         budget &&
         !admitDoctorUpdateInspection(budget, "agent", [
           { id: "core/doctor/lint-inspection", label: "Doctor lint inspection" },
         ])
       ) {
-        const warnings = [...budget.deferred.values()];
-        return {
-          checksRun: 0,
-          checksSkipped: 0,
-          exitCode: 0,
-          findings: warnings,
-          writeOutput() {
-            if (detectDoctorLintOutputMode(opts) === "json") {
-              writeJsonResult({ ok: true, checksRun: 0, checksSkipped: 0, findings: [], warnings });
-            } else {
-              for (const finding of warnings) {
-                runtime.log(
-                  `[warning] ${finding.checkId} [${finding.errorCode}]: ${finding.message}`,
-                );
-                runtime.log(finding.fixHint ?? "Run `openclaw doctor` after activation.");
-              }
-            }
-          },
-        };
+        return createDeferredInspectionExecution(runtime, opts, [...budget.deferred.values()]);
       }
     }
   }
@@ -387,6 +388,7 @@ async function executeDoctorLint(
     };
   }
 
+  await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.config }));
   const cfg = captureRuntimeConfig(snapshot.config);
   const sourceEnv = { ...stateView.sourceEnv };
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
@@ -436,14 +438,16 @@ async function executeDoctorLint(
     deferInspectionDisposal: stateView.deferInspectionDisposal,
   };
 
-  const checks = [
+  const checks: HealthCheck[] = [
+    stateSchemaHealthCheck,
     ...coreChecks.map((check) => withCoreLintContext(check, coreCtx, availabilityFindings)),
     ...extensionChecks,
   ];
   const runOpts: DoctorLintRunOptions = {
-    checks: opts.updateReadiness
-      ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
-      : checks,
+    checks:
+      opts.updateReadiness && opts.includeAllChecks !== true
+        ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
+        : checks,
     includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     skipIds: [...(opts.skipIds ?? []), ...(stateView.deferredCheckIds ?? [])],
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
@@ -495,8 +499,7 @@ async function executeDoctorLint(
     warnings,
     cleanupWarnings: stateView.cleanupWarnings,
     writeOutput() {
-      const mode = detectDoctorLintOutputMode(opts);
-      if (mode === "json") {
+      if (detectDoctorLintOutputMode(opts) === "json") {
         writeJsonResult({
           ok: exitCode === 0,
           checksRun: result.checksRun,
@@ -533,6 +536,10 @@ async function withReadOnlyPluginStateSnapshot<T>(
   cleanupWarnings?: HealthFinding[],
 ): Promise<T> {
   const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
+  const captureStorage = Object.freeze({
+    stateDir: getPluginSourceCaptureStorage()?.stateDir ?? resolveStateDir(sourceEnv),
+    placement: "temporary" as const,
+  });
   let cleanup: () => Promise<boolean>;
   let privateRoot: string;
   let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
@@ -556,6 +563,11 @@ async function withReadOnlyPluginStateSnapshot<T>(
     throw new DoctorLintStateSnapshotError(error);
   }
   const privateStateDir = path.join(privateRoot, "openclaw-state");
+  // Only this owned copy is mutable; source-bound checks keep the enclosing read scope.
+  const inspection = artifactPreservingReads.getStore();
+  if (inspection) {
+    inspection.privateRoots.add(privateStateDir);
+  }
   const privateDatabasePath = resolveOpenClawStateSqlitePath({
     ...sourceEnv,
     OPENCLAW_STATE_DIR: privateStateDir,
@@ -583,15 +595,13 @@ async function withReadOnlyPluginStateSnapshot<T>(
       // Runtime schema checks defer OAuth probes: external rotation cannot be snapshotted.
       outcome = {
         ok: true,
-        value: await withDisposableOpenClawStateReads(privateDatabasePath, () =>
-          withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
-            runStarted = true;
-            // Nested inspections keep cache-owned native bytes outside every disposable snapshot.
-            return await pluginSourceCaptureStateDir.run(
-              pluginSourceCaptureStateDir.getStore() ?? resolveStateDir(sourceEnv),
-              () => run(privateEnv),
-            );
-          }),
+        value: await withPluginSourceCaptureStorage(captureStorage, () =>
+          withDisposableOpenClawStateReads(privateDatabasePath, () =>
+            withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
+              runStarted = true;
+              return await run(privateEnv);
+            }),
+          ),
         ),
       };
     } catch (error) {

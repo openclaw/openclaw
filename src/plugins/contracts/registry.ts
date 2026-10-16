@@ -57,6 +57,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       providerIds: [...entry.providerIds],
       providerEnvVars: normalizeProviderEnvVars(entry.providerEnvVars),
       workerProviderIds: [...entry.workerProviderIds],
+      storageProviderIds: [...entry.storageProviderIds],
       embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
@@ -81,6 +82,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         (plugin.cliBackends.length > 0 ||
           plugin.providers.length > 0 ||
           (plugin.contracts?.workerProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.storageProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.embeddingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.speechProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
@@ -103,6 +105,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       providerIds: normalizeContractStringValues(plugin.providers),
       providerEnvVars: resolvePluginProviderEnvVars(plugin),
       workerProviderIds: normalizeContractStringValues(plugin.contracts?.workerProviders ?? []),
+      storageProviderIds: normalizeContractStringValues(plugin.contracts?.storageProviders ?? []),
       embeddingProviderIds: normalizeContractStringValues(
         plugin.contracts?.embeddingProviders ?? [],
       ),
@@ -188,39 +191,20 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
   loadEntries: (registry: BundledCapabilityRuntimeRegistry) => T[];
 }): T[] {
   const discovery = discoverOpenClawPlugins({});
-  let lastFailure: Error | undefined;
-
-  // Manifest IDs exist before registration; only observed runtime entries prove the load worked.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: [params.pluginId],
-      pluginSdkResolution: "dist",
-      discovery,
-    });
-    const entries = params.loadEntries(registry);
-    if (entries.length > 0) {
-      return entries;
-    }
-
-    lastFailure = formatBundledCapabilityPluginLoadError({
-      pluginId: params.pluginId,
-      capabilityLabel: params.capabilityLabel,
-      registry,
-    });
+  const registry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [params.pluginId],
+    pluginSdkResolution: "dist",
+    discovery,
+  });
+  const entries = params.loadEntries(registry);
+  if (entries.length > 0) {
+    return entries;
   }
-
-  throw (
-    lastFailure ??
-    new Error(
-      `bundled ${params.capabilityLabel} contract load failed for ${params.pluginId}: no entries`,
-    )
-  );
-}
-
-function loadProviderContractEntriesForPluginIds(
-  pluginIds: readonly string[],
-): ProviderContractEntry[] {
-  return pluginIds.flatMap((pluginId) => loadProviderContractEntriesForPluginId(pluginId));
+  throw formatBundledCapabilityPluginLoadError({
+    pluginId: params.pluginId,
+    capabilityLabel: params.capabilityLabel,
+    registry,
+  });
 }
 
 function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
@@ -233,7 +217,7 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
 
   try {
     providerContractLoadError = undefined;
-    const entries = loadScopedCapabilityRuntimeRegistryEntries({
+    return loadScopedCapabilityRuntimeRegistryEntries({
       pluginId,
       capabilityLabel: "provider",
       loadEntries: (registry) =>
@@ -243,11 +227,7 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
             pluginId: entry.pluginId,
             provider: entry.provider,
           })),
-    }).map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    }));
-    return entries;
+    });
   } catch (error) {
     providerContractLoadError = error instanceof Error ? error : new Error(String(error));
     return [];
@@ -365,15 +345,12 @@ export function resolveProviderContractProvidersForPluginIds(
   const allowed = new Set(pluginIds);
   return [
     ...new Map(
-      loadProviderContractEntriesForPluginIds([...allowed])
+      [...allowed]
+        .flatMap(loadProviderContractEntriesForPluginId)
         .filter((entry) => allowed.has(entry.pluginId))
         .map((entry) => [entry.provider.id, entry.provider]),
     ).values(),
   ];
 }
-function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
-  return resolveBundledManifestContracts();
-}
-
 export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  createLazyArrayView(loadPluginRegistrationContractRegistry);
+  createLazyArrayView(resolveBundledManifestContracts);

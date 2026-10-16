@@ -16,6 +16,29 @@ describe("Codex app-server websocket transport", () => {
   const httpServers: http.Server[] = [];
   const tempDirs: string[] = [];
 
+  function createTransport(url: string) {
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url,
+      headers: {},
+    });
+    transports.push(transport);
+    return transport;
+  }
+
+  async function websocketUrl(server: WebSocketServer) {
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+    return `ws://127.0.0.1:${address.port}`;
+  }
+
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -76,16 +99,10 @@ describe("Codex app-server websocket transport", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
+    const url = await websocketUrl(server);
     const client = await CodexAppServerClient.start({
       transport: "websocket",
-      url: `ws://127.0.0.1:${address.port}`,
+      url,
       authToken: "secret",
     });
     clients.push(client);
@@ -160,22 +177,9 @@ describe("Codex app-server websocket transport", () => {
       socket.once("ping", () => resolvePing?.());
       socket.once("message", () => resolveConnected?.());
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
+    const url = await websocketUrl(server);
 
-    const transport = createWebSocketTransport({
-      transport: "websocket",
-      command: "codex",
-      args: [],
-      url: `ws://127.0.0.1:${address.port}`,
-      headers: {},
-    });
-    transports.push(transport);
+    const transport = createTransport(url);
     transport.stdin.write("{}\n");
     await connected;
 
@@ -202,22 +206,9 @@ describe("Codex app-server websocket transport", () => {
       socket.once("ping", () => resolvePing?.());
       socket.once("message", () => resolveConnected?.());
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
+    const url = await websocketUrl(server);
 
-    const transport = createWebSocketTransport({
-      transport: "websocket",
-      command: "codex",
-      args: [],
-      url: `ws://127.0.0.1:${address.port}`,
-      headers: {},
-    });
-    transports.push(transport);
+    const transport = createTransport(url);
     const exited = new Promise<unknown>((resolve) => {
       transport.once("exit", (code) => resolve(code));
     });
@@ -237,7 +228,8 @@ describe("Codex app-server websocket transport", () => {
     expect(transport.killed).toBe(true);
   });
 
-  it.each([401, 403])("surfaces a rejected HTTP %i websocket upgrade", async (statusCode) => {
+  it("surfaces a rejected HTTP websocket upgrade", async () => {
+    const statusCode = 401;
     const httpServer = http.createServer((_request, response) => {
       response.writeHead(statusCode);
       response.end();
@@ -250,15 +242,8 @@ describe("Codex app-server websocket transport", () => {
     if (!address || typeof address === "string") {
       throw new Error("expected websocket test server port");
     }
-
-    const transport = createWebSocketTransport({
-      transport: "websocket",
-      command: "codex",
-      args: [],
-      url: `ws://127.0.0.1:${address.port}`,
-      headers: {},
-    });
-    transports.push(transport);
+    const url = `ws://127.0.0.1:${address.port}`;
+    const transport = createTransport(url);
     const connectionError = new Promise<unknown>((resolve) => {
       transport.once("error", (error) => resolve(error));
     });
@@ -284,21 +269,8 @@ describe("Codex app-server websocket transport", () => {
       socket.once("message", (data) => resolveMessage?.(rawDataToText(data)));
       resolveConnection?.();
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
-    const transport = createWebSocketTransport({
-      transport: "websocket",
-      command: "codex",
-      args: [],
-      url: `ws://127.0.0.1:${address.port}`,
-      headers: {},
-    });
-    transports.push(transport);
+    const url = await websocketUrl(server);
+    const transport = createTransport(url);
     await connected;
     const frame = Buffer.from('{"jsonrpc":"2.0","method":"😀"}\n');
     const emojiStart = frame.indexOf(Buffer.from("😀"));
@@ -318,21 +290,8 @@ describe("Codex app-server websocket transport", () => {
       socket.once("message", (data) => resolveMessage?.(rawDataToText(data)));
       socket.send("{}");
     });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
-    const transport = createWebSocketTransport({
-      transport: "websocket",
-      command: "codex",
-      args: [],
-      url: `ws://127.0.0.1:${address.port}`,
-      headers: {},
-    });
-    transports.push(transport);
+    const url = await websocketUrl(server);
+    const transport = createTransport(url);
     const clientReady = new Promise<void>((resolve) => {
       transport.stdout.once("data", () => resolve());
     });

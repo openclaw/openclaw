@@ -17,6 +17,7 @@ type Routing = Pick<
   | "isHeartbeat"
   | "verboseLevel"
   | "registeredAt"
+  | "eventState"
 >;
 
 type RoutingRecord = { owner: WeakRef<AgentRunContext>; routing: Routing };
@@ -58,6 +59,7 @@ export function recordAgentEventRouting(
     isHeartbeat: context.isHeartbeat,
     verboseLevel: context.verboseLevel,
     registeredAt: context.registeredAt,
+    eventState: context.eventState,
   };
   const routingByRun = (scope.routingByRun ??= new Map());
   const record = routingByRun.get(runId);

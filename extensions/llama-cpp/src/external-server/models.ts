@@ -7,9 +7,8 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
-import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
 type LlamaServerModelStatus =
   | "unloaded"
@@ -63,14 +62,6 @@ function normalizeStatus(value: unknown): LlamaServerModelStatus {
   }
 }
 
-function resolveContextWindow(props: LlamaServerPropsWire | undefined): number {
-  return (
-    asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
-    asPositiveSafeInteger(props?.n_ctx) ??
-    SELF_HOSTED_DEFAULT_CONTEXT_WINDOW
-  );
-}
-
 function resolveMaxTokens(props: LlamaServerPropsWire | undefined, contextWindow: number): number {
   const params = props?.default_generation_settings?.params;
   const advertised =
@@ -91,20 +82,21 @@ function resolveInput(
 
 function buildCompat(
   props: LlamaServerPropsWire | undefined,
+  useRuntimeDefaults: boolean,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
-  const supportsTools = asBoolean(caps?.supports_tool_calls) === true;
-  const supportsTypedContent = asBoolean(caps?.supports_typed_content) === true;
   return {
     supportsStore: false,
     supportsDeveloperRole: false,
-    supportsReasoningEffort: asBoolean(caps?.supports_reasoning_effort) === true,
+    supportsReasoningEffort: caps?.supports_reasoning_effort === true,
     supportsTemperature: true,
     supportsUsageInStreaming: true,
-    supportsTools,
+    ...(typeof caps?.supports_tool_calls === "boolean" || useRuntimeDefaults
+      ? { supportsTools: caps?.supports_tool_calls === true }
+      : {}),
     supportsStrictMode: false,
     supportsJsonSchemaResponseFormat: true,
-    requiresStringContent: !supportsTypedContent,
+    requiresStringContent: caps?.supports_typed_content !== true,
     maxTokensField: "max_tokens",
   };
 }
@@ -113,13 +105,18 @@ function buildCompat(
 export function mapLlamaServerModel(
   row: LlamaServerModelWire,
   props?: LlamaServerPropsWire,
+  useRuntimeDefaults = true,
 ): LlamaServerDiscoveredModel | null {
   const id = typeof row.id === "string" ? row.id.trim() : "";
   if (!id || (row.object !== undefined && row.object !== "model")) {
     return null;
   }
-  const contextWindow = resolveContextWindow(props);
-  const compat = buildCompat(props);
+  // Setup must not turn an unverified runtime fallback into an authored override.
+  const contextWindow =
+    asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
+    asPositiveSafeInteger(props?.n_ctx) ??
+    (useRuntimeDefaults ? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW : undefined);
+  const compat = buildCompat(props, useRuntimeDefaults);
   return {
     config: {
       id,
@@ -129,7 +126,7 @@ export function mapLlamaServerModel(
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
       contextTokens: contextWindow,
-      maxTokens: resolveMaxTokens(props, contextWindow),
+      maxTokens: resolveMaxTokens(props, contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW),
       compat,
     },
     status: normalizeStatus(row.status?.value),
@@ -141,18 +138,27 @@ export function buildLlamaServerProviderConfig(params: {
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  const models = Array.isArray(params.configured?.models) ? [...params.configured.models] : [];
-  const seen = new Set(models.map((model) => model.id));
-  for (const discovered of params.discoveredModels) {
-    if (seen.has(discovered.config.id)) {
-      continue;
-    }
-    seen.add(discovered.config.id);
-    models.push(discovered.config);
-  }
+  const baseUrl = resolveLlamaServerEndpoint(params.configured?.baseUrl).inferenceBaseUrl;
+  const discoveredById = new Map(params.discoveredModels.map(({ config }) => [config.id, config]));
+  const models = (params.configured?.models ?? []).map((configured) => {
+    const discovered = discoveredById.get(configured.id);
+    discoveredById.delete(configured.id);
+    const matchesRoute =
+      (!configured.api || configured.api === "openai-completions") &&
+      resolveLlamaServerEndpoint(configured.baseUrl?.trim() || baseUrl).inferenceBaseUrl ===
+        baseUrl;
+    return discovered && matchesRoute
+      ? Object.assign({}, discovered, configured, {
+          contextWindow: configured.contextWindow ?? discovered.contextWindow,
+          contextTokens: configured.contextTokens ?? discovered.contextTokens,
+          compat: { ...discovered.compat, ...configured.compat },
+        })
+      : configured;
+  });
+  models.push(...discoveredById.values());
   return normalizeLlamaServerProviderConfig({
     ...params.configured,
-    baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
+    baseUrl,
     models,
   });
 }

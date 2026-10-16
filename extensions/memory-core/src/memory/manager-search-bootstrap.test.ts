@@ -24,36 +24,8 @@ describe("memory search bootstrap", () => {
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
   } = fixture;
 
-  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
-    const manager = await getFtsSessionManager();
-    if (!manager) {
-      return;
-    }
-
-    await seedMemoryIndexSessionTranscript({
-      sessionId: "session-bootstrap",
-      messages: [
-        {
-          role: "assistant",
-          timestamp: "2026-04-07T15:25:04.113Z",
-          content: "The current Project Nebula codename is ORBIT-10.",
-        },
-      ],
-    });
-
-    const results = await manager.search("current Project Nebula codename ORBIT-10", {
-      minScore: 0,
-      maxResults: 3,
-    });
-
-    expect(results[0]?.source).toBe("sessions");
-    expect(results[0]?.snippet).toContain("ORBIT-10");
-  });
-
   it.each([
     { source: "memory", provider: "none" },
-    { source: "sessions", provider: "none" },
-    { source: "memory", provider: "openai" },
     { source: "sessions", provider: "openai" },
   ] as const)(
     "discovers new $source content with $provider after empty CLI searches without repeatedly repairing the index",
@@ -95,16 +67,24 @@ describe("memory search bootstrap", () => {
         }
         if (index === 1) {
           manager = await getFreshManager(cfg);
+          if (provider !== "none") {
+            expect(manager.status().vector?.index?.state).toBe("complete");
+          }
           await manager.sync({ reason: "cli" });
         }
         const discovered = await manager.search("alpha", { minScore: 0 });
         expect(discovered).toHaveLength(index + 1);
         expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
         if (index === 0) {
+          if (provider !== "none") {
+            expect(manager.status().vector?.index?.state).toBe("complete");
+          }
           expect(manager.status().custom?.automaticRebuildNotice).toMatchObject({
             sequence: initialRepairSequence,
           });
           await manager.close();
+        } else {
+          expect(manager.status().custom?.automaticRebuildNotice).toMatchObject({ sequence: 0 });
         }
       }
 
@@ -187,5 +167,30 @@ describe("memory search bootstrap", () => {
     await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
 
     expect(providerFixture.providerCalls).toHaveLength(0);
+  });
+  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
+    const manager = await getFtsSessionManager();
+    if (!manager) {
+      return;
+    }
+
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-bootstrap",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "The current Project Nebula codename is ORBIT-10.",
+        },
+      ],
+    });
+
+    const results = await manager.search("current Project Nebula codename ORBIT-10", {
+      minScore: 0,
+      maxResults: 3,
+    });
+
+    expect(results[0]?.source).toBe("sessions");
+    expect(results[0]?.snippet).toContain("ORBIT-10");
   });
 });

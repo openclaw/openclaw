@@ -60,6 +60,9 @@ it(
       expect(phases).toHaveLength(2);
       expect(phases[0]).toContain("startupz: started");
       expect(phases[1]).toContain("readyz: ready");
+      expect(
+        result.logTail.some((line) => line.startsWith("openclaw-update-canary-progress: ")),
+      ).toBe(true);
       expect(occupied.listening).toBe(true);
       expect(await fs.readdir(stateDir)).toEqual([]);
       const callIndex = spawned.mock.calls.findIndex(

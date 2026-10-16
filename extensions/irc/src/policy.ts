@@ -1,4 +1,3 @@
-// Irc plugin module implements policy behavior.
 import {
   resolveScopeKeyCaseInsensitive,
   resolveScopeRequireMention,

@@ -1,5 +1,7 @@
-// Nostr plugin module owns durable ingress identity and legacy-state migration.
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelIngressError,
+  type ChannelIngressQueue,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const NOSTR_INGRESS_PAYLOAD_VERSION = 1;
@@ -10,16 +12,10 @@ export type NostrIngressPayload = {
   rawEvent: string;
 };
 
-export class NostrIngressPermanentError extends Error {
-  constructor(
-    readonly reason: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "NostrIngressPermanentError";
-  }
-}
+export const NostrIngressPermanentError = createChannelIngressError<string>(
+  "NostrIngressPermanentError",
+  { withReason: true },
+);
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {

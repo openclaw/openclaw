@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { summarizeInStages } from "./compaction.js";
+import { summarizeCompactionHistory } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
@@ -72,15 +72,12 @@ describe("compaction retry backoff over real HTTP", () => {
       ];
       const originalHistory = Buffer.from(JSON.stringify(messages));
 
-      const summary = summarizeInStages({
+      const summary = summarizeCompactionHistory({
         messages,
         model,
         apiKey: "loopback-test-key", // pragma: allowlist secret
         signal: controller.signal,
         reserveTokens: 1_000,
-        maxChunkTokens: 50_000,
-        contextWindow: model.contextWindow,
-        parts: 1,
       });
 
       await expect(summary).rejects.toThrow(/abort/i);

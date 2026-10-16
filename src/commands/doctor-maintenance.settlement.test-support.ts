@@ -1,3 +1,5 @@
+import * as childProcess from "node:child_process";
+import { promisify as promisifyCaptured } from "node:util";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type {
@@ -29,6 +31,7 @@ const boundary = vi.hoisted(() => ({
   stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
+  config: vi.fn(async () => ({ config: {} })),
   revalidate: vi.fn<typeof revalidateManagedGatewayServiceAfterUpdate>(),
   repair: vi.fn(async () => ({})),
   restart: vi.fn(),
@@ -44,22 +47,33 @@ const boundary = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: boundary.native,
-  spawnSync: boundary.native,
-  fork: boundary.native,
-  exec: boundary.native,
-  execSync: boundary.native,
-  execFile: boundary.native,
-  execFileSync: boundary.native,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  const guarded = {
+    spawn: vi.fn(actual.spawn).mockImplementation(boundary.native),
+    spawnSync: vi.fn(actual.spawnSync).mockImplementation(boundary.native),
+    fork: vi.fn(actual.fork).mockImplementation(boundary.native),
+    exec: vi.fn(actual.exec).mockImplementation(boundary.native),
+    execSync: vi.fn(actual.execSync).mockImplementation(boundary.native),
+    execFile: vi.fn(actual.execFile).mockImplementation(boundary.native),
+    execFileSync: vi.fn(actual.execFileSync).mockImplementation(boundary.native),
+  };
+  Object.defineProperty(guarded.exec, promisify.custom, {
+    value: vi.fn(promisify(actual.exec)).mockImplementation(boundary.native),
+  });
+  Object.defineProperty(guarded.execFile, promisify.custom, {
+    value: vi.fn(promisify(actual.execFile)).mockImplementation(boundary.native),
+  });
+  return { ...actual, ...guarded, default: { ...actual, ...guarded } };
+});
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
 }));
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: async () => ({ config: {} }),
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: boundary.config,
 }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
@@ -95,6 +109,10 @@ vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
   readGatewayOwnerLease: boundary.owner,
 }));
+vi.mock("./doctor-maintenance-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-maintenance-inspection.js")>()),
+  readDoctorGatewayOwnerLease: boundary.owner,
+}));
 vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
   acquireGatewayLock: boundary.gatewayAcquire,
@@ -114,6 +132,10 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
         })),
     };
   },
+}));
+vi.mock("../state/openclaw-state-maintenance-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-maintenance-context.js")>()),
+  admitOpenClawMaintenanceLiveAuthorityReads: () => {},
 }));
 vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
@@ -170,17 +192,35 @@ vi.mock("../cli/daemon-cli/restart-health.js", async () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const root = "/synthetic/doctor-install";
+const nativeFunctions = [
+  childProcess.spawn,
+  childProcess.spawnSync,
+  childProcess.fork,
+  childProcess.exec,
+  childProcess.execSync,
+  childProcess.execFile,
+  childProcess.execFileSync,
+  promisifyCaptured(childProcess.exec),
+  promisifyCaptured(childProcess.execFile),
+];
 let stopped: PreManagedServiceStop;
 beforeEach(() => {
   vi.resetAllMocks();
+  for (const native of nativeFunctions) {
+    vi.mocked(native).mockImplementation(boundary.native);
+  }
   boundary.external.mockReturnValue(false);
+  boundary.config.mockResolvedValue({ config: {} });
   boundary.readLeases.mockReturnValue([]);
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
   boundary.scopeAssert = undefined;
   boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
   boundary.gatewayAcquire.mockImplementation(() => ({
     release: boundary.release,
-    assertCurrent: boundary.ownerAssert,
+    assertCurrent: (assertPolicy?: () => void) => {
+      boundary.ownerAssert();
+      assertPolicy?.();
+    },
     run<T>(operation: () => T): T {
       boundary.ownerAssert();
       return operation();
@@ -237,7 +277,7 @@ beforeEach(() => {
     loadState: { status: "loaded" },
     runtime: { status: "stopped" },
   });
-  boundary.health.mockResolvedValue({ healthy: true });
+  boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
   boundary.native.mockImplementation(() => {
     throw new Error("Doctor settlement controls cannot start or inspect native processes");
   });
@@ -246,6 +286,10 @@ afterEach(() => {
   try {
     expect(boundary.native).not.toHaveBeenCalled();
   } finally {
+    // Retained runtime owners can outlive this module; restore captured callables in place.
+    for (const native of nativeFunctions) {
+      vi.mocked(native).mockReset();
+    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   }

@@ -6,7 +6,8 @@ import { touchPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
-import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { attachGatewayConnection, type GatewayConnectionOptions } from "./connection.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
@@ -40,6 +41,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       socket.terminate();
       return;
     }
+    let batched = false;
+    Object.assign(socket, {
+      batchWrites() {
+        if (batched) {
+          return;
+        }
+        batched = true;
+        upgradeReq.socket.cork();
+        process.nextTick(() => {
+          batched = false;
+          upgradeReq.socket.uncork();
+        });
+      },
+    });
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =

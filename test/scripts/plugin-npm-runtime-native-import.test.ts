@@ -24,6 +24,7 @@ function fixture(format = "esm", declaration = "peerDependencies") {
     "tsconfig.json",
     JSON.stringify({ extends: path.resolve(import.meta.dirname, "../../tsconfig.json") }),
   );
+  writeFile(root, "tsconfig.native.json", "{}\n");
   writeFile(
     root,
     "package.json",
@@ -120,6 +121,9 @@ function nativeImport(root: string, entry: string, format: string) {
   return spawnSync(
     process.execPath,
     [
+      ...(process.versions.bun
+        ? ["--no-install", "--tsconfig-override", path.join(root, "tsconfig.native.json")]
+        : []),
       "--input-type=module",
       "-e",
       format === "cjs"

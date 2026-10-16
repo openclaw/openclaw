@@ -48,14 +48,9 @@ export function resetToolStream(host: ToolStreamState) {
 
 export function resetToolStreamRun(host: ToolStreamState, runId: string) {
   cancelToolStreamSync(host);
-  const removedIdentities = new Set<string>();
-  for (const identity of host.toolStreamOrder) {
-    const entry = host.toolStreamById.get(identity);
-    if (entry?.runId !== runId) {
-      continue;
-    }
-    removedIdentities.add(identity);
-  }
+  const removedIdentities = new Set(
+    host.toolStreamOrder.filter((identity) => host.toolStreamById.get(identity)?.runId === runId),
+  );
   for (const identity of removedIdentities) {
     host.toolStreamById.delete(identity);
   }

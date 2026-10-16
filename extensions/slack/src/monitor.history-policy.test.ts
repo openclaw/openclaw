@@ -8,7 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
   getSlackHandlerOrThrow,
@@ -40,6 +40,11 @@ beforeEach(async () => {
   await resetSlackTestState(defaultSlackTestConfig());
 });
 
+afterEach(async () => {
+  clearRuntimeConfigSnapshot();
+  await fs.rm(getMediaDir(), { recursive: true, force: true });
+});
+
 function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
   return {
     type: "message",
@@ -55,7 +60,6 @@ function captureReplyContexts<T extends Record<string, unknown>>() {
   const contexts: T[] = [];
   replyMock.mockImplementation(async (ctx: unknown) => {
     contexts.push(ctx as T);
-    return undefined;
   });
   return contexts;
 }
@@ -128,41 +132,29 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         RawBody?: string;
         InboundHistory?: Array<{ body: string; media?: Array<{ path?: string }> }>;
       }>();
-      try {
-        await runHistoryMessage(
-          makeSlackMessageEvent({
-            text: "<@bot-user> inspect prior bot discussion",
-            ts: "103",
-            channel_type: "channel",
-          }),
-        );
-        expect(captured).toHaveLength(1);
-        const visible = contextVisibility === "all" ? messages : messages.slice(2);
-        expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual(
-          visible.toReversed().map((message) => message.text),
-        );
-        expect(captured[0]?.InboundHistory?.map((entry) => entry.media?.length)).toEqual(
-          visible.map(() => 1),
-        );
-        expect(mediaFetchMock.mock.calls.map(([url]) => url)).toEqual(
-          visible.toReversed().flatMap((message) => message.files.map((file) => file.url_private)),
-        );
-        expect(captured[0]?.RawBody).toContain("inspect prior bot discussion");
-        expect(captured[0]?.Body).toContain("allowed bot user");
-        expect(captured[0]?.Body).toContain("allowed bot-only identity");
-        if (contextVisibility !== "all") {
-          expect(captured[0]?.Body).not.toContain("denied");
-        }
-      } finally {
-        for (const ctx of captured) {
-          for (const entry of ctx.InboundHistory ?? []) {
-            for (const media of entry.media ?? []) {
-              if (media.path) {
-                await fs.rm(media.path, { force: true });
-              }
-            }
-          }
-        }
+      await runHistoryMessage(
+        makeSlackMessageEvent({
+          text: "<@bot-user> inspect prior bot discussion",
+          ts: "103",
+          channel_type: "channel",
+        }),
+      );
+      expect(captured).toHaveLength(1);
+      const visible = contextVisibility === "all" ? messages : messages.slice(2);
+      expect(captured[0]?.InboundHistory?.map((entry) => entry.body)).toEqual(
+        visible.toReversed().map((message) => message.text),
+      );
+      expect(captured[0]?.InboundHistory?.map((entry) => entry.media?.length)).toEqual(
+        visible.map(() => 1),
+      );
+      expect(mediaFetchMock.mock.calls.map(([url]) => url)).toEqual(
+        visible.toReversed().flatMap((message) => message.files.map((file) => file.url_private)),
+      );
+      expect(captured[0]?.RawBody).toContain("inspect prior bot discussion");
+      expect(captured[0]?.Body).toContain("allowed bot user");
+      expect(captured[0]?.Body).toContain("allowed bot-only identity");
+      if (contextVisibility !== "all") {
+        expect(captured[0]?.Body).not.toContain("denied");
       }
     },
   );
@@ -188,24 +180,20 @@ describe("Slack native history sender policy through monitor dispatch", () => {
           ],
         };
       });
-      try {
-        await runHistoryMessage(
-          makeSlackMessageEvent({
-            text: "<@bot-user> inspect bot discussion",
-            ts: "103",
-            channel_type: "channel",
-            ...(scope === "thread" ? { thread_ts: "100" } : {}),
-          }),
-        ).catch((error: unknown) => {
-          expect(error).toBeInstanceOf(Error);
-        });
-        expect(read).toHaveBeenCalledOnce();
-        expect(mediaFetchMock).not.toHaveBeenCalled();
-        expect(replyMock).not.toHaveBeenCalled();
-        expect(sendMock).not.toHaveBeenCalled();
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
+      await runHistoryMessage(
+        makeSlackMessageEvent({
+          text: "<@bot-user> inspect bot discussion",
+          ts: "103",
+          channel_type: "channel",
+          ...(scope === "thread" ? { thread_ts: "100" } : {}),
+        }),
+      ).catch((error: unknown) => {
+        expect(error).toBeInstanceOf(Error);
+      });
+      expect(read).toHaveBeenCalledOnce();
+      expect(mediaFetchMock).not.toHaveBeenCalled();
+      expect(replyMock).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
     },
   );
 
@@ -283,13 +271,11 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         try {
           await run;
         } finally {
-          clearRuntimeConfigSnapshot();
           if (previousFiles === undefined) {
             Reflect.deleteProperty(client, "files");
           } else {
             Reflect.set(client, "files", previousFiles);
           }
-          await fs.rm(mediaDir, { recursive: true, force: true });
         }
       }
     },
@@ -375,8 +361,6 @@ describe("Slack native history sender policy through monitor dispatch", () => {
         await run;
       } finally {
         saveSpy.mockRestore();
-        clearRuntimeConfigSnapshot();
-        await fs.rm(mediaDir, { recursive: true, force: true });
       }
     }
   });

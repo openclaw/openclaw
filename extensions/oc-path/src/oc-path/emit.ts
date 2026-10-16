@@ -1,84 +1,70 @@
-/**
- * Emit an AST back to bytes.
- *
- * **Two modes**:
- *
- *   1. **Round-trip** — the AST hasn't been mutated since `parseMd`
- *      produced it. Returns `ast.raw` verbatim. Byte-identical.
- *
- *   2. **Mutation-aware** — the AST has been modified (frontmatter
- *      entry edited, item kv.value changed, block reordered). Returns
- *      a freshly-rendered representation. **Not** byte-identical to a
- *      hypothetical "perfect" rewrite — we render canonical forms
- *      (LF endings, single space after `:` in frontmatter, etc.).
- *      Callers needing byte-fidelity for partial edits should patch
- *      `raw` directly instead of mutating the AST.
- *
- * In both modes, every emitted leaf flows through `guardSentinel` so a
- * `__OPENCLAW_REDACTED__` literal anywhere in the output throws
- * `OcEmitSentinelError`. This is the substrate guard: callers can't
- * accidentally write a redacted view to disk through this emitter.
- *
- * @module @openclaw/oc-path/emit
- */
+import type { AstBlock, MdAst } from "./ast.js";
+import { sourceLineEnding } from "./source.js";
 
-import type { MdAst } from "./ast.js";
-import { emitWithMode, type EmitOptions } from "./emit-mode.js";
-import { formatFrontmatterValue } from "./frontmatter-format.js";
-import { guardSentinel } from "./sentinel.js";
-
-/**
- * Emit the AST. In render mode, throws `OcEmitSentinelError` if any
- * leaf string matches `REDACTED_SENTINEL`. In round-trip mode, echoes
- * `ast.raw` verbatim (does not scan unless caller opts in via
- * `acceptPreExistingSentinel: false`).
- */
-export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
-  return emitWithMode(ast, opts, (guardPath) => {
-    for (const fm of ast.frontmatter) {
-      guardSentinel(fm.value, `${guardPath}/[frontmatter]/${fm.key}`);
-    }
-    if (ast.preamble.length > 0) {
-      guardSentinel(ast.preamble, `${guardPath}/[preamble]`);
-    }
-    for (const block of ast.blocks) {
-      if (block.bodyText.length > 0) {
-        guardSentinel(block.bodyText, `${guardPath}/${block.slug}/[body]`);
-        for (const item of block.items) {
-          if (item.kv) {
-            guardSentinel(item.kv.value, `${guardPath}/${block.slug}/${item.slug}/${item.kv.key}`);
-          }
-        }
-      }
-    }
-    return rebuildMdRaw(ast).raw;
+export function replaceMdSource(
+  ast: MdAst,
+  start: number,
+  end: number,
+  replacement: string,
+  update: (shifted: MdAst) => MdAst,
+): MdAst {
+  const endLine = ast.raw.slice(0, end).split("\n").length;
+  const atLineStart =
+    end === 0 || ast.raw[end - 1] === "\n" || (end === 1 && ast.raw[0] === "\uFEFF");
+  const delta = replacement.split("\n").length - ast.raw.slice(start, end).split("\n").length;
+  const shift = (line: number) =>
+    line > endLine || (atLineStart && line === endLine) ? line + delta : line;
+  // Keep explicit multiline values as one addressed item; reparsing would turn
+  // literal Markdown inside a value into additional addressable nodes.
+  const edited = update({
+    ...ast,
+    raw: ast.raw.slice(0, start) + replacement + ast.raw.slice(end),
+    frontmatterEndLine:
+      ast.frontmatterEndLine === undefined ? undefined : shift(ast.frontmatterEndLine),
+    frontmatter: ast.frontmatter.map((entry) => ({ ...entry, line: shift(entry.line) })),
+    blocks: ast.blocks.map((block) => ({
+      ...block,
+      line: shift(block.line),
+      items: block.items.map((item) => ({ ...item, line: shift(item.line) })),
+    })),
   });
+  const lines = edited.raw.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const blocks: AstBlock[] = [];
+  for (const [index, block] of edited.blocks.entries()) {
+    const next = edited.blocks[index + 1];
+    const bodyText = lines.slice(block.line, next ? next.line - 1 : lines.length).join("\n");
+    blocks.push(bodyText === block.bodyText ? block : { ...block, bodyText });
+  }
+  return {
+    ...edited,
+    preamble: lines
+      .slice(
+        edited.frontmatterEndLine ?? 0,
+        edited.blocks[0] ? edited.blocks[0].line - 1 : lines.length,
+      )
+      .join("\n"),
+    blocks,
+  };
 }
 
-// Editing guards new values separately, preserving unrelated pre-existing sentinel text.
-export function rebuildMdRaw(ast: MdAst): MdAst {
-  const parts: string[] = [];
-  if (ast.frontmatter.length > 0) {
-    parts.push("---");
-    for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
-    }
-    parts.push("---");
-  }
-  if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(ast.preamble);
-  }
-  for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
-  }
-  return { ...ast, raw: parts.join("\n") };
+export function insertMdSource(
+  ast: MdAst,
+  offset: number,
+  text: string,
+  update: (shifted: MdAst, line: number) => MdAst,
+): MdAst {
+  const ending = sourceLineEnding(ast.raw);
+  const prefix =
+    offset > 0 && ast.raw[offset - 1] !== "\n" && !(offset === 1 && ast.raw[0] === "\uFEFF")
+      ? ending
+      : "";
+  const suffix = offset < ast.raw.length || ast.raw.endsWith("\n") ? ending : "";
+  const line = ast.raw.slice(0, offset).split("\n").length + (prefix ? 1 : 0);
+  return replaceMdSource(
+    ast,
+    offset,
+    offset,
+    prefix + text.replace(/\r?\n/g, ending) + suffix,
+    (shifted) => update(shifted, line),
+  );
 }

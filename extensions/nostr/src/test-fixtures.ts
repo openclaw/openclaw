@@ -36,7 +36,6 @@ export function createMockNostrBus(eventId?: string) {
   return {
     sendDm: vi.fn(async () => eventId),
     close: vi.fn(async () => {}),
-    getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
   };
@@ -48,7 +47,7 @@ export const TEST_HEX_PRIVATE_KEY =
 export const TEST_HEX_PUBLIC_KEY =
   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
-export const TEST_RELAY_URL = "wss://relay.example.com";
+const TEST_RELAY_URL = "wss://relay.example.com";
 export const TEST_SETUP_RELAY_URLS = ["wss://relay.damus.io", "wss://relay.primal.net"];
 export const TEST_RESOLVED_PRIVATE_KEY = "resolved-nostr-private-key";
 

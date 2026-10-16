@@ -18,6 +18,80 @@ vi.mock("node:fs", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+async function collectArchive(
+  source: string,
+  chunks: Buffer[],
+  callbacks: Partial<Pick<Parameters<typeof walkBackupTar>[0], "onEntry" | "onVanished">> = {},
+) {
+  for await (const chunk of walkBackupTar({
+    tar,
+    paths: [source],
+    skip: () => false,
+    filter: () => true,
+    onEntry: (_source, header) => {
+      header.path = "payload";
+    },
+    onVanished: () => {
+      throw new Error("unexpected missing entry");
+    },
+    onProgress: () => {},
+    ...callbacks,
+  })) {
+    chunks.push(chunk);
+  }
+}
+
+it("archives a source whose exact file ID exceeds Number precision", async () => {
+  const source = path.join(tempDirs.make("backup-exact-identity-"), "payload.txt");
+  const payload = "exact file identity";
+  await fs.writeFile(source, payload);
+  const ino = (1n << 63n) + 1n;
+  const lstat = fs.lstat;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const observed = await lstat(...args);
+    if (args[0] === source) {
+      Object.defineProperty(observed, "ino", {
+        value: typeof observed.ino === "bigint" ? ino : Number(ino),
+      });
+    }
+    return observed;
+  });
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === source) {
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async (options) => {
+        const observed = await stat(options);
+        Object.defineProperty(observed, "ino", {
+          value: typeof observed.ino === "bigint" ? ino : Number(ino),
+        });
+        return observed;
+      });
+    }
+    return handle;
+  });
+  const chunks: Buffer[] = [];
+  await collectArchive(source, chunks);
+  const entries: Array<{ path: string; body: string }> = [];
+  const parser = new tar.Parser({
+    onReadEntry(entry) {
+      const body: Buffer[] = [];
+      entry.on("data", (chunk: Buffer) => body.push(chunk));
+      entry.on("end", () =>
+        entries.push({ path: entry.path, body: Buffer.concat(body).toString() }),
+      );
+    },
+  });
+  const done = new Promise<void>((resolve, reject) => {
+    parser.on("end", resolve);
+    parser.on("error", reject);
+  });
+  parser.end(Buffer.concat(chunks));
+  await done;
+  expect(entries).toEqual([{ path: "payload", body: payload }]);
+});
+
 it.each([
   { encoding: "header", target: String.raw`C:\external\workspace` },
   { encoding: "PAX", target: "C:\\external\\" + "workspace".repeat(15) },
@@ -28,11 +102,7 @@ it.each([
   const manifestLinks: BackupSymbolicLink[] = [];
   const chunks: Buffer[] = [];
   try {
-    for await (const chunk of walkBackupTar({
-      tar,
-      paths: [source],
-      skip: () => false,
-      filter: () => true,
+    await collectArchive(source, chunks, {
       onEntry: (_source, header) => {
         header.path = "backup/payload/state/link";
         const { external, ...link } = recordArchiveSymbolicLink({
@@ -48,13 +118,7 @@ it.each([
           manifestLinks.push(link);
         }
       },
-      onVanished: () => {
-        throw new Error("unexpected missing entry");
-      },
-      onProgress: () => {},
-    })) {
-      chunks.push(chunk);
-    }
+    });
   } finally {
     platform.mockRestore();
   }
@@ -139,24 +203,7 @@ it
       });
     }
     const chunks: Buffer[] = [];
-    const archive = async () => {
-      for await (const chunk of walkBackupTar({
-        tar,
-        paths: [root],
-        skip: () => false,
-        filter: () => true,
-        onEntry: (_source, header) => {
-          header.path = "payload";
-        },
-        onVanished: () => {
-          throw new Error("unexpected missing entry");
-        },
-        onProgress: () => {},
-      })) {
-        chunks.push(chunk);
-      }
-    };
-    await expect(archive()).rejects.toThrow(
+    await expect(collectArchive(root, chunks)).rejects.toThrow(
       /Backup (directory changed|source became a symbolic link|source identity changed)/u,
     );
     expect(swapped).toBe(true);
@@ -178,23 +225,11 @@ it("refuses a required root removed during a descendant open", async () => {
     return await open(...args);
   });
   const onVanished = vi.fn();
-  let emittedBytes = 0;
-  const archive = async () => {
-    for await (const chunk of walkBackupTar({
-      tar,
-      paths: [root],
-      skip: () => false,
-      filter: () => true,
-      onEntry: (_source, header) => {
-        header.path = "payload";
-      },
-      onVanished,
-      onProgress: () => {},
-    })) {
-      emittedBytes += chunk.length;
-    }
-  };
-  await expect(archive()).rejects.toMatchObject({ code: "ENOENT", path: root });
+  const chunks: Buffer[] = [];
+  await expect(collectArchive(root, chunks, { onVanished })).rejects.toMatchObject({
+    code: "ENOENT",
+    path: root,
+  });
   expect(onVanished).toHaveBeenCalledWith(file);
-  expect(emittedBytes).toBeGreaterThan(0);
+  expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
 });

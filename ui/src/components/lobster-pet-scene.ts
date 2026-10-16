@@ -1,5 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
-
 export type LobsterSceneLane = { start: number; end: number; y: number };
 export type LobsterSceneTravel = {
   from: { x: number; y: number };
@@ -116,7 +114,7 @@ export function lobsterLanePoint(lane: LobsterSceneLane | null, pct: number) {
 
 // Geometry has one lifecycle owner. Observers never watch pet mutations, and
 // queued measurements cannot revive a detached host or reroll a visit.
-export class LobsterComposerGeometry implements ReactiveController {
+export class LobsterComposerGeometry {
   scene: LobsterComposerScene = { top: null, floor: null, passage: null };
   private resize: ResizeObserver | null = null;
   private mutation: MutationObserver | null = null;
@@ -125,11 +123,10 @@ export class LobsterComposerGeometry implements ReactiveController {
   private observed: Element[] = [];
 
   constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
+    private readonly host: HTMLElement,
     private readonly twins: () => boolean,
-  ) {
-    host.addController(this);
-  }
+    private readonly notify: () => void,
+  ) {}
 
   planWalk(anchor: "top" | "floor", spotPct: number, roll: number): LobsterSceneMove | null {
     const lane = this.scene[anchor];
@@ -184,7 +181,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     };
   }
 
-  hostConnected() {
+  connect() {
     this.active = true;
     if (typeof ResizeObserver !== "undefined") {
       // ResizeObserver runs after layout; keep collision lanes current for this paint.
@@ -196,9 +193,17 @@ export class LobsterComposerGeometry implements ReactiveController {
     const root = composer?.closest(".new-session-page__draft") ?? composer;
     if (root) {
       this.mutation = new MutationObserver((records) => {
+        // Popup teardown can report descendants after their ancestry is gone.
+        // The attached removal target still records real in-flow geometry changes.
         if (
           records.some(
-            (record) => record.target !== this.host && !this.host.contains(record.target),
+            (record) =>
+              record.target.isConnected &&
+              record.target !== this.host &&
+              !this.host.contains(record.target) &&
+              !(
+                record.target instanceof Element ? record.target : record.target.parentElement
+              )?.closest("[popover]"),
           )
         ) {
           this.scheduleMeasure();
@@ -214,7 +219,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.scheduleMeasure();
   }
 
-  hostDisconnected() {
+  dispose() {
     this.active = false;
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
@@ -251,9 +256,11 @@ export class LobsterComposerGeometry implements ReactiveController {
     }
     const footer = composer.querySelector(".agent-chat__composer-footer");
     const editor = composer.querySelector("textarea");
+    // These boxed groups already protect every footer control. Descendant
+    // buttons include entire hidden catalogs, not additional collision lanes.
     const controls = Array.from(
       footer?.querySelectorAll(
-        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, wa-button, [role=button]",
+        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions",
       ) ?? [],
     );
     const root = composer.closest(".new-session-page__draft");
@@ -312,7 +319,7 @@ export class LobsterComposerGeometry implements ReactiveController {
     this.host.toggleAttribute("data-scene-ready", next.top !== null);
     if (JSON.stringify(next) !== JSON.stringify(this.scene)) {
       this.scene = next;
-      this.host.requestUpdate();
+      this.notify();
     }
   }
 }

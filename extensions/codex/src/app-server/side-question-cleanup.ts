@@ -7,26 +7,55 @@ import {
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
 
-type SideThreadCleanup = {
-  threadId?: string;
-  turnId?: string;
-  interrupt: boolean;
-  terminateBackgroundTerminals: boolean;
-  timeoutMs: number;
-};
-
 export async function cleanupCodexSideQuestion(
   client: CodexAppServerClient,
-  params: SideThreadCleanup & {
+  params: {
+    threadId?: string;
+    turnId?: string;
+    interrupt: boolean;
+    terminateBackgroundTerminals: boolean;
+    timeoutMs: number;
     failure?: { error: unknown };
     afterThreadCleanup: ReadonlyArray<() => void | Promise<void>>;
   },
 ): Promise<void> {
+  const cleanupThread = async () => {
+    if (!params.threadId) {
+      return;
+    }
+    if (params.interrupt && params.turnId !== undefined) {
+      const confirmed = await interruptCodexTurnAndWaitBestEffort(client, {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        timeoutMs: params.timeoutMs,
+      });
+      if (!confirmed) {
+        await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
+        // An unconfirmed native turn must never lose its only visible subscription.
+        throw new Error(
+          "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
+        );
+      }
+    }
+    if (params.terminateBackgroundTerminals && params.turnId !== undefined) {
+      try {
+        await terminateCodexBackgroundTerminals(client, params.threadId);
+      } catch (error) {
+        await retireUnsafeCodexTurnClientBestEffort(client, "side background terminals");
+        throw error;
+      }
+    }
+    if (
+      !(await unsubscribeCodexThreadBestEffort(client, {
+        threadId: params.threadId,
+        timeoutMs: params.timeoutMs,
+      }))
+    ) {
+      await retireUnsafeCodexTurnClientBestEffort(client, "side thread unsubscribe");
+    }
+  };
   const errors: unknown[] = [];
-  for (const cleanup of [
-    () => cleanupCodexSideThread(client, params),
-    ...params.afterThreadCleanup,
-  ]) {
+  for (const cleanup of [cleanupThread, ...params.afterThreadCleanup]) {
     try {
       // Keep projector retirement and its fallback activation in the same turn.
       const pending = cleanup();
@@ -50,43 +79,4 @@ export async function cleanupCodexSideQuestion(
   throw new AggregateError(errors, errors.map(formatErrorMessage).join("; "), {
     cause: errors[0],
   });
-}
-
-async function cleanupCodexSideThread(
-  client: CodexAppServerClient,
-  params: SideThreadCleanup,
-): Promise<void> {
-  if (!params.threadId) {
-    return;
-  }
-  if (params.interrupt && params.turnId !== undefined) {
-    const confirmed = await interruptCodexTurnAndWaitBestEffort(client, {
-      threadId: params.threadId,
-      turnId: params.turnId,
-      timeoutMs: params.timeoutMs,
-    });
-    if (!confirmed) {
-      await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
-      // An unconfirmed native turn must never lose its only visible subscription.
-      throw new Error(
-        "Codex /btw cleanup could not confirm the side turn stopped; background terminals may still be running.",
-      );
-    }
-  }
-  if (params.terminateBackgroundTerminals && params.turnId !== undefined) {
-    try {
-      await terminateCodexBackgroundTerminals(client, params.threadId);
-    } catch (error) {
-      await retireUnsafeCodexTurnClientBestEffort(client, "side background terminals");
-      throw error;
-    }
-  }
-  if (
-    !(await unsubscribeCodexThreadBestEffort(client, {
-      threadId: params.threadId,
-      timeoutMs: params.timeoutMs,
-    }))
-  ) {
-    await retireUnsafeCodexTurnClientBestEffort(client, "side thread unsubscribe");
-  }
 }

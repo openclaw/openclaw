@@ -2,11 +2,11 @@
 
 export {
   createOpenAiCompatibleImageGenerationProvider,
-  type OpenAiCompatibleImageProviderOptions,
   type OpenAiCompatibleImageProviderRequestBody,
   type OpenAiCompatibleImageProviderRequestParams,
   type OpenAiCompatibleImageRequestMode,
 } from "../image-generation/openai-compatible-image-provider.js";
+export { inlineOpenAiCompatibleImageUrls } from "../image-generation/openai-compatible-image-urls.js";
 
 export {
   generatedImageAssetFromBase64,
@@ -26,16 +26,10 @@ export {
 
 export type {
   GeneratedImageAsset,
-  ImageGenerationBackground,
   ImageGenerationOpenAIBackground,
-  ImageGenerationOpenAIModeration,
-  ImageGenerationOpenAIOptions,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
-  ImageGenerationProviderOptions,
-  ImageGenerationQuality,
-  ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,
   ImageGenerationSourceImage,

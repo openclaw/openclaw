@@ -143,13 +143,26 @@ describe("runSystemAgentTui", () => {
     };
     Reflect.deleteProperty(options, "verifiedInference");
 
-    await expect(runSystemAgentTui(options, createRuntime())).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
+    await expect(runSystemAgentTui(options, createRuntime())).rejects.toMatchObject({
+      message: expect.stringContaining("openclaw onboard"),
+    });
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
     expect(runChannelsAdd).not.toHaveBeenCalled();
+  });
+
+  it("reports a changed verified route without recommending onboarding", async () => {
+    const verified = await createVerifiedTuiOptions();
+    const runTui = vi.fn();
+    vi.mocked(resolveSystemAgentVerifiedInferenceState).mockResolvedValueOnce(null);
+
+    await expect(runSystemAgentTui({ ...verified, runTui }, createRuntime())).rejects.toMatchObject(
+      {
+        message: expect.stringContaining("verified inference route changed"),
+      },
+    );
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs OpenClaw inside the shared TUI shell", async () => {
@@ -344,41 +357,6 @@ describe("runSystemAgentTui", () => {
                 thinkingLevel: "high",
               },
             ],
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-  });
-
-  it("uses the verified model's default thinking level", async () => {
-    const config = {
-      ...verifiedConfig,
-      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
-    } satisfies OpenClawConfig;
-    const verified = await createVerifiedTuiOptions(
-      {
-        loadOverview: async () => ({
-          ...overview,
-          defaultModel: "openai/gpt-5.6-sol@openai:setup-test",
-        }),
-      },
-      config,
-    );
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            listSessions: () => Promise<{
-              sessions: Array<{ model?: string; thinkingLevel?: string }>;
-            }>;
-          };
-
-          await expect(backend.listSessions()).resolves.toMatchObject({
-            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
           });
           return { exitReason: "exit" };
         },

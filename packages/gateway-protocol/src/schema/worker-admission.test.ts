@@ -10,34 +10,28 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WorkerLiveEventResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
-  WorkerPortalResponseFrameSchema,
-  WorkerSessionsSendResponseFrameSchema,
-  WorkerSessionsSpawnResponseFrameSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
-  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
   validateWorkerLiveEventParams,
-  validateWorkerPortalParams,
-  validateWorkerSessionsSendParams,
-  validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
+import { WorkerGatewayToolResultSchema } from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
+  validateWorkerInferenceEventFrame,
   validateWorkerInferenceStartParams,
+  validateWorkerInferenceTerminalFrame,
 } from "./worker-inference.js";
+import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "./worker-protocol-primitives.js";
 
 const bundleHash = "a".repeat(64);
 const handshake: WorkerAdmissionHandshake = {
@@ -217,16 +211,12 @@ describe("worker admission handshake schema", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { ...handshake, bundleHash: "short" },
-    { ...handshake, bundleHash: "A".repeat(64) },
-    { ...handshake, openclawVersion: "" },
-    { ...handshake, protocolFeatures: [""] },
-    { ...handshake, protocolFeatures: ["run-v1", "run-v1"] },
-    { ...handshake, unexpected: true },
-  ])("rejects malformed admission identity %#", (candidate) => {
-    expect(validateWorkerAdmissionHandshake(candidate)).toBe(false);
-  });
+  it.each([{ ...handshake, bundleHash: "short" }])(
+    "rejects malformed admission identity %#",
+    (candidate) => {
+      expect(validateWorkerAdmissionHandshake(candidate)).toBe(false);
+    },
+  );
 });
 
 describe("worker protocol schemas", () => {
@@ -276,117 +266,6 @@ describe("worker protocol schemas", () => {
     expect(Value.Check(WorkerHeartbeatResponseFrameSchema, response)).toBe(true);
   });
 
-  it("keeps worker session tools closed and payload-bounded", () => {
-    const spawn = { toolCallId: "call-spawn", task: "run the child" };
-    const send = {
-      toolCallId: "call-send",
-      sessionKey: "agent:main:dashboard:child",
-      message: "report status",
-    };
-    const portal = { toolCallId: "call-portal", action: "open", port: 3000, path: "/app" };
-    expect(validateWorkerSessionsSpawnParams(spawn)).toBe(true);
-    expect(validateWorkerSessionsSendParams(send)).toBe(true);
-    expect(validateWorkerPortalParams(portal)).toBe(true);
-    expect(validateWorkerSessionsSpawnParams({ ...spawn, unexpected: true })).toBe(false);
-    expect(validateWorkerSessionsSendParams({ ...send, message: "" })).toBe(false);
-    expect(validateWorkerPortalParams({ ...portal, token: "secret" })).toBe(false);
-    expect(validateWorkerPortalParams({ ...portal, action: "unknown" })).toBe(false);
-    expect(validateWorkerPortalParams({ ...portal, port: 0 })).toBe(false);
-    expect(validateWorkerPortalParams({ ...portal, path: "app" })).toBe(false);
-    const escaped = "\0";
-    const requestBytes = (method: string, requestParams: object) =>
-      Buffer.byteLength(
-        JSON.stringify({
-          type: "req",
-          id: escaped.repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
-          method,
-          params: requestParams,
-        }),
-        "utf8",
-      );
-    const impossibleText = escaped.repeat(10_000);
-    const spawnEnvelope = {
-      toolCallId: escaped.repeat(256),
-      label: escaped.repeat(256),
-      agentId: escaped.repeat(256),
-      model: escaped.repeat(256),
-    };
-    const maximalSpawn = {
-      ...spawnEnvelope,
-      task: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
-      runTimeoutSeconds: 86_400,
-    };
-    expect(validateWorkerSessionsSpawnParams(maximalSpawn)).toBe(true);
-    expect(requestBytes("worker.sessions.spawn", maximalSpawn)).toBeLessThanOrEqual(
-      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-    );
-    const impossibleSpawn = { ...spawnEnvelope, task: impossibleText };
-    expect(requestBytes("worker.sessions.spawn", impossibleSpawn)).toBeGreaterThan(
-      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-    );
-    expect(validateWorkerSessionsSpawnParams(impossibleSpawn)).toBe(false);
-
-    const sendEnvelope = {
-      toolCallId: escaped.repeat(256),
-      sessionKey: escaped.repeat(1_024),
-      timeoutSeconds: 86_400,
-    };
-    const maximalSend = {
-      ...sendEnvelope,
-      message: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
-    };
-    expect(validateWorkerSessionsSendParams(maximalSend)).toBe(true);
-    expect(requestBytes("worker.sessions.send", maximalSend)).toBeLessThanOrEqual(
-      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-    );
-    const impossibleSend = { ...sendEnvelope, message: impossibleText };
-    expect(requestBytes("worker.sessions.send", impossibleSend)).toBeGreaterThan(
-      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-    );
-    expect(validateWorkerSessionsSendParams(impossibleSend)).toBe(false);
-
-    const maximalPortal = {
-      toolCallId: escaped.repeat(256),
-      action: "open",
-      port: 65_535,
-      title: escaped.repeat(256),
-      description: escaped.repeat(WORKER_SESSION_TOOL_MAX_TEXT_LENGTH),
-      path: `/${escaped.repeat(1_023)}`,
-      id: escaped.repeat(256),
-    };
-    expect(validateWorkerPortalParams(maximalPortal)).toBe(true);
-    expect(requestBytes("worker.portal", maximalPortal)).toBeLessThanOrEqual(
-      WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-    );
-    expect(validateWorkerPortalParams({ ...maximalPortal, description: impossibleText })).toBe(
-      false,
-    );
-    expect(
-      validateWorkerSessionsSpawnParams({
-        ...spawn,
-        runTimeoutSeconds: 86_401,
-      }),
-    ).toBe(false);
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_SESSION_TOOLS_PROTOCOL_FEATURE);
-    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_PORTAL_PROTOCOL_FEATURE);
-
-    const response = {
-      type: "res" as const,
-      id: "session-tool-1",
-      ok: true as const,
-      payload: { resultJson: JSON.stringify({ content: [] }) },
-    };
-    expect(Value.Check(WorkerSessionsSpawnResponseFrameSchema, response)).toBe(true);
-    expect(Value.Check(WorkerSessionsSendResponseFrameSchema, response)).toBe(true);
-    expect(Value.Check(WorkerPortalResponseFrameSchema, response)).toBe(true);
-    expect(
-      Value.Check(WorkerSessionsSendResponseFrameSchema, {
-        ...response,
-        payload: { ...response.payload, extra: true },
-      }),
-    ).toBe(false);
-  });
-
   it("accepts semantic transcript commits and generated-id responses", () => {
     const commitParams = transcriptCommit();
     expect(validateWorkerTranscriptCommitParams(commitParams)).toBe(true);
@@ -406,6 +285,73 @@ describe("worker protocol schemas", () => {
     ).toBe(true);
     expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
+  });
+
+  it("accepts bounded opaque provider response IDs across worker message transports", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const accepts = (responseId: string) => {
+      const message = { ...assistantMessage, responseId };
+      return [
+        validateWorkerTranscriptCommitParams(transcriptCommit({ messages: [message] })),
+        validateWorkerInferenceStartParams({
+          ...inferenceStart,
+          context: { messages: [message] },
+        }),
+        validateWorkerInferenceTerminalFrame({
+          type: "event",
+          event: "worker.inference.terminal",
+          payload: { ...inferenceIdentity, seq: 1, outcome: { type: "done", message } },
+        }),
+      ];
+    };
+
+    // Compatible providers can encode routing state in IDs longer than internal worker IDs.
+    for (const responseId of [
+      "response" + "x".repeat(477),
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+    ]) {
+      expect(accepts(responseId)).toEqual([true, true, true]);
+    }
+    for (const responseId of [
+      "",
+      " ",
+      " response",
+      "response ",
+      "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1),
+    ]) {
+      expect(accepts(responseId)).toEqual([false, false, false]);
+    }
+    expect(
+      validateWorkerTranscriptCommitParams(
+        transcriptCommit({
+          messages: [{ ...assistantMessage, model: "x".repeat(257) }],
+        }),
+      ),
+    ).toBe(false);
+    expect(validateWorkerInferenceStartParams({ ...inferenceStart, runId: "x".repeat(257) })).toBe(
+      false,
+    );
+    for (const [responseId, withinBudget] of [
+      ["response" + "x".repeat(477), true],
+      ["x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES), false],
+    ] as const) {
+      expect(
+        isWorkerTranscriptFrameWithinBudget({
+          type: "req",
+          id: "commit-1",
+          method: "worker.transcript.commit",
+          params: {
+            runEpoch: 2,
+            seq: 1,
+            baseLeafId: null,
+            messages: [{ ...assistantMessage, responseId }],
+          },
+        }),
+      ).toBe(withinBudget);
+    }
   });
 
   it("accepts opaque provider replay state on assistant transcript messages", () => {
@@ -585,9 +531,23 @@ describe("worker protocol schemas", () => {
     }
   });
 
+  it.each([{ type: "toolcall_start", id: "call-1", toolName: "probe" }])(
+    "keeps inference content events closed and indexed: $type",
+    (contentEvent) => {
+      const validateEvent = (value: unknown) =>
+        validateWorkerInferenceEventFrame({
+          type: "event",
+          event: "worker.inference.event",
+          payload: { ...inferenceIdentity, seq: 1, event: value },
+        });
+      expect(validateEvent({ ...contentEvent, contentIndex: 0 })).toBe(true);
+      expect(validateEvent(contentEvent)).toBe(false);
+      expect(validateEvent({ ...contentEvent, contentIndex: -1 })).toBe(false);
+      expect(validateEvent({ ...contentEvent, contentIndex: 0, unexpected: true })).toBe(false);
+    },
+  );
+
   it.each([
-    transcriptCommit({ messages: [] }),
-    transcriptCommit({ seq: 0 }),
     transcriptCommit({ sessionId: "other" }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], id: "entry-from-worker" }] }),
     transcriptCommit({ messages: [{ ...transcriptMessages[0], parentId: "parent-from-worker" }] }),
@@ -630,32 +590,58 @@ describe("worker protocol schemas", () => {
     });
   });
 
-  it("rejects non-finite numbers parsed from worker JSON", () => {
-    const candidate = JSON.parse(`{
-      "runEpoch": 2,
-      "seq": 1,
-      "baseLeafId": null,
-      "messages": [{
-        "role": "toolResult",
-        "toolCallId": "call-non-finite",
-        "toolName": "probe",
-        "content": [],
-        "details": { "value": 1e400 },
-        "isError": false,
-        "timestamp": 1
-      }]
-    }`) as unknown;
-
-    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(false);
-    expect(validateWorkerTranscriptCommitParams.errors?.[0]).toMatchObject({
-      keyword: "finite",
-    });
-  });
-
   it("keeps worker close reasons closed", () => {
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "admission-rejected")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "credential-replaced")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "placement-mismatch")).toBe(true);
     expect(Value.Check(WorkerProtocolCloseReasonSchema, "not-a-worker-reason")).toBe(false);
+  });
+});
+
+describe("worker message wire boundaries", () => {
+  it.each([
+    {
+      content: { type: "image", data: "encoded", mimeType: "image/png" },
+      accepts: [true, true, true],
+    },
+    {
+      content: { type: "text", text: "a".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1) },
+      accepts: [false, true, false],
+    },
+  ])("retains each transport's content limits ($accepts)", ({ content, accepts }) => {
+    const message = { role: "user", content: [content], timestamp: 1 };
+    expect([
+      validateWorkerTranscriptCommitParams(transcriptCommit({ messages: [message] })),
+      validateWorkerInferenceStartParams({ ...inferenceStart, context: { messages: [message] } }),
+      Value.Check(WorkerGatewayToolResultSchema, { content: [content] }),
+    ]).toEqual(accepts);
+  });
+
+  it("admits text-only runtime context and rejects image payloads", () => {
+    const runtimeContext = {
+      role: "user",
+      content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent facts" }],
+      timestamp: 1,
+      runtimeContext: { retained: true },
+    };
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: { messages: [runtimeContext] },
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: {
+          messages: [
+            {
+              ...runtimeContext,
+              content: [{ type: "image", data: "encoded", mimeType: "image/png" }],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 });

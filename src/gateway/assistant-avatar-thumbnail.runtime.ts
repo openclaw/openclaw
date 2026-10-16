@@ -1,10 +1,8 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GatewayAvatarImageSource } from "./assistant-avatar-cache.js";
 import {
   createHttpImageRepresentation,
@@ -12,8 +10,8 @@ import {
 } from "./http-image-response.js";
 
 const AVATAR_THUMBNAIL_SIDE = 128;
-const thumbnailCache = new Map<string, HttpImageRepresentation>();
-const pendingThumbnails = new Map<string, Promise<HttpImageRepresentation>>();
+// The admitted source owns both pending and completed work until its revision is replaced.
+const thumbnails = new WeakMap<GatewayAvatarImageSource, Promise<HttpImageRepresentation>>();
 
 async function createAvatarThumbnail(
   source: GatewayAvatarImageSource,
@@ -63,23 +61,13 @@ async function createAvatarThumbnail(
 export async function readGatewayAvatarThumbnail(
   source: GatewayAvatarImageSource,
 ): Promise<HttpImageRepresentation> {
-  const { revision } = source;
-  const cached = thumbnailCache.get(revision);
-  if (cached) {
-    thumbnailCache.delete(revision);
-    thumbnailCache.set(revision, cached);
-    return cached;
+  let pending = thumbnails.get(source);
+  if (!pending) {
+    pending = createAvatarThumbnail(source).catch((error: unknown) => {
+      thumbnails.delete(source);
+      throw error;
+    });
+    thumbnails.set(source, pending);
   }
-  return getOrCreatePromise(
-    pendingThumbnails,
-    revision,
-    async () => {
-      const image = await createAvatarThumbnail(source);
-      thumbnailCache.set(revision, image);
-      // Pending jobs retain their own custody until settlement, independently of the LRU.
-      pruneMapToMaxSize(thumbnailCache, 4);
-      return image;
-    },
-    { evictOnSettled: true },
-  );
+  return pending;
 }

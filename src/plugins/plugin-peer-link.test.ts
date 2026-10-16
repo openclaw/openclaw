@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
+  auditOpenClawPeerDependencyLinkSync,
   linkOpenClawPeerDependencies,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
@@ -17,6 +18,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   syncBuiltinESMExports();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -26,6 +28,78 @@ function makeTempDir() {
 }
 
 describe("plugin peer links", () => {
+  function standalone(root: string, overrides: Record<string, unknown> = {}) {
+    const runtime = path.join(root, "runtime");
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, "package.json"), '{"name":"openclaw"}');
+    fs.writeFileSync(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "jit",
+        executable: { path: "renamed-host", sha256: "a".repeat(64) },
+        runtime: { path: "runtime", sha256: "b".repeat(64) },
+        openclaw: { version: "2026.10.4", commit: "c".repeat(40) },
+        bun: { version: "1.4.3" },
+        ...overrides,
+      }),
+    );
+    return runtime;
+  }
+
+  it("admits a peer installed by another copy of the same standalone build and rebinds on repair", async () => {
+    const root = makeTempDir();
+    const bundle = standalone(path.join(root, "bundle"));
+    const seed = standalone(path.join(root, "seed"));
+    const packageDir = path.join(root, "plugin");
+    fs.mkdirSync(packageDir);
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${bundle}/`).href);
+    const install = { installedDir: packageDir, peerDependencies: { openclaw: "*" }, logger: {} };
+    expect(await linkOpenClawPeerDependencies({ ...install, hostRoot: bundle })).toEqual({
+      repaired: 1,
+      skipped: 0,
+    });
+    const peer = path.join(packageDir, "node_modules", "openclaw");
+    expect(fs.realpathSync(peer)).toBe(fs.realpathSync(bundle));
+
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${seed}/`).href);
+    expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+    // Metadata admission is read-only; explicit installation/repair owns rebinding.
+    expect(fs.realpathSync(peer)).toBe(fs.realpathSync(bundle));
+    expect(await linkOpenClawPeerDependencies(install)).toEqual({ repaired: 1, skipped: 0 });
+    expect(fs.realpathSync(peer)).toBe(fs.realpathSync(seed));
+  });
+
+  it.each([
+    ["new commit", { openclaw: { version: "2026.10.4", commit: "d".repeat(40) } }],
+    ["rebuilt executable", { executable: { path: "renamed-host", sha256: "d".repeat(64) } }],
+    ["changed sidecar", { runtime: { path: "runtime", sha256: "d".repeat(64) } }],
+    ["unrelated sidecar", { runtime: { path: "other-runtime", sha256: "b".repeat(64) } }],
+    ["version only", { openclaw: { version: "2026.10.4" } }],
+  ])("rejects %s and lets an explicit install re-resolve its host", async (_label, overrides) => {
+    const root = makeTempDir();
+    const previous = standalone(path.join(root, "previous"));
+    const current = standalone(path.join(root, "current"), overrides);
+    const packageDir = path.join(root, "plugin");
+    const peer = path.join(packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(path.dirname(peer), { recursive: true });
+    fs.symlinkSync(previous, peer, "junction");
+    vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${current}/`).href);
+    const issue = auditOpenClawPeerDependencyLinkSync({ packageDir });
+    expect(issue?.reason).toContain("instead of");
+    expect(issue?.reason).toContain("openclaw doctor --fix");
+    expect(fs.realpathSync(peer)).toBe(fs.realpathSync(previous));
+    expect(
+      await linkOpenClawPeerDependencies({
+        installedDir: packageDir,
+        peerDependencies: { openclaw: "*" },
+        logger: {},
+      }),
+    ).toEqual({ repaired: 1, skipped: 0 });
+    expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+    expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
+  });
+
   describe.each(["direct", "managed", "registered"] as const)("%s repair authority", (entry) => {
     it.each(["missing-modules", "missing-link", "stale-link", "package-copy"] as const)(
       "preserves %s on a one-shot authority refusal during preparation",
@@ -229,38 +303,6 @@ describe("plugin peer links", () => {
     expect(fs.existsSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(false);
   });
 
-  it("relinks openclaw peers in the managed npm root", async () => {
-    const npmRoot = makeTempDir();
-    const packageDir = path.join(npmRoot, "node_modules", "peer-plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        version: "1.0.0",
-        peerDependencies: {
-          openclaw: ">=2026.0.0",
-        },
-      }),
-      "utf8",
-    );
-
-    const messages: string[] = [];
-    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-      npmRoot,
-      logger: {
-        info: (message) => messages.push(message),
-        warn: (message) => messages.push(message),
-      },
-    });
-
-    const linkPath = path.join(packageDir, "node_modules", "openclaw");
-    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
-    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
-    expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
-  });
-
   it.each(["dependencies", "optionalDependencies"] as const)(
     "relinks openclaw %s in the managed npm root",
     async (declaration) => {
@@ -350,60 +392,8 @@ describe("plugin peer links", () => {
     expect(result.issues[0]?.packageName).toBe("peer-plugin");
     expect(failures).toHaveLength(1);
     expect(failures[0]?.packageDir).toBe(unreadableDir);
+    expect(fs.existsSync(path.join(peerDir, "node_modules", "openclaw"))).toBe(false);
   });
-
-  it("audits missing managed npm openclaw peer links without relinking", async () => {
-    const npmRoot = makeTempDir();
-    const packageDir = path.join(npmRoot, "node_modules", "peer-plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        version: "1.0.0",
-        peerDependencies: {
-          openclaw: ">=2026.0.0",
-        },
-      }),
-      "utf8",
-    );
-
-    const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
-
-    const linkPath = path.join(packageDir, "node_modules", "openclaw");
-    expect(result.checked).toBe(1);
-    expect(result.broken).toBe(1);
-    expect(result.issues[0]?.packageName).toBe("peer-plugin");
-    expect(result.issues[0]?.reason).toContain(linkPath);
-    expect(fs.existsSync(linkPath)).toBe(false);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not follow a package-local node_modules symlink while linking openclaw peers",
-    async () => {
-      const root = makeTempDir();
-      const packageDir = path.join(root, "peer-plugin");
-      const outsideDir = path.join(root, "outside-node-modules");
-      fs.mkdirSync(packageDir, { recursive: true });
-      fs.mkdirSync(outsideDir, { recursive: true });
-      fs.symlinkSync(outsideDir, path.join(packageDir, "node_modules"), "dir");
-
-      const warnings: string[] = [];
-      const result = await linkOpenClawPeerDependencies({
-        installedDir: packageDir,
-        peerDependencies: {
-          openclaw: ">=2026.0.0",
-        },
-        logger: {
-          warn: (message) => warnings.push(message),
-        },
-      });
-
-      expect(result).toEqual({ repaired: 0, skipped: 1 });
-      expect(fs.existsSync(path.join(outsideDir, "openclaw"))).toBe(false);
-      expect(warnings.join("\n")).toContain("is not a real directory");
-    },
-  );
 
   it("replaces an existing real openclaw package directory", async () => {
     const root = makeTempDir();

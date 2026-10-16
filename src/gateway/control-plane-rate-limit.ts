@@ -45,7 +45,7 @@ export function consumeControlPlaneWriteBudget(params: {
 } {
   const nowMs = params.nowMs ?? Date.now();
   const key = `${params.method}|${resolveControlPlaneRateLimitKey(params.client)}`;
-  const bucket = controlPlaneBuckets.get(key);
+  let bucket = controlPlaneBuckets.get(key);
 
   if (!bucket || nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
     // Enforce hard cap before inserting a new key to bound memory usage
@@ -56,16 +56,11 @@ export function consumeControlPlaneWriteBudget(params: {
     ) {
       pruneMapToMaxSize(controlPlaneBuckets, CONTROL_PLANE_BUCKET_MAX_ENTRIES - 1);
     }
-    controlPlaneBuckets.set(key, {
-      count: 1,
+    bucket = {
+      count: 0,
       windowStartMs: nowMs,
-    });
-    return {
-      allowed: true,
-      retryAfterMs: 0,
-      remaining: CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS - 1,
-      key,
     };
+    controlPlaneBuckets.set(key, bucket);
   }
 
   if (bucket.count >= CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS) {

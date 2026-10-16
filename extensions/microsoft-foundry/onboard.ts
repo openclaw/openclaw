@@ -35,8 +35,6 @@ import {
 
 const FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-export { listSubscriptions } from "./cli.js";
-
 function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
   try {
     const accounts = JSON.parse(
@@ -56,42 +54,33 @@ function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] 
       if (!account.resourceGroup) {
         continue;
       }
-      if (account.kind === "OpenAI") {
-        const endpoint = extractFoundryEndpoint(account.endpoint);
-        if (!endpoint) {
-          continue;
-        }
-        resources.push({
-          id: account.id,
-          accountName: account.name,
-          kind: "OpenAI",
-          location: account.location,
-          resourceGroup: account.resourceGroup,
-          endpoint,
-          projects: [],
-        });
+      if (account.kind !== "OpenAI" && account.kind !== "AIServices") {
         continue;
       }
-      if (account.kind !== "AIServices") {
-        continue;
-      }
-      const customSubdomain = normalizeOptionalString(account.customSubdomain);
-      const endpoint = customSubdomain
-        ? `https://${customSubdomain}.services.ai.azure.com`
-        : undefined;
+      const customSubdomain =
+        account.kind === "AIServices"
+          ? normalizeOptionalString(account.customSubdomain)
+          : undefined;
+      const endpoint =
+        account.kind === "OpenAI"
+          ? extractFoundryEndpoint(account.endpoint)
+          : customSubdomain
+            ? `https://${customSubdomain}.services.ai.azure.com`
+            : undefined;
       if (!endpoint) {
         continue;
       }
       resources.push({
         id: account.id,
         accountName: account.name,
-        kind: "AIServices",
+        kind: account.kind,
         location: account.location,
         resourceGroup: account.resourceGroup,
         endpoint,
-        projects: Array.isArray(account.projects)
-          ? account.projects.filter((project): project is string => typeof project === "string")
-          : [],
+        projects:
+          account.kind === "AIServices" && Array.isArray(account.projects)
+            ? account.projects.filter((project): project is string => typeof project === "string")
+            : [],
       });
     }
     return resources;
@@ -330,7 +319,7 @@ async function promptFoundryClaudeModel(
   ).trim();
 }
 
-async function promptEndpointAndModelBase(
+export async function promptEndpointAndModelManually(
   ctx: ProviderAuthContext,
   options?: {
     endpointInitialValue?: string;
@@ -407,16 +396,10 @@ async function promptEndpointAndModelBase(
   };
 }
 
-export async function promptEndpointAndModelManually(
-  ctx: ProviderAuthContext,
-): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx);
-}
-
 export async function promptApiKeyEndpointAndModel(
   ctx: ProviderAuthContext,
 ): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx, {
+  return promptEndpointAndModelManually(ctx, {
     endpointInitialValue: process.env.AZURE_OPENAI_ENDPOINT,
     modelInitialValue: "gpt-4o",
     modelFamilyInitialValue: "other-chat",
@@ -446,25 +429,17 @@ function buildFoundryConnectionTest(params: {
       },
     };
   }
-  if (params.api === ANTHROPIC_MESSAGES_API) {
-    return {
-      url: `${baseUrl}/v1/messages`,
-      body: {
-        model: params.modelId,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-        ...(requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
-          ? { thinking: { type: "adaptive" } }
-          : {}),
-      },
-    };
-  }
+  const anthropic = params.api === ANTHROPIC_MESSAGES_API;
   return {
-    url: `${baseUrl}/chat/completions`,
+    url: `${baseUrl}/${anthropic ? "v1/messages" : "chat/completions"}`,
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "hi" }],
       max_tokens: 1,
+      ...(anthropic &&
+      requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
+        ? { thinking: { type: "adaptive" } }
+        : {}),
     },
   };
 }
@@ -591,12 +566,7 @@ export async function testFoundryConnection(params: {
       subscriptionId: params.subscriptionId,
       tenantId: params.tenantId,
     });
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: params.endpoint,
-      modelId: params.modelId,
-      modelNameHint: params.modelNameHint,
-      api: params.api,
-    });
+    const testRequest = buildFoundryConnectionTest(params);
     const { response: res, release } = await fetchWithSsrFGuard({
       url: testRequest.url,
       init: {
@@ -611,22 +581,15 @@ export async function testFoundryConnection(params: {
       timeoutMs: 15_000,
     });
     try {
-      if (res.status === 400) {
+      if (!res.ok) {
         const body = await readResponseTextLimited(
           res,
           FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
         ).catch(() => "");
         await params.ctx.prompter.note(
-          `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${truncateUtf16Safe(body, 200)}`,
-          "Connection Test",
-        );
-      } else if (!res.ok) {
-        const body = await readResponseTextLimited(
-          res,
-          FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
-        ).catch(() => "");
-        await params.ctx.prompter.note(
-          `Warning: test request returned ${res.status}. ${truncateUtf16Safe(body, 200)}\nProceeding anyway - you can fix the endpoint later.`,
+          res.status === 400
+            ? `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${truncateUtf16Safe(body, 200)}`
+            : `Warning: test request returned ${res.status}. ${truncateUtf16Safe(body, 200)}\nProceeding anyway - you can fix the endpoint later.`,
           "Connection Test",
         );
       } else {

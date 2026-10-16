@@ -6,11 +6,13 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   isCronDeliveryStatus,
   isCronRunStatus,
 } from "./run-history-detail.js";
+import { cronRunEntryMatchesLink } from "./run-link.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
@@ -20,6 +22,7 @@ type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
 export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -30,6 +33,8 @@ export type ReadCronRunHistoryPageOptions = {
   deliveryStatus?: CronDeliveryStatus;
   deliveryStatuses?: CronDeliveryStatus[];
   query?: string;
+  /** Matches computed while the worker holds each bounded batch of search details. */
+  queryMatchedTaskIds?: ReadonlySet<string>;
   sortDir?: CronRunHistorySortDir;
   jobNameById?: Record<string, string>;
   /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
@@ -77,6 +82,7 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   return [
     entry.summary ?? "",
     entry.error ?? "",
+    entry.deliveryError ?? "",
     entry.errorReason ?? "",
     entry.diagnostics?.summary ?? "",
     ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
@@ -88,16 +94,13 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   ].join(" ");
 }
 
-function compareHistoryRows(
-  left: { entry: CronRunLogEntry; record: CronRunRecord },
-  right: { entry: CronRunLogEntry; record: CronRunRecord },
-  direction: CronRunHistorySortDir,
-): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-  return (
-    multiplier * (left.entry.ts - right.entry.ts) ||
-    multiplier * (left.record.createdAt - right.record.createdAt) ||
-    multiplier * left.record.id.localeCompare(right.record.id)
+export function cronRunHistoryMatchesQuery(
+  entry: CronRunLogEntry,
+  query: string,
+  jobNameById?: Record<string, string>,
+): boolean {
+  return normalizeLowercaseStringOrEmpty(queryText(entry, jobNameById)).includes(
+    normalizeLowercaseStringOrEmpty(query),
   );
 }
 
@@ -114,6 +117,14 @@ export function projectCronRunHistoryPage(
   records: readonly CronRunRecord[],
   options: ReadCronRunHistoryPageOptions,
 ): CronRunHistoryPage {
+  return selectCronRunHistoryPage(records, options).page;
+}
+
+/** Select identities before loading page-sized response details. */
+export function selectCronRunHistoryPage(
+  records: readonly CronRunRecord[],
+  options: ReadCronRunHistoryPageOptions,
+): { page: CronRunHistoryPage; records: CronRunRecord[] } {
   const jobId = options.jobId ? normalizeCronRunJobId(options.jobId) : undefined;
   const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
@@ -126,19 +137,25 @@ export function projectCronRunHistoryPage(
   const runId = normalizeOptionalString(options.runId);
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
-  const sortDir: CronRunHistorySortDir = options.sortDir === "asc" ? "asc" : "desc";
-  const rows = records
+  const sortMultiplier = options.sortDir === "asc" ? -1 : 1;
+  let rows = records
     .filter(
       (record) =>
         (!jobId || record.jobId === jobId) && cronRunRecordStoreKey(record) === options.storeKey,
     )
     .filter((record) => !agentId || record.agentId === agentId)
     .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
-    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null)
-    .filter(({ entry }) => {
-      if (runId && entry.runId !== runId) {
-        return false;
-      }
+    .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null);
+  if (runId) {
+    const exact = rows.filter(({ entry }) => entry.runId === runId);
+    const aliases = exact.length
+      ? []
+      : rows.filter(({ entry }) => cronRunEntryMatchesLink(runId, entry));
+    // Public ids retain precedence; a reused session or start time cannot select another run.
+    rows = exact.length ? exact : aliases.length === 1 ? aliases : [];
+  }
+  rows = rows
+    .filter(({ record, entry }) => {
       if (statuses && (!entry.status || !statuses.includes(entry.status))) {
         return false;
       }
@@ -147,22 +164,38 @@ export function projectCronRunHistoryPage(
       }
       return (
         (!query ||
-          normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)) &&
+          (options.queryMatchedTaskIds
+            ? options.queryMatchedTaskIds.has(record.id)
+            : cronRunHistoryMatchesQuery(entry, query, options.jobNameById))) &&
         (!options.entryFilter || options.entryFilter(entry))
       );
     })
-    .toSorted((left, right) => compareHistoryRows(left, right, sortDir));
+    .toSorted(
+      (left, right) => sortMultiplier * compareCronRunRecordsNewestFirst(left.record, right.record),
+    );
   const total = rows.length;
   const boundedOffset = Math.min(total, offset);
-  const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);
+  const selected = rows.slice(boundedOffset, boundedOffset + limit);
+  const entries = selected.map(({ entry }) => entry);
   attachJobNames(entries, options.jobNameById);
+  if (options.view === "summary") {
+    // Search and visibility use the full record before pruning the response page.
+    for (const entry of entries) {
+      delete entry.diagnostics;
+      delete entry.delivery;
+      delete entry.failureNotificationDelivery;
+    }
+  }
   const nextOffset = boundedOffset + entries.length;
   return {
-    entries,
-    total,
-    offset: boundedOffset,
-    limit,
-    hasMore: nextOffset < total,
-    nextOffset: nextOffset < total ? nextOffset : null,
+    records: selected.map(({ record }) => record),
+    page: {
+      entries,
+      total,
+      offset: boundedOffset,
+      limit,
+      hasMore: nextOffset < total,
+      nextOffset: nextOffset < total ? nextOffset : null,
+    },
   };
 }

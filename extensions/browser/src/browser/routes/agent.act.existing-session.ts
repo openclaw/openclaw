@@ -50,11 +50,11 @@ async function readExistingSessionLocationHref(params: ChromeMcpTargetOperation)
     fn: "() => window.location.href",
   });
   if (typeof currentUrl !== "string") {
-    throw new Error("Location probe returned a non-string result");
+    throw new Error("Location check returned a non-string result");
   }
   const normalizedUrl = currentUrl.trim();
   if (!normalizedUrl) {
-    throw new Error("Location probe returned an empty URL");
+    throw new Error("Location check returned an empty URL");
   }
   return normalizedUrl;
 }

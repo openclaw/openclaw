@@ -1,6 +1,3 @@
-/**
- * Small shared normalization helpers for embedded-agent runner settings.
- */
 import {
   resolveProviderThinkingLevel,
   type ThinkLevel,
@@ -32,15 +29,9 @@ export function mapThinkingLevelForProvider(
 }
 
 export function mapThinkingLevel(providerLevel?: ProviderThinkLevel): ThinkingLevel {
-  if (!providerLevel) {
-    return "off";
-  }
   // Runtime streams do not expose a distinct adaptive level. Preserve the
   // provider-owned adaptive default by using Claude's documented high effort.
-  if (providerLevel === "adaptive") {
-    return "high";
-  }
-  return providerLevel;
+  return providerLevel === "adaptive" ? "high" : providerLevel || "off";
 }
 
 export type { ThinkLevel };

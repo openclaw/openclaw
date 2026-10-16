@@ -58,3 +58,49 @@ describe("fake Codex configuration preflight", () => {
     ]);
   });
 });
+
+it("allocates distinct auth fixture threads across clients and preserves resumed identity", () => {
+  const resumedThreadId = "0199be31-cb00-7000-8000-000000000001";
+  const startedThreadIds: string[] = [];
+  for (let client = 0; client < 2; client++) {
+    const result = spawnSync(
+      process.execPath,
+      ["test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_QA_CODEX_APP_SERVER_VERSION: "0.153.0",
+          OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG: path.join(
+            tempDirs.make("codex-fixture-threads-"),
+            "requests.jsonl",
+          ),
+        },
+        input:
+          [
+            { id: 1, method: "thread/start", params: {} },
+            { id: 2, method: "thread/start", params: {} },
+            { id: 3, method: "thread/resume", params: { threadId: resumedThreadId } },
+          ]
+            .map((request) => JSON.stringify(request))
+            .join("\n") + "\n",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const responses = result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(responses).toHaveLength(3);
+    expect(responses[2]).toMatchObject({
+      id: 3,
+      result: { thread: { id: resumedThreadId } },
+    });
+    for (const response of responses.slice(0, 2)) {
+      expect(response.result.thread.id).toEqual(expect.any(String));
+      expect(response.result.thread.id).not.toBe(resumedThreadId);
+      startedThreadIds.push(response.result.thread.id);
+    }
+  }
+  expect(new Set(startedThreadIds).size).toBe(4);
+});

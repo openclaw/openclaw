@@ -1,20 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { supportsCurrentWorkerLaunch } from "./admission.js";
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
+import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
   workerDisappearanceError,
   type WorkerActiveDispatchPlacement,
+  type WorkerDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
-import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orphan-cleanup.js";
+import {
+  cleanupPendingWorkspaceResultOrphans,
+  type PendingWorkspaceResultOrphanCleanup,
+} from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
@@ -24,6 +27,10 @@ import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { boundedWorkerError } from "./worker-error.js";
 
@@ -56,17 +63,24 @@ function activePlacementExecutionError(
   return undefined;
 }
 
-export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
+export function createPlacementRecoveryActions(
+  deps: PlacementRecoveryDeps,
+  initialPlacements: readonly WorkerDispatchPlacement[],
+) {
   const { environments, failure, placements } = deps;
   const interruptedClaims = new Set(
-    placements.list().flatMap((placement) => {
+    initialPlacements.flatMap((placement) => {
       const claim = projectWorkerSessionTurnClaim(placement);
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
   );
-  // Orphan Git refs carry no live authority. Scan them once in the tracked full
-  // post-start sweep, never on readiness or targeted turn recovery.
-  let orphanCleanupPending = false;
+  const isInterruptedTurn = (placement: WorkerDispatchPlacement) => {
+    const claim = projectWorkerSessionTurnClaim(placement);
+    return Boolean(claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim)));
+  };
+  // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
+  // Completed roots belong to this startup pass; settlement removes new refs itself.
+  let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
 
   const reconcileActivePlacement = async (
     initialPlacement: WorkerActiveDispatchPlacement,
@@ -78,7 +92,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     // Retire the old turn, not its machine. The node stop acknowledgement fences the
     // physical worker; the replacement turn receives a fresh claim on the same workspace.
     const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    const interrupted = isInterruptedTurn(placement);
     if ((mode === "restart" || interrupted) && placement.turnClaim) {
       if (
         claim &&
@@ -90,14 +104,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         try {
           await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
           await placements.closeWorkerTurnToolState(claim);
-          const current = placements.get(placement.sessionId);
+          const currentFacts = await placements.readProjection([placement.sessionId], {
+            current: true,
+          });
+          const current = currentFacts.placements.get(placement.sessionId);
           const currentEnvironment = environments.get(placement.environmentId);
           if (
             current?.state !== "active" ||
             current.generation !== placement.generation ||
             currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
             !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
-            placements.getPlacementMove(placement.sessionId)
+            currentFacts.moves.has(placement.sessionId)
           ) {
             throw new Error("Interrupted worker owner changed while stopping");
           }
@@ -138,6 +155,15 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         return;
       }
     }
+    if (
+      placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF &&
+      (!environment ||
+        workerDisappearanceError(environment) ||
+        isUnavailableEnvironment(environment))
+    ) {
+      // There is no Gateway copy to fall back to. Preserve the device binding indefinitely.
+      return;
+    }
     const disappearance = workerDisappearanceError(environment);
     if (disappearance || (environment && isUnavailableEnvironment(environment))) {
       await failure.reclaimActive(
@@ -175,7 +201,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ownerEpoch: environment.ownerEpoch,
         });
       }
-      placements.adoptActive({
+      await placements.adoptActive({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         environmentId: environment.environmentId,
@@ -195,9 +221,20 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     sessionId: string,
     mode: "startup" | "restart" | "runtime",
     environmentId?: string,
+    resultsOnly?: "results-only",
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     let facts = await placements.readProjection([sessionId], { current: true });
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    // Once recovery accepts a result, finish this session's durable settlement.
     const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
+    if (resultsOnly === "results-only") {
+      return;
+    }
     facts = await placements.readProjection([sessionId], { current: true });
     const blocked =
       stagedOwners.has(sessionId) ||
@@ -283,16 +320,28 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     mode?: "startup",
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     // Environment reconciliation can resume provisioning through session admission.
     // It must finish outside admission, before any recoverSession unit enters it.
     if (mode === "startup") {
       // Older Gateways can commit draining before claiming a result, or release
       // an unstaged failed claim. The draining placement still owes a final save.
       for (const { sessionId } of await placements.readRecoveryCandidates()) {
+        if (deps.isShuttingDown?.()) {
+          return;
+        }
         let abandonedEnvironmentId: string | undefined;
         // A busy session has a live lifecycle operation in this process that owns its final save.
         await admit([sessionId], async () => {
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const facts = await placements.readProjection([sessionId], { current: true });
+          if (deps.isShuttingDown?.()) {
+            return;
+          }
           const placement = facts.placements.get(sessionId);
           if (!placement || facts.moves.has(sessionId)) {
             return;
@@ -309,12 +358,15 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             environment.ownerEpoch === placement.activeOwnerEpoch
           ) {
             await deps.workspaceOperations.run(environment.environmentId, async () => {
+              if (deps.isShuttingDown?.()) {
+                return;
+              }
               await forceAbandonWorkerEnvironment({
                 ...deps,
                 environmentId: environment.environmentId,
               });
+              abandonedEnvironmentId = environment.environmentId;
             });
-            abandonedEnvironmentId = environment.environmentId;
             return;
           }
           if (
@@ -325,7 +377,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             return;
           }
           const claimId = `reclaim-${randomUUID()}`;
-          const claim = placements.claimReclaimWorkspaceResult(
+          const claim = await placements.claimReclaimWorkspaceResult(
             {
               sessionId: placement.sessionId,
               sessionKey: placement.sessionKey,
@@ -336,7 +388,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             },
             (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
           );
-          placements.handoffWorkspaceResultRecovery(claim);
+          await placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {
@@ -351,7 +403,13 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       const reconciled = await runTasksWithConcurrency({
         tasks: (await placements.readRecoveryCandidates()).flatMap(({ environmentId, state }) =>
           environmentId && state !== "failed" && state !== "local" && state !== "reclaimed"
-            ? [() => environments.reconcileEnvironment(environmentId)]
+            ? [
+                async () => {
+                  if (!deps.isShuttingDown?.()) {
+                    await environments.reconcileEnvironment(environmentId);
+                  }
+                },
+              ]
             : [],
         ),
         limit: 8,
@@ -365,13 +423,23 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = true;
+      orphanCleanupPending =
+        initialPlacements.length > 0
+          ? { placements: initialPlacements, rootsBySession: new Map(), completedRoots: new Set() }
+          : undefined;
     }
     for (const { sessionId } of candidates) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
     }
-    if (mode !== "startup" && orphanCleanupPending) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      mode !== "startup" &&
+      orphanCleanupPending &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
@@ -381,8 +449,14 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     environmentId?: string,
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,
   ): Promise<void> => {
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     await environments.reconcileOnce(environmentId);
     for (const candidate of await placements.readRecoveryCandidates()) {
+      if (deps.isShuttingDown?.()) {
+        return;
+      }
       if (
         environmentId !== undefined &&
         candidate.environmentId !== environmentId &&
@@ -390,14 +464,18 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       ) {
         continue;
       }
-      await admit([candidate.sessionId], () =>
-        recoverSession(candidate.sessionId, "runtime", environmentId),
+      await admit([candidate.sessionId], (mode) =>
+        recoverSession(candidate.sessionId, "runtime", environmentId, mode),
       );
     }
-    if (orphanCleanupPending && environmentId === undefined) {
-      orphanCleanupPending = !(await cleanupPendingWorkspaceResultOrphans(deps, admit));
+    if (
+      orphanCleanupPending &&
+      environmentId === undefined &&
+      (await cleanupPendingWorkspaceResultOrphans(deps, admit, orphanCleanupPending))
+    ) {
+      orphanCleanupPending = undefined;
     }
   };
 
-  return { reconcile, reconcileActive };
+  return { reconcile, reconcileActive, isInterruptedTurn };
 }

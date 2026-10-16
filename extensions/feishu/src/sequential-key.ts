@@ -9,14 +9,11 @@ export function getFeishuSequentialKey(params: {
   event: FeishuMessageEvent;
   preparedContent?: string;
   botOpenId?: string;
-  botName?: string;
 }): string {
-  const { accountId, event, botOpenId, botName, preparedContent } = params;
+  const { accountId, event, botOpenId, preparedContent } = params;
   const chatId = event.message.chat_id?.trim() || "unknown";
   const baseKey = `feishu:${accountId}:${chatId}`;
-  const text = (
-    preparedContent ?? parseFeishuMessageEvent(event, botOpenId, botName).content
-  ).trim();
+  const text = (preparedContent ?? parseFeishuMessageEvent(event, botOpenId).content).trim();
 
   if (isAbortRequestText(text)) {
     return `${baseKey}:control`;

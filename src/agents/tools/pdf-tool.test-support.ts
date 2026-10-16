@@ -6,7 +6,9 @@ import path from "node:path";
 import { type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+import * as authProfiles from "../auth-profiles.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
@@ -14,7 +16,6 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../sessions/model-registry-runtime.js";
-import { createEmptyPluginMetadataSnapshot } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 type StubPreparedRuntimeSnapshot = {
   agentDir: string;
@@ -135,6 +136,11 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
       agentDir,
       wrote: false,
+    });
+
+    vi.spyOn(authProfiles, "ensureAuthProfileStoreWithoutExternalProfilesAsync").mockResolvedValue({
+      version: 1,
+      profiles: {},
     });
 
     vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({

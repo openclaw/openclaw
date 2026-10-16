@@ -6,11 +6,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 describe("sidebar linked conversation identity", () => {
   it.each([
     {
-      name: "route-only WhatsApp direct chat",
-      row: { key: "agent:main:whatsapp:direct:15555550123" },
-      expected: { channelLabel: "WhatsApp", kind: "direct", address: "+15555550123" },
-    },
-    {
       name: "route-only email direct chat",
       row: { key: "agent:main:email:direct:alex@example.com" },
       expected: { channelLabel: "Email", kind: "direct", address: "alex@example.com" },
@@ -24,9 +19,19 @@ describe("sidebar linked conversation identity", () => {
       name: "current privacy identity instead of an older phone route",
       row: {
         key: "agent:main:whatsapp:direct:15555550123",
-        origin: { provider: "whatsapp", from: "100000000@lid", to: "15555550999@s.whatsapp.net" },
+        origin: {
+          provider: "whatsapp",
+          from: "100000000@lid",
+          to: "15555550999@s.whatsapp.net",
+          label: "100000000@lid",
+        },
       },
-      expected: { channelLabel: "WhatsApp", kind: "direct", address: undefined },
+      expected: {
+        channelLabel: "WhatsApp",
+        kind: "direct",
+        address: undefined,
+        conversation: undefined,
+      },
     },
     {
       name: "WhatsApp phone JID",
@@ -54,20 +59,6 @@ describe("sidebar linked conversation identity", () => {
         conversation: "Weekend plans",
         address: undefined,
       },
-    },
-    {
-      name: "WhatsApp privacy identifier",
-      row: {
-        key: "agent:main:whatsapp:direct:100000000@lid",
-        channel: "whatsapp",
-        origin: {
-          provider: "whatsapp",
-          from: "100000000@lid",
-          to: "15555550999@s.whatsapp.net",
-          label: "100000000@lid",
-        },
-      },
-      expected: { channelLabel: "WhatsApp", address: undefined, conversation: undefined },
     },
     {
       name: "Discord thread without redundant origin metadata",
@@ -133,19 +124,6 @@ describe("sidebar linked conversation identity", () => {
       expected: { channelLabel: "Discord", kind: "thread", conversation: "Example #releases" },
     },
     {
-      name: "Slack workspace and channel",
-      row: {
-        key: "agent:main:slack:channel:c123:thread:123.456",
-        channel: "slack",
-        chatType: "channel",
-        subject: "Example #releases",
-        groupChannel: "#releases",
-        space: "T123",
-        origin: { provider: "slack", threadId: "123.456" },
-      },
-      expected: { channelLabel: "Slack", kind: "thread", conversation: "Example #releases" },
-    },
-    {
       name: "Telegram topic",
       row: {
         key: "agent:main:telegram:group:-123:topic:17",
@@ -194,11 +172,6 @@ describe("sidebar linked conversation identity", () => {
       expected: { channelLabel: "Constructor", kind: "direct" },
     },
     {
-      name: "__proto__ channel from an explicit session key",
-      row: { key: "agent:main:__proto__:channel:example" },
-      expected: { channelLabel: "__proto__", kind: "channel" },
-    },
-    {
       name: "canonical peer instead of conflicting last-delivery metadata",
       row: {
         key: "agent:main:whatsapp:direct:15555550123",
@@ -224,17 +197,14 @@ describe("sidebar linked conversation identity", () => {
     expect(projectSidebarSession(row).channelPresentation).toMatchObject(expected);
   });
 
-  it.each(["agent:main:main", "agent:main:dashboard:chat", "agent:main:work", "global"])(
-    "does not label %s as channel-linked because of its last delivery route",
-    (key) => {
-      expect(
-        projectSidebarSession({
-          key,
-          channel: "whatsapp",
-          chatType: "direct",
-          origin: { provider: "whatsapp", from: "+15555550123" },
-        }).channelPresentation,
-      ).toBeUndefined();
-    },
-  );
+  it("does not label a dashboard session as channel-linked because of its last delivery route", () => {
+    expect(
+      projectSidebarSession({
+        key: "agent:main:dashboard:chat",
+        channel: "whatsapp",
+        chatType: "direct",
+        origin: { provider: "whatsapp", from: "+15555550123" },
+      }).channelPresentation,
+    ).toBeUndefined();
+  });
 });

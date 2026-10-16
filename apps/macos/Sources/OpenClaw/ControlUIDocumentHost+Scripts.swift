@@ -3,28 +3,45 @@ import OpenClawKit
 import WebKit
 
 extension ControlUIDocumentHost {
-    static func installNativeAuthScript(
+    func installNativeAuthScript() {
+        let controller = self.webView.configuration.userContentController
+        // WebKit only supports removing all scripts. Preserve other capabilities
+        // and replace this owner's exact projection, including after disconnect.
+        let scripts = controller.userScripts.filter { $0 !== self.nativeAuthScript }
+        controller.removeAllUserScripts()
+        for script in scripts {
+            controller.addUserScript(script)
+        }
+        self.nativeAuthScript = Self.installNativeAuthScript(
+            into: controller, url: self.currentURL, auth: self.auth)
+    }
+
+    private static func installNativeAuthScript(
         into userContentController: WKUserContentController,
         url: URL,
-        auth: DashboardWindowAuth)
+        auth: DashboardWindowAuth) -> WKUserScript?
     {
-        guard auth.hasCredential || auth.usesBrowserIdentity else { return }
-        let credentials: [String: Any?] = [
-            "gatewayUrl": auth.gatewayUrl,
-            "token": auth.token,
-            "password": auth.password,
-        ]
-        var payload = credentials.compactMapValues { $0 }
-        if auth.usesBrowserIdentity {
+        var payload: [String: Any]
+        switch auth {
+        case .unauthenticated:
+            return nil
+        case let .nativeDevice(gatewayURL, _, _, credentials):
+            payload = credentials ?? [:]
+            payload["gatewayUrl"] = gatewayURL
+            // Released UI must not prefer an earlier token over the accepted password.
+            if payload["password"] != nil { payload["token"] = NSNull() }
+            if credentials == nil {
+                payload["token"] = NSNull()
+                payload["password"] = NSNull()
+            }
+            // Released UI consumes shared fields; current UI uses the native signer.
+            payload["nativeConnectAuth"] = true
+        case let .browserIdentity(gatewayURL):
             // Explicit absence retires an earlier shared login at this browser origin.
-            payload["token"] = NSNull()
-            payload["password"] = NSNull()
+            payload = ["gatewayUrl": gatewayURL, "token": NSNull(), "password": NSNull()]
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return
-        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        let json = String(bytes: data, encoding: .utf8)!
         let script = """
         (() => {
           try {
@@ -35,11 +52,12 @@ extension ControlUIDocumentHost {
           } catch {}
         })();
         """
-        userContentController.addUserScript(
-            WKUserScript(
-                source: Self.scopedDashboardScript(script, url: url),
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true))
+        let userScript = WKUserScript(
+            source: Self.scopedDashboardScript(script, url: url),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true)
+        userContentController.addUserScript(userScript)
+        return userScript
     }
 
     /// The dashboard can visit its identity provider. Recheck in JavaScript,

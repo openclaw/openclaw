@@ -3,27 +3,21 @@ import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  buildOutboundMediaLoadOptions,
   extensionForMime,
   normalizePollDurationHours,
   normalizePollInput,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
-import {
-  createChannelMessage,
-  createUserDmChannel,
-  getChannel,
-  RequestClient,
-} from "./internal/discord.js";
-import { parseAndResolveRecipient, type DiscordRecipient } from "./recipient-resolution.js";
+import { createChannelMessage } from "./internal/api.messages.js";
+import { createUserDmChannel, getChannel, RequestClient } from "./internal/discord.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
 import {
@@ -36,6 +30,8 @@ import {
 } from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord } from "./send.permissions.js";
 import { DiscordSendError, type DiscordOutboundMediaOpts } from "./send.types.js";
+import type { DiscordTarget } from "./target-parsing.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -48,10 +44,14 @@ const DISCORD_UPLOAD_TOO_LARGE_STATUS = 413;
 const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
   "Attachment skipped: Discord rejected the file as too large.";
 
-function resolveRequiredDiscordSendPermissions(channelType?: number): string[] {
-  return isDiscordThreadChannelType(channelType)
+function resolveRequiredDiscordSendPermissions(channelType: number | undefined, hasMedia: boolean) {
+  const permissions = isDiscordThreadChannelType(channelType)
     ? ["ViewChannel", "SendMessagesInThreads"]
     : ["ViewChannel", "SendMessages"];
+  if (hasMedia) {
+    permissions.push("AttachFiles");
+  }
+  return permissions;
 }
 
 type DiscordRequest = DiscordRetryRunner;
@@ -117,6 +117,13 @@ function normalizeDiscordPollInput(input: PollInput): RESTAPIPoll {
   };
 }
 
+function readDiscordErrorNumber(value: unknown, finiteNumbers = false) {
+  if (typeof value === "number") {
+    return !finiteNumbers || Number.isFinite(value) ? value : undefined;
+  }
+  return typeof value === "string" && /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
 function getDiscordErrorCode(err: unknown) {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -127,13 +134,7 @@ function getDiscordErrorCode(err: unknown) {
       : "rawError" in err && err.rawError && typeof err.rawError === "object"
         ? (err.rawError as { code?: unknown }).code
         : undefined;
-  if (typeof candidate === "number") {
-    return candidate;
-  }
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
-  }
-  return undefined;
+  return readDiscordErrorNumber(candidate);
 }
 
 function getDiscordErrorStatus(err: unknown) {
@@ -146,13 +147,7 @@ function getDiscordErrorStatus(err: unknown) {
       : "statusCode" in err && err.statusCode !== undefined
         ? err.statusCode
         : undefined;
-  if (typeof candidate === "number" && Number.isFinite(candidate)) {
-    return candidate;
-  }
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
-  }
-  return undefined;
+  return readDiscordErrorNumber(candidate, true);
 }
 
 function isDiscordUploadTooLargeError(err: unknown) {
@@ -202,10 +197,7 @@ async function buildDiscordSendError(
     });
     probedChannelType = permissions.channelType;
     const current = new Set(permissions.permissions);
-    const required = resolveRequiredDiscordSendPermissions(probedChannelType);
-    if (ctx.hasMedia) {
-      required.push("AttachFiles");
-    }
+    const required = resolveRequiredDiscordSendPermissions(probedChannelType, ctx.hasMedia);
     missing = required.filter((permission) => !current.has(permission));
   } catch {
     /* ignore permission probe errors */
@@ -215,14 +207,12 @@ async function buildDiscordSendError(
   const apiDetails = [`code=${code}`, status != null ? `status=${status}` : undefined]
     .filter(Boolean)
     .join(" ");
-  const probedPermissions = resolveRequiredDiscordSendPermissions(probedChannelType);
-  if (ctx.hasMedia) {
-    probedPermissions.push("AttachFiles");
-  }
-  const probeSummary = probedPermissions.join("/");
+  const probeSummary = resolveRequiredDiscordSendPermissions(probedChannelType, ctx.hasMedia).join(
+    "/",
+  );
   const missingLabel = missing.length
     ? `discord missing permissions in channel ${ctx.channelId}: ${missing.join(", ")}`
-    : `discord missing permissions in channel ${ctx.channelId}; permission probe did not identify missing ${probeSummary}`;
+    : `discord missing permissions in channel ${ctx.channelId}; permission check did not identify missing ${probeSummary}`;
   return new DiscordSendError(
     `${missingLabel} (${apiDetails}). bot might be blocked by channel/thread overrides, archived thread state, reply target visibility, or app-role position`,
     {
@@ -237,16 +227,13 @@ async function buildDiscordSendError(
 
 async function resolveChannelId(
   rest: RequestClient,
-  recipient: DiscordRecipient,
+  recipient: Pick<DiscordTarget, "kind" | "id">,
   request: DiscordRequest,
 ): Promise<{ channelId: string; dm?: boolean }> {
   if (recipient.kind === "channel") {
     return { channelId: recipient.id };
   }
-  const dmChannel = (await request(
-    () => createUserDmChannel(rest, recipient.id),
-    "dm-channel",
-  )) as { id: string };
+  const dmChannel = await request(() => createUserDmChannel(rest, recipient.id), "dm-channel");
   if (!dmChannel?.id) {
     throw new Error("Failed to create Discord DM channel");
   }
@@ -258,9 +245,11 @@ async function resolveDiscordTargetChannelId(
   opts: DiscordClientOpts & { cfg: OpenClawConfig },
 ): Promise<{ channelId: string; dm?: boolean }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord target channel resolution");
-  const recipient = await parseAndResolveRecipient(raw, cfg, opts.accountId, {
-    defaultKind: "channel",
-  });
+  const recipient = await parseAndResolveDiscordTarget(
+    raw,
+    { cfg, accountId: opts.accountId },
+    { defaultKind: "channel" },
+  );
   const { rest, request } = createDiscordClient(opts);
   return await resolveChannelId(rest, recipient, request);
 }
@@ -269,11 +258,7 @@ export async function resolveDiscordChannel(
   rest: RequestClient,
   channelId: string,
 ): Promise<APIChannel | undefined> {
-  try {
-    return await getChannel(rest, channelId);
-  } catch {
-    return undefined;
-  }
+  return getChannel(rest, channelId).catch(() => undefined);
 }
 
 export function buildDiscordTextChunks(
@@ -370,11 +355,7 @@ async function sendDiscordChunks(
         async () => {
           await params.onPlatformSendDispatch?.();
           params.assertPlatformSendAuthorized?.();
-          return createChannelMessage<{ id: string; channel_id: string }>(
-            params.rest,
-            params.channelId,
-            { body },
-          );
+          return createChannelMessage(params.rest, params.channelId, { body });
         },
         files ? "media" : "text",
         { safety: "nonce-protected-create" },
@@ -399,10 +380,6 @@ async function sendDiscordChunks(
   return { ...primary, platformMessageIds };
 }
 
-async function sendDiscordText(params: DiscordTextSendParams) {
-  return sendDiscordChunks(params);
-}
-
 type DiscordMediaSendParams = DiscordTextSendParams &
   DiscordOutboundMediaOpts & {
     mediaUrl: string;
@@ -411,15 +388,12 @@ type DiscordMediaSendParams = DiscordTextSendParams &
   };
 
 async function sendDiscordMedia(params: DiscordMediaSendParams) {
-  const media = await loadWebMedia(
-    params.mediaUrl,
-    buildOutboundMediaLoadOptions({
-      maxBytes: params.maxBytes,
-      mediaAccess: params.mediaAccess,
-      mediaLocalRoots: params.mediaLocalRoots,
-      mediaReadFile: params.mediaReadFile,
-    }),
-  );
+  const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
+    maxBytes: params.maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  });
   const resolvedFileName =
     params.filename?.trim() ||
     media.fileName ||
@@ -432,7 +406,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
         throw error;
       }
       // The multipart request is all-or-nothing. Attachment-coupled presentation must not accompany text fallback.
-      return sendDiscordText({
+      return sendDiscordChunks({
         ...params,
         text: buildDiscordUploadTooLargeFallbackText(params.text),
         components: undefined,
@@ -461,5 +435,5 @@ export {
   resolveDiscordTargetChannelId,
   resolveDiscordRest,
   sendDiscordMedia,
-  sendDiscordText,
+  sendDiscordChunks as sendDiscordText,
 };

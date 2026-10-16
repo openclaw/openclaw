@@ -3,11 +3,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const KEY = "agent:main:upgrade-restored-index";
 const SESSION = "upgrade-restored-index-history";
@@ -87,10 +87,7 @@ function doctor(mode, fixture, name) {
 }
 
 function sessionState(fixture, stateDir = fixture.stateDir) {
-  const database = new DatabaseSync(path.join(stateDir, fixture.databaseRelative), {
-    readOnly: true,
-  });
-  try {
+  return readDatabase(path.join(stateDir, fixture.databaseRelative), (database) => {
     database.exec("BEGIN");
     const row = database
       .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
@@ -111,9 +108,7 @@ function sessionState(fixture, stateDir = fixture.stateDir) {
       lastActivityAt: entry.lastActivityAt ?? null,
       events,
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function assertCurrent(fixture, observed) {

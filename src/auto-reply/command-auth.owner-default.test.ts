@@ -13,7 +13,7 @@ installDiscordRegistryHooks();
 describe("senderIsOwner only reflects explicit owner authorization", () => {
   it.each([{ allowFrom: ["*"] }, { allowFrom: ["456"] }])(
     "suppresses command access without revoking owner identity for allowFrom $allowFrom",
-    ({ allowFrom }) => {
+    async ({ allowFrom }) => {
       const cfg = { commands: { ownerAllowFrom: ["456"], allowFrom: { "*": allowFrom } } };
       const ctx = {
         Provider: "discord",
@@ -28,10 +28,10 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
         senderIsOwner: true,
         isAuthorizedSender: false,
       });
-      expect(isResetAuthorizedForContext(params)).toBe(false);
+      expect(await isResetAuthorizedForContext(params)).toBe(false);
       ctx.CommandInterpretationSuppressed = false;
       expect(resolveCommandAuthorization(params).isAuthorizedSender).toBe(true);
-      expect(isResetAuthorizedForContext(params)).toBe(true);
+      expect(await isResetAuthorizedForContext(params)).toBe(true);
     },
   );
 

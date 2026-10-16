@@ -212,6 +212,13 @@ export async function resolveMatrixIngressAccess(config: {
           accountId,
           meta: { name: senderName },
         });
+        if (!code) {
+          logVerboseMessage(
+            `matrix pairing request ignored sender=${senderId} (pending limit reached)`,
+          );
+          await commitInboundEventIfClaimedAndDiscardReserved();
+          return undefined;
+        }
         if (shouldSendPairingReply(senderId, created)) {
           const pairingReply = core.channel.pairing.buildPairingReply({
             channel: "matrix",

@@ -1,9 +1,13 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import * as commandExec from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -11,7 +15,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { requireGit, runGit } from "./git.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 
 const identity = {
@@ -28,6 +32,7 @@ describe("empty managed workspaces", () => {
       vi.unstubAllEnvs();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     }),
   );
@@ -43,9 +48,10 @@ describe("empty managed workspaces", () => {
   beforeEach(() => {
     root = tempDirs.make("openclaw-empty-workspace-");
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
-    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     now = 1_700_000_000_000;
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({
       env,
       now: () => now,
@@ -195,7 +201,7 @@ describe("empty managed workspaces", () => {
     await service.remove({ id: created.id, reason: "archive-again" });
     now += SNAPSHOT_RETENTION_MS + 1;
     const unavailableLease = vi
-      .spyOn(stateLease, "withOpenClawStateLease")
+      .spyOn(stateLease, "withOpenClawStateLeaseAsync")
       .mockRejectedValue(new Error("allocation lease unavailable"));
     expect((await service.gc()).snapshotsPruned).toBe(0);
     expect(fsSync.existsSync(created.repoRoot)).toBe(true);

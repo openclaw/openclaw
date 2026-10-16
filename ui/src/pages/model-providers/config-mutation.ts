@@ -6,7 +6,17 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import {
+  modelSettingPrimary,
+  modelSettingFallbacks,
+  modelSettingPatch,
+  withModelSettingPrimary,
+} from "../../lib/model-setting.ts";
 import type { DefaultModelSelection, ModelBehaviorConfig } from "./data.ts";
+
+function replaceFirstFallback(fallbacks: string[], model: string | null): string[] {
+  return model ? [model, ...fallbacks.slice(1).filter((fallback) => fallback !== model)] : [];
+}
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,
@@ -21,17 +31,21 @@ export function modelDefaultsActions(
     },
     onFallbackChange: (model: string | null) => {
       stageDefaults({
-        fallbacks: model
-          ? [
-              model,
-              ...getDefaults()
-                .fallbacks.slice(1)
-                .filter((fallback) => fallback !== model),
-            ]
-          : [],
+        fallbacks: replaceFirstFallback(getDefaults().fallbacks, model),
       });
     },
-    onUtilityChange: (model: string | null) => stageDefaults({ utilityModel: model }),
+    onUtilityChange: (model: string | null) =>
+      stageDefaults({ utilityModel: withModelSettingPrimary(getDefaults().utilityModel, model) }),
+    onUtilityFallbackChange: (model: string | null) => {
+      const current = getDefaults().utilityModel;
+      const primary = modelSettingPrimary(current);
+      stageDefaults({
+        utilityModel: {
+          ...(primary !== undefined ? { primary } : {}),
+          fallbacks: replaceFirstFallback(modelSettingFallbacks(current), model),
+        },
+      });
+    },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
@@ -50,7 +64,10 @@ export function readModelBehaviorConfig(
   return {
     thinkingLevel: typeof thinkingValue === "string" ? thinkingValue : undefined,
     thinkingOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "thinkingDefault"),
-    fastMode: fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : undefined,
+    fastMode:
+      fastValue === "auto" || fastValue === "ultrafast" || typeof fastValue === "boolean"
+        ? fastValue
+        : undefined,
     fastModeOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "fastModeDefault"),
   };
 }
@@ -60,7 +77,10 @@ export function readModelBehaviorConfig(
  * destructive-array guard rejects such merge patches unless the exact path is
  * confirmed via replacePaths.
  */
-export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
+export const DEFAULT_MODELS_REPLACE_PATHS = [
+  "agents.defaults.model.fallbacks",
+  "agents.defaults.utilityModel.fallbacks",
+];
 
 export function buildDefaultsPatch(
   params: Omit<DefaultModelSelection, "fallbacks"> &
@@ -79,7 +99,7 @@ export function buildDefaultsPatch(
                   : params.primary,
             }
           : {}),
-        utilityModel: params.utilityModel,
+        utilityModel: modelSettingPatch(params.utilityModel),
         ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
@@ -99,12 +119,6 @@ const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
   "no_model",
   "unknown",
 ];
-
-export function isMissingMethodError(error: unknown): boolean {
-  return /method (?:not found|not supported)|unknown method/iu.test(
-    modelProviderErrorMessage(error),
-  );
-}
 
 export function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
   if (results.length === 1) {
@@ -147,8 +161,7 @@ export function modelProviderConfigBusy(context: ApplicationContext): boolean {
   );
 }
 
-export type ModelProviderConfigMutation = {
-  key: string;
+type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];
@@ -183,6 +196,29 @@ export function modelProviderErrorMessage(error: unknown): string {
   return formatUiError(error, t("modelProviders.requestFailed"));
 }
 
+export async function modelProviderMutationWarnings(
+  result: {
+    value: { warning?: string };
+    refresh: { ok: true } | { ok: false; error: string };
+  },
+  refreshProviders: () => Promise<string | null | undefined>,
+): Promise<string | null> {
+  const warnings = result.value.warning ? [result.value.warning] : [];
+  if (!result.refresh.ok) {
+    warnings.push(result.refresh.error);
+  } else {
+    try {
+      const warning = await refreshProviders();
+      if (warning) {
+        warnings.push(warning);
+      }
+    } catch (error) {
+      warnings.push(modelProviderErrorMessage(error));
+    }
+  }
+  return warnings.length ? warnings.join(" ") : null;
+}
+
 /**
  * The config owner adopts the committed snapshot and reconciles application.
  * Saving ends at its acknowledgement, not at a second read or provider discovery.
@@ -207,13 +243,11 @@ export async function runModelProviderConfigMutation(
     if (!owner.isCurrentClient()) {
       return;
     }
-    if (!patched) {
-      if (owner.isCurrentAgent()) {
-        owner.setMessage({
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
-        });
-      }
+    if (!patched && owner.isCurrentAgent()) {
+      owner.setMessage({
+        kind: "error",
+        text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
+      });
     }
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
@@ -271,23 +305,10 @@ export async function runModelProviderApiKeyMutation(
       owner.setMessage({ kind: "error", text: result.error });
       return { ok: false };
     }
-    const warnings = result.value.warning ? [result.value.warning] : [];
-    if (!result.refresh.ok) {
-      warnings.push(result.refresh.error);
-    } else {
-      try {
-        const warning = await owner.refreshProviders();
-        if (warning) {
-          warnings.push(warning);
-        }
-      } catch (error) {
-        warnings.push(modelProviderErrorMessage(error));
-      }
-    }
+    const warning = await modelProviderMutationWarnings(result, () => owner.refreshProviders());
     if (!isCurrent()) {
       return { ok: false };
     }
-    const warning = warnings.length > 0 ? warnings.join(" ") : null;
     owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
     return { ok: true, warning };
   } finally {
@@ -295,19 +316,4 @@ export async function runModelProviderApiKeyMutation(
       owner.setBusy(false);
     }
   }
-}
-
-export function modelProviderApiKeySuccess(
-  action: "edit" | "add",
-  apiKey: string | null,
-  provider: string,
-): string {
-  return t(
-    action === "add"
-      ? "modelProviders.add.saved"
-      : apiKey === null
-        ? "modelProviders.apiKey.removed"
-        : "modelProviders.apiKey.saved",
-    { provider },
-  );
 }

@@ -28,10 +28,9 @@ vi.mock("../config/config.js", () => ({
     hash: "config",
   }),
 }));
-vi.mock("./inference-route.js", () => ({
-  projectDefaultInferenceRoute: async () => ({ route: null }),
-  projectInferenceRoute: vi.fn(),
-  sameDefaultInferenceRoute: vi.fn(),
+vi.mock("./inference-route.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inference-route.js")>()),
+  projectInferenceRoute: vi.fn(async () => ({ route: null })),
 }));
 vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
 vi.mock("../plugins/install-config.js", () => ({
@@ -243,37 +242,19 @@ describe("exact system-agent plugin artifacts", () => {
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
   });
 
-  it.each(["review", "apply"])(
-    "refuses include-owned plugin config before installation at %s",
-    async (phase) => {
-      const operation = await pack();
-      if (phase === "apply") {
-        await prepareSystemAgentPluginArtifact(operation);
-      }
-      mocks.parsed = { plugins: { $include: "plugins.json" } };
-      const { runtime } = createSystemAgentTestRuntime();
-      const attempt =
-        phase === "review"
-          ? prepareSystemAgentPluginArtifact(operation)
-          : executePluginArtifactActivation(operation, runtime, { approved: true });
-      await expect(attempt).rejects.toThrow(
-        "Install the reviewed archive with openclaw plugins install",
-      );
-      expect(mocks.install).not.toHaveBeenCalled();
-      expect(mocks.audit).not.toHaveBeenCalled();
-      if (phase === "review") {
-        await expect(
-          fs.access(
-            path.join(fixture, "state", "imports", "plugins", "pending", `${operation.sha256}.tgz`),
-          ),
-        ).rejects.toThrow();
-      }
-    },
-  );
+  it("refuses include-owned plugin config before installation", async () => {
+    const operation = await pack();
+    await prepareSystemAgentPluginArtifact(operation);
+    mocks.parsed = { plugins: { $include: "plugins.json" } };
+    const { runtime } = createSystemAgentTestRuntime();
+    await expect(
+      executePluginArtifactActivation(operation, runtime, { approved: true }),
+    ).rejects.toThrow("Install the reviewed archive with openclaw plugins install");
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { dependencies: { example: "1.0.0" } },
-    { optionalDependencies: { example: "1.0.0" } },
     { scripts: { install: "node postinstall.js" } },
     { peerDependencies: { example: "*" } },
   ])("rejects an artifact requiring unreviewed installation inputs: %j", async (fields) => {

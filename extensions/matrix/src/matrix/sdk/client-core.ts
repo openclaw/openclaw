@@ -1,12 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  EventType,
-  MatrixError,
-  MatrixEventEvent,
-  MsgType,
-  Preset,
-  type MatrixEvent,
-} from "matrix-js-sdk/lib/matrix.js";
+import { EventType, MatrixError, MsgType, Preset } from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { formatMatrixErrorReason } from "../errors.js";
@@ -434,17 +427,8 @@ export abstract class MatrixClientCore extends MatrixClientBase {
 
     const mapper = this.client.getEventMapper();
     const event = mapper(rawEvent);
-    let decryptedEvent: MatrixEvent | undefined;
-    const onDecrypted = (candidate: MatrixEvent) => {
-      decryptedEvent = candidate;
-    };
-    event.once(MatrixEventEvent.Decrypted, onDecrypted);
-    try {
-      await this.client.decryptEventIfNeeded(event);
-    } finally {
-      event.off(MatrixEventEvent.Decrypted, onDecrypted);
-    }
-    return matrixEventToRaw(decryptedEvent ?? event);
+    await this.client.decryptEventIfNeeded(event);
+    return matrixEventToRaw(event);
   }
 
   async getRelations(

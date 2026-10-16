@@ -1,5 +1,5 @@
-// Qa Lab Matrix module implements events behavior.
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { asNullableObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type MatrixQaRoomEvent = {
   content?: Record<string, unknown>;
   event_id?: string;
@@ -85,33 +85,24 @@ function resolveMatrixQaMessageContent(
   content: Record<string, unknown>,
   relatesTo: Record<string, unknown> | null,
 ) {
-  const newContentRaw = content["m.new_content"];
-  const newContent =
-    typeof newContentRaw === "object" && newContentRaw !== null
-      ? (newContentRaw as Record<string, unknown>)
-      : null;
+  const newContent = asNullableObjectRecord(content["m.new_content"]);
   if (relatesTo?.rel_type === "m.replace" && newContent) {
     return newContent;
   }
   return content;
 }
 
-function normalizeMatrixQaRelation(value: unknown) {
-  if (typeof value !== "object" || value === null) {
+function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
+  if (!relation) {
     return undefined;
   }
-  const relation = value as Record<string, unknown>;
-  const inReplyToRaw = relation["m.in_reply_to"];
-  const inReplyTo =
-    typeof inReplyToRaw === "object" && inReplyToRaw !== null
-      ? (inReplyToRaw as Record<string, unknown>)
-      : null;
+  const inReplyTo = asNullableObjectRecord(relation["m.in_reply_to"]);
   return {
-    eventId: typeof relation.event_id === "string" ? relation.event_id : undefined,
-    inReplyToId: typeof inReplyTo?.event_id === "string" ? inReplyTo.event_id : undefined,
+    eventId: readStringField(relation, "event_id"),
+    inReplyToId: readStringField(inReplyTo, "event_id"),
     isFallingBack:
       typeof relation.is_falling_back === "boolean" ? relation.is_falling_back : undefined,
-    relType: typeof relation.rel_type === "string" ? relation.rel_type : undefined,
+    relType: readStringField(relation, "rel_type"),
   };
 }
 
@@ -132,20 +123,9 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
 }
 
 function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  switch (msgtype) {
-    case "m.audio":
-      return "audio" as const;
-    case "m.file":
-      return "file" as const;
-    case "m.image":
-      return "image" as const;
-    case "m.sticker":
-      return "sticker" as const;
-    case "m.video":
-      return "video" as const;
-    default:
-      return undefined;
-  }
+  return (["audio", "file", "image", "sticker", "video"] as const).find(
+    (kind) => msgtype === `m.${kind}`,
+  );
 }
 
 function isLikelyMatrixQaFilenameBody(value: string) {
@@ -175,19 +155,17 @@ function resolveMatrixQaAttachmentSummary(params: {
 }
 
 function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedApproval | undefined {
-  if (typeof value !== "object" || value === null) {
+  const metadata = asNullableObjectRecord(value);
+  if (!metadata) {
     return undefined;
   }
-  const metadata = value as Record<string, unknown>;
-  const id = typeof metadata.id === "string" ? metadata.id.trim() : "";
+  const id = readStringField(metadata, "id")?.trim();
   const kind = metadata.kind;
   if (!id || (kind !== "exec" && kind !== "plugin")) {
     return undefined;
   }
-  const commandText =
-    typeof metadata.commandText === "string" ? metadata.commandText.trim() : undefined;
-  const commandPreview =
-    typeof metadata.commandPreview === "string" ? metadata.commandPreview.trim() : undefined;
+  const commandText = readStringField(metadata, "commandText")?.trim();
+  const commandPreview = readStringField(metadata, "commandPreview")?.trim();
   const commandTextPreview = commandPreview?.slice(0, MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS);
   return {
     id,
@@ -223,12 +201,9 @@ export function normalizeMatrixQaObservedEvent(
     return null;
   }
   const content = event.content ?? {};
-  const msgtype = typeof content.msgtype === "string" ? content.msgtype : undefined;
+  const msgtype = readStringField(content, "msgtype");
   const relatesToRaw = content["m.relates_to"];
-  const relatesTo =
-    typeof relatesToRaw === "object" && relatesToRaw !== null
-      ? (relatesToRaw as Record<string, unknown>)
-      : null;
+  const relatesTo = asNullableObjectRecord(relatesToRaw);
   const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
   const replacesEventId =
     relatesTo?.rel_type === "m.replace" && typeof relatesTo.event_id === "string"
@@ -237,20 +212,11 @@ export function normalizeMatrixQaObservedEvent(
   // An edit's outer m.replace relation describes wire delivery, not the
   // logical relation of the edited message. Matrix ignores relations inside
   // m.new_content, so the observer must inherit the original event's relation.
-  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesToRaw);
-  const normalizedMsgtype =
-    typeof messageContent.msgtype === "string" ? messageContent.msgtype : msgtype;
+  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesTo);
+  const normalizedMsgtype = readStringField(messageContent, "msgtype") ?? msgtype;
   const normalizedFilename =
-    typeof messageContent.filename === "string"
-      ? messageContent.filename
-      : typeof content.filename === "string"
-        ? content.filename
-        : undefined;
-  const mentionsRaw = messageContent["m.mentions"] ?? content["m.mentions"];
-  const mentions =
-    typeof mentionsRaw === "object" && mentionsRaw !== null
-      ? (mentionsRaw as Record<string, unknown>)
-      : null;
+    readStringField(messageContent, "filename") ?? readStringField(content, "filename");
+  const mentions = asNullableObjectRecord(messageContent["m.mentions"] ?? content["m.mentions"]);
   const mentionUserIds = readNonEmptyStringEntries(mentions?.user_ids);
   const reactionKey =
     type === "m.reaction" && typeof relatesTo?.key === "string" ? relatesTo.key : undefined;
@@ -259,7 +225,7 @@ export function normalizeMatrixQaObservedEvent(
       ? relatesTo.event_id
       : undefined;
   const attachment = resolveMatrixQaAttachmentSummary({
-    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
+    body: readStringField(messageContent, "body"),
     filename: normalizedFilename,
     msgtype: normalizedMsgtype,
   });
@@ -270,9 +236,7 @@ export function normalizeMatrixQaObservedEvent(
     type === "m.room.redaction"
       ? typeof event.redacts === "string"
         ? event.redacts
-        : typeof content.redacts === "string"
-          ? content.redacts
-          : undefined
+        : readStringField(content, "redacts")
       : undefined;
 
   return {
@@ -284,12 +248,11 @@ export function normalizeMatrixQaObservedEvent(
     type,
     originServerTs:
       typeof event.origin_server_ts === "number" ? Math.floor(event.origin_server_ts) : undefined,
-    body: typeof messageContent.body === "string" ? messageContent.body : undefined,
-    formattedBody:
-      typeof messageContent.formatted_body === "string" ? messageContent.formatted_body : undefined,
+    body: readStringField(messageContent, "body"),
+    formattedBody: readStringField(messageContent, "formatted_body"),
     msgtype: normalizedMsgtype,
     ...("org.matrix.msc4357.live" in messageContent ? { live: true as const } : {}),
-    membership: typeof content.membership === "string" ? content.membership : undefined,
+    membership: readStringField(content, "membership"),
     ...(logicalRelation ? { relatesTo: logicalRelation } : {}),
     ...(mentions
       ? {

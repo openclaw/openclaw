@@ -1,49 +1,35 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { captureMaintenanceConfigAsyncReader } from "../../config/sessions/store-maintenance-runtime.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { updateAcpSessionStoreEntry } from "./session-meta-entry.js";
-import {
-  buildAcpDatabaseSessionKey,
-  legacyAcpDatabaseSessionKeys,
-  resolveLegacyFreeAcpSessionKey,
-} from "./session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { upsertMemoryAcpSessionMeta } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
-import { upsertAcpSessionMetaNative } from "./session-meta-write.native.js";
-import type {
-  AcpSessionMutationCommit,
-  AcpSessionMutationDecision,
-  AcpSessionMutationPreparation,
-} from "./session-meta-write.types.js";
+import {
+  prepareAcpSessionMutation,
+  commitAcpSessionMutation,
+} from "./session-meta-worker-mutation.js";
+import { upsertAcpSessionMetaForMaintenance } from "./session-meta-write.native.js";
+import type { AcpSessionMutationParams } from "./session-meta-write.types.js";
 
-type AcpSessionMutationParams = Parameters<typeof upsertAcpSessionMetaNative>[0];
-
-/** File-backed writes retain their read source through both canonical storage owners. */
+/** Entry changes follow the selected session owner; ACP metadata keeps its shared worker. */
 export async function upsertAcpSessionMeta(
   params: AcpSessionMutationParams,
 ): Promise<SessionEntry | null> {
-  return mutateAcpSessionMeta(params);
+  return isIncognitoSessionKey(params.sessionKey.trim())
+    ? upsertMemoryAcpSessionMeta(params)
+    : mutateAcpSessionMeta(params);
 }
 
 /** Private control updates cannot recreate metadata that disappeared after preparation. */
@@ -75,17 +61,6 @@ async function mutateAcpSessionMeta(
     assertCurrent: params.assertCommitAllowed,
   });
   const store = resolveSessionStorePathForAcp({ ...captured, sessionKey, agentId: params.agentId });
-  if (isIncognitoSessionKey(sessionKey)) {
-    if (control) {
-      throw new Error("ACP controlled metadata mutation requires its durable worker source");
-    }
-    return upsertAcpSessionMetaNative({
-      ...params,
-      ...captured,
-      expectedControlBinding,
-      assertCommitAllowed: captured.assertCurrent,
-    });
-  }
   return withSessionEntryReadOnlyInWorker(
     {
       agentId: store.agentId,
@@ -100,17 +75,6 @@ async function mutateAcpSessionMeta(
       }
       const entry = read.value;
       const readerScope = readOwner.scope;
-      if (readOwner.kind === "native") {
-        if (control) {
-          throw new Error("ACP controlled metadata mutation requires its durable worker source");
-        }
-        return upsertAcpSessionMetaNative({
-          ...params,
-          ...captured,
-          expectedControlBinding,
-          assertCommitAllowed: captured.assertCurrent,
-        });
-      }
       if (!readerScope?.storePath) {
         throw new Error("ACP mutation has no retained canonical source");
       }
@@ -120,10 +84,11 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       };
       if (!supportsOpenClawAgentDatabaseExecution(options)) {
+        // Memory readers return before this file-backed scope; only native maintenance remains.
         if (control) {
           throw new Error("ACP controlled metadata mutation requires its durable worker source");
         }
-        return upsertAcpSessionMetaNative({
+        return upsertAcpSessionMetaForMaintenance({
           ...params,
           ...captured,
           expectedControlBinding,
@@ -136,13 +101,9 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       });
       const prepareMaintenance = captureMaintenanceConfigAsyncReader(captured.assertCurrent);
-      const key = normalizeStoreSessionKey(store.storeSessionKey);
+      const key = store.storeSessionKey;
       const metadataRead = {
-        keys: [
-          buildAcpDatabaseSessionKey(key, store.agentId),
-          ...legacyAcpDatabaseSessionKeys(key, store.agentId, captured.cfg),
-        ],
-        legacyKey: resolveLegacyFreeAcpSessionKey(key),
+        keys: [buildAcpDatabaseSessionKey(key, store.agentId)],
       };
       if (
         control &&
@@ -151,8 +112,7 @@ async function mutateAcpSessionMeta(
           control.source.agentId !== options.agentId ||
           !isDeepStrictEqual(control.source.identity, identity) ||
           !isDeepStrictEqual(control.sharedSource.identity, context.admission.identity) ||
-          !isDeepStrictEqual(control.read.keys, metadataRead.keys) ||
-          control.read.legacyKey !== metadataRead.legacyKey)
+          !isDeepStrictEqual(control.read.keys, metadataRead.keys))
       ) {
         throw new Error("ACP controlled metadata mutation does not match its prepared target");
       }
@@ -191,81 +151,23 @@ async function mutateAcpSessionMeta(
             : identity,
         };
       };
-      let decision: AcpSessionMutationDecision | undefined;
       try {
-        const nonce = randomUUID();
-        const preparation = await runOpenClawStateWorkerOperation(
+        const { preparation, decision: selected } = await prepareAcpSessionMutation(
           context,
-          (scope) =>
-            scope.execute({
-              type: "acp.prepareMutation",
-              input: {
-                nonce,
-                read: { ...metadataRead, entry },
-                entry,
-                updatedAt,
-                source: source(),
-                sessionKey: key,
-                agentId: store.agentId,
-                expectedControlBinding,
-                control,
-              },
-            }),
           {
-            assertCurrent,
-            createAdmission() {
-              let phase: "transaction" | "commit" | "settled" = "transaction";
-              const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-                const facts = request.facts;
-                const port =
-                  isRecord(facts) && facts.preparationPort instanceof MessagePort
-                    ? facts.preparationPort
-                    : undefined;
-                try {
-                  assertCurrent();
-                  if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
-                    throw new Error("ACP callback differs from its retained transaction");
-                  }
-                  if (request.stage === "transaction") {
-                    if (!port || decision) {
-                      throw new Error("ACP callback has no unique decision port");
-                    }
-                    // SAFETY: this private worker supplies this operation's authoritative row snapshot.
-                    const prepared = facts.preparation as AcpSessionMutationPreparation;
-                    const next = params.mutate(
-                      prepared.current,
-                      prepared.current
-                        ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
-                        : prepared.entry,
-                    );
-                    decision =
-                      next === undefined
-                        ? { kind: "keep" }
-                        : next === null
-                          ? { kind: "clear" }
-                          : { kind: "set", meta: next };
-                    assertCurrent();
-                    port.postMessage(decision, []);
-                    phase = "commit";
-                  } else {
-                    phase = "settled";
-                  }
-                  if (!grant()) {
-                    throw new Error("ACP callback admission expired");
-                  }
-                } finally {
-                  port?.close();
-                }
-              });
-              return { nativeLocations: [context.admission.databasePath, options.path], admission };
-            },
+            read: { ...metadataRead, entry },
+            entry,
+            updatedAt,
+            source: source(),
+            sessionKey: key,
+            agentId: store.agentId,
+            expectedControlBinding,
+            control,
           },
+          params.mutate,
+          assertCurrent,
         );
         assertCurrent();
-        const selected = decision;
-        if (!selected) {
-          throw new Error("ACP metadata mutation returned no decision");
-        }
         if (selected.kind === "keep") {
           return preparation.current
             ? mergeSessionEntry(preparation.entry, { acp: preparation.current })
@@ -278,11 +180,7 @@ async function mutateAcpSessionMeta(
           env: captured.env,
           sessionKey: resolveSqliteSessionKey(key, store.agentId),
         };
-        const update = (
-          mutation: Parameters<typeof updateAcpSessionStoreEntry>[0]["mutation"],
-          expectedEntry = preparation.entry ?? null,
-          skipMaintenance = params.skipMaintenance,
-        ) =>
+        const update = (mutation: Parameters<typeof updateAcpSessionStoreEntry>[0]["mutation"]) =>
           updateAcpSessionStoreEntry({
             options,
             scope,
@@ -291,10 +189,10 @@ async function mutateAcpSessionMeta(
             assertCurrent,
             readOwner,
             mutation,
-            expectedEntry,
+            expectedEntry: preparation.entry ?? null,
             expectedControlBinding,
             prepareMaintenance,
-            skipMaintenance,
+            skipMaintenance: params.skipMaintenance,
           });
         const changed =
           selected.kind === "clear"
@@ -307,13 +205,6 @@ async function mutateAcpSessionMeta(
           return null;
         }
         const commitEntry = changed.entry ?? preparation.entry;
-        const cleanup = async () => {
-          await update({ kind: "clear-legacy" }, commitEntry ?? null, true);
-          assertCurrent();
-        };
-        if (selected.kind === "set") {
-          await cleanup();
-        }
         await commitAcpSessionMutation(
           context,
           {
@@ -333,7 +224,6 @@ async function mutateAcpSessionMeta(
         );
         assertCurrent();
         if (selected.kind === "clear") {
-          await cleanup();
           return changed.entry;
         }
         return mergeSessionEntry(changed.entry ?? undefined, { acp: selected.meta });
@@ -342,64 +232,4 @@ async function mutateAcpSessionMeta(
       }
     },
   );
-}
-
-async function commitAcpSessionMutation(
-  context: ReturnType<typeof captureOpenClawStateWorkerContext>,
-  input: AcpSessionMutationCommit,
-  assertCurrent: () => void,
-) {
-  const nonce = randomUUID();
-  let admitted:
-    | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
-    | undefined;
-  let published = false;
-  const publish = () => {
-    const receipt = admitted?.admission.committed?.facts;
-    if (!published && isRecord(receipt) && receipt.nonce === nonce) {
-      published = true;
-      sessionChanges.emit({ agentId: input.agentId, sessionKey: input.sessionKey });
-    }
-  };
-  try {
-    await runOpenClawStateWorkerOperation(
-      context,
-      async (scope) => {
-        try {
-          await scope.execute({ type: "acp.commitMutation", input: { ...input, nonce } });
-        } finally {
-          await admitted?.retained.settled;
-          publish();
-        }
-      },
-      {
-        assertCurrent,
-        createAdmission(retained) {
-          let phase: "transaction" | "commit" | "settled" = "transaction";
-          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            assertCurrent();
-            if (
-              !isRecord(request.facts) ||
-              request.facts.nonce !== nonce ||
-              request.stage !== phase
-            ) {
-              throw new Error("ACP metadata commit differs from its retained owner");
-            }
-            phase = request.stage === "transaction" ? "commit" : "settled";
-            if (!grant()) {
-              throw new Error("ACP metadata commit admission expired");
-            }
-          });
-          admitted = { admission, retained };
-          return {
-            nativeLocations: [context.admission.databasePath, input.source.path],
-            admission,
-          };
-        },
-      },
-    );
-  } finally {
-    await admitted?.retained.settled;
-    publish();
-  }
 }

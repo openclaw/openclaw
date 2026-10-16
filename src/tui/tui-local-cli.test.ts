@@ -85,41 +85,34 @@ beforeEach(() => {
 });
 
 describe("TUI local CLI subprocess owner", () => {
-  it("uses canonical invocation and supervisor on this process host, with no shell or retained diagnostics", async () => {
-    const h = harness({ output: '{"safe":true}' });
-    expect(h.spawn).not.toHaveBeenCalled();
-    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual({
-      ok: true,
-      value: { safe: true },
-    });
-    expect(h.spawn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "child",
-        argv: ["/host/node", "/host/openclaw.mjs", "browser", "extension", "setup"],
-        cwd: "/host/package",
-        captureOutput: false,
-        stdinMode: "pipe-closed",
-        env: expect.objectContaining({ TSX_TSCONFIG_PATH: "/host/tsconfig.json" }),
-      }),
-    );
-    expect(h.run.detachOutput).toHaveBeenCalledOnce();
-    await h.runner.shutdown();
-    expect(h.cleanup).toHaveBeenCalledOnce();
-  });
-
   it.each([
+    { output: '{"safe":true}', reason: null },
     { output: "secret-non-json", reason: "invalid_response" },
     { output: '"' + "s".repeat(40_000) + '"', reason: "invalid_response" },
     { output: "secret-error", result: { exitCode: 1 }, reason: "execution_failed" },
     { output: "secret-timeout", result: { timedOut: true }, reason: "timeout" },
     { error: new Error("secret-spawn-error"), reason: "execution_failed" },
-  ])("returns only $reason for failed subprocess output", async ({ reason, ...options }) => {
+  ])("projects subprocess output to a bounded result ($reason)", async ({ reason, ...options }) => {
     const h = harness(options);
-    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual({
-      ok: false,
-      reason,
-    });
+    expect(h.spawn).not.toHaveBeenCalled();
+    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual(
+      reason === null ? { ok: true, value: { safe: true } } : { ok: false, reason },
+    );
+    if (reason === null) {
+      expect(h.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "child",
+          argv: ["/host/node", "/host/openclaw.mjs", "browser", "extension", "setup"],
+          cwd: "/host/package",
+          captureOutput: false,
+          stdinMode: "pipe-closed",
+          env: expect.objectContaining({ TSX_TSCONFIG_PATH: "/host/tsconfig.json" }),
+        }),
+      );
+      expect(h.run.detachOutput).toHaveBeenCalledOnce();
+    }
     await h.runner.shutdown();
+    expect(h.cleanup).toHaveBeenCalledOnce();
   });
 
   it("cancels an active run, refuses overlapping actions, and allows a later inspect", async () => {

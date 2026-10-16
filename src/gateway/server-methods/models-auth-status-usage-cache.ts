@@ -1,4 +1,3 @@
-// Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -43,10 +42,8 @@ type ProviderUsageRefresh = ProviderUsageCacheIdentity & {
 
 const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
-let cacheGeneration = 0;
 
 export function clearModelAuthStatusUsageCache(): void {
-  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
@@ -129,7 +126,6 @@ function scheduleProviderUsageRefresh(
   ) {
     return active.promise;
   }
-  const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -141,10 +137,7 @@ function scheduleProviderUsageRefresh(
     })
       .then((freshUsage) => {
         const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-        if (
-          publishGeneration === cacheGeneration &&
-          usageRefreshByAgentId.get(params.agentId) === refresh
-        ) {
+        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
           usageCacheByAgentId.set(params.agentId, {
             agentDir: params.agentDir,
             configRef: params.configRef,
@@ -249,7 +242,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
   coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
     agentId: snapshot.agentId,
     agentDir: snapshot.agentDir,

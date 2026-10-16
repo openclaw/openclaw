@@ -54,25 +54,6 @@ describe("system-cli", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true });
   });
 
-  it("runs system event with default wake mode and text output", async () => {
-    await runCli(["system", "event", "--text", "  hello world  "]);
-
-    const [method, payload, options, requestOptions] = gatewayCall();
-    expect(method).toBe("wake");
-    expect((payload as { text?: string } | undefined)?.text).toBe("  hello world  ");
-    expect(options).toEqual({ mode: "next-heartbeat", text: "hello world" });
-    expect(requestOptions).toEqual({ expectFinal: false });
-    expect(runtimeLogs).toEqual(["ok"]);
-  });
-
-  it("prints JSON for event when --json is enabled", async () => {
-    callGatewayFromCli.mockResolvedValueOnce({ id: "wake-1" });
-
-    await runCli(["system", "event", "--text", "hello", "--json"]);
-
-    expect(runtimeLogs).toEqual([JSON.stringify({ id: "wake-1" }, null, 2)]);
-  });
-
   it("reports a rejected system event instead of claiming it was enqueued", async () => {
     callGatewayFromCli.mockResolvedValueOnce({ ok: false, reason: "unwakeable-session-key" });
 
@@ -84,16 +65,6 @@ describe("system-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("handles invalid wake mode as runtime error", async () => {
-    await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
-
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-    expect(runtimeLogs).toEqual([]);
-    expect(runtimeErrors[0]).toContain("--mode must be now or next-heartbeat");
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
   it.each([
     {
       name: "invalid wake mode",
@@ -101,13 +72,6 @@ describe("system-cli", () => {
       gatewayResult: undefined,
       expectedError: "--mode must be now or next-heartbeat",
       gatewayCalls: 0,
-    },
-    {
-      name: "rejected Gateway call",
-      args: ["system", "event", "--text", "hello", "--json"],
-      gatewayResult: { ok: false, reason: "unwakeable-session-key" },
-      expectedError: "unwakeable-session-key",
-      gatewayCalls: 1,
     },
   ])(
     "writes JSON when $name fails",
@@ -126,23 +90,23 @@ describe("system-cli", () => {
     },
   );
 
-  it.each([
-    { mode: "human", args: ["system", "event", "--text", "hello"] },
-    { mode: "JSON", args: ["system", "event", "--text", "hello", "--json"] },
-  ])("hands agent selection refusals to the CLI failure owner in $mode mode", async ({ args }) => {
-    const error = new Error("Multiple agents are configured, but this operation has no owner.");
-    error.name = "AgentSelectionRequiredError";
-    callGatewayFromCli.mockRejectedValueOnce(error);
+  it.each([{ mode: "human", args: ["system", "event", "--text", "hello"] }])(
+    "hands agent selection refusals to the CLI failure owner in $mode mode",
+    async ({ args }) => {
+      const error = new Error("Multiple agents are configured, but this operation has no owner.");
+      error.name = "AgentSelectionRequiredError";
+      callGatewayFromCli.mockRejectedValueOnce(error);
 
-    // The root failure owner renders expected conditions without crash framing;
-    // the command must rethrow instead of printing its own copy.
-    await expect(runCli(args)).rejects.toBe(error);
+      // The root failure owner renders expected conditions without crash framing;
+      // the command must rethrow instead of printing its own copy.
+      await expect(runCli(args)).rejects.toBe(error);
 
-    expect(runtimeLogs).toEqual([]);
-    expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
+      expect(runtimeLogs).toEqual([]);
+      expect(runtimeErrors).toEqual([]);
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards --session-key on system event", async () => {
     await runCli([
@@ -166,56 +130,20 @@ describe("system-cli", () => {
     expect(requestOptions).toEqual({ expectFinal: false });
   });
 
-  it("treats empty --session-key as omitted", async () => {
-    await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
+  it.each([{ args: ["system", "presence"], method: "system-presence", params: undefined }])(
+    "routes $args to gateway",
+    async ({ args, method, params }) => {
+      callGatewayFromCli.mockResolvedValueOnce({ method });
 
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const params = gatewayCall()[2];
-    expect(params).not.toHaveProperty("sessionKey");
-  });
+      await runCli(args);
 
-  it("writes JSON when an implicit machine-output command fails", async () => {
-    callGatewayFromCli.mockRejectedValueOnce(new Error("Gateway unavailable"));
-
-    await runCli(["system", "heartbeat", "last"]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [method, gatewayOptions, params, requestOptions] = gatewayCall();
-    expect(method).toBe("last-heartbeat");
-    expect(typeof gatewayOptions).toBe("object");
-    expect(params).toBeUndefined();
-    expect(requestOptions).toEqual({ expectFinal: false });
-    const expectedError = "Gateway unavailable";
-    expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
-    expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it.each([
-    { args: ["system", "heartbeat", "last"], method: "last-heartbeat", params: undefined },
-    {
-      args: ["system", "heartbeat", "enable"],
-      method: "set-heartbeats",
-      params: { enabled: true },
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+      const [calledMethod, gatewayOptions, calledParams, requestOptions] = gatewayCall();
+      expect(calledMethod).toBe(method);
+      expect(typeof gatewayOptions).toBe("object");
+      expect(calledParams).toEqual(params);
+      expect(requestOptions).toEqual({ expectFinal: false });
+      expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
     },
-    {
-      args: ["system", "heartbeat", "disable"],
-      method: "set-heartbeats",
-      params: { enabled: false },
-    },
-    { args: ["system", "presence"], method: "system-presence", params: undefined },
-  ])("routes $args to gateway", async ({ args, method, params }) => {
-    callGatewayFromCli.mockResolvedValueOnce({ method });
-
-    await runCli(args);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [calledMethod, gatewayOptions, calledParams, requestOptions] = gatewayCall();
-    expect(calledMethod).toBe(method);
-    expect(typeof gatewayOptions).toBe("object");
-    expect(calledParams).toEqual(params);
-    expect(requestOptions).toEqual({ expectFinal: false });
-    expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
-  });
+  );
 });

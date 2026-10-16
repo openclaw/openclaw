@@ -2,11 +2,166 @@ import Foundation
 import Testing
 @testable import OpenClawNativeState
 #if canImport(Darwin)
-import Darwin
 import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
+    @Test(arguments: ["device_identities", "device_auth_tokens"])
+    func `newer shared schemas admit only unchanged credential tables`(_ name: String) throws {
+        try self.withDatabase { database in
+            try database.ensureCanonicalTable(.deviceIdentities)
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            try database.ensureCanonicalTable(.execApprovalsConfig)
+            try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            // STRICT migrations rename a temporary table, leaving its name quoted in sqlite_schema.
+            try database.execute("ALTER TABLE \(name) RENAME TO migration_temporary")
+            try database.execute("ALTER TABLE migration_temporary RENAME TO \"\(name)\"")
+            try self.createConfigMachineState(database)
+            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
+
+            try database.ensureCanonicalTable(.deviceIdentities)
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.execApprovalsConfig)
+            }
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            }
+            #expect(try database.scalarInt64("PRAGMA user_version") == 2_147_483_647)
+        }
+    }
+
+    @Test(arguments: [
+        "UPDATE schema_meta SET role = 'agent'",
+        "UPDATE schema_meta SET schema_version = 1",
+        "DROP TABLE schema_meta",
+        "DROP TABLE device_auth_tokens",
+        "ALTER TABLE device_auth_tokens ADD COLUMN future_policy TEXT",
+        "DROP INDEX idx_device_auth_tokens_updated",
+        "CREATE UNIQUE INDEX future_token_constraint ON device_auth_tokens(token)",
+        """
+        CREATE TRIGGER future_token_cleanup AFTER DELETE ON device_auth_tokens
+        BEGIN DELETE FROM config_machine_state; END
+        """,
+        """
+        DROP TABLE device_auth_tokens;
+        CREATE TABLE device_auth_tokens (
+          device_id TEXT NOT NULL, role TEXT NOT NULL, token TEXT NOT NULL CHECK(length(token) > 5),
+          scopes_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY(device_id, role)
+        ) STRICT;
+        CREATE INDEX idx_device_auth_tokens_updated ON device_auth_tokens(updated_at_ms DESC, device_id, role)
+        """,
+    ])
+    func `newer credential admission refuses changed contracts without writing`(_ mutation: String) throws {
+        try self.withDatabaseURL { database, url in
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            try self.createConfigMachineState(database)
+            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
+            try database.execute(mutation)
+            let original = try Data(contentsOf: url)
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.deviceAuthTokens)
+            }
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
+    @Test(arguments: [
+        "PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647",
+        "UPDATE schema_meta SET schema_version = 2",
+        "UPDATE schema_meta SET role = 'agent'",
+        "DROP TABLE schema_meta",
+        "PRAGMA user_version = 6; UPDATE schema_meta SET schema_version = 6; DROP TABLE config_machine_state",
+        "PRAGMA user_version = 0",
+    ])
+    func `read-only admission rejects incompatible state before returning a handle`(_ mutation: String) throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            try writer.execute(mutation)
+            let original = try Data(contentsOf: url)
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+            }
+
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
+    @Test(arguments: 1...5, [false, true])
+    func `older schemas preserve absent or populated config state`(version: Int, hasTable: Bool) throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA user_version = \(version); UPDATE schema_meta SET schema_version = \(version)")
+            if hasTable {
+                try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            } else {
+                try writer.execute("DROP TABLE config_machine_state")
+            }
+            let original = try Data(contentsOf: url)
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == hasTable)
+            if hasTable {
+                #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
+            }
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
+    @Test func `read-only bootstrap admission preserves absent config state`() throws {
+        try self.withDatabaseURL { writer, url in
+            try writer.ensureCanonicalTable(.deviceAuthTokens)
+            let original = try Data(contentsOf: url)
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+            #expect(try reader.scalarInt64("PRAGMA user_version") == 0)
+            #expect(try Data(contentsOf: url) == original)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == false)
+        }
+    }
+
+    @Test func `read-only config opens checkpointed WAL without sidecars`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-native-wal-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("openclaw.sqlite")
+        do {
+            let writer = try OpenClawNativeStateSQLite(databaseURL: url)
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA journal_mode=WAL")
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            try #require(writer.scalarInt64("PRAGMA wal_checkpoint(TRUNCATE)") == 0)
+        }
+        // Node removes these on last close; Apple's writer may retain its empty WAL.
+        for suffix in ["-wal", "-shm"] {
+            if FileManager.default.fileExists(atPath: url.path + suffix) {
+                if suffix == "-wal" {
+                    try #require(FileManager.default.attributesOfItem(atPath: url.path + suffix)[.size] as? Int == 0)
+                }
+                try FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+            try #require(!FileManager.default.fileExists(atPath: url.path + suffix))
+        }
+        let original = try Data(contentsOf: url)
+        let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+        #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
+        #expect(throws: OpenClawNativeStateError.self) {
+            try reader.execute("UPDATE config_machine_state SET value_json = 'unexpected'")
+        }
+        #expect(try Data(contentsOf: url) == original)
+    }
+
+    private func createConfigMachineState(_ database: OpenClawNativeStateSQLite) throws {
+        try database.execute("""
+        PRAGMA user_version = 1;
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER);
+        INSERT INTO schema_meta VALUES ('primary', 'global', 1);
+        CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+        """)
+    }
+
     @Test
     func `version zero composes exact canonical tables`() throws {
         try self.withDatabase { database in
@@ -312,9 +467,18 @@ struct OpenClawNativeStateSQLiteTests {
             var permissions: acl_permset_t?
             guard acl_get_permset(entry, &permissions) == 0 else { throw self.aclError() }
             for permission in tag == ACL_EXTENDED_ALLOW
-                ? [ACL_READ_DATA, ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_EXECUTE, ACL_READ_ATTRIBUTES,
-                   ACL_WRITE_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_READ_SECURITY,
-                   ACL_WRITE_SECURITY]
+                ? [
+                    ACL_READ_DATA,
+                    ACL_WRITE_DATA,
+                    ACL_APPEND_DATA,
+                    ACL_EXECUTE,
+                    ACL_READ_ATTRIBUTES,
+                    ACL_WRITE_ATTRIBUTES,
+                    ACL_READ_EXTATTRIBUTES,
+                    ACL_WRITE_EXTATTRIBUTES,
+                    ACL_READ_SECURITY,
+                    ACL_WRITE_SECURITY,
+                ]
                 : [ACL_READ_DATA]
             {
                 guard acl_add_perm(permissions, permission) == 0 else { throw self.aclError() }

@@ -14,13 +14,7 @@ export function pickJsonlLineIndex(ast: JsonlAst, addr: string): number {
     return ast.lines.findIndex((line) => line.kind === "value");
   }
   if (addr === POS_LAST) {
-    for (let index = ast.lines.length - 1; index >= 0; index -= 1) {
-      const line = ast.lines[index];
-      if (line !== undefined && line.kind === "value") {
-        return index;
-      }
-    }
-    return -1;
+    return ast.lines.findLastIndex((line) => line?.kind === "value");
   }
   const match = /^L(\d+)$/.exec(addr);
   if (match === null || match[1] === undefined) {

@@ -11,7 +11,13 @@ export type { NodeWorkerTurnReceipt } from "./node-worker-journal.types.js";
 
 /** Immutable turn outcomes attached to a separately supervised physical worker. */
 export class NodeWorkerTurnStore {
-  constructor(private readonly worker: NodeWorkerJournalWorker) {}
+  readonly get;
+  readonly finish;
+
+  constructor(private readonly worker: NodeWorkerJournalWorker) {
+    this.get = worker.operation("nodeWorker.turn.get");
+    this.finish = worker.operation("nodeWorker.turn.finish");
+  }
 
   claim(
     params: Parameters<NodeWorkerTurnKernel["claim"]>[0],
@@ -20,21 +26,11 @@ export class NodeWorkerTurnStore {
     return this.worker.execute({ type: "nodeWorker.turn.claim", input: [params] }, authority);
   }
 
-  get(turnId: string): Promise<NodeWorkerTurnReceipt | undefined> {
-    return this.worker.execute({ type: "nodeWorker.turn.get", input: [turnId] });
-  }
-
   async getMatching(
     expected: NodeWorkerSupervisorIdentity,
   ): Promise<NodeWorkerTurnReceipt | undefined> {
     const identity = { ...expected };
     const receipt = await this.get(identity.launchId);
     return receipt && nodeWorkerTurnMatchesIdentity(receipt, identity) ? receipt : undefined;
-  }
-
-  finish(
-    params: Parameters<NodeWorkerTurnKernel["finish"]>[0],
-  ): Promise<NodeWorkerTurnReceipt | undefined> {
-    return this.worker.execute({ type: "nodeWorker.turn.finish", input: [params] });
   }
 }

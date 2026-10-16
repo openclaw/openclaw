@@ -17,6 +17,7 @@ export {
   createHostTtsRuntimeContract,
   createOwnerBackedContractTool,
   createProcessPollDeliveryContract,
+  createRequiredExecRuntimeContract,
   createTerminalPresentationContractTool,
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,

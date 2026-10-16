@@ -9,7 +9,13 @@ import {
 } from "./managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
-const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const retentionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mocks.lease.assertOwned.mockReset();
+    cleanup();
+  }),
+);
 
 const mocks = vi.hoisted(() => {
   const lease = {
@@ -99,13 +105,9 @@ describe("plugin install record marker fencing", () => {
   });
 
   it.each([
-    ...(["retirement", "activation"] as const).flatMap((transition) =>
-      (["lease", "invoker"] as const).map((owner) => ({
-        transition,
-        owner,
-        boundary: "preparation",
-      })),
-    ),
+    { transition: "retirement", owner: "lease", boundary: "preparation" },
+    { transition: "retirement", owner: "invoker", boundary: "preparation" },
+    { transition: "activation", owner: "lease", boundary: "preparation" },
     ...(["removal", "directory cleanup"] as const).map((boundary) => ({
       transition: "activation",
       owner: "invoker",
@@ -134,7 +136,7 @@ describe("plugin install record marker fencing", () => {
       let current = true;
       const stat = fs.promises.stat.bind(fs.promises);
       const readFile = fs.promises.readFile.bind(fs.promises);
-      const statSpy = vi.spyOn(fs.promises, "stat").mockImplementation(async (target, options) => {
+      vi.spyOn(fs.promises, "stat").mockImplementation(async (target, options) => {
         const result = await stat(target, options);
         if (
           boundary === "preparation" &&
@@ -145,28 +147,26 @@ describe("plugin install record marker fencing", () => {
         }
         return result;
       });
-      const readSpy = vi
-        .spyOn(fs.promises, "readFile")
-        .mockImplementation(async (target, options) => {
-          const result = await readFile(target, options);
-          if (
-            boundary === "preparation" &&
-            transition === "activation" &&
-            target === fixture.markerPath
-          ) {
-            current = false;
-          }
-          return result;
-        });
+      vi.spyOn(fs.promises, "readFile").mockImplementation(async (target, options) => {
+        const result = await readFile(target, options);
+        if (
+          boundary === "preparation" &&
+          transition === "activation" &&
+          target === fixture.markerPath
+        ) {
+          current = false;
+        }
+        return result;
+      });
       const rm = fs.promises.rm.bind(fs.promises);
-      const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
         await rm(target, options);
         if (boundary === "removal" && String(target) === fixture.markerPath) {
           current = false;
         }
       });
       const rmdir = fs.promises.rmdir.bind(fs.promises);
-      const rmdirSpy = vi.spyOn(fs.promises, "rmdir").mockImplementation(async (target) => {
+      vi.spyOn(fs.promises, "rmdir").mockImplementation(async (target) => {
         try {
           await rmdir(target);
         } finally {
@@ -186,39 +186,31 @@ describe("plugin install record marker fencing", () => {
       if (owner === "lease") {
         mocks.lease.assertOwned.mockImplementation(assertInvoker);
       }
-      try {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-          await expect(
-            commitPluginInstallRecordsWithConfig({
-              previousInstallRecords: transition === "retirement" ? records : {},
-              nextInstallRecords: transition === "activation" ? records : {},
-              nextConfig: {},
-              ...(owner === "invoker"
-                ? { writeOptions: { assertConfigPathForWrite: assertInvoker } }
-                : {}),
-            }),
-          ).rejects.toBe(failure);
-        });
-        expect(current).toBe(false);
-        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledTimes(
-          owner === "invoker" ? 1 : 0,
-        );
-        if (before !== undefined) {
-          expect(fs.readFileSync(fixture.markerPath, "utf8")).toBe(before);
-        } else {
-          expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(false);
-        }
-        expect(fs.existsSync(fixture.installPath)).toBe(true);
-        if (boundary === "directory cleanup") {
-          expect(fs.readFileSync(siblingMarker, "utf8")).toBe("unrelated marker");
-        }
-      } finally {
-        statSpy.mockRestore();
-        readSpy.mockRestore();
-        rmSpy.mockRestore();
-        rmdirSpy.mockRestore();
-        mocks.lease.assertOwned.mockReset();
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: transition === "retirement" ? records : {},
+            nextInstallRecords: transition === "activation" ? records : {},
+            nextConfig: {},
+            ...(owner === "invoker"
+              ? { writeOptions: { assertConfigPathForWrite: assertInvoker } }
+              : {}),
+          }),
+        ).rejects.toBe(failure);
+      });
+      expect(current).toBe(false);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledTimes(
+        owner === "invoker" ? 1 : 0,
+      );
+      if (before !== undefined) {
+        expect(fs.readFileSync(fixture.markerPath, "utf8")).toBe(before);
+      } else {
+        expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(false);
+      }
+      expect(fs.existsSync(fixture.installPath)).toBe(true);
+      if (boundary === "directory cleanup") {
+        expect(fs.readFileSync(siblingMarker, "utf8")).toBe("unrelated marker");
       }
     },
   );
@@ -230,7 +222,7 @@ describe("plugin install record marker fencing", () => {
     const failure = new Error("update authority revoked during marker compensation");
     let current = true;
     const rm = fs.promises.rm.bind(fs.promises);
-    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
       await rm(target, options);
       if (String(target) === first.markerPath) {
         current = false;
@@ -246,29 +238,24 @@ describe("plugin install record marker fencing", () => {
       markerBeforeRollback = fs.readFileSync(second.markerPath, "utf8");
       throw new Error("config changed");
     });
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords: {
-              "first-retained": first.record,
-              "second-retained": second.record,
-            },
-            nextInstallRecords: {},
-            nextConfig: {},
-          }),
-        ).rejects.toBe(failure);
-      });
-      expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledOnce();
-      expect(fs.existsSync(first.markerPath)).toBe(false);
-      expect(markerBeforeRollback).not.toBe("");
-      expect(fs.readFileSync(second.markerPath, "utf8")).toBe(markerBeforeRollback);
-      expect(fs.existsSync(first.installPath)).toBe(true);
-      expect(fs.existsSync(second.installPath)).toBe(true);
-    } finally {
-      rmSpy.mockRestore();
-      mocks.lease.assertOwned.mockReset();
-    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await expect(
+        commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {
+            "first-retained": first.record,
+            "second-retained": second.record,
+          },
+          nextInstallRecords: {},
+          nextConfig: {},
+        }),
+      ).rejects.toBe(failure);
+    });
+    expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledOnce();
+    expect(fs.existsSync(first.markerPath)).toBe(false);
+    expect(markerBeforeRollback).not.toBe("");
+    expect(fs.readFileSync(second.markerPath, "utf8")).toBe(markerBeforeRollback);
+    expect(fs.existsSync(first.installPath)).toBe(true);
+    expect(fs.existsSync(second.installPath)).toBe(true);
   });
 
   it("fences marker restoration after rollback directory preparation loses authority", async () => {
@@ -282,7 +269,7 @@ describe("plugin install record marker fencing", () => {
     const failure = new Error("update authority revoked during marker restoration");
     let current = true;
     const mkdir = fs.promises.mkdir.bind(fs.promises);
-    const mkdirSpy = vi.spyOn(fs.promises, "mkdir").mockImplementation(async (target, options) => {
+    vi.spyOn(fs.promises, "mkdir").mockImplementation(async (target, options) => {
       const result = await mkdir(target, options);
       if (String(target) === path.dirname(fixture.markerPath)) {
         current = false;
@@ -295,24 +282,19 @@ describe("plugin install record marker fencing", () => {
       }
     });
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
-    try {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          commitPluginInstallRecordsWithConfig({
-            previousInstallRecords: {},
-            nextInstallRecords: { "retained-fence": fixture.record },
-            nextConfig: {},
-          }),
-        ).rejects.toBe(failure);
-      });
-      expect(current).toBe(false);
-      expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledOnce();
-      expect(fs.existsSync(fixture.markerPath)).toBe(false);
-      expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(true);
-      expect(fs.existsSync(fixture.installPath)).toBe(true);
-    } finally {
-      mkdirSpy.mockRestore();
-      mocks.lease.assertOwned.mockReset();
-    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await expect(
+        commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: { "retained-fence": fixture.record },
+          nextConfig: {},
+        }),
+      ).rejects.toBe(failure);
+    });
+    expect(current).toBe(false);
+    expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledOnce();
+    expect(fs.existsSync(fixture.markerPath)).toBe(false);
+    expect(fs.existsSync(path.dirname(fixture.markerPath))).toBe(true);
+    expect(fs.existsSync(fixture.installPath)).toBe(true);
   });
 });

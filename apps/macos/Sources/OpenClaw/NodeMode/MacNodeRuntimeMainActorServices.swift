@@ -1,9 +1,12 @@
 import CoreLocation
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError?
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -16,8 +19,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
@@ -42,6 +44,10 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     private let locationService = MacNodeLocationService()
     private let computerAction = ComputerActionService()
 
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
+        await PermissionManager.missingPermissions(capabilities, disabled: disabled)
+    }
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
@@ -64,15 +70,13 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
     {
         try await self.screenRecorder.record(
             screenIndex: screenIndex,
             durationMs: durationMs,
             fps: fps,
-            includeAudio: includeAudio,
-            outPath: outPath)
+            includeAudio: includeAudio)
     }
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus {

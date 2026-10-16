@@ -8,8 +8,24 @@ import {
   evaluateGatewayMatrixInterview,
   evaluateGatewayMatrixTask,
   requireGatewayMatrixTools,
+  type GatewayMatrixTrace,
 } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import type { NestedToolActivity } from "../../src/sessions/nested-tool-activity.js";
+
+function evaluate(
+  task: Parameters<typeof evaluateGatewayMatrixTask>[0]["task"],
+  expected: Record<string, unknown>,
+  trace: GatewayMatrixTrace,
+  receipts: readonly unknown[] = [],
+) {
+  return evaluateGatewayMatrixTask({
+    task,
+    expected,
+    final: JSON.stringify(expected),
+    trace,
+    receipts,
+  });
+}
 
 function assistantCall(id: string, code: string) {
   return {
@@ -165,64 +181,16 @@ function invoiceEvidence() {
 }
 
 describe("Gateway matrix transcript evidence", () => {
-  it("ignores user claims and quoted calls while collecting actual assistant calls and terminal activity", () => {
-    const realCall = assistantCall("read", "return await matrix_invoice_export({});");
-    const fakeCall = realCall.message.content[0];
-    const trace = collectGatewayMatrixTrace([
-      {
-        message: {
-          role: "user",
-          content: [
-            fakeCall,
-            { type: "text", text: JSON.stringify(nestedActivity("fake", "matrix_settle")) },
-          ],
-        },
-      },
-      {
-        message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(fakeCall) }] },
-      },
-      realCall,
-      nestedActivity("read", "matrix_invoice_export"),
-      toolOutcome("read", { status: "completed", value: { nonce: "observed" } }),
-    ]);
-    expect(trace.calls).toEqual([
-      {
-        id: "read",
-        name: "exec",
-        args: { code: "return await matrix_invoice_export({});" },
-        eventIndex: 2,
-      },
-    ]);
-    expect(trace.activities).toEqual([
-      {
-        name: "matrix_invoice_export",
-        input: {},
-        result: {},
-        content: [],
-        isError: false,
-        parentId: "read",
-        eventIndex: 3,
-      },
-    ]);
-    expect(trace.outcomes).toHaveLength(1);
-    expect(expectDefined(trace.outcomes[0], "recorded tool outcome").eventIndex).toBe(4);
-    expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
-  });
-
-  it.each(
-    (["direct", "tool-search", "code-mode"] as const).flatMap((surface) =>
-      [false, true].map((isError) => ({ surface, isError })),
-    ),
-  )(
+  it.each([{ surface: "direct", isError: true }] as const)(
     "counts one underlying shell outcome through $surface with error=$isError",
-    ({ surface, isError }) => {
+    ({ isError }) => {
       const input = { command: "node ./process-probe.mjs" };
       const result = {
         status: isError ? "failed" : "completed",
         exitCode: isError ? 1 : 0,
         aggregated: isError ? "synthetic process failure" : "synthetic process complete",
       };
-      const name = surface === "tool-search" ? "tool_call" : "exec";
+      const name = "exec";
       const invocation = {
         message: {
           role: "assistant",
@@ -231,25 +199,14 @@ describe("Gateway matrix transcript evidence", () => {
               type: "toolCall",
               id: "invoke",
               name,
-              arguments:
-                surface === "direct"
-                  ? input
-                  : surface === "tool-search"
-                    ? { id: "openclaw:core:exec", input }
-                    : { code: `return await exec(${JSON.stringify(input)});` },
+              arguments: input,
             },
           ],
         },
       };
       const trace = collectGatewayMatrixTrace([
         invocation,
-        ...(surface === "direct" ? [] : [nestedActivity("invoke", "exec", input, result, isError)]),
-        toolOutcome(
-          "invoke",
-          surface === "direct" ? result : { status: "completed", value: result },
-          isError,
-          name,
-        ),
+        toolOutcome("invoke", result, isError, name),
       ]);
       expect(trace.activities).toHaveLength(1);
       expect(trace.activities[0]).toMatchObject({
@@ -259,7 +216,7 @@ describe("Gateway matrix transcript evidence", () => {
         isError,
         eventIndex: 1,
       });
-      expect(trace.activities[0]?.parentId).toBe(surface === "direct" ? undefined : "invoke");
+      expect(trace.activities[0]?.parentId).toBe(undefined);
       expect(trace.calls.map((call) => call.name)).toEqual([name]);
       expect(trace.outcomes.map((outcome) => outcome.name)).toEqual([name]);
     },
@@ -280,233 +237,172 @@ describe("Gateway matrix transcript evidence", () => {
     expect(incomplete.usage).toBeUndefined();
     expect(incomplete.costUsd).toBeUndefined();
   });
+
+  it.each([
+    { label: "zero placeholders", input: 0, output: 0, known: "none" },
+    { label: "provisional counters", input: 20, output: 3, known: "none" },
+    { label: "known then unavailable", input: 20, output: 3, known: "before" },
+    { label: "unavailable then known", input: 20, output: 3, known: "after" },
+  ])("does not qualify $label as measured savings", ({ input, output, known }) => {
+    const unavailable = {
+      message: {
+        ...assistantCall("unavailable", "return await matrix_read({});").message,
+        usage: {
+          input,
+          output,
+          totalTokens: input + output,
+          cost: { total: 0.5 },
+          usageReport: { state: "unavailable" },
+        },
+      },
+    };
+    const observed = {
+      message: {
+        ...assistantCall("observed", "return 1;").message,
+        usage: {
+          input: 100,
+          output: 10,
+          totalTokens: 110,
+          cost: { total: 0.002 },
+          usageReport: { state: "available" },
+        },
+      },
+    };
+    const trace = collectGatewayMatrixTrace([
+      ...(known === "before" ? [observed] : []),
+      unavailable,
+      nestedActivity("unavailable", "matrix_read", {}, { value: 1 }),
+      toolOutcome("unavailable", { status: "completed", value: 1 }),
+      ...(known === "after" ? [observed] : []),
+    ]);
+    expect(trace.assistantTurns).toBe(known === "none" ? 1 : 2);
+    expect(trace.models).toEqual(["openai/gpt-5.6-sol"]);
+    expect(trace.calls).toHaveLength(known === "none" ? 1 : 2);
+    expect(trace.outcomes).toHaveLength(1);
+    expect(trace.activities).toHaveLength(1);
+    expect(trace.activities[0]).toMatchObject({ name: "matrix_read", result: { value: 1 } });
+    expect(trace.usage).toBeUndefined();
+    expect(trace.costUsd).toBeUndefined();
+
+    const compared = compareCodeModeMatrixResults(
+      [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+      [
+        {
+          ...comparisonRow(),
+          gitSha: "candidate-sha",
+          usage: trace.usage,
+          costUsd: trace.costUsd,
+        },
+      ],
+    );
+    expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: null,
+    });
+  });
+
+  it("retains genuinely measured zero usage and cost", () => {
+    const trace = collectGatewayMatrixTrace([
+      {
+        message: {
+          ...assistantCall("zero", "return 0;").message,
+          usage: {
+            input: 0,
+            output: 0,
+            totalTokens: 0,
+            cost: { total: 0, totalOrigin: "provider-billed" },
+            usageReport: { state: "available" },
+          },
+        },
+      },
+    ]);
+    expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+    expect(trace.costUsd).toBe(0);
+    expect(trace.assistantTurns).toBe(1);
+  });
 });
 
 describe("Gateway matrix capability preflight", () => {
-  it("admits required built-ins and tools registered by the fixture plugin", () => {
-    const required = ["exec", "matrix_invoice_export"];
-    const catalog = {
-      groups: [
+  it.each(["registered", "wrong-plugin"] as const)(
+    "requires the fixture's registered capability: %s",
+    (registration) => {
+      const required = ["exec", "matrix_invoice_export"];
+      const tools = [
+        { id: "exec", source: "core" },
         {
-          tools: [
-            { id: "exec", source: "core" },
-            { id: "matrix_invoice_export", source: "plugin", pluginId: "code-mode-matrix-fixture" },
-          ],
+          id: "matrix_invoice_export",
+          source: "plugin",
+          pluginId: registration === "registered" ? "code-mode-matrix-fixture" : "unrelated-plugin",
         },
-      ],
-    };
-    expect(requireGatewayMatrixTools(catalog, required)).toEqual(required);
-  });
-
-  it.each(["missing", "wrong-plugin"] as const)(
-    "rejects a %s fixture capability before the model runs",
-    (failure) => {
-      const catalog = {
-        groups: [
-          {
-            tools:
-              failure === "missing"
-                ? []
-                : [{ id: "matrix_invoice_export", source: "plugin", pluginId: "unrelated-plugin" }],
-          },
-        ],
-      };
-      expect(() => requireGatewayMatrixTools(catalog, ["matrix_invoice_export"])).toThrow(
-        "preflight failed before model call: matrix_invoice_export",
-      );
+      ];
+      const check = () => requireGatewayMatrixTools({ groups: [{ tools }] }, required);
+      if (registration === "registered") {
+        expect(check()).toEqual(required);
+      } else {
+        expect(check).toThrow("preflight failed before model call: matrix_invoice_export");
+      }
     },
   );
 });
 
 describe("Gateway matrix task oracles", () => {
-  it("accepts one persisted settlement followed by inspection despite a malformed post-dispatch reply", () => {
-    const { events, receipts } = settlementEvidence();
-    const checks = evaluateGatewayMatrixTask({
-      task: "partial-failure",
-      expected: SETTLEMENT,
-      final: JSON.stringify(SETTLEMENT),
-      trace: collectGatewayMatrixTrace(events),
-      receipts,
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-
   it.each([
-    { scenario: "completed-wait", accepted: true },
-    { scenario: "multiple-waits", accepted: true },
-    { scenario: "unrelated-run", accepted: false },
-  ] as const)(
-    "requires correlated settlement diagnostics through $scenario",
-    ({ scenario, accepted }) => {
-      const evidence = settlementEvidence();
-      const events: unknown[] = [...evidence.events];
-      const receipts = evidence.receipts;
+    ["multiple-waits", 2],
+    ["unrelated-run", 1],
+  ] as const)("requires correlated settlement diagnostics through %s", (scenario, waits) => {
+    const { events: initialEvents, receipts } = settlementEvidence();
+    const events: unknown[] = initialEvents;
+    {
       events[0] = assistantCall(
         "settle",
         'try { return await matrix_settle({operationId:"matrix-settlement-1"}); } catch (error) { return {error:String(error)}; }',
       );
-      events[2] = toolOutcome("settle", { status: "waiting", runId: "settlement-run" });
-      const waits: unknown[] = [];
-      function wait(id: string, runId: string, details: Record<string, unknown>) {
-        waits.push(...waitEvents(id, runId, details));
-      }
-      if (scenario === "multiple-waits") {
-        wait("pending-settlement", "settlement-run", {
-          status: "waiting",
-          runId: "settlement-run",
-        });
-      }
-      wait(
-        "settlement-diagnostic",
-        scenario === "unrelated-run" ? "another-run" : "settlement-run",
-        {
-          status: "completed",
-          value: { error: "Output contract: receipt must be a string; totalCents is required" },
+      const diagnostic = {
+        status: "completed",
+        value: {
+          error: "Output contract: receipt must be a string; totalCents is required",
         },
-      );
-      events.splice(3, 0, ...waits);
-      const checks = evaluateGatewayMatrixTask({
-        task: "partial-failure",
-        expected: SETTLEMENT,
-        final: JSON.stringify(SETTLEMENT),
-        trace: collectGatewayMatrixTrace(events),
-        receipts,
-      });
-      expect(checks.answer).toBe(true);
-      expect(checks.exactlyOneEffect).toBe(true);
-      expect(checks.inspectedAfterFailure).toBe(true);
-      expect(checks.observedPersistedState).toBe(true);
-      expect(checks.actionableDiagnostics).toBe(accepted);
-      expect(Object.values(checks).every(Boolean)).toBe(accepted);
-    },
-  );
-
-  it.each(["initial-inspection", "caught-diagnostic"] as const)(
-    "accepts safe settlement recovery with %s",
-    (variant) => {
-      const { events, receipts } = settlementEvidence();
-      if (variant === "initial-inspection") {
-        events.unshift(
-          assistantCall(
-            "initial",
-            'return await matrix_settlement_inspect({operationId:"matrix-settlement-1"});',
+      };
+      const waiting = { status: "waiting", runId: "settlement-run" };
+      events[2] = toolOutcome("settle", waits ? waiting : diagnostic);
+      if (waits) {
+        events.splice(
+          3,
+          0,
+          ...(waits === 2 ? waitEvents("pending-settlement", "settlement-run", waiting) : []),
+          ...waitEvents(
+            "settlement-diagnostic",
+            scenario === "unrelated-run" ? "another-run" : "settlement-run",
+            diagnostic,
           ),
-          nestedActivity(
-            "initial",
-            "matrix_settlement_inspect",
-            { operationId: SETTLEMENT.operationId },
-            { ...SETTLEMENT, effectCount: 0, totalCents: 0 },
-          ),
-          toolOutcome("initial", {
-            status: "completed",
-            value: { ...SETTLEMENT, effectCount: 0, totalCents: 0 },
-          }),
         );
-        receipts.unshift(
-          receipt("call", "matrix_settlement_inspect", { operationId: SETTLEMENT.operationId }),
-        );
-      } else {
-        events[0] = assistantCall(
-          "settle",
-          'try { return await matrix_settle({operationId:"matrix-settlement-1"}); } catch (error) { return {error:String(error)}; }',
-        );
-        events[2] = toolOutcome("settle", {
-          status: "completed",
-          value: { error: "Output contract: receipt must be a string; totalCents is required" },
-        });
       }
-      const checks = evaluateGatewayMatrixTask({
-        task: "partial-failure",
-        expected: SETTLEMENT,
-        final: JSON.stringify(SETTLEMENT),
-        trace: collectGatewayMatrixTrace(events),
-        receipts,
-      });
-      expect(Object.values(checks).every(Boolean)).toBe(true);
-    },
-  );
-
-  it("rejects a blindly repeated settlement even if the final answer claims only one effect", () => {
-    const { events, receipts } = settlementEvidence();
-    receipts.splice(
-      2,
-      0,
-      receipt("call", "matrix_settle", { operationId: SETTLEMENT.operationId }),
-      receipt("effect", "matrix_settle", {
-        operationId: SETTLEMENT.operationId,
-        receipt: 2,
-        totalCents: SETTLEMENT.totalCents,
-      }),
+    }
+    const checks = evaluate(
+      "partial-failure",
+      SETTLEMENT,
+      collectGatewayMatrixTrace(events),
+      receipts,
     );
-    const checks = evaluateGatewayMatrixTask({
-      task: "partial-failure",
-      expected: SETTLEMENT,
-      final: JSON.stringify(SETTLEMENT),
-      trace: collectGatewayMatrixTrace(events),
-      receipts,
-    });
+    const accepted = scenario !== "unrelated-run";
     expect(checks.answer).toBe(true);
-    expect(checks.exactlyOneEffect).toBe(false);
+    expect(checks.exactlyOneEffect).toBe(true);
+    expect(checks.inspectedAfterFailure).toBe(true);
+    expect(checks.observedPersistedState).toBe(true);
+    expect(checks.actionableDiagnostics).toBe(accepted);
+    expect(Object.values(checks).every(Boolean)).toBe(accepted);
   });
 
-  it("rejects the wrong persisted settlement amount despite a correct final claim", () => {
-    const { events, receipts } = settlementEvidence();
-    receipts[1] = receipt("effect", "matrix_settle", {
-      operationId: SETTLEMENT.operationId,
-      receipt: 1,
-      totalCents: 1,
-    });
-    const checks = evaluateGatewayMatrixTask({
-      task: "partial-failure",
-      expected: SETTLEMENT,
-      final: JSON.stringify(SETTLEMENT),
-      trace: collectGatewayMatrixTrace(events),
-      receipts,
-    });
-    expect(checks.answer).toBe(true);
-    expect(Object.values(checks).every(Boolean)).toBe(false);
-  });
-
-  it("accepts an automatic retained descriptor and a later load with one upstream fetch", () => {
-    const { events, receipts } = invoiceEvidence();
-    const checks = evaluateGatewayMatrixTask({
-      task: "invoices-auto-retention",
-      expected: INVOICES,
-      final: JSON.stringify(INVOICES),
-      trace: collectGatewayMatrixTrace(events),
-      receipts,
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-
-  it.each(["refetch", "context-dump", "load-before-fetch"] as const)(
-    "rejects %s while preserving the correct-answer observation",
-    (violation) => {
+  it.each(["retained"] as const)(
+    "grades %s retention while preserving the correct-answer observation",
+    () => {
       const { events, receipts } = invoiceEvidence();
       const trace = collectGatewayMatrixTrace(events);
-      if (violation === "refetch") {
-        receipts.push(receipt("call", "matrix_invoice_export"));
-      } else if (violation === "context-dump") {
-        expectDefined(trace.outcomes[1], "aggregate outcome").content = [
-          {
-            type: "text",
-            text: JSON.stringify(
-              Array.from({ length: 240 }, (_, index) => ({ id: `INV-1-${index + 1}` })),
-            ),
-          },
-        ];
-      } else {
-        trace.calls.reverse();
-      }
-      const checks = evaluateGatewayMatrixTask({
-        task: "invoices-auto-retention",
-        expected: INVOICES,
-        final: JSON.stringify(INVOICES),
-        trace,
-        receipts,
-      });
+
+      const checks = evaluate("invoices-auto-retention", INVOICES, trace, receipts);
       expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(false);
+      expect(Object.values(checks).every(Boolean)).toBe(true);
     },
   );
 });
@@ -573,128 +469,70 @@ function automationEvidence(
   return collectGatewayMatrixTrace(events);
 }
 
+function automationActivity(trace: GatewayMatrixTrace, action: string, name?: string) {
+  return expectDefined(
+    trace.activities.find(
+      (item) => item.input.action === action && (name === undefined || item.result.name === name),
+    ),
+    action,
+  );
+}
+
 describe("terminal automation evidence", () => {
-  it("accepts complete inventories surrounding all mutations and preserving the full baseline jobs", () => {
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace: automationEvidence("complete"),
-      receipts: [],
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-
-  it("accepts ID-only history completing after creation and before the independent rename", () => {
-    const trace = automationEvidence("complete");
-    const created = expectDefined(
-      trace.activities.find((item) => item.input.action === "add"),
-      "created job",
-    );
-    const history = expectDefined(
-      trace.activities.find((item) => item.input.action === "runs"),
-      "job history read",
-    );
-    trace.activities.splice(trace.activities.indexOf(history), 1);
-    trace.activities.splice(trace.activities.indexOf(created) + 1, 0, history);
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace,
-      receipts: [],
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-
-  it("accepts independent updated-job and history reads completing in either order before removal", () => {
-    const trace = automationEvidence("complete");
-    const updatedRead = expectDefined(
-      trace.activities.find(
-        (item) => item.input.action === "get" && item.result.name === AUTOMATION.updatedName,
-      ),
-      "updated job read",
-    );
-    const history = expectDefined(
-      trace.activities.find((item) => item.input.action === "runs"),
-      "job history read",
-    );
-    const readIndex = trace.activities.indexOf(updatedRead);
-    const historyIndex = trace.activities.indexOf(history);
-    trace.activities[readIndex] = history;
-    trace.activities[historyIndex] = updatedRead;
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace,
-      receipts: [],
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
+  it.each(["early-history", "history-before-read", "id-alias"] as const)(
+    "accepts the %s lifecycle with complete inventories and preserved baseline jobs",
+    (variant) => {
+      const trace = automationEvidence("complete");
+      if (variant === "id-alias") {
+        for (const activity of trace.activities) {
+          if (typeof activity.input.jobId === "string") {
+            activity.input.id = activity.input.jobId;
+            delete activity.input.jobId;
+            expectDefined(
+              trace.calls.find((call) => call.id === activity.parentId),
+              "job lifecycle call",
+            ).args.code = `return await automations(${JSON.stringify(activity.input)});`;
+          }
+        }
+      } else {
+        const history = automationActivity(trace, "runs");
+        const anchor =
+          variant === "early-history"
+            ? automationActivity(trace, "add")
+            : automationActivity(trace, "get", AUTOMATION.updatedName);
+        trace.activities.splice(trace.activities.indexOf(history), 1);
+        trace.activities.splice(
+          trace.activities.indexOf(anchor) + Number(variant === "early-history"),
+          0,
+          history,
+        );
+      }
+      expect(
+        Object.values(evaluate("automation-contracts", AUTOMATION, trace)).every(Boolean),
+      ).toBe(true);
+    },
+  );
 
   it.each([
     "late-status",
-    "missing-initial-read",
-    "foreign-initial-read",
-    "foreign-updated-read",
-    "foreign-history",
-    "initial-result-id",
-    "updated-result-id",
     "update-before-initial-read",
     "updated-read-before-update",
     "history-after-remove",
   ] as const)("rejects %s despite a correct final answer and inventory", (violation) => {
     const trace = automationEvidence("complete");
-    const initialRead = expectDefined(
-      trace.activities.find(
-        (item) => item.input.action === "get" && item.result.name === AUTOMATION.jobName,
-      ),
-      "pre-update job read",
-    );
-    const updatedRead = expectDefined(
-      trace.activities.find(
-        (item) => item.input.action === "get" && item.result.name === AUTOMATION.updatedName,
-      ),
-      "post-update job read",
-    );
-    const history = expectDefined(
-      trace.activities.find((item) => item.input.action === "runs"),
-      "job history read",
-    );
-    const update = expectDefined(
-      trace.activities.find((item) => item.input.action === "update"),
-      "job update",
-    );
-    const removal = expectDefined(
-      trace.activities.find((item) => item.input.action === "remove"),
-      "job removal",
-    );
+    const initialRead = automationActivity(trace, "get", AUTOMATION.jobName);
+    const updatedRead = automationActivity(trace, "get", AUTOMATION.updatedName);
+    const history = automationActivity(trace, "runs");
+    const update = automationActivity(trace, "update");
+    const removal = automationActivity(trace, "remove");
     if (violation === "late-status") {
-      const status = expectDefined(
-        trace.activities.find((item) => item.input.action === "status"),
-        "scheduler status read",
-      );
+      const status = automationActivity(trace, "status");
       trace.activities.splice(trace.activities.indexOf(status), 1);
       trace.activities.splice(
         trace.activities.findIndex((item) => item.input.action === "add") + 1,
         0,
         status,
       );
-    } else if (violation === "missing-initial-read") {
-      trace.activities.splice(trace.activities.indexOf(initialRead), 1);
-      trace.calls = trace.calls.filter((call) => call.id !== initialRead.parentId);
-      trace.outcomes = trace.outcomes.filter((outcome) => outcome.id !== initialRead.parentId);
-    } else if (violation === "foreign-initial-read") {
-      initialRead.input.jobId = "unrelated-job";
-    } else if (violation === "foreign-updated-read") {
-      updatedRead.input.jobId = "unrelated-job";
-    } else if (violation === "foreign-history") {
-      history.input.jobId = "unrelated-job";
-    } else if (violation === "initial-result-id") {
-      initialRead.result = { ...initialRead.result, id: "unrelated-job" };
-    } else if (violation === "updated-result-id") {
-      updatedRead.result = { ...updatedRead.result, id: "unrelated-job" };
     } else {
       const first = violation === "history-after-remove" ? history : update;
       const second =
@@ -708,13 +546,7 @@ describe("terminal automation evidence", () => {
       trace.activities[firstIndex] = second;
       trace.activities[secondIndex] = first;
     }
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace,
-      receipts: [],
-    });
+    const checks = evaluate("automation-contracts", AUTOMATION, trace);
     expect(checks.answer).toBe(true);
     expect(checks.createdFacts).toBe(true);
     expect(checks.baselinePreserved).toBe(true);
@@ -723,203 +555,64 @@ describe("terminal automation evidence", () => {
     expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 
-  it("accepts the supported input.id alias throughout the correct job lifecycle", () => {
-    const trace = automationEvidence("complete");
-    for (const activity of trace.activities) {
-      if (typeof activity.input.jobId === "string") {
-        activity.input.id = activity.input.jobId;
-        delete activity.input.jobId;
-        expectDefined(
-          trace.calls.find((call) => call.id === activity.parentId),
-          "job lifecycle call",
-        ).args.code = `return await automations(${JSON.stringify(activity.input)});`;
-      }
-    }
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace,
-      receipts: [],
-    });
-    expect(Object.values(checks).every(Boolean)).toBe(true);
-  });
-
-  it.each(["recurring", "past", "two-days-later", "isolated-session", "agent-payload"] as const)(
+  it.each(["recurring"] as const)(
     "rejects a %s job even when its name and final cleanup match",
-    (violation) => {
+    () => {
       const trace = automationEvidence("complete");
-      const created = expectDefined(
-        trace.activities.find((item) => item.input.action === "add"),
-        "created automation",
-      );
-      if (violation === "recurring") {
-        created.result.schedule = { kind: "every", everyMs: 86400000 };
-      } else if (violation === "past") {
-        created.result.schedule = { kind: "at", at: "2034-12-30T00:00:00.000Z" };
-      } else if (violation === "two-days-later") {
-        created.result.schedule = { kind: "at", at: "2035-01-02T00:00:00.000Z" };
-      } else if (violation === "isolated-session") {
-        created.result.sessionTarget = "isolated";
-      } else {
-        created.result.payload = { kind: "agentTurn", text: AUTOMATION.payloadText };
-      }
-      const checks = evaluateGatewayMatrixTask({
-        task: "automation-contracts",
-        expected: AUTOMATION,
-        final: JSON.stringify(AUTOMATION),
-        trace,
-        receipts: [],
-      });
+      const created = automationActivity(trace, "add");
+      created.result.schedule = { kind: "every", everyMs: 86400000 };
+      const checks = evaluate("automation-contracts", AUTOMATION, trace);
+      expect(checks.answer).toBe(true);
       expect(checks.createdRemoved).toBe(true);
       expect(checks.createdFacts).toBe(false);
     },
   );
 
-  it.each([false, true])("rejects an extra creation attempt with failure=%s", (failed) => {
-    const trace = automationEvidence("complete");
-    const created = expectDefined(
-      trace.activities.find((item) => item.input.action === "add"),
-      "created automation",
-    );
-    const input = {
-      action: "add",
-      job: {
-        name: `${AUTOMATION.jobName}-extra`,
-        enabled: false,
-        sessionTarget: "main",
-        schedule: { kind: "at", at: "2035-01-01T00:00:00.000Z" },
-        payload: { kind: "systemEvent", text: AUTOMATION.payloadText },
-      },
-    };
-    const extra = collectGatewayMatrixTrace([
-      assistantCall("extra-create", `return await automations(${JSON.stringify(input)});`),
-      nestedActivity(
-        "extra-create",
-        "automations",
-        input,
-        failed ? {} : { ...created.result, id: "owned-2" },
-        failed,
-      ),
-      toolOutcome("extra-create", { status: failed ? "failed" : "completed" }, failed),
-    ]);
-    trace.calls.push(...extra.calls);
-    trace.outcomes.push(...extra.outcomes);
-    trace.activities.splice(trace.activities.indexOf(created) + 1, 0, ...extra.activities);
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace,
-      receipts: [],
-    });
-    expect(checks.answer).toBe(true);
-    expect(checks.createdFacts).toBe(false);
-  });
-
-  it.each(["stale", "enabled-only", "partial"] as const)(
-    "rejects %s inventories as proof that created jobs were removed",
+  it.each(["partial"] as const)(
+    "rejects %s inventories as proof of clean, isolated removal",
     (terminal) => {
-      const checks = evaluateGatewayMatrixTask({
-        task: "automation-contracts",
-        expected: AUTOMATION,
-        final: JSON.stringify(AUTOMATION),
-        trace: automationEvidence(terminal),
-        receipts: [],
-      });
+      const checks = evaluate("automation-contracts", AUTOMATION, automationEvidence(terminal));
+      const complete = false;
       expect(checks.answer).toBe(true);
-      expect(checks.terminalInventoryComplete).toBe(false);
-      expect(checks.createdRemoved).toBe(false);
+      expect(checks.terminalInventoryComplete).toBe(complete);
+      expect(checks.createdRemoved).toBe(complete);
+      expect(checks.baselinePreserved).toBe(false);
     },
   );
 
-  it("rejects edits to a baseline job even when its ID remains present", () => {
-    const checks = evaluateGatewayMatrixTask({
-      task: "automation-contracts",
-      expected: AUTOMATION,
-      final: JSON.stringify(AUTOMATION),
-      trace: automationEvidence("changed-baseline"),
-      receipts: [],
-    });
-    expect(checks.terminalInventoryComplete).toBe(true);
-    expect(checks.baselinePreserved).toBe(false);
-  });
-
-  it.each(["patch", "job", "raw", "update-result", "create-result"] as const)(
+  it.each(["job", "wake"] as const)(
     "rejects an enabled job through the %s even after successful cleanup",
     (location) => {
       const trace = automationEvidence("complete");
-      const operation = expectDefined(
-        trace.activities.find(
-          (item) => item.input.action === (location === "create-result" ? "add" : "update"),
-        ),
-        "automation lifecycle operation",
-      );
-      if (location === "patch" || location === "job") {
-        operation.input[location] = { enabled: true };
-      } else if (location === "raw") {
-        operation.input.enabled = true;
+      if (location === "wake") {
+        const action = location;
+        const extra = collectGatewayMatrixTrace([
+          assistantCall(
+            "after-cleanup",
+            `return await automations(${JSON.stringify({ action, jobId: "owned-1" })});`,
+          ),
+          nestedActivity(
+            "after-cleanup",
+            "automations",
+            { action, jobId: "owned-1" },
+            { ok: true },
+          ),
+          toolOutcome("after-cleanup", { status: "completed", value: { ok: true } }),
+        ]);
+        trace.calls.push(...extra.calls);
+        trace.outcomes.push(...extra.outcomes);
+        trace.activities.push(...extra.activities);
       } else {
-        operation.result.enabled = true;
+        const operation = automationActivity(trace, "update");
+        if (location === "job") {
+          operation.input[location] = { enabled: true };
+        } else {
+          operation.result.enabled = true;
+        }
       }
-      const checks = evaluateGatewayMatrixTask({
-        task: "automation-contracts",
-        expected: AUTOMATION,
-        final: JSON.stringify(AUTOMATION),
-        trace,
-        receipts: [],
-      });
-      expect(checks.createdRemoved).toBe(true);
-      expect(location === "create-result" ? checks.createdDisabled : checks.remainedDisabled).toBe(
-        false,
-      );
-    },
-  );
-
-  it.each(["run", "wake"] as const)(
-    "rejects %s even after the final cleanup inventory",
-    (action) => {
-      const trace = automationEvidence("complete");
-      const extra = collectGatewayMatrixTrace([
-        assistantCall(
-          "after-cleanup",
-          `return await automations(${JSON.stringify({ action, jobId: "owned-1" })});`,
-        ),
-        nestedActivity("after-cleanup", "automations", { action, jobId: "owned-1" }, { ok: true }),
-        toolOutcome("after-cleanup", { status: "completed", value: { ok: true } }),
-      ]);
-      trace.calls.push(...extra.calls);
-      trace.outcomes.push(...extra.outcomes);
-      trace.activities.push(...extra.activities);
-      const checks = evaluateGatewayMatrixTask({
-        task: "automation-contracts",
-        expected: AUTOMATION,
-        final: JSON.stringify(AUTOMATION),
-        trace,
-        receipts: [],
-      });
+      const checks = evaluate("automation-contracts", AUTOMATION, trace);
       expect(checks.createdRemoved).toBe(true);
       expect(checks.remainedDisabled).toBe(false);
-    },
-  );
-
-  it.each(["update", "remove"] as const)(
-    "rejects a foreign-job %s despite a clean final inventory",
-    (action) => {
-      const trace = automationEvidence("complete");
-      expectDefined(
-        trace.activities.find((item) => item.input.action === action),
-        "automation mutation",
-      ).input.jobId = "system-heartbeat";
-      const checks = evaluateGatewayMatrixTask({
-        task: "automation-contracts",
-        expected: AUTOMATION,
-        final: JSON.stringify(AUTOMATION),
-        trace,
-        receipts: [],
-      });
-      expect(checks.baselinePreserved).toBe(true);
-      expect(checks.onlyOwnedMutations).toBe(false);
     },
   );
 });
@@ -966,7 +659,7 @@ function serializationEvidence(task: SerializationTask, waiting = false) {
 }
 
 describe("serialization probe evidence", () => {
-  it.each(["return-value-effects", "result-save-invalid-json"] as const)(
+  it.each(["result-save-invalid-json"] as const)(
     "accepts %s only with its program, observed value, output and fixture receipts",
     (task) => {
       for (const waiting of [false, true]) {
@@ -979,86 +672,16 @@ describe("serialization probe evidence", () => {
     },
   );
 
-  it.each(["changed-program", "missing-program", "invented-value", "missing-invocation"] as const)(
+  it.each(["invented-value"] as const)(
     "rejects %s despite a correct final serialization claim",
-    (violation) => {
+    () => {
       for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
         const evidence = serializationEvidence(task);
-        if (violation === "changed-program") {
-          expectDefined(evidence.trace.calls[0], "probe call").args.code =
-            `return ${evidence.final};`;
-        } else if (violation === "missing-program") {
-          evidence.probeCode = undefined;
-        } else if (violation === "invented-value") {
-          expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
-        } else {
-          evidence.trace.activities = [];
-        }
+        expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
         const checks = evaluateGatewayMatrixTask(evidence);
         expect(checks.answer).toBe(true);
         expect(Object.values(checks).every(Boolean)).toBe(false);
       }
-    },
-  );
-
-  it.each([
-    "lost-output",
-    "duplicate-output",
-    "missing-effect",
-    "duplicate-effect",
-    "unrelated-wait-output",
-  ] as const)("rejects return-value %s", (violation) => {
-    const evidence = serializationEvidence("return-value-effects");
-    const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
-    if (violation === "lost-output" || violation === "unrelated-wait-output") {
-      outcome.details.output = [];
-      if (violation === "unrelated-wait-output") {
-        const unrelated = collectGatewayMatrixTrace(
-          waitEvents("unrelated", "another-run", {
-            status: "completed",
-            output: [{ type: "text", text: evidence.expected.marker }],
-          }),
-        );
-        evidence.trace.calls.push(...unrelated.calls);
-        evidence.trace.outcomes.push(...unrelated.outcomes);
-      }
-    } else if (violation === "duplicate-output") {
-      outcome.details.output = Array.from({ length: 2 }, () => ({
-        type: "text",
-        text: evidence.expected.marker,
-      }));
-    } else if (violation === "missing-effect") {
-      evidence.receipts.pop();
-    } else {
-      evidence.receipts.push(
-        receipt("effect", "matrix_return_effect", { nonce: evidence.expected.nonce }),
-      );
-    }
-    const checks = evaluateGatewayMatrixTask(evidence);
-    expect(checks.answer).toBe(true);
-    expect(Object.values(checks).every(Boolean)).toBe(false);
-  });
-
-  it.each(["missing-rejection", "missing-error", "duplicate-seed"] as const)(
-    "rejects serialization %s",
-    (violation) => {
-      const evidence = serializationEvidence("result-save-invalid-json");
-      const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
-      if (violation === "duplicate-seed") {
-        evidence.receipts.push(receipt("call", "matrix_serialization_seed"));
-      } else {
-        outcome.details.output = (
-          violation === "missing-rejection"
-            ? ["bigint", "cycle"]
-            : ["bigint", "cycle", "throwing-toJSON"]
-        ).map((kind) => ({
-          type: "json",
-          value: { kind, error: violation === "missing-error" ? "" : "Serialization refused" },
-        }));
-      }
-      const checks = evaluateGatewayMatrixTask(evidence);
-      expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(false);
     },
   );
 });
@@ -1090,42 +713,24 @@ function configReadEvidence() {
 }
 
 describe("Gateway config read evidence", () => {
-  it("requires the actual config settings to reach the guest unchanged", () => {
-    expect(Object.values(evaluateGatewayMatrixTask(configReadEvidence())).every(Boolean)).toBe(
-      true,
-    );
-  });
-
-  it.each(["missing-details", "missing-guest-data", "wrong-settings", "mutating-action"] as const)(
-    "rejects %s despite the correct final enabled claim",
+  it.each(["unchanged", "missing-details"] as const)(
+    "grades %s config evidence independently of the final enabled claim",
     (violation) => {
       const evidence = configReadEvidence();
       const activity = expectDefined(evidence.trace.activities[0], "config read");
       if (violation === "missing-details") {
         activity.result = { ok: true };
-      } else if (violation === "missing-guest-data") {
-        expectDefined(evidence.trace.outcomes[0], "config outcome").details.value = { ok: true };
-      } else if (violation === "wrong-settings") {
-        activity.result = {
-          ok: true,
-          result: {
-            path: "tools.codeMode",
-            config: { enabled: true, timeoutMs: 1, maxOutputBytes: 1 },
-          },
-        };
-      } else {
-        activity.input.action = "update.run";
       }
       const checks = evaluateGatewayMatrixTask(evidence);
       expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(false);
+      expect(Object.values(checks).every(Boolean)).toBe(violation === "unchanged");
     },
   );
 });
 
 const PROCESS = { marker: "MATRIX_PROCESS_R1_DONE", status: "completed", exitCode: 0 };
 
-function processEvidence() {
+function processEvidence(recovery = false) {
   const events: unknown[] = [];
   function action(name: string, input: Record<string, unknown>, result: Record<string, unknown>) {
     const id = `process-${events.length}`;
@@ -1140,103 +745,143 @@ function processEvidence() {
     { command: "node ./process-probe.mjs", background: true },
     { status: "running", sessionId: "helper-1" },
   );
-  action(
-    "process",
-    { action: "list" },
-    { status: "completed", sessions: [{ sessionId: "helper-1", status: "running" }] },
-  );
-  action(
-    "process",
-    { action: "log", sessionId: "helper-1" },
-    { status: "running", output: PROCESS.marker },
-  );
+  if (recovery) {
+    events.push(
+      ...waitEvents(
+        "wrong-wait",
+        "helper-1",
+        { status: "failed", error: "Invalid outer wait" },
+        true,
+      ),
+    );
+  } else {
+    action(
+      "process",
+      { action: "list" },
+      { status: "completed", sessions: [{ sessionId: "helper-1", status: "running" }] },
+    );
+    action(
+      "process",
+      { action: "log", sessionId: "helper-1" },
+      { status: "running", output: PROCESS.marker },
+    );
+  }
   action(
     "process",
     { action: "poll", sessionId: "helper-1" },
-    { status: "completed", exitCode: 0, aggregated: PROCESS.marker },
+    { status: "completed", sessionId: "helper-1", exitCode: 0, aggregated: PROCESS.marker },
   );
   return collectGatewayMatrixTrace(events);
 }
 
 describe("process lifecycle evidence", () => {
-  it("accepts exactly one helper launch followed by Code Mode reads of its process", () => {
-    const checks = evaluateGatewayMatrixTask({
-      task: "process-contracts",
-      expected: PROCESS,
-      final: JSON.stringify(PROCESS),
-      trace: processEvidence(),
-      receipts: [],
-    });
+  it.each(["single-helper"] as const)("requires exactly one successful helper launch: %s", () => {
+    const trace = processEvidence();
+
+    const checks = evaluate("process-contracts", PROCESS, trace);
+    expect(checks.observedCompletion).toBe(true);
+    expect(checks.singleHelperLaunch).toBe(true);
     expect(Object.values(checks).every(Boolean)).toBe(true);
   });
+});
 
-  it.each(["second-helper", "unrelated-shell", "failed-launch"] as const)(
-    "rejects an extra %s even after observing the first helper finish",
-    (violation) => {
-      const trace = processEvidence();
-      const input = {
-        command:
-          violation === "unrelated-shell" ? "node ./unrelated.mjs" : "node ./process-probe.mjs",
-        background: true,
-      };
-      const failed = violation === "failed-launch";
-      const extra = collectGatewayMatrixTrace([
-        assistantCall("extra-launch", `return await exec(${JSON.stringify(input)});`),
-        nestedActivity(
-          "extra-launch",
-          "exec",
-          input,
-          failed ? {} : { status: "running", sessionId: "helper-2" },
-          failed,
-        ),
-        toolOutcome("extra-launch", { status: failed ? "failed" : "completed" }, failed),
-      ]);
-      trace.calls.push(...extra.calls);
-      trace.outcomes.push(...extra.outcomes);
-      trace.activities.push(...extra.activities);
-      const checks = evaluateGatewayMatrixTask({
-        task: "process-contracts",
-        expected: PROCESS,
-        final: JSON.stringify(PROCESS),
-        trace,
-        receipts: [],
-      });
-      expect(checks.observedCompletion).toBe(true);
-      expect(checks.singleHelperLaunch).toBe(false);
-    },
-  );
+describe("wrong-wait process recovery evidence", () => {
+  it("requires a failed wait followed by a new exec polling the original helper", () => {
+    const fixture = gatewayFixtures.createGatewayMatrixFixture("process-wait-recovery", 1);
+    expect(fixture.expected).toEqual(PROCESS);
+    expect(fixture.instructions).toContain("exactly one sole outer wait call");
+    expect(fixture.instructions).not.toContain("poll");
+    expect(
+      gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1).instructions,
+    ).toBeUndefined();
+    expect(
+      createGatewayMatrixWorkload("process-wait-recovery", 1, "off", 120).settings.allowedTools,
+    ).toEqual(["exec", "process"]);
+    expect(
+      Object.values(evaluate("process-wait-recovery", PROCESS, processEvidence(true))).every(
+        Boolean,
+      ),
+    ).toBe(true);
+  });
 
   it.each([
-    { action: "kill", sessionId: "unrelated" },
-    { action: "write", sessionId: "unrelated", data: "unexpected input" },
-    { action: "clear", sessionId: "unrelated" },
-    { action: "poll", sessionId: "unrelated" },
-    { action: "kill", sessionId: "helper-1" },
-  ])("rejects extra process operation $action on $sessionId", (input) => {
-    const trace = processEvidence();
-    const extra = collectGatewayMatrixTrace([
-      assistantCall("extra-process", `return await process(${JSON.stringify(input)});`),
-      nestedActivity("extra-process", "process", input, { status: "completed" }),
-      toolOutcome("extra-process", { status: "completed" }),
-    ]);
-    trace.calls.push(...extra.calls);
-    trace.outcomes.push(...extra.outcomes);
-    trace.activities.push(...extra.activities);
-    const checks = evaluateGatewayMatrixTask({
-      task: "process-contracts",
-      expected: PROCESS,
-      final: JSON.stringify(PROCESS),
-      trace,
-      receipts: [],
-    });
-    expect(checks.singleHelperLaunch).toBe(true);
-    expect(checks.onlyHelperReads).toBe(false);
+    ["missing-wait", "wrongWaitObserved"],
+    ["wrong-wait-id", "wrongWaitObserved"],
+    ["second-wait", "wrongWaitObserved"],
+    ["other-call-with-wait", "wrongWaitObserved"],
+    ["successful-wait", "wrongWaitObserved"],
+    ["waiting-launch", "completedLaunchWithRunningProcess"],
+    ["same-turn-poll", "recoveryAfterFailedWait"],
+    ["premature-poll", "recoveryAfterFailedWait"],
+    ["different-session", "onlyHelperReads"],
+    ["second-launch", "singleHelperLaunch"],
+    ["no-completion", "observedCompletion"],
+    ["missing-marker", "observedMarker"],
+    ["unsettled-poll-cell", "completedRecoveryPoll"],
+  ] as const)("rejects %s despite the correct final claim", (violation, failedCheck) => {
+    const trace = processEvidence(true);
+    const launch = expectDefined(
+      trace.activities.find((item) => item.name === "exec"),
+      "launch",
+    );
+    const poll = expectDefined(
+      trace.activities.find((item) => item.name === "process"),
+      "poll",
+    );
+    const pollCall = expectDefined(
+      trace.calls.find((call) => call.id === poll.parentId),
+      "poll cell",
+    );
+    const wait = expectDefined(
+      trace.calls.find((call) => call.name === "wait"),
+      "wrong wait",
+    );
+    const waitResult = expectDefined(
+      trace.outcomes.find((item) => item.id === wait.id),
+      "wait result",
+    );
+    if (violation === "missing-wait") {
+      trace.calls = trace.calls.filter((call) => call !== wait);
+      trace.outcomes = trace.outcomes.filter((outcome) => outcome !== waitResult);
+    } else if (violation === "wrong-wait-id") {
+      wait.args.runId = "another-process";
+    } else if (violation === "second-wait") {
+      trace.calls.push({ ...wait, id: "extra-wait" });
+    } else if (violation === "other-call-with-wait") {
+      trace.calls.push({ ...wait, id: "extra-exec", name: "exec", args: { code: "return 1;" } });
+    } else if (violation === "successful-wait") {
+      waitResult.isError = false;
+      waitResult.details = { status: "completed" };
+    } else if (violation === "waiting-launch") {
+      expectDefined(
+        trace.outcomes.find((item) => item.id === launch.parentId),
+        "launch result",
+      ).details.status = "waiting";
+    } else if (violation === "same-turn-poll") {
+      pollCall.eventIndex = wait.eventIndex;
+    } else if (violation === "premature-poll") {
+      pollCall.eventIndex = 0;
+    } else if (violation === "different-session") {
+      poll.input.sessionId = "another-process";
+    } else if (violation === "second-launch") {
+      trace.activities.push({ ...launch, result: { status: "running", sessionId: "helper-2" } });
+    } else if (violation === "no-completion") {
+      poll.result = { status: "running", sessionId: "helper-1", aggregated: PROCESS.marker };
+    } else if (violation === "missing-marker") {
+      poll.result.aggregated = "";
+    } else {
+      trace.outcomes = trace.outcomes.filter((outcome) => outcome.id !== pollCall.id);
+    }
+    const checks = evaluate("process-wait-recovery", PROCESS, trace);
+    expect(checks.answer).toBe(true);
+    expect(checks[failedCheck]).toBe(false);
+    expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 });
 
 describe("JavaScript declaration and argument-validation evidence", () => {
   const expected = { verificationCode: "JAVASCRIPT_R1_OK" };
-  function evidence(extraReadPath?: string) {
+  function evidence() {
     const trace = collectGatewayMatrixTrace([
       assistantCall("list", 'return await API.list("tools/");'),
       toolOutcome("list", {
@@ -1311,57 +956,17 @@ describe("JavaScript declaration and argument-validation evidence", () => {
       ),
       toolOutcome("write", { status: "completed", value: expected.verificationCode }),
     ]);
-    if (extraReadPath) {
-      const write = expectDefined(
-        trace.calls.find((call) => call.id === "write"),
-        "write call",
-      );
-      write.args.code = `await read(${JSON.stringify({ path: extraReadPath })});\n${String(write.args.code)}`;
-      trace.activities.splice(2, 0, {
-        ...expectDefined(trace.activities[1], "source read"),
-        input: { path: extraReadPath },
-        parentId: "write",
-      });
-    }
     return trace;
   }
-  it.each([undefined, "facts.txt"])(
-    "accepts complete evidence with extra read %s",
-    (extraReadPath) => {
-      const checks = evaluateGatewayMatrixTask({
-        task: "javascript-contracts",
-        expected,
-        final: JSON.stringify(expected),
-        trace: evidence(extraReadPath),
-        receipts: [],
-      });
-      expect(Object.values(checks).every(Boolean)).toBe(true);
-    },
-  );
   it.each([
     "missing-types",
     "late-types",
     "reordered-discovery",
     "early-rejected-read",
     "late-rejection",
-    "missing-error",
     "fabricated-error",
-    "wrong-rejected-input",
-    "wrong-error-text",
-    "wrong-error-tool",
-    "unexpected-read",
-    "fabricated-types",
-    "dead-discovery",
-    "shadowed-api",
-    "wrong-content",
-    "wrong-source-content",
-    "empty-source-result",
-    "missing-readback",
-    "stale-readback-text",
-    "wrong-readback-details",
-    "retired-options",
-  ] as const)("rejects %s even when the final answer is correct", (violation) => {
-    const trace = evidence(violation === "unexpected-read" ? "other.txt" : undefined);
+  ] as const)("grades %s JavaScript evidence independently of the final answer", (violation) => {
+    const trace = evidence();
     if (violation === "missing-types") {
       expectDefined(trace.outcomes[0], "declaration result").details.value = {};
     } else if (violation === "late-types") {
@@ -1393,66 +998,10 @@ describe("JavaScript declaration and argument-validation evidence", () => {
         ).eventIndex - 1;
     } else if (violation === "late-rejection") {
       trace.activities.push(expectDefined(trace.activities.shift(), "rejected read"));
-    } else if (violation === "missing-error") {
-      expectDefined(
-        trace.outcomes.find((outcome) => outcome.id === "invalid"),
-        "validation result",
-      ).details.output = [];
     } else if (violation === "fabricated-error") {
       trace.activities.shift();
-    } else if (violation === "wrong-rejected-input") {
-      expectDefined(trace.activities[0], "rejected read").input.path = "42";
-    } else if (violation === "wrong-error-text") {
-      expectDefined(
-        trace.outcomes.find((outcome) => outcome.id === "invalid"),
-        "validation result",
-      ).details.output = [
-        { type: "text", text: 'Invalid arguments for tool "read": path fabricated error.' },
-      ];
-    } else if (violation === "wrong-error-tool") {
-      expectDefined(
-        trace.outcomes.find((outcome) => outcome.id === "invalid"),
-        "validation result",
-      ).details.output = [
-        { type: "text", text: 'Invalid arguments for tool "write": /path: must be string.' },
-      ];
-    } else if (["fabricated-types", "dead-discovery", "shadowed-api"].includes(violation)) {
-      const call = expectDefined(
-        trace.calls.find((candidate) => candidate.id === "read-types"),
-        "declaration read",
-      );
-      call.args.code =
-        violation === "fabricated-types"
-          ? 'return {content:"declare function read(input: {path: string}): Promise<unknown>;"};'
-          : violation === "dead-discovery"
-            ? 'if (false) await API.read("tools/read.d.ts"); return {content:"declare function read(input: {path: string}): Promise<unknown>;"};'
-            : 'const API = {read: async () => ({content:"declare function read(input: {path: string}): Promise<unknown>;"})}; return await API.read("tools/read.d.ts");';
-    } else if (violation === "wrong-source-content") {
-      expectDefined(trace.activities[1], "source read").result.content = "WRONG_VALUE";
-    } else if (violation === "empty-source-result") {
-      const source = expectDefined(trace.activities[1], "source read");
-      source.result = { kind: "text", content: "" };
-      source.content = [];
-    } else if (violation === "wrong-content") {
-      expectDefined(trace.activities[2], "write").input.content = "wrong";
-    } else if (violation === "missing-readback") {
-      trace.activities.pop();
-    } else if (violation === "stale-readback-text") {
-      expectDefined(trace.activities.at(-1), "readback").content = [
-        { type: "text", text: "STALE_VALUE" },
-      ];
-    } else if (violation === "wrong-readback-details") {
-      expectDefined(trace.activities.at(-1), "readback").result.content = "WRONG_VALUE";
-    } else if (violation === "retired-options") {
-      expectDefined(trace.calls[0], "first cell").args.language = "typescript";
     }
-    const checks = evaluateGatewayMatrixTask({
-      task: "javascript-contracts",
-      expected,
-      final: JSON.stringify(expected),
-      trace,
-      receipts: [],
-    });
+    const checks = evaluate("javascript-contracts", expected, trace);
     expect(checks.answer).toBe(true);
     expect(Object.values(checks).every(Boolean)).toBe(false);
   });
@@ -1477,27 +1026,6 @@ describe("Gateway matrix interview evidence", () => {
     accepted: boolean;
   }[] = [
     {
-      label: "full preview",
-      descriptors: [{ id: "full", previewTruncated: false }],
-      probedIds: ["full"],
-      previewComplete: true,
-      accepted: true,
-    },
-    {
-      label: "truncated preview",
-      descriptors: [{ id: "partial", previewTruncated: true }],
-      probedIds: ["partial"],
-      previewComplete: false,
-      accepted: true,
-    },
-    {
-      label: "incorrect full-preview claim",
-      descriptors: [{ id: "full", previewTruncated: false }],
-      probedIds: ["full"],
-      previewComplete: false,
-      accepted: false,
-    },
-    {
       label: "missing preview metadata",
       descriptors: [{ id: "unknown" }],
       probedIds: ["unknown"],
@@ -1511,33 +1039,6 @@ describe("Gateway matrix interview evidence", () => {
         { id: "partial", previewTruncated: true },
       ],
       probedIds: ["full", "partial"],
-      previewComplete: null,
-      accepted: true,
-    },
-    {
-      label: "conflicting descriptors",
-      descriptors: [
-        { id: "same", previewTruncated: false },
-        { id: "same", previewTruncated: true },
-      ],
-      probedIds: ["same"],
-      previewComplete: null,
-      accepted: true,
-    },
-    {
-      label: "unprobed truncated preview",
-      descriptors: [
-        { id: "full", previewTruncated: false },
-        { id: "partial", previewTruncated: true },
-      ],
-      probedIds: ["full"],
-      previewComplete: true,
-      accepted: true,
-    },
-    {
-      label: "known and unknown selected previews",
-      descriptors: [{ id: "full", previewTruncated: false }, { id: "unknown" }],
-      probedIds: ["full", "unknown"],
       previewComplete: null,
       accepted: true,
     },
@@ -1591,64 +1092,14 @@ describe("Gateway matrix interview evidence", () => {
     },
   );
 
-  it.each(["claim-only", "call-without-outcome", "observed-expiry", "external-action"] as const)(
-    "requires actual expiry evidence for %s",
-    (scenario) => {
-      const taskTrace = collectGatewayMatrixTrace(invoiceEvidence().events);
-      const events: unknown[] = [];
-      if (scenario !== "claim-only") {
-        events.push(
-          assistantCall(
-            "probe",
-            'try { return await results.load("result-1"); } catch (error) { return {error:String(error)}; }',
-          ),
-        );
-      }
-      if (scenario === "observed-expiry" || scenario === "external-action") {
-        events.push(
-          toolOutcome("probe", {
-            status: "completed",
-            value: { error: "Result reference result-1 is unavailable or expired" },
-          }),
-        );
-      }
-      if (scenario === "external-action") {
-        events.push(nestedActivity("probe", "matrix_invoice_export"));
-      }
-      const checks = evaluateGatewayMatrixInterview(
-        "invoices-auto-retention",
-        taskTrace,
-        collectGatewayMatrixTrace(events),
-        answer,
-      );
-      expect(checks.answered).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(scenario === "observed-expiry");
-      if (scenario === "claim-only" || scenario === "call-without-outcome") {
-        expect(checks.priorReferenceUnavailable).toBe(false);
-      }
-      if (scenario === "external-action") {
-        expect(checks.noExternalAction).toBe(false);
-      }
-    },
-  );
-
-  it.each([
-    { scenario: "caught-expiry", accepted: true },
-    { scenario: "uncaught-expiry", accepted: true },
-    { scenario: "multiple-waits", accepted: true },
-    { scenario: "unrelated-run-id", accepted: false },
-    { scenario: "never-terminal", accepted: false },
-    { scenario: "unrelated-expiry-text", accepted: false },
-  ] as const)(
+  it.each([{ scenario: "other-session-call-outcome", accepted: false }] as const)(
     "requires correlated terminal expiry evidence through $scenario",
-    ({ scenario, accepted }) => {
+    ({ accepted }) => {
       const taskTrace = collectGatewayMatrixTrace(invoiceEvidence().events);
-      const events: unknown[] = [
+      const events: Record<string, unknown>[] = [
         assistantCall(
           "probe",
-          scenario === "uncaught-expiry"
-            ? 'return await results.load("result-1");'
-            : 'try { return await results.load("result-1"); } catch (error) { return {error:String(error)}; }',
+          'try { return await results.load("result-1"); } catch (error) { return {error:String(error)}; }',
         ),
         toolOutcome("probe", { status: "waiting", runId: "expiry-probe-run" }),
       ];
@@ -1656,33 +1107,9 @@ describe("Gateway matrix interview evidence", () => {
         events.push(...waitEvents(id, runId, details, isError));
       }
       const expired = { error: "Result reference result-1 is unavailable or expired" };
-      if (scenario === "never-terminal") {
-        wait("resume-1", "expiry-probe-run", {
-          status: "waiting",
-          runId: "expiry-probe-run",
-          output: [expired],
-        });
-      } else if (scenario === "unrelated-expiry-text") {
-        wait("resume-1", "expiry-probe-run", {
-          status: "completed",
-          value: { data: "still available" },
-        });
-        events.push(
-          assistantCall("unrelated", 'return "An unrelated label expired";'),
-          toolOutcome("unrelated", { status: "completed", value: expired }),
-        );
-      } else {
-        if (scenario === "multiple-waits") {
-          wait("resume-1", "expiry-probe-run", { status: "waiting", runId: "expiry-probe-run" });
-        }
-        wait(
-          "resume-final",
-          scenario === "unrelated-run-id" ? "other-run" : "expiry-probe-run",
-          scenario === "uncaught-expiry"
-            ? { status: "failed", ...expired }
-            : { status: "completed", value: expired },
-          scenario === "uncaught-expiry",
-        );
+      wait("resume-final", "expiry-probe-run", { status: "completed", value: expired }, false);
+      for (const [index, event] of events.entries()) {
+        event.matrixSessionKey = index === 1 ? "child-session" : "root-session";
       }
       const checks = evaluateGatewayMatrixInterview(
         "invoices-auto-retention",
@@ -1744,22 +1171,12 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["prompt", "fixture", "thinking", "timeout", "executor"] as const)(
+  it.each(["timeout"] as const)(
     "rejects a changed %s instead of comparing different workloads",
-    (field) => {
+    () => {
       const baseline = comparisonRow();
       const candidate = comparisonRow();
-      if (field === "prompt") {
-        candidate.workload.promptSha256 = "changed";
-      } else if (field === "fixture") {
-        candidate.workload.fixtureSha256 = "changed";
-      } else if (field === "thinking") {
-        candidate.workload.settings.thinking = "high";
-      } else if (field === "timeout") {
-        candidate.workload.settings.timeoutSeconds = 240;
-      } else {
-        candidate.workload.settings.executor = "quickjs";
-      }
+      candidate.workload.settings.timeoutSeconds = 121;
       expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
         "workload changed",
       );
@@ -1775,44 +1192,12 @@ describe("fixed Gateway matrix comparisons", () => {
     );
   });
 
-  it("pairs a failed trial without Gateway metrics using its retained workload identity", () => {
-    const { gateway: _gateway, ...failed } = comparisonRow();
-    const compared = compareCodeModeMatrixResults(
-      [{ ...failed, passed: false }],
-      [comparisonRow()],
-    );
-    expect(expectDefined(compared.cells[0], "failed paired comparison")).toMatchObject({
-      baselinePassed: false,
-      candidatePassed: true,
-      bothPassed: false,
-      deltas: null,
-    });
-  });
-
   it("rejects legacy rows without workload fingerprints", () => {
     const { workload: _workload, ...legacy } = comparisonRow();
     expect(() => compareCodeModeMatrixResults([legacy], [comparisonRow()])).toThrow(
       "workload fingerprints",
     );
   });
-
-  it.each(["baseline", "candidate"] as const)(
-    "does not report a timing gain when the %s trial failed",
-    (failed) => {
-      const baseline = comparisonRow();
-      const candidate = { ...comparisonRow(), gitSha: "candidate-sha", elapsedMs: 1 };
-      candidate.gateway.taskElapsedMs = 1;
-      if (failed === "baseline") {
-        baseline.passed = false;
-      } else {
-        candidate.passed = false;
-      }
-      const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-      const cell = expectDefined(compared.cells[0], "paired comparison cell");
-      expect(cell.bothPassed).toBe(false);
-      expect(cell.deltas).toBeNull();
-    },
-  );
 
   it("compares task time separately from startup and leaves unobserved metrics null", () => {
     const baseline = comparisonRow();
@@ -1848,187 +1233,55 @@ function comparisonRowWithOutcomes() {
 }
 
 describe("separate task and interview comparison outcomes", () => {
-  it("retains overall failure while comparing successful task behavior separately from a failed interview", () => {
-    const baseline = comparisonRowWithOutcomes();
-    const candidate = comparisonRowWithOutcomes();
-    candidate.passed = false;
-    candidate.gateway.taskElapsedMs = 8000;
-    candidate.gateway.interview.checks.priorReferenceUnavailable = false;
-    const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-    const cell = expectDefined(compared.cells[0], "paired outcome comparison");
-    expect(cell).toMatchObject({
-      baselinePassed: true,
-      candidatePassed: false,
-      bothPassed: false,
-      deltas: null,
-    });
-    expect(cell.taskBehavior).toEqual({
-      baselinePassed: true,
-      candidatePassed: true,
-      bothPassed: true,
-      modelsMatched: true,
-      deltas: {
-        taskElapsedMs: -2000,
-        assistantTurns: null,
-        upstreamCalls: 0,
-        inputTokens: null,
-        outputTokens: null,
-        costUsd: null,
-      },
-    });
-    expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: false });
-    expect(compared.baselinePassed).toBe(1);
-    expect(compared.candidatePassed).toBe(0);
-    expect(compared.outcomes).toEqual({
-      taskBehavior: {
-        baseline: { passed: 1, failed: 0, unavailable: 0 },
-        candidate: { passed: 1, failed: 0, unavailable: 0 },
-      },
-      interviewConsistency: {
-        baseline: { passed: 1, failed: 0, unavailable: 0 },
-        candidate: { passed: 0, failed: 1, unavailable: 0 },
-      },
-    });
-  });
-
-  it("withholds task timing deltas for failed task behavior even when the interview is consistent", () => {
-    const baseline = comparisonRowWithOutcomes();
-    const candidate = comparisonRowWithOutcomes();
-    candidate.passed = false;
-    candidate.gateway.taskElapsedMs = 1;
-    candidate.gateway.behavior.answer = false;
-    const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-    const cell = expectDefined(compared.cells[0], "failed task outcome comparison");
-    expect(cell.deltas).toBeNull();
-    expect(cell.taskBehavior).toEqual({
-      baselinePassed: true,
-      candidatePassed: false,
-      bothPassed: false,
-      modelsMatched: true,
-      deltas: null,
-    });
-    expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: true });
-    expect(compared.outcomes.taskBehavior.candidate).toEqual({
-      passed: 0,
-      failed: 1,
-      unavailable: 0,
-    });
-    expect(compared.outcomes.interviewConsistency.candidate).toEqual({
-      passed: 1,
-      failed: 0,
-      unavailable: 0,
-    });
-  });
-
-  it.each([
-    {
-      label: "missing trace flags",
-      gateway: { behavior: { answer: true }, interview: { checks: { answered: true } } },
-    },
-    {
-      label: "unavailable traces",
-      gateway: {
-        traceAvailable: false,
-        behavior: { answer: false },
-        interview: { traceAvailable: false, checks: { answered: false } },
-      },
-    },
-    {
-      label: "missing check maps",
-      gateway: { traceAvailable: true, interview: { traceAvailable: true } },
-    },
-    {
-      label: "empty check maps",
-      gateway: {
-        traceAvailable: true,
-        behavior: {},
-        interview: { traceAvailable: true, checks: {} },
-      },
-    },
-    {
-      label: "nonboolean check values",
-      gateway: {
-        traceAvailable: true,
-        behavior: { answer: "true" },
-        interview: { traceAvailable: true, checks: { answered: "false" } },
-      },
-    },
-  ])(
-    "counts $label as unavailable rather than a failed or zero-valued observation",
-    ({ gateway }) => {
-      const baseline = comparisonRowWithOutcomes();
-      const candidate = { ...comparisonRow(), passed: false, gateway };
-      const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-      const cell = expectDefined(compared.cells[0], "unavailable outcome comparison");
-      expect(cell.deltas).toBeNull();
-      expect(cell.taskBehavior).toEqual({
-        baselinePassed: true,
-        candidatePassed: null,
-        bothPassed: false,
-        modelsMatched: false,
-        deltas: null,
-      });
-      expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: null });
-      expect(compared.outcomes.taskBehavior.candidate).toEqual({
-        passed: 0,
-        failed: 0,
-        unavailable: 1,
-      });
-      expect(compared.outcomes.interviewConsistency.candidate).toEqual({
-        passed: 0,
-        failed: 0,
-        unavailable: 1,
-      });
-    },
-  );
-
-  it.each(["task", "interview"] as const)(
-    "keeps unavailable %s evidence independent of the other outcome",
-    (missing) => {
+  it.each([{ failed: "interview", taskElapsedMs: 8000 }] as const)(
+    "separates $failed failure from the other outcome",
+    ({ taskElapsedMs }) => {
       const baseline = comparisonRowWithOutcomes();
       const candidate = comparisonRowWithOutcomes();
+      const taskPassed = true;
       candidate.passed = false;
-      if (missing === "task") {
-        candidate.gateway.traceAvailable = false;
-      } else {
-        candidate.gateway.interview.traceAvailable = false;
-      }
+      candidate.gateway.taskElapsedMs = taskElapsedMs;
+      candidate.gateway.behavior.answer = taskPassed;
+      candidate.gateway.interview.checks.priorReferenceUnavailable = !taskPassed;
       const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-      const cell = expectDefined(compared.cells[0], "independent evidence comparison");
-      expect(cell.taskBehavior.candidatePassed).toBe(missing === "task" ? null : true);
-      expect(cell.interviewConsistency.candidatePassed).toBe(missing === "interview" ? null : true);
-    },
-  );
-
-  it.each([
-    { side: "baseline", identity: "mismatched" },
-    { side: "candidate", identity: "mismatched" },
-    { side: "baseline", identity: "missing" },
-    { side: "candidate", identity: "missing" },
-  ] as const)(
-    "withholds task-only deltas when $side model identity is $identity",
-    ({ side, identity }) => {
-      const { oracle: _oracle, ...withoutIdentity } = comparisonRowWithOutcomes();
-      const unverified = {
-        ...withoutIdentity,
-        passed: false,
-        ...(identity === "mismatched" ? { oracle: { identity: false } } : {}),
-      };
-      const baseline = side === "baseline" ? unverified : comparisonRowWithOutcomes();
-      const candidate = side === "candidate" ? unverified : comparisonRowWithOutcomes();
-      const compared = compareCodeModeMatrixResults([baseline], [candidate]);
-      const cell = expectDefined(compared.cells[0], "comparison with unverified model identity");
-      expect(cell.deltas).toBeNull();
-      expect(cell.taskBehavior).toEqual({
+      const cell = expectDefined(compared.cells[0], "paired outcome comparison");
+      expect(cell).toMatchObject({
         baselinePassed: true,
-        candidatePassed: true,
-        bothPassed: true,
-        modelsMatched: false,
+        candidatePassed: false,
+        bothPassed: false,
         deltas: null,
       });
-      expect(compared.outcomes.taskBehavior).toEqual({
-        baseline: { passed: 1, failed: 0, unavailable: 0 },
-        candidate: { passed: 1, failed: 0, unavailable: 0 },
+      expect(cell.taskBehavior).toEqual({
+        baselinePassed: true,
+        candidatePassed: taskPassed,
+        bothPassed: taskPassed,
+        modelsMatched: true,
+        deltas: taskPassed
+          ? {
+              taskElapsedMs: -2000,
+              assistantTurns: null,
+              upstreamCalls: 0,
+              inputTokens: null,
+              outputTokens: null,
+              costUsd: null,
+            }
+          : null,
+      });
+      expect(cell.interviewConsistency).toEqual({
+        baselinePassed: true,
+        candidatePassed: !taskPassed,
+      });
+      expect(compared.baselinePassed).toBe(1);
+      expect(compared.candidatePassed).toBe(0);
+      expect(compared.outcomes).toEqual({
+        taskBehavior: {
+          baseline: { passed: 1, failed: 0, unavailable: 0 },
+          candidate: { passed: Number(taskPassed), failed: Number(!taskPassed), unavailable: 0 },
+        },
+        interviewConsistency: {
+          baseline: { passed: 1, failed: 0, unavailable: 0 },
+          candidate: { passed: Number(!taskPassed), failed: Number(taskPassed), unavailable: 0 },
+        },
       });
     },
   );

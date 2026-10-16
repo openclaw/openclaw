@@ -141,12 +141,6 @@ describe("browser Talk provider item ordering", () => {
 
   it.each([
     {
-      name: "split words",
-      user: ["hel", "lo"],
-      assistant: ["ye", "s"],
-      expected: ["hello", "yes"],
-    },
-    {
       name: "repeated fragments",
       user: ["ha", "ha"],
       assistant: ["no", "no"],

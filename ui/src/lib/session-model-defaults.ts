@@ -1,4 +1,3 @@
-// Shared helpers for comparing session rows against list defaults.
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 
 type SessionModelFields = Pick<GatewaySessionRow, "agentRuntime" | "model" | "modelProvider">;

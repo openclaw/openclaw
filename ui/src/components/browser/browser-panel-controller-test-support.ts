@@ -1,7 +1,7 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
-import type { ReactiveController } from "lit";
 import { afterEach, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
   BrowserPanelController,
@@ -73,10 +73,11 @@ export function createBrowserPanelTestMetrics(url: string, title = BROWSER_PANEL
 }
 
 export class TestBrowserPanelHost implements BrowserPanelControllerHost {
-  readonly controllers: ReactiveController[] = [];
+  readonly controllers: PanelLifecycleController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
+  readonly stage = document.createElement("div");
   readonly resourceBasePath = "";
   readonly authToken = null;
   sessionKey = "";
@@ -87,7 +88,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   open = true;
 
   constructor(public client: GatewayBrowserClient | null) {
-    const stage = document.createElement("div");
+    const stage = this.stage;
     stage.className = "bp-stage";
     vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -103,11 +104,14 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
     this.renderRoot.append(stage);
   }
 
-  addController(controller: ReactiveController): void {
+  addController(controller: PanelLifecycleController): void {
+    if (controller instanceof BrowserPanelController) {
+      controller.input.elements.stage = this.stage;
+    }
     this.controllers.push(controller);
   }
 
-  removeController(controller: ReactiveController): void {
+  removeController(controller: PanelLifecycleController): void {
     const index = this.controllers.indexOf(controller);
     if (index >= 0) {
       this.controllers.splice(index, 1);

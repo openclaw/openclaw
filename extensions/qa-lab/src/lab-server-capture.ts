@@ -1,9 +1,9 @@
 import net from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
-import type {
-  AsyncDebugProxyCaptureStore,
-  CaptureQueryPreset,
+import {
+  acquireDebugProxyCaptureStoreAsync,
+  type AsyncDebugProxyCaptureStore,
+  type CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
@@ -16,9 +16,7 @@ export function createQaCaptureLifecycle() {
     OPENCLAW_STATE_DIR: resolveStateDir(),
     OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
   };
-  let captureStoreLease:
-    | ReturnType<typeof proxyCapture.acquireDebugProxyCaptureStoreAsync>
-    | undefined;
+  let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStoreAsync> | undefined;
   let captureClosing = false;
   const captureOperations = new Set<Promise<unknown>>();
   const withCaptureStore = <T>(operation: (store: AsyncDebugProxyCaptureStore) => Promise<T>) => {
@@ -26,19 +24,11 @@ export function createQaCaptureLifecycle() {
       return Promise.reject(new Error("Capture store is closing."));
     }
     if (!captureStoreLease) {
-      const { acquireDebugProxyCaptureStoreAsync } = proxyCapture;
-      if (typeof acquireDebugProxyCaptureStoreAsync !== "function") {
-        return Promise.reject(
-          new Error("QA capture requires async proxy capture support. Upgrade the OpenClaw host."),
-        );
-      }
       const lease = acquireDebugProxyCaptureStoreAsync({ env: captureEnv });
       captureStoreLease = lease;
       void lease.catch(() => {
         // A failed acquisition owns no store; a later request can acquire again.
-        if (captureStoreLease === lease) {
-          captureStoreLease = undefined;
-        }
+        captureStoreLease = undefined;
       });
     }
     const pending = captureStoreLease.then(({ store }) => operation(store));
@@ -122,10 +112,8 @@ async function probeTcpReachability(
   rawUrl: string,
   timeoutMs = 700,
 ): Promise<QaStartupProbeStatus> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return {
       label: rawUrl,
       url: rawUrl,

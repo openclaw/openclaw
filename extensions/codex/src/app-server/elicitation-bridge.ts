@@ -23,20 +23,18 @@ import {
   requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
-  type AppServerApprovalOutcome,
   type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import type {
   CodexAppPolicyContextEntry,
   PluginAppPolicyContext,
   PluginAppPolicyContextEntry,
-} from "./plugin-thread-config.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+} from "./session-binding-record-codec.js";
 
 type ApprovalPropertyContext = {
   name: string;
   schema: JsonObject;
-  required: boolean;
 };
 
 type BridgeableApprovalElicitation = {
@@ -257,10 +255,10 @@ function resolvePluginElicitation(params: {
   const context = params.pluginAppPolicyContext;
   const entries = context ? Object.values(context.apps) : [];
   const pluginEntries = entries.filter(isPluginAppPolicyContextEntry);
+  const readIdentity = (keys: string[]) =>
+    readFirstString(meta, keys) ?? readFirstString(requestParams, keys);
 
-  const appId =
-    readFirstString(meta, PLUGIN_APP_ID_META_KEYS) ??
-    readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
+  const appId = readIdentity(PLUGIN_APP_ID_META_KEYS);
   const connectorId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
   const isCodexConnectorApproval = isCodexConnectorApprovalElicitation(requestParams, meta);
   if (
@@ -293,15 +291,9 @@ function resolvePluginElicitation(params: {
     }
   }
 
-  const pluginName =
-    readFirstString(meta, PLUGIN_NAME_META_KEYS) ??
-    readFirstString(requestParams, PLUGIN_NAME_META_KEYS);
-  const configKey =
-    readFirstString(meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
-    readFirstString(requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
-  const marketplaceName =
-    readFirstString(meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
-    readFirstString(requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
+  const pluginName = readIdentity(PLUGIN_NAME_META_KEYS);
+  const configKey = readIdentity(PLUGIN_CONFIG_KEY_META_KEYS);
+  const marketplaceName = readIdentity(PLUGIN_MARKETPLACE_NAME_META_KEYS);
   if (pluginName || configKey) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
@@ -484,24 +476,12 @@ function readApprovalElicitation(
     ...(source.kind !== "computer-use"
       ? {
           persistHintsMode: "explicit" as const,
-          allowedDecisions: buildApprovalAllowedDecisions(
-            requestedSchema,
-            meta,
-            source.kind === "mcp",
-          ),
+          allowedDecisions: canMapPersistentApproval(requestedSchema, meta, source.kind === "mcp")
+            ? ["allow-once", "allow-always", "deny"]
+            : ["allow-once", "deny"],
         }
       : {}),
   };
-}
-
-function buildApprovalAllowedDecisions(
-  requestedSchema: JsonObject,
-  meta: JsonObject,
-  allowSession = false,
-): ExecApprovalDecision[] {
-  return canMapPersistentApproval(requestedSchema, meta, allowSession)
-    ? ["allow-once", "allow-always", "deny"]
-    : ["allow-once", "deny"];
 }
 
 function canMapPersistentApproval(
@@ -517,16 +497,11 @@ function canMapPersistentApproval(
     return persistHints.includes("always");
   }
   const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
-  return Object.entries(properties).some(([name, value]) => {
-    const schema = isJsonObject(value) ? value : undefined;
-    if (!schema) {
-      return false;
-    }
-    return (
-      isPersistField({ name, schema, required: false }) &&
-      chooseAlwaysPersistOptionValue(readEnumOptions(schema)) !== undefined
-    );
-  });
+  return readApprovalProperties(properties).some(
+    (property) =>
+      isPersistField(property) &&
+      chooseAlwaysPersistOptionValue(readEnumOptions(property.schema)) !== undefined,
+  );
 }
 
 function logPluginElicitationDecline(reason: string, requestParams: JsonObject | undefined): void {
@@ -576,20 +551,20 @@ function buildApprovalDescription(params: {
 
 function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
   const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
-  return Object.entries(properties)
-    .map(([name, value]) => {
-      const schema = isJsonObject(value) ? value : undefined;
-      if (!schema) {
-        return undefined;
-      }
-      const propTitle =
-        sanitizeDisplayText(readNonBlankString(schema.title) ?? "") ||
-        sanitizeDisplayText(name) ||
-        "field";
-      const description = sanitizeOptionalDisplayText(readNonBlankString(schema.description));
-      return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
-    })
-    .filter((line): line is string => Boolean(line));
+  return readApprovalProperties(properties).map(({ name, schema }) => {
+    const propTitle =
+      sanitizeDisplayText(readNonBlankString(schema.title) ?? "") ||
+      sanitizeDisplayText(name) ||
+      "field";
+    const description = sanitizeOptionalDisplayText(readNonBlankString(schema.description));
+    return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
+  });
+}
+
+function readApprovalProperties(properties: JsonObject): ApprovalPropertyContext[] {
+  return Object.entries(properties).flatMap(([name, schema]) =>
+    isJsonObject(schema) ? [{ name, schema }] : [],
+  );
 }
 
 function readDisplayParamLines(meta: JsonObject): string[] {
@@ -597,22 +572,15 @@ function readDisplayParamLines(meta: JsonObject): string[] {
   if (!Array.isArray(displayParams)) {
     return [];
   }
-  const lines = displayParams
-    .slice(0, MAX_DISPLAY_PARAM_ENTRIES)
-    .map((entry) => {
-      const param = isJsonObject(entry) ? entry : undefined;
-      if (!param) {
-        return undefined;
-      }
-      const name =
-        sanitizeOptionalDisplayText(readNonBlankString(param.display_name)) ??
-        sanitizeOptionalDisplayText(readNonBlankString(param.name));
-      if (!name) {
-        return undefined;
-      }
-      return `- ${name}: ${formatDisplayParamValue(param.value)}`;
-    })
-    .filter((line): line is string => Boolean(line));
+  const lines = displayParams.slice(0, MAX_DISPLAY_PARAM_ENTRIES).flatMap((param) => {
+    if (!isJsonObject(param)) {
+      return [];
+    }
+    const name =
+      sanitizeOptionalDisplayText(readNonBlankString(param.display_name)) ??
+      sanitizeOptionalDisplayText(readNonBlankString(param.name));
+    return name ? [`- ${name}: ${formatDisplayParamValue(param.value)}`] : [];
+  });
   const remaining = displayParams.length - MAX_DISPLAY_PARAM_ENTRIES;
   return remaining > 0 ? [...lines, `- Additional parameters: ${remaining} more`] : lines;
 }
@@ -651,24 +619,18 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
       return "{truncated}";
     }
     const parts: string[] = [];
-    let count = 0;
-    let truncated = false;
     for (const key in value) {
       if (!Object.hasOwn(value, key)) {
         continue;
       }
-      if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
-        truncated = true;
+      if (parts.length >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
+        parts.push("...");
         break;
       }
       const safeKey = truncateDisplayText(sanitizeDisplayText(key), 80);
       parts.push(
         `${JSON.stringify(safeKey)}:${formatDisplayJsonValue(value[key] ?? null, depth - 1)}`,
       );
-      count += 1;
-    }
-    if (truncated) {
-      parts.push("...");
     }
     return `{${parts.join(",")}}`;
   }
@@ -728,7 +690,7 @@ function buildAcceptedContent(
     BridgeableApprovalElicitation,
     "requestedSchema" | "meta" | "persistHintsMode"
   >,
-  outcome: AppServerApprovalOutcome,
+  outcome: "approved-once" | "approved-session",
 ): JsonObject | undefined {
   const { requestedSchema, meta } = approvalPrompt;
   const properties = isJsonObject(requestedSchema.properties)
@@ -746,87 +708,62 @@ function buildAcceptedContent(
   let sawApprovalField = false;
   const persist = choosePersistHint(readPersistHints(meta, approvalPrompt.persistHintsMode));
 
-  for (const [name, value] of Object.entries(properties)) {
-    const schema = isJsonObject(value) ? value : undefined;
-    if (!schema) {
-      continue;
-    }
-    const property = { name, schema, required: required.has(name) };
-    const next =
-      readApprovalFieldValue(property, outcome, persist) ??
-      readPersistFieldValue(property, meta, outcome, approvalPrompt.persistHintsMode ?? "legacy") ??
-      (outcome === "approved-once" && isPersistField(property)
-        ? undefined
-        : property.schema.default);
+  for (const property of readApprovalProperties(properties)) {
+    const next = readAcceptedPropertyValue(
+      property,
+      outcome,
+      persist,
+      approvalPrompt.persistHintsMode ?? "legacy",
+    );
 
     if (isApprovalField(property)) {
       sawApprovalField = true;
     }
     if (next === undefined) {
-      if (property.required) {
+      if (required.has(property.name)) {
         return undefined;
       }
       continue;
     }
 
-    content[name] = next;
+    content[property.name] = next;
   }
 
   return sawApprovalField ? content : undefined;
 }
 
-function readApprovalFieldValue(
+function readAcceptedPropertyValue(
   property: ApprovalPropertyContext,
-  outcome: AppServerApprovalOutcome,
+  outcome: "approved-once" | "approved-session",
   persist: "always" | "session" | undefined,
-): JsonValue | undefined {
-  if (!isApprovalField(property)) {
-    return undefined;
-  }
-  const type = readNonBlankString(property.schema.type);
-  if (type === "boolean") {
-    return true;
-  }
-  const options = readEnumOptions(property.schema);
-  if (options.length === 0) {
-    return undefined;
-  }
-
-  const acceptChoice = options.find((option) => isPositiveApprovalOption(option));
-  if (outcome === "approved-session") {
-    return (
-      options.find((option) => isPersistentApprovalOption(option, persist))?.value ??
-      acceptChoice?.value
-    );
-  }
-  return acceptChoice?.value;
-}
-
-function readPersistFieldValue(
-  property: ApprovalPropertyContext,
-  meta: JsonObject,
-  outcome: AppServerApprovalOutcome,
   persistHintsMode: "legacy" | "explicit",
 ): JsonValue | undefined {
-  if (!isPersistField(property) || outcome !== "approved-session") {
+  if (isApprovalField(property)) {
+    if (readNonBlankString(property.schema.type) === "boolean") {
+      return true;
+    }
+    const options = readEnumOptions(property.schema);
+    const choice =
+      (outcome === "approved-session"
+        ? options.find((option) => isPersistentApprovalOption(option, persist))
+        : undefined) ?? options.find(isPositiveApprovalOption);
+    if (choice) {
+      return choice.value;
+    }
+  }
+  if (!isPersistField(property)) {
+    return property.schema.default;
+  }
+  if (outcome === "approved-once") {
     return undefined;
   }
-  const persistHints = readPersistHints(meta, persistHintsMode);
   const options = readEnumOptions(property.schema);
-  if (options.length === 0) {
-    return undefined;
-  }
-  const preferred = choosePersistHint(persistHints);
-  if (preferred) {
-    const match = options.find(
-      (option) => option.value === preferred || option.label === preferred,
-    );
-    return match?.value;
-  }
-  if (persistHintsMode === "explicit") {
-    return chooseAlwaysPersistOptionValue(options);
-  }
-  return undefined;
+  const choice = persist
+    ? options.find((option) => option.value === persist || option.label === persist)?.value
+    : persistHintsMode === "explicit"
+      ? chooseAlwaysPersistOptionValue(options)
+      : undefined;
+  return choice ?? property.schema.default;
 }
 
 function isApprovalField(property: ApprovalPropertyContext): boolean {
@@ -862,7 +799,7 @@ function readPersistHints(meta: JsonObject, mode: "legacy" | "explicit" = "legac
 
 function buildAcceptedMeta(
   meta: JsonObject,
-  outcome: AppServerApprovalOutcome,
+  outcome: "approved-once" | "approved-session",
   persistHintsMode: "legacy" | "explicit",
 ): JsonObject | null {
   if (outcome !== "approved-session") {
@@ -873,27 +810,15 @@ function buildAcceptedMeta(
 }
 
 function choosePersistHint(persistHints: string[]): "always" | "session" | undefined {
-  if (persistHints.includes("always")) {
-    return "always";
-  }
-  if (persistHints.includes("session")) {
-    return "session";
-  }
-  return undefined;
+  return (["always", "session"] as const).find((hint) => persistHints.includes(hint));
 }
 
 function chooseAlwaysPersistOptionValue(
   options: Array<{ value: string; label: string }>,
 ): string | undefined {
-  const always = options.find((option) => optionMatchesPersist(option, "always"));
-  return always?.value;
-}
-
-function optionMatchesPersist(
-  option: { value: string; label: string },
-  persist: "always" | "session",
-): boolean {
-  return option.value.toLowerCase() === persist || option.label.toLowerCase() === persist;
+  return options.find(
+    (option) => option.value.toLowerCase() === "always" || option.label.toLowerCase() === "always",
+  )?.value;
 }
 
 function hasNoSchemaProperties(requestedSchema: JsonObject): boolean {
@@ -910,16 +835,11 @@ function readEnumOptions(schema: JsonObject): Array<{ value: string; label: stri
     return values.map((value, index) => ({ value, label: labels[index] ?? value }));
   }
   if (Array.isArray(schema.oneOf)) {
-    return schema.oneOf
-      .map((entry) => {
-        const option = isJsonObject(entry) ? entry : undefined;
-        const value = readNonBlankString(option?.const);
-        if (!value) {
-          return undefined;
-        }
-        return { value, label: readNonBlankString(option?.title) ?? value };
-      })
-      .filter((entry): entry is { value: string; label: string } => Boolean(entry));
+    return schema.oneOf.flatMap((entry) => {
+      const option = isJsonObject(entry) ? entry : undefined;
+      const value = readNonBlankString(option?.const);
+      return value ? [{ value, label: readNonBlankString(option?.title) ?? value }] : [];
+    });
   }
   return [];
 }

@@ -10,7 +10,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-c
 import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 
 export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
+  return api.runtime.config.current() as OpenClawConfig;
 }
 
 type BoundClaudeSource = { adopted: boolean; hostId: string; threadId: string };
@@ -35,7 +35,7 @@ function boundClaudeSource(
   const hostId =
     isRecord(marker) && typeof marker.sourceHostId === "string"
       ? marker.sourceHostId
-      : entry.execHost === "node" && typeof entry.execNode === "string" && entry.execNode.trim()
+      : entry.execHost === "node" && entry.execNode?.trim()
         ? `node:${entry.execNode.trim()}`
         : CLAUDE_LOCAL_SESSION_HOST_ID;
   // A CLI resume binding only records which Claude thread this session last

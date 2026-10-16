@@ -20,12 +20,7 @@ type MattermostDraftPublishedPart = {
 
 type MattermostFinalTextResolution =
   | {
-      kind: "full";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "remaining";
+      kind: "full" | "remaining";
       text: string;
       publishedParts: readonly MattermostDraftPublishedPart[];
     }
@@ -33,21 +28,6 @@ type MattermostFinalTextResolution =
       kind: "already-delivered";
       publishedParts: readonly MattermostDraftPublishedPart[];
     };
-
-type MattermostDraftStream = {
-  update: (text: string) => void;
-  updateAssistantText: (text: string) => void;
-  flush: () => Promise<void>;
-  postId: () => string | undefined;
-  clear: () => Promise<void>;
-  deleteCurrentMessage: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  stop: () => Promise<void>;
-  forceNewMessage: () => Promise<void>;
-  settleBoundaries: () => Promise<void>;
-  resolveFinalText: (text: string) => MattermostFinalTextResolution;
-};
 
 function normalizeMattermostDraftText(text: string, maxChars: number): string {
   const trimmed = text.trim();
@@ -76,33 +56,6 @@ function consumeMattermostPublishedChunk(params: {
   return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
 }
 
-type MattermostDraftPreviewBoundaryController = {
-  noteUpdate: () => void;
-  noteBoundary: () => Promise<void>;
-};
-
-export function createMattermostDraftPreviewBoundaryController(params: {
-  enabled: boolean;
-  forceNewMessage: () => void | Promise<void>;
-}): MattermostDraftPreviewBoundaryController {
-  let hasStreamedContent = false;
-  return {
-    noteUpdate() {
-      hasStreamedContent = true;
-    },
-    async noteBoundary() {
-      if (!params.enabled) {
-        return;
-      }
-      if (!hasStreamedContent) {
-        return;
-      }
-      hasStreamedContent = false;
-      await params.forceNewMessage();
-    },
-  };
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
@@ -113,7 +66,7 @@ export function createMattermostDraftStream(params: {
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): MattermostDraftStream {
+}) {
   const maxChars = Math.min(
     params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
     MATTERMOST_STREAM_MAX_CHARS,
@@ -121,6 +74,16 @@ export function createMattermostDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
+  const retainAcceptedDeliveryFailure = (err: unknown) => {
+    if (isChannelPartialDeliveryError(err)) {
+      // Publish terminal state before warning hooks can re-enter delivery.
+      const acceptedDeliveryError = toErrorObject(err, "Mattermost accepted delivery failed");
+      streamState.stopped = true;
+      terminalAcceptedDeliveryError = acceptedDeliveryError;
+      return acceptedDeliveryError;
+    }
+    return undefined;
+  };
   const assertNoAcceptedDeliveryFailure = () => {
     if (terminalAcceptedDeliveryError !== undefined) {
       throw terminalAcceptedDeliveryError;
@@ -145,9 +108,6 @@ export function createMattermostDraftStream(params: {
   const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
-    if (streamState.stopped && !streamState.final) {
-      return false;
-    }
     const target = currentGeneration;
     const rendered = params.renderText?.(text) ?? text;
     const normalized = normalizeMattermostDraftText(rendered, maxChars);
@@ -181,13 +141,7 @@ export function createMattermostDraftStream(params: {
     } catch (err) {
       // Stop immediately so a discarded background failure cannot queue a second visible post.
       streamState.stopped = true;
-      const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-        ? toErrorObject(err, "Mattermost accepted delivery failed")
-        : undefined;
-      if (acceptedDeliveryError) {
-        // Warning handlers can synchronously re-enter finalization; retain the failure first.
-        terminalAcceptedDeliveryError = acceptedDeliveryError;
-      }
+      const acceptedDeliveryError = retainAcceptedDeliveryFailure(err);
       params.warn?.(
         `mattermost stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -250,7 +204,6 @@ export function createMattermostDraftStream(params: {
         await inFlightAtBoundary;
         assertNoAcceptedDeliveryFailure();
         if (streamState.stopped && !streamState.final) {
-          assertNoAcceptedDeliveryFailure();
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
@@ -297,14 +250,7 @@ export function createMattermostDraftStream(params: {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });
         }
       } catch (err) {
-        const acceptedDeliveryError = isChannelPartialDeliveryError(err)
-          ? toErrorObject(err, "Mattermost accepted delivery failed")
-          : undefined;
-        if (acceptedDeliveryError) {
-          // Publish terminal state before warning hooks can re-enter update or forceNewMessage.
-          streamState.stopped = true;
-          terminalAcceptedDeliveryError = acceptedDeliveryError;
-        }
+        const acceptedDeliveryError = retainAcceptedDeliveryFailure(err);
         const publishedAssistantPrefix = assistantText?.slice(0, publishedAssistantOffset).trim();
         if (publishedAssistantPrefix) {
           // A later physical chunk failed after this exact source prefix became durable.
@@ -382,34 +328,34 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const resolveFinalText = (text: string) => {
+  const resolveFinalText = (text: string): MattermostFinalTextResolution => {
     const publishedParts = [...publishedAssistantParts.values()];
     if (sealedAssistantTexts.length === 0) {
-      return { kind: "full" as const, text, publishedParts };
+      return { kind: "full", text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.text.trim();
-      if (!completed || !remainingText.startsWith(completed)) {
-        return { kind: "full" as const, text, publishedParts };
+      const completed = sealedText.text;
+      if (!remainingText.startsWith(completed)) {
+        return { kind: "full", text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
       // Canonical assistant block aggregation uses newline separators. A plain-space
       // suffix can be a block-local final that merely shares the prior block's prefix.
       if (sealedText.requiresBlockBoundary && suffix && !/^\r?\n/.test(suffix)) {
-        return { kind: "full" as const, text, publishedParts };
+        return { kind: "full", text, publishedParts };
       }
       remainingText = suffix.replace(sealedText.requiresBlockBoundary ? /^(?:\r?\n)+/ : /^\s+/, "");
     }
     const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
     const remaining = remainingText.trim();
     if (currentText && !remaining.startsWith(currentText)) {
-      return { kind: "full" as const, text, publishedParts };
+      return { kind: "full", text, publishedParts };
     }
     return remaining
-      ? { kind: "remaining" as const, text: remaining, publishedParts }
-      : { kind: "already-delivered" as const, publishedParts };
+      ? { kind: "remaining", text: remaining, publishedParts }
+      : { kind: "already-delivered", publishedParts };
   };
 
   params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);

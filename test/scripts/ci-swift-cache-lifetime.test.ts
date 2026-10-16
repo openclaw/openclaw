@@ -120,14 +120,29 @@ describe("macOS optional Swift cache lifetime", () => {
       expect(required["continue-on-error"]).not.toBe(true);
     }
     expect(budget.env?.CACHE_STARTED).toBe("${{ steps.swift-cache-clock.outputs.started }}");
+    const jobTimeout = runInNewContext(job["timeout-minutes"].replace(/^\$\{\{\s*|\s*\}\}$/g, ""), {
+      github: { event_name: "pull_request" },
+      needs: { preflight: { outputs: { validation_tier: "main" } } },
+      inputs: {},
+      matrix: { phase: "tests" },
+    });
+    expect(jobTimeout).toBe(30);
+    const tail = [budget, packageSave, metadata, buildSave];
+    expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
+    let minutes = 0;
+    for (const owner of tail) {
+      expect(owner["continue-on-error"], owner.name).toBe(true);
+      expect(owner["timeout-minutes"], owner.name).toBeGreaterThan(0);
+      minutes += owner["timeout-minutes"]!;
+    }
+    expect(minutes).toBe(5);
+    expect(20 + minutes).toBeLessThanOrEqual(jobTimeout - 5);
   });
 
   it.each([
     [0, "1000", "true"],
     [1199, "1000", "true"],
     [1200, "1000", "false"],
-    [1760, "1000", "false"],
-    [1800, "1000", "false"],
     [-1, "1000", "false"],
     [1, "", "false"],
     [1, "broken", "false"],
@@ -139,20 +154,6 @@ describe("macOS optional Swift cache lifetime", () => {
     for (const owner of [packageSave, metadata, buildSave]) {
       expect(selected(owner, { allowed }), owner.name).toBe(expected === "true");
     }
-  });
-
-  it("leaves terminal reserve even if every admitted optional step uses its entire timeout", () => {
-    expect(job["timeout-minutes"]).toBe(30);
-    const tail = [budget, packageSave, metadata, buildSave];
-    expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
-    let minutes = 0;
-    for (const owner of tail) {
-      expect(owner["continue-on-error"], owner.name).toBe(true);
-      expect(owner["timeout-minutes"], owner.name).toBeGreaterThan(0);
-      minutes += owner["timeout-minutes"]!;
-    }
-    expect(minutes).toBe(5);
-    expect(20 + minutes).toBeLessThanOrEqual(job["timeout-minutes"] - 5);
   });
 
   it.each([packageSave, metadata, buildSave])(

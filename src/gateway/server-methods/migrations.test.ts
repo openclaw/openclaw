@@ -44,10 +44,10 @@ function createConfig() {
   return {
     agents: {
       defaults: { workspace: "/tmp/workspace-main" },
-      list: [
-        { id: "main", default: true },
-        { id: "research", workspace: "/tmp/workspace-research" },
-      ],
+      entries: {
+        main: {},
+        research: { workspace: "/tmp/workspace-research" },
+      },
     },
   } as never;
 }
@@ -516,9 +516,9 @@ describe("memory migration gateway handlers", () => {
   it("rejects apply when the selected agent workspace changed after preview", async () => {
     const planFingerprint = await loadPlanFingerprint();
     const mutableConfig = config as {
-      agents: { list: Array<{ id: string; workspace?: string }> };
+      agents: { entries: Record<string, { workspace?: string }> };
     };
-    const research = mutableConfig.agents.list.find((agent) => agent.id === "research");
+    const research = mutableConfig.agents.entries.research;
     if (!research) {
       throw new Error("expected research agent");
     }

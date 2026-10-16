@@ -19,10 +19,7 @@ it("reconciles saved and externally changed names through background DB-only pag
       originator: "codex_cli_rs",
     }),
   );
-  const saved = await projectCodexCatalogPage(
-    { data: original },
-    { sanitize: terminalText.sanitizeTerminalText },
-  );
+  const saved = await projectCodexCatalogPage({ data: original });
   const state: CodexCatalogState = {
     entries: vi.fn(async () => [
       { key: "complete", createdAt: 0, value: { version: 1 as const, kind: "complete" as const } },

@@ -94,6 +94,31 @@ describe("prepared reply routing", () => {
     },
   );
 
+  it("rejects a producer retired during its final delivery preparation", async () => {
+    let current = true;
+    const beforeDeliver = vi.fn(async () => {
+      current = false;
+    });
+    const result = await routeReply({
+      cfg: {},
+      payload: { text: "event update", mediaUrl: "https://example.invalid/clip.ogg" },
+      channel: "matrix",
+      to: "!room:example.invalid",
+      replyKind: "final",
+      mirror: false,
+      beforeDeliver,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("event producer retired");
+        }
+      },
+    });
+    expect(beforeDeliver).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ ok: false, delivered: false });
+    expect(result.error).toContain("event producer retired");
+    expect(visible).toEqual([]);
+  });
+
   it("rejects a writer retired after prepared routing and awaited channel work", async () => {
     const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
     const session = {

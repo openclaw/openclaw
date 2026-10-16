@@ -24,7 +24,7 @@ guesswork.
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
      for full-suite ranking.
    - For bundled plugin breadth, run the smallest relevant `pnpm
-test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
+     test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
      before jumping to the full extension sweep.
    - For a scoped hotspot use:
      `/usr/bin/time -l pnpm test <file-or-files> --maxWorkers=1 --reporter=verbose`
@@ -226,8 +226,7 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- For source changes, run `pnpm check:changed` before push; in maintainer
-  Testbox mode run it in the warmed Testbox.
+- Source changes: focused local tests + targeted typecheck/lint/format before push; `pnpm check:changed` optional. PR CI = broad proof. Testbox only for CI/local gaps, immediate grant; warmed Testbox reuse when selected.
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.

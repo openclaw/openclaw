@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
   resolveSidebarAttentionKey,
@@ -35,17 +36,9 @@ type SidebarAttentionStoreControllerConstructor = new (
   onChange: () => void,
 ) => SidebarAttentionStoreController;
 
-export type SidebarAttentionStore = {
-  readonly entries: readonly SidebarInboxEntry[];
-  activate(Controller: SidebarAttentionStoreControllerConstructor): MentionsCapability;
-  dismiss(dismissal: SidebarAttentionDismissal): void;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
-};
+export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
-export function createSidebarAttentionStore(
-  sources: SidebarAttentionStoreSources,
-): SidebarAttentionStore {
+export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
   const listeners = new Set<() => void>();
   let controller: SidebarAttentionStoreController | null = null;
   const publish = () => {
@@ -73,17 +66,14 @@ export function createSidebarAttentionStore(
     get entries() {
       return controller?.entries ?? [];
     },
-    activate(Controller) {
+    activate(Controller: SidebarAttentionStoreControllerConstructor) {
       controller ??= new Controller(sources, publish);
       return controller.mentions;
     },
-    dismiss(dismissal) {
+    dismiss(dismissal: SidebarAttentionDismissal) {
       controller?.dismiss(dismissal);
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       stopScopeUpgrade();

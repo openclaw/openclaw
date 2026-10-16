@@ -9,12 +9,12 @@ import {
   NODE_HOST_CONFIG_KEY,
   type NodeHostConfig,
 } from "../node-host/config.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {

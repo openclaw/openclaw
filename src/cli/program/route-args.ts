@@ -104,7 +104,7 @@ export function parseHealthRouteArgs(argv: string[]) {
   }
   return {
     json: hasFlag(argv, "--json"),
-    verbose: getVerboseFlag(argv, { includeDebug: true }),
+    verbose: getVerboseFlag(argv),
     timeoutMs,
   };
 }
@@ -130,7 +130,7 @@ export function parseStatusRouteArgs(argv: string[]) {
     all: hasFlag(argv, "--all"),
     usage: hasFlag(argv, "--usage"),
     ...(agent !== undefined ? { agent } : {}),
-    verbose: getVerboseFlag(argv, { includeDebug: true }),
+    verbose: getVerboseFlag(argv),
     timeoutMs,
   };
 }
@@ -139,7 +139,14 @@ export function parseStatusRouteArgs(argv: string[]) {
 export function parseGatewayStatusRouteArgs(argv: string[]) {
   const values = parseRoutedValueFlags(argv, {
     commandPath: ["gateway", "status"],
-    booleanFlags: ["--deep", "--json", "--require-rpc", "--no-probe", "--ssh-auto"],
+    booleanFlags: [
+      "--deep",
+      "--json",
+      "--require-rpc",
+      "--no-probe",
+      "--ssh-auto",
+      "--runtime-intent-only",
+    ],
     valueFlags: ["--url", "--token", "--password", "--timeout", "--ssh", "--ssh-identity"],
   });
   if (!values) {
@@ -164,6 +171,7 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
     json: hasFlag(argv, "--json"),
     requireRpc: hasFlag(argv, "--require-rpc"),
     probe: !hasFlag(argv, "--no-probe"),
+    ...(hasFlag(argv, "--runtime-intent-only") ? { runtimeIntentOnly: true } : {}),
   };
 }
 
@@ -304,27 +312,19 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
-function parseModelsRootStatusRouteArgs(argv: string[]) {
-  const values = parseRoutedValueFlags(argv, {
+/** Parse both parent aliases and `openclaw models status` through one status owner. */
+export function parseModelsStatusRouteArgs(argv: string[]) {
+  const rootValues = parseRoutedValueFlags(argv, {
     commandPath: ["models"],
     booleanFlags: MODELS_PARENT_BOOLEAN_FLAGS,
     valueFlags: MODELS_PARENT_VALUE_FLAGS,
   });
-  if (!values) {
-    return null;
-  }
-  return {
-    agent: values.get("--agent"),
-    json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
-    plain: hasFlag(argv, "--status-plain"),
-  };
-}
-
-/** Parse both parent aliases and `openclaw models status` through one status owner. */
-export function parseModelsStatusRouteArgs(argv: string[]) {
-  const rootArgs = parseModelsRootStatusRouteArgs(argv);
-  if (rootArgs) {
-    return rootArgs;
+  if (rootValues) {
+    return {
+      agent: rootValues.get("--agent"),
+      json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
+      plain: hasFlag(argv, "--status-plain"),
+    };
   }
   const values = parseRoutedValueFlags(argv, {
     commandPath: ["models", "status"],

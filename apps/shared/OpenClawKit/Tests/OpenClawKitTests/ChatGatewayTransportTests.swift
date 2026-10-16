@@ -4,6 +4,59 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayTransportTests {
+    @Test func `mutation receipt binds canonical fields to the captured owner and session incarnation`() async throws {
+        let recorder = RequestRecorder()
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: "research") },
+            unreadAckContract: true,
+            receivesPatchReceipts: true,
+            request: { request in
+                await recorder.append(request)
+                return Data(#"""
+                {"ok":true,"key":"global","entry":{"sessionId":"session-a","label":"Canonical name",
+                  "updatedAt":20,"lastReadAt":20,"lastActivityAt":10}}
+                """#.utf8)
+            })
+        let receipt = try #require(await lease.patchSession(
+            key: "global", expectedSessionID: "session-a", expectedMarkedUnreadAt: .some(5),
+            label: nil, category: nil, pinned: nil, archived: nil, unread: false))
+        let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"global","agentId":"research","sessionId":"session-a","updatedAt":10,"unread":true}
+        """#.utf8))
+        #expect(receipt.matches(row))
+        #expect(receipt.entry.label == "Canonical name")
+        var different = row
+        different.agentId = "other"
+        #expect(!receipt.matches(different))
+        different = row
+        different.sessionId = "session-b"
+        #expect(!receipt.matches(different))
+        let requests = await recorder.requests
+        #expect(requests.count == 1)
+        #expect(requests.first?.params["agentId"]?.value as? String == "research")
+        #expect(requests.first?.params["expectedSessionId"]?.value as? String == "session-a")
+        #expect(requests.first?.params["expectedMarkedUnreadAt"]?.value as? Double == 5)
+    }
+
+    @Test(arguments: [false, true])
+    func `mutation receipt decoding is opt in and rejects an incomplete acknowledgement`(enabled: Bool) async throws {
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: "research") },
+            unreadAckContract: true,
+            receivesPatchReceipts: enabled,
+            request: { _ in Data(#"{"ok":true}"#.utf8) })
+        if enabled {
+            await #expect(throws: DecodingError.self) {
+                try await lease.patchSession(
+                    key: "global", label: nil, category: nil, pinned: nil, archived: nil, unread: false)
+            }
+        } else {
+            let receipt = try await lease.patchSession(
+                key: "global", label: nil, category: nil, pinned: nil, archived: nil, unread: false)
+            #expect(receipt == nil)
+        }
+    }
+
     @Test(arguments: [OpenClawChatSessionTargetPolicy.preserveBareKeys, .scopeBareKeysToSelectedAgent])
     func `shared operations preserve platform targeting through the transport protocol`(
         policy: OpenClawChatSessionTargetPolicy) async throws
@@ -41,18 +94,32 @@ struct ChatGatewayTransportTests {
                 if request.method == "sessions.rewind" {
                     return Data(#"{"editorText":"restored draft"}"#.utf8)
                 }
+                if request.method == "sessions.create" {
+                    return Data(#"{"key":"agent:reviewer:child"}"#.utf8)
+                }
                 throw Failure.retiredRoute
             })
 
         let response = try await transport.rewindSession(sessionKey: "global", entryId: "message-1")
         #expect(response.editorText == "restored draft")
+        #expect(try await transport.forkSession(parentKey: "global") == "agent:reviewer:child")
+        #expect(try await transport.forkSession(
+            parentKey: "global", fromLastCompleted: true, agentID: "other") == "agent:reviewer:child")
         await #expect(throws: Failure.retiredRoute) {
             try await transport.switchSessionBranch(sessionKey: "global", agentID: "other", leafEntryId: "leaf-1")
         }
         let requests = await recorder.requests
-        #expect(requests.map(\.method) == ["sessions.rewind", "sessions.branches.switch"])
+        #expect(requests.map(\.method) == [
+            "sessions.rewind", "sessions.create", "sessions.create", "sessions.branches.switch",
+        ])
         #expect(requests[0].params["agentId"]?.value as? String == "reviewer")
-        #expect(requests[1].params["agentId"]?.value as? String == "other")
+        #expect(requests[1].params["agentId"]?.value as? String == "reviewer")
+        #expect(requests[1].params["parentSessionKey"]?.value as? String == "global")
+        #expect(requests[1].params["fork"]?.value as? Bool == true)
+        #expect(requests[1].params["forkFrom"] == nil)
+        #expect(requests[2].params["agentId"]?.value as? String == "other")
+        #expect(requests[2].params["forkFrom"]?.value as? String == "last-completed")
+        #expect(requests[3].params["agentId"]?.value as? String == "other")
     }
 
     private enum Failure: Error { case unexpectedRequest, retiredRoute }

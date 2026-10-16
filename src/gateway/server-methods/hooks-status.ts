@@ -19,7 +19,6 @@ export const hooksStatusHandlers: GatewayRequestHandlers = {
       rawAgentId: params.agentId,
       respond,
       cfg: config,
-      normalize: (value) => (typeof value === "string" ? value.trim() || undefined : undefined),
     });
     if (!resolved) {
       return;

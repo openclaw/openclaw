@@ -8,8 +8,10 @@ import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/re
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { testing as schedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
@@ -39,6 +41,7 @@ vi.mock("../../context-engine/registry.js", async (importOriginal) => ({
 export function useChatAbortRegistryFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
+  let releaseProfileCatalog: (() => void) | undefined;
   let settleRootWork: ReturnType<typeof observeRootWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
@@ -59,6 +62,8 @@ export function useChatAbortRegistryFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    await captureRuntimeConfigAsyncReader()();
+    releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
     settleRootWork = observeRootWork();
   });
   afterEach(async () => {
@@ -71,8 +76,10 @@ export function useChatAbortRegistryFixture() {
     // Delivery results can settle before their detached root's cleanup tail.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
+        releaseProfileCatalog?.();
+        releaseProfileCatalog = undefined;
         await cleanupSessionStateForTest({ stateDir: stateDir || undefined });
         clearConfigCache();
         clearRuntimeConfigSnapshot();

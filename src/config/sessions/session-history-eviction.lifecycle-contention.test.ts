@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -25,7 +26,9 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-it("resumes history eviction after foreign state maintenance refuses admission", async () => {
+it("resumes history eviction after foreign state maintenance refuses admission", async ({
+  signal,
+}) => {
   state = await createOpenClawTestState({ prefix: "history-lifecycle-", layout: "state-only" });
   const tempDir = state.sessionsDir();
   fs.mkdirSync(tempDir, { recursive: true });
@@ -68,8 +71,18 @@ it("resumes history eviction after foreign state maintenance refuses admission",
     ],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => resolve());
+  });
   try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message", { signal }),
+        closed,
+        "Foreign state owner exited before IPC readiness",
+      ),
+      signal,
+    );
     expect(ready).toEqual({ ready: true });
     await expect(enforce()).rejects.toThrow("offline maintenance");
   } finally {
@@ -77,10 +90,9 @@ it("resumes history eviction after foreign state maintenance refuses admission",
       child.send({ release: true });
     }
     try {
-      if (child.exitCode === null) {
-        await once(child, "close", { signal: AbortSignal.timeout(5_000) });
-      }
+      await withinTest(closed, signal);
     } finally {
+      // Retain TERM/KILL escalation only for failed or aborted ownership handshakes.
       await stopChildProcess(child, 5_000);
     }
   }

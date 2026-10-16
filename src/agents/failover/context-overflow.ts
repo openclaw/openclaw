@@ -1,4 +1,4 @@
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   hasRateLimitTpmHint,
@@ -53,12 +53,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   ) {
     return false;
   }
-  if (isContextOverflowError(errorMessage)) {
-    return true;
-  }
   return (
-    !normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template") &&
-    !matchesContextOverflowMessage(errorMessage, "rate-limit-hint") &&
-    matchesContextOverflowMessage(errorMessage, "failover-hint")
+    isContextOverflowError(errorMessage) ||
+    (!normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template") &&
+      !matchesContextOverflowMessage(errorMessage, "rate-limit-hint") &&
+      matchesContextOverflowMessage(errorMessage, "failover-hint"))
   );
 }

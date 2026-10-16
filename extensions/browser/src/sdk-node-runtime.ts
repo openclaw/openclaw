@@ -1,7 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
-/** Runs async work with an optional aborting timeout signal. */
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,

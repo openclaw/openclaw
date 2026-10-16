@@ -1,23 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
-import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 describe("per-agent legacy migrations after roster normalization", () => {
-  it("does not create global model settings from a discarded legacy roster", () => {
-    const raw = {
-      agents: {
-        entries: { main: { name: "canonical" } },
-        list: [
-          { id: "old", model: "vllm/qwen-test", params: { qwenThinkingFormat: "chat-template" } },
-        ],
-      },
-    };
-    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
-    expect(result.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
-  });
+  it.each(["defaults", "inherited agent"])(
+    "creates absent provider ancestors for Qwen params from %s",
+    (source) => {
+      const legacyParams = { qwenThinkingFormat: "chat-template" };
+      const raw = {
+        agents: {
+          defaults: {
+            model: "vllm/Qwen/selected@local",
+            params: { temperature: 0.2, ...(source === "defaults" ? legacyParams : {}) },
+          },
+          list: [
+            {
+              id: "local",
+              params: { temperature: 0.4, ...(source === "inherited agent" ? legacyParams : {}) },
+            },
+          ],
+        },
+      };
+      const { next } = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
 
-  it.each(["entries", "list"])("preserves migrated values in a %s roster", (shape) => {
+      expect(next).toHaveProperty("models.providers.vllm", {
+        models: [
+          {
+            id: "Qwen/selected",
+            name: "Qwen/selected",
+            reasoning: true,
+            compat: { thinkingFormat: "qwen-chat-template" },
+          },
+        ],
+      });
+      expect(next).toHaveProperty("agents.defaults.params", { temperature: 0.2 });
+      expect(next).toHaveProperty("agents.entries", { local: { params: { temperature: 0.4 } } });
+      expect(next).not.toHaveProperty("agents.list");
+    },
+  );
+
+  it.each(["entries", "list"])("migrates only the active %s roster", (shape) => {
     const agent = {
       tools: { exec: { timeoutSec: 45 } },
       sandbox: { browser: { enableNoVnc: false } },
@@ -29,7 +51,16 @@ describe("per-agent legacy migrations after roster normalization", () => {
       agents: {
         ownership: "explicit",
         ...(shape === "entries"
-          ? { entries: { worker: agent } }
+          ? {
+              entries: { worker: agent },
+              list: [
+                {
+                  id: "old",
+                  model: "vllm/discarded",
+                  params: { qwenThinkingFormat: "chat-template" },
+                },
+              ],
+            }
           : { list: [{ id: "worker", ...agent }] }),
       },
     };
@@ -41,12 +72,9 @@ describe("per-agent legacy migrations after roster normalization", () => {
       ]),
     );
 
-    const changes: string[] = [];
-    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-      migration.apply(raw, changes);
-    }
+    const { next } = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
 
-    expect(raw).toMatchObject({
+    expect(next).toMatchObject({
       agents: {
         ownership: "explicit",
         entries: {
@@ -64,10 +92,12 @@ describe("per-agent legacy migrations after roster normalization", () => {
         },
       },
     });
-    expect(raw).not.toHaveProperty("agents.entries.worker.params.qwenThinkingFormat");
-    expect(raw).not.toHaveProperty("agents.entries.worker.tools.exec.timeoutSec");
-    expect(raw).not.toHaveProperty("agents.entries.worker.sandbox.browser.enableNoVnc");
-    expect(raw).not.toHaveProperty("agents.entries.worker.tts.enabled");
-    expect(raw).not.toHaveProperty("agents.entries.worker.tts.providers.custom.voice");
+    expect(next).toHaveProperty("models.providers.vllm.models.length", 1);
+    expect(next).not.toHaveProperty("agents.list");
+    expect(next).not.toHaveProperty("agents.entries.worker.params.qwenThinkingFormat");
+    expect(next).not.toHaveProperty("agents.entries.worker.tools.exec.timeoutSec");
+    expect(next).not.toHaveProperty("agents.entries.worker.sandbox.browser.enableNoVnc");
+    expect(next).not.toHaveProperty("agents.entries.worker.tts.enabled");
+    expect(next).not.toHaveProperty("agents.entries.worker.tts.providers.custom.voice");
   });
 });

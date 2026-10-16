@@ -4,3 +4,9 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
   assertDirectAdapterHandoff?: () => void;
 };
+
+export type SignalSseEvent = {
+  event?: string;
+  data?: string;
+  id?: string;
+};

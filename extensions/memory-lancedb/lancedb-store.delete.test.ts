@@ -95,7 +95,7 @@ describe("MemoryDB delete receipts", () => {
         [{ id: "known" }],
         [{ id: "known" }],
       ]);
-      expect(lanceMocks.schema).toHaveBeenCalledTimes(2);
+      expect(lanceMocks.schema).toHaveBeenCalledTimes(1);
       expect(lanceMocks.checkoutLatest).not.toHaveBeenCalled();
       await expect(db.query("main", { columns: ["id"] })).resolves.toEqual([{ id: "known" }]);
       expect(lanceMocks.checkoutLatest).toHaveBeenCalledTimes(1);

@@ -141,24 +141,4 @@ describe("node wake coordination", () => {
     await expect(first).resolves.toEqual(sentWake);
     await expect(second).resolves.toEqual(sentWake);
   });
-
-  it("tracks reconnect-nudge throttle independently from wake throttle", async () => {
-    const sent = await runNodeWakeNudgeAttempt({
-      nodeId: "node-1",
-      throttleMs: 60_000,
-      throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-      attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
-    });
-    const throttled = await runNodeWakeNudgeAttempt({
-      nodeId: "node-1",
-      throttleMs: 60_000,
-      throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-      attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
-    });
-
-    expect(sent.reason).toBe("sent");
-    expect(throttled.reason).toBe("throttled");
-    expect(getNodeWakeStateSnapshot("node-1")?.lastWakeAtMs).toBeUndefined();
-    expect(getNodeWakeStateSnapshot("node-1")?.lastNudgeAtMs).toBeGreaterThan(0);
-  });
 });

@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 
 type NotificationRegistry = Pick<
@@ -15,7 +15,6 @@ type PendingConnectionAlert = {
   connId: string;
   pairingIdentity?: string;
   pairingGeneration?: string;
-  job?: GatewayScheduledJob;
 };
 
 const PRIMARY_DELAY_MS = 750;
@@ -48,7 +47,7 @@ class NodeConnectionNotificationRouter {
 
   constructor(
     private readonly registry: NotificationRegistry,
-    private readonly scheduler: GatewayScheduler,
+    private readonly scheduler: GatewaySchedulerScope,
   ) {}
 
   onConnected(source: NodeSession, isFirstConnection: boolean): void {
@@ -57,8 +56,6 @@ class NodeConnectionNotificationRouter {
     if (!isFirstConnection && !this.pendingByNodeId.has(source.nodeId)) {
       return;
     }
-    const previous = this.pendingByNodeId.get(source.nodeId);
-    previous?.job?.cancel();
     const pending: PendingConnectionAlert = {
       nodeId: source.nodeId,
       connId: source.connId,
@@ -66,13 +63,15 @@ class NodeConnectionNotificationRouter {
       pairingGeneration: source.pairingGeneration,
     };
     this.pendingByNodeId.set(source.nodeId, pending);
-    this.scheduleDelivery(pending, PRIMARY_DELAY_MS, () => this.deliverPrimary(pending));
+    this.scheduler.schedule({
+      id: `node-connection/${pending.nodeId}`,
+      delayMs: PRIMARY_DELAY_MS,
+      run: () => this.deliverPrimary(pending),
+    });
   }
 
   dispose(): void {
-    for (const pending of this.pendingByNodeId.values()) {
-      pending.job?.cancel();
-    }
+    this.scheduler.beginClose();
     this.pendingByNodeId.clear();
   }
 
@@ -96,9 +95,11 @@ class NodeConnectionNotificationRouter {
       this.finishAlert(pending);
       return;
     }
-    this.scheduleDelivery(pending, FALLBACK_DELAY_MS, () =>
-      this.deliverFallback(pending, primary?.connId),
-    );
+    this.scheduler.schedule({
+      id: `node-connection/${pending.nodeId}`,
+      delayMs: FALLBACK_DELAY_MS,
+      run: () => this.deliverFallback(pending, primary?.connId),
+    });
   }
 
   private async deliverFallback(
@@ -115,9 +116,7 @@ class NodeConnectionNotificationRouter {
       .filter(isMacNotificationNode)
       .filter((node) => node.connId !== attemptedConnId);
     await Promise.all(targets.map(async (node) => await this.notify(node, source, pending)));
-    if (this.attemptIsCurrent(pending)) {
-      this.finishAlert(pending);
-    }
+    this.finishAlert(pending);
   }
 
   private currentSource(
@@ -139,12 +138,11 @@ class NodeConnectionNotificationRouter {
   private attemptIsCurrent(pending: PendingConnectionAlert): boolean {
     // Object identity lets a replacement invalidate both staged jobs and
     // in-flight deliveries without a second generation bookkeeping path.
-    return this.pendingByNodeId.get(pending.nodeId) === pending;
+    return !this.scheduler.signal.aborted && this.pendingByNodeId.get(pending.nodeId) === pending;
   }
 
   private finishAlert(pending: PendingConnectionAlert): void {
     if (this.attemptIsCurrent(pending)) {
-      pending.job?.cancel();
       this.pendingByNodeId.delete(pending.nodeId);
     }
   }
@@ -188,18 +186,6 @@ class NodeConnectionNotificationRouter {
       return false;
     }
   }
-
-  private scheduleDelivery(
-    pending: PendingConnectionAlert,
-    delayMs: number,
-    deliver: () => Promise<void>,
-  ): void {
-    pending.job = this.scheduler.schedule({
-      id: `node-connection/${pending.connId}`,
-      delayMs,
-      run: deliver,
-    });
-  }
 }
 
 const routersByRegistry = new WeakMap<NodeRegistry, NodeConnectionNotificationRouter>();
@@ -218,7 +204,7 @@ export function startNodeConnectionNotifications(
   registry: NodeRegistry,
   scheduler: GatewayScheduler,
 ): () => void {
-  const router = new NodeConnectionNotificationRouter(registry, scheduler);
+  const router = new NodeConnectionNotificationRouter(registry, scheduler.scope());
   routersByRegistry.set(registry, router);
   return () => {
     router.dispose();

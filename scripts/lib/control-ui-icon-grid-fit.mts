@@ -416,12 +416,9 @@ export function scanIconGridFit(
         if (
           box.position === "absolute" ||
           box.position === "fixed" ||
-          (box.transform && box.transform !== "none")
+          (box.transform && box.transform !== "none") ||
+          witnessIsUnresolved(control, icon, rules, options.otherRules ?? [])
         ) {
-          unresolved += 2;
-          continue;
-        }
-        if (witnessIsUnresolved(control, icon, rules, options.otherRules ?? [])) {
           unresolved += 2;
           continue;
         }

@@ -42,18 +42,6 @@ type FileWriteParams = {
   expectedBinding?: unknown;
 };
 
-type FileWriteSuccess = {
-  ok: true;
-  path: string;
-  size: number;
-  sha256: string;
-  overwritten: boolean;
-  binding: PathBinding;
-  rejectHardlinks?: true;
-};
-
-type FileWriteResult = FileWriteSuccess | FileWriteError;
-
 function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
@@ -139,9 +127,7 @@ async function writeBoundTarget(input: {
   }
 }
 
-export async function handleFileWrite(
-  params: Partial<FileWriteParams> & Record<string, unknown>,
-): Promise<FileWriteResult> {
+export async function handleFileWrite(params: Partial<FileWriteParams> & Record<string, unknown>) {
   const rawPath = typeof params?.path === "string" ? params.path : "";
   const hasContentBase64 = typeof params?.contentBase64 === "string";
   const contentBase64 = hasContentBase64 ? (params.contentBase64 as string) : "";
@@ -228,26 +214,7 @@ export async function handleFileWrite(
     if (!createParents) {
       return err("PARENT_NOT_FOUND", `parent directory does not exist: ${parentDir}`);
     }
-    if (preflightOnly) {
-      const computedSha256 = sha256Hex(buf);
-      if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
-        return err(
-          "INTEGRITY_FAILURE",
-          `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
-          targetPath,
-        );
-      }
-      return {
-        ok: true,
-        path: canonicalTargetPath,
-        size: buf.length,
-        sha256: computedSha256,
-        overwritten: false,
-        binding: await captureWriteBinding(canonicalTargetPath),
-        ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
-      };
-    }
-    if (!expectedBinding) {
+    if (!preflightOnly && !expectedBinding) {
       try {
         await fs.mkdir(parentDir, { recursive: true });
       } catch (mkdirErr) {
@@ -320,7 +287,7 @@ export async function handleFileWrite(
 
   if (preflightOnly) {
     return {
-      ok: true,
+      ok: true as const,
       path: canonicalTargetPath,
       size: buf.length,
       sha256: computedSha256,
@@ -341,12 +308,12 @@ export async function handleFileWrite(
       return writeResult;
     }
     return {
-      ok: true,
+      ok: true as const,
       path: writeResult.path,
       size: buf.length,
       sha256: computedSha256,
       overwritten: writeResult.overwritten,
-      binding: { kind: "existing", ...writeResult.identity },
+      binding: { kind: "existing", ...writeResult.identity } satisfies PathBinding,
     };
   }
 
@@ -382,7 +349,7 @@ export async function handleFileWrite(
   }
 
   return {
-    ok: true,
+    ok: true as const,
     path: canonicalPath,
     size: buf.length,
     sha256: computedSha256,
@@ -390,6 +357,6 @@ export async function handleFileWrite(
     binding: {
       kind: "existing",
       ...(finalIdentity ?? fileIdentity(await fs.stat(canonicalPath, { bigint: true }))),
-    },
+    } satisfies PathBinding,
   };
 }

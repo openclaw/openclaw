@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
+  compareCronRunRecordsNewestFirst,
   cronRunRecordStoreKey,
   cronRunRecordToRunLogEntry,
   cronRunRecordToScriptRunResult,
   cronRunRecordToTriggerEval,
-  resolveCronRunRecordTimestamp,
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
@@ -63,9 +63,7 @@ function findLatestCronRunForRecovery(
     .toSorted(
       (left, right) =>
         Number(left.endedAt !== undefined) - Number(right.endedAt !== undefined) ||
-        resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
-        right.createdAt - left.createdAt ||
-        right.id.localeCompare(left.id),
+        compareCronRunRecordsNewestFirst(left, right),
     )[0];
 }
 
@@ -113,7 +111,7 @@ function finalizedCronRun(
 
 /** Re-reads record recovery facts on the caller's exact SQLite transaction. */
 export function findCronRunRecoveryInDatabase(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   jobId: string;
   startedAt: number;
   storeKey: string;

@@ -1,8 +1,4 @@
-// Cron simple command registration: remove, toggle, show, runs, and run-now.
-import {
-  resolvePositiveTimerTimeoutMs,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
 import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
@@ -53,14 +49,6 @@ function parseCronRunWaitDuration(raw: unknown): number {
     throw error;
   }
   return resolveTimerTimeoutMs(durationMs, 0, 0);
-}
-
-function parseCronRunPollInterval(raw: unknown): number {
-  const durationMs = parseCronRunWaitDuration(raw);
-  if (durationMs <= 0) {
-    throw new CronCliError("invalid --poll-interval");
-  }
-  return resolvePositiveTimerTimeoutMs(durationMs, 2_000);
 }
 
 async function waitForCronRunCompletion(params: {
@@ -167,6 +155,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Show automation run history")
       .argument("[id]", "Job id")
       .option("--id <id>", "Job id (alternative to positional argument)")
+      .option("--all", "Show run history across all visible automations", false)
       .option("--run-id <runId>", "Filter by cron run id")
       .addOption(
         new Option("--status <status>", "Filter by run status").choices([
@@ -197,14 +186,19 @@ export function registerCronSimpleCommands(cron: Command) {
               `Conflicting job ids: positional "${argId}" and --id "${flagId}".`,
             );
           }
-          const id = requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
+          if (opts.all && (idArg !== undefined || opts.id !== undefined)) {
+            throw new CronCliError("--all cannot be combined with a job id");
+          }
+          const id = opts.all
+            ? undefined
+            : requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
           const limit = parseCronIntegerOption(opts.limit ?? "50", "--limit");
           const offset = parseCronIntegerOption(opts.offset, "--offset", "non-negative");
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }
           const res = await callGatewayFromCli("cron.runs", opts, {
-            id,
+            ...(opts.all ? { scope: "all" } : { id }),
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
             ...(typeof opts.status === "string" ? { status: opts.status } : {}),
             ...(typeof opts.deliveryStatus === "string"
@@ -245,7 +239,10 @@ export function registerCronSimpleCommands(cron: Command) {
           let pollIntervalMs = 0;
           if (opts.wait) {
             waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout);
-            pollIntervalMs = parseCronRunPollInterval(opts.pollInterval);
+            pollIntervalMs = parseCronRunWaitDuration(opts.pollInterval);
+            if (pollIntervalMs <= 0) {
+              throw new CronCliError("invalid --poll-interval");
+            }
           }
           if (command.getOptionValueSource("timeout") === "default") {
             opts.timeout = "600000";

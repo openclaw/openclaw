@@ -1,8 +1,3 @@
-/**
- * web_search built-in tool.
- *
- * Runs the configured runtime provider and returns normalized cached search results.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -78,11 +73,9 @@ const WebSearchSchema = {
 } satisfies Record<string, unknown>;
 
 function isWebSearchDisabled(config?: OpenClawConfig): boolean {
-  const search = config?.tools?.web?.search;
-  return Boolean(search && typeof search === "object" && search.enabled === false);
+  return config?.tools?.web?.search?.enabled === false;
 }
 
-/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   enabled?: boolean;

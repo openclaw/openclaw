@@ -114,7 +114,7 @@ async function withProofFixture(
     },
   });
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
     plugins: { allow: [providerId], entries: { [providerId]: { enabled: true } } },
   };
   try {

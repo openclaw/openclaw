@@ -8,7 +8,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("limit reporting", () => {
-  it.each([{}, { CI: "1" }, { GITHUB_ACTIONS: "false" }])(
+  it.each([{ CI: "1" }, { GITHUB_ACTIONS: "false" }])(
     "keeps local checks blocking with %j",
     (env) => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});

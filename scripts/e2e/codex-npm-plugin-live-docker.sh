@@ -14,7 +14,6 @@ TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 CANDIDATE_ROOT="$(cd "$CANDIDATE_ROOT" && pwd)"
 ROOT_DIR="$TRUSTED_HARNESS_DIR"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-image.sh"
-source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-npm-plugin-live-e2e" OPENCLAW_CODEX_NPM_PLUGIN_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_NPM_PLUGIN_DOCKER_TARGET:-bare}"
@@ -101,22 +100,18 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$CANDIDATE_ROOT/scripts/e2e/Dockerfile" "$CANDIDATE_ROOT" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
-    return 0
-  fi
+if [ -n "$PACKAGE_TGZ" ]; then
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
+else
   if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
     echo "OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
     exit 1
   fi
-  local harness_root="$ROOT_DIR"
-  ROOT_DIR="$CANDIDATE_ROOT"
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live)"
-  ROOT_DIR="$harness_root"
-}
-
-prepare_package_tgz
+  PACKAGE_TGZ="$(
+    ROOT_DIR="$CANDIDATE_ROOT"
+    docker_e2e_prepare_package_tgz codex-npm-plugin-live
+  )"
+fi
 
 configure_codex_plugin_registry_candidate() {
   local source_path="$1"

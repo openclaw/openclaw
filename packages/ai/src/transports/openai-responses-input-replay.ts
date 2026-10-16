@@ -15,11 +15,16 @@ export function recordResponsesInputReplay(
   }
 }
 
-function readResponsesInputReplay(message: AssistantMessage): ResponsesInputReplay | undefined {
+export function readResponsesInputReplayState(message: AssistantMessage) {
   const replay =
     "openclawResponsesInputReplay" in message ? message.openclawResponsesInputReplay : undefined;
+  return isRecord(replay) ? replay : undefined;
+}
+
+function readResponsesInputReplay(message: AssistantMessage): ResponsesInputReplay | undefined {
+  const replay = readResponsesInputReplayState(message);
   if (
-    isRecord(replay) &&
+    replay &&
     typeof replay.afterResponseId === "string" &&
     Array.isArray(replay.before) &&
     replay.before.every((item) => typeof item === "string") &&

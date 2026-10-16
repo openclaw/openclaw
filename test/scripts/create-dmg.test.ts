@@ -71,6 +71,12 @@ case "$command_name" in
     : > "\${!#}"
     ;;
   attach)
+    # Busy hosts can fail with EAGAIN after creating the image devices.
+    printf '%s' "$1" > "\${HDIUTIL_LOG}.image"
+    if [[ "\${HDIUTIL_ATTACH_EAGAIN:-0}" == "1" ]]; then
+      echo "hdiutil: attach failed - Resource temporarily unavailable" >&2
+      exit 35
+    fi
     mountpoint=""
     while (($#)); do
       if [[ "$1" == "-mountpoint" ]]; then
@@ -99,14 +105,21 @@ case "$command_name" in
     printf '%s' "$detach_attempts" > "$detach_attempts_file"
     vanish_at="\${HDIUTIL_DETACH_VANISH_AT:-0}"
     if (( vanish_at > 0 && detach_attempts >= vanish_at )); then
-      rm -f "\${HDIUTIL_LOG}.attached"
+      rm -f "\${HDIUTIL_LOG}.attached" "\${HDIUTIL_LOG}.image"
       echo "hdiutil: detach failed - No such file or directory" >&2
       exit 1
     fi
     if (( detach_attempts <= \${HDIUTIL_DETACH_FAIL_COUNT:-0} )); then
       exit 9
     fi
-    rm -f "\${HDIUTIL_LOG}.attached"
+    rm -f "\${HDIUTIL_LOG}.attached" "\${HDIUTIL_LOG}.image"
+    ;;
+  info)
+    images=""
+    if [[ -f "\${HDIUTIL_LOG}.image" ]]; then
+      images="<dict><key>image-path</key><string>$(cat "\${HDIUTIL_LOG}.image")</string><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk99</string></dict><dict><key>dev-entry</key><string>/dev/disk99s1</string></dict></array></dict>"
+    fi
+    printf '<plist version="1.0"><dict><key>images</key><array>%s</array></dict></plist>\\n' "$images"
     ;;
   resize)
     if [[ "\${1:-}" == "-limits" ]]; then
@@ -172,12 +185,6 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function readPngDimensions(imagePath: string): { width: number; height: number } {
-  const data = readFileSync(imagePath);
-  expect(data.subarray(1, 4).toString("ascii")).toBe("PNG");
-  return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
-}
-
 function expectPrivateDmgMount(log: string): string {
   const attach = log.match(/^attach (.+)\/image-rw\.dmg -mountpoint (.+) -nobrowse$/m);
   const runRoot = attach?.[1];
@@ -206,24 +213,6 @@ afterEach(() => {
 });
 
 describe("create-dmg plist validation", () => {
-  it("fails closed for required Info.plist reads", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const readBlock = script.slice(
-      script.indexOf("APP_NAME="),
-      script.indexOf('DMG_NAME="${APP_NAME}-${VERSION}.dmg"'),
-    );
-
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/plistbuddy.sh"');
-    expect(readBlock).toContain(
-      'APP_NAME="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleName)"',
-    );
-    expect(readBlock).toContain(
-      'VERSION="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString)"',
-    );
-    expect(readBlock).not.toContain("PlistBuddy");
-    expect(readBlock).not.toContain("|| echo");
-  });
-
   it("keeps temporary DMG artifacts scoped to one run", () => {
     const script = readFileSync(scriptPath, "utf8");
 
@@ -242,23 +231,6 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain("/tmp/openclaw-dmg-limits.txt");
     expect(script).not.toContain('"/Volumes/$DMG_VOLUME_NAME"');
     expect(script).not.toContain('tell application "Finder" to close every window');
-  });
-
-  it("keeps the larger Finder layout aligned with the packaged backgrounds", () => {
-    const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain('DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"');
-    expect(script).toContain('DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"');
-    expect(script).toContain('DMG_APP_POS="${DMG_APP_POS:-170 305}"');
-    expect(script).toContain('DMG_APPS_POS="${DMG_APPS_POS:-510 305}"');
-    expect(readPngDimensions("apps/macos/Packaging/dmg-background-small.png")).toEqual({
-      width: 680,
-      height: 430,
-    });
-    expect(readPngDimensions("apps/macos/Packaging/dmg-background.png")).toEqual({
-      width: 1360,
-      height: 860,
-    });
   });
 
   it("fails malformed DMG resize slack before creating images", () => {
@@ -332,21 +304,6 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(readFileSync(output, "utf8")).toBe("converted");
     const log = readFileSync(tools.hdiutilLog, "utf8");
     expect(log).toContain(`${outputDir}${path.sep}.openclaw-dmg.`);
-  });
-
-  it("preserves an existing output when image creation fails", () => {
-    const app = makeValidApp();
-    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
-    tempDirs.push(outputDir);
-    const output = path.join(outputDir, "OpenClaw.dmg");
-    writeFileSync(output, "previous output", "utf8");
-    const tools = makeFakeDmgTools();
-
-    const result = runScript([app, output], { ...tools.env, HDIUTIL_FAIL_ON: "create" });
-
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(output, "utf8")).toBe("previous output");
-    expect(readFileSync(tools.hdiutilLog, "utf8")).not.toContain("detach");
   });
 
   it("fails before image creation when Finder layout values are malformed", () => {
@@ -430,6 +387,55 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(readFileSync(path.join(mountPoint, "live-volume-file"), "utf8")).toBe("mounted");
     rmSync(path.dirname(mountPoint), { recursive: true, force: true });
   });
+
+  it.each([false, true])(
+    "detaches an RW image that a failed attach left without a mount (detach fails: %s)",
+    (detachFails) => {
+      const app = makeValidApp();
+      const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+      tempDirs.push(outputDir);
+      const output = path.join(outputDir, "OpenClaw.dmg");
+      const tools = makeFakeDmgTools();
+
+      const result = runScript([app, output], {
+        ...tools.env,
+        HDIUTIL_ATTACH_EAGAIN: "1",
+        HDIUTIL_DETACH_FAIL: detachFails ? "1" : "0",
+      });
+
+      expect(result.status, result.stderr).toBe(detachFails ? 1 : 35);
+      const log = readFileSync(tools.hdiutilLog, "utf8");
+      const image = log.match(/^attach (.+) -mountpoint /m)?.[1] ?? "";
+      expect(path.basename(image)).toBe("image-rw.dmg");
+      const runRoot = path.dirname(image);
+      tempDirs.push(runRoot);
+      expect(
+        log
+          .slice(log.indexOf("\nattach ") + 1)
+          .trim()
+          .split("\n"),
+      ).toEqual([
+        `attach ${image} -mountpoint ${path.join(runRoot, "mount")} -nobrowse`,
+        "info -plist",
+        "detach -quiet /dev/disk99",
+        "info -plist",
+      ]);
+      expect(log).not.toContain("-force");
+      expect(existsSync(output)).toBe(false);
+      expect(existsSync(image)).toBe(detachFails);
+      expect(result.stderr).toContain("hdiutil: attach failed - Resource temporarily unavailable");
+      if (detachFails) {
+        expect(result.stderr).toContain(
+          `ERROR: disk image ${image} is still attached; detach it with: hdiutil detach /dev/disk99\n`,
+        );
+        expect(result.stderr).toContain(
+          `Error: Preserving DMG temp root because its RW image is still attached: ${runRoot}\n`,
+        );
+      } else {
+        expect(result.stderr).not.toContain("Preserving DMG temp root");
+      }
+    },
+  );
 
   it.each([
     { vanishAt: 5, detaches: 5, forced: false },

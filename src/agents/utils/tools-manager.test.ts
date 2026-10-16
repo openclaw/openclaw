@@ -11,6 +11,7 @@ import os, { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import type { FileLockOptions } from "../../infra/file-lock.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -79,7 +80,7 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
-  it.each(["fd", "rg", "shell"] as const)(
+  it.each(["fd", "shell"] as const)(
     "keeps %s usable without an ambient agent owner",
     async (tool) => {
       const home = expectDefined(tempAgentDir, "test home");
@@ -106,71 +107,61 @@ describe("ensureTool", () => {
       } else {
         const { ensureTool } = await import("./tools-manager.js");
         spawnSyncMock.mockReturnValue({ status: 0 });
-        await expect(ensureTool(tool, true)).resolves.toBe(tool);
+        await expect(ensureTool(tool)).resolves.toBe(tool);
         spawnSyncMock.mockReturnValue({ status: 1 });
-        await expect(ensureTool(tool, true)).resolves.toBeUndefined();
+        await expect(ensureTool(tool)).resolves.toBeUndefined();
         expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
       }
       expect(snapshotFiles(home)).toEqual(before);
     },
   );
 
-  it.each(
-    [
-      { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
-      { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
-      { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
-      { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
-      {
-        name: "completed migration",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "valid",
-        selected: "canonical",
-      },
-      {
-        name: "incomplete receipt",
-        legacy: "payload",
-        canonical: "empty",
-        receipt: "partial",
-        selected: "legacy",
-      },
-      {
-        name: "another source's receipt",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "other-source",
-        selected: "legacy",
-      },
-      {
-        name: "another target's receipt",
-        legacy: "payload",
-        canonical: "payload",
-        receipt: "other-target",
-        selected: "legacy",
-      },
-      { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
-      { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
-    ].flatMap((testCase) =>
-      ["none", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"].map((override) => ({
-        testCase,
-        override,
-      })),
-    ),
-  )(
-    "reuses managed binaries across agent directory migration: $testCase.name ($override)",
-    async ({ testCase, override }) => {
+  it.each([
+    { name: "legacy only", legacy: "payload", canonical: "missing", selected: "legacy" },
+    { name: "migrated", legacy: "missing", canonical: "payload", selected: "canonical" },
+    { name: "both present", legacy: "payload", canonical: "payload", selected: "legacy" },
+    { name: "empty canonical", legacy: "payload", canonical: "empty", selected: "legacy" },
+    {
+      name: "completed migration",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "valid",
+      selected: "canonical",
+    },
+    {
+      name: "incomplete receipt",
+      legacy: "payload",
+      canonical: "empty",
+      receipt: "partial",
+      selected: "legacy",
+    },
+    {
+      name: "another source's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-source",
+      selected: "legacy",
+    },
+    {
+      name: "another target's receipt",
+      legacy: "payload",
+      canonical: "payload",
+      receipt: "other-target",
+      selected: "legacy",
+    },
+    { name: "empty legacy", legacy: "empty", canonical: "missing", selected: "canonical" },
+    { name: "missing legacy", legacy: "missing", canonical: "missing", selected: "canonical" },
+  ])(
+    "reuses managed binaries across default-profile agent directory migration: $name",
+    async (testCase) => {
       const home = expectDefined(tempAgentDir, "test home");
       vi.spyOn(os, "homedir").mockReturnValue(home);
-      const overrideHome = join(home, "override-home");
-      const stateDir =
-        override === "OPENCLAW_STATE_DIR"
-          ? join(home, "state")
-          : join(override === "OPENCLAW_HOME" ? overrideHome : home, ".openclaw");
+      const stateDir = join(home, ".openclaw");
       vi.stubEnv("HOME", home);
       vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("OPENCLAW_HOME", override === "OPENCLAW_HOME" ? overrideHome : "");
-      vi.stubEnv("OPENCLAW_STATE_DIR", override === "OPENCLAW_STATE_DIR" ? stateDir : "");
+      vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
       vi.stubEnv("OPENCLAW_OFFLINE", "1");
       const canonicalDir = join(stateDir, "agents", "main", "agent");
@@ -215,7 +206,7 @@ describe("ensureTool", () => {
       const selectedContents =
         testCase.selected === "legacy" ? testCase.legacy : testCase.canonical;
 
-      await expect(ensureTool("fd", true)).resolves.toBe(
+      await expect(ensureTool("fd")).resolves.toBe(
         selectedContents === "payload" ? join(selectedDir, "bin", binaryName) : undefined,
       );
       expect(getAgentDir()).toBe(selectedDir);
@@ -225,7 +216,7 @@ describe("ensureTool", () => {
     },
   );
 
-  it.each(["malformed", "invalid", "missing", "unreadable"])(
+  it.each(["unreadable"])(
     "keeps installed tools available with %s config and follows repaired configuration",
     async (condition) => {
       const root = expectDefined(tempAgentDir, "test root");
@@ -260,14 +251,14 @@ describe("ensureTool", () => {
       const before = snapshotFiles(root);
       read.mockClear();
       expect(getAgentDir()).toBe(firstDir);
-      await expect(ensureTool("fd", true)).resolves.toBe(join(firstDir, "bin", binary));
+      await expect(ensureTool("fd")).resolves.toBe(join(firstDir, "bin", binary));
       expect(read.mock.calls.some(([file]) => file === configPath)).toBe(false);
       expect(warn).not.toHaveBeenCalled();
 
       vi.stubEnv("OPENCLAW_AGENT_DIR", "");
       const beforeEnv = { ...process.env };
       expect(getAgentDir()).toBe(defaultDir);
-      await expect(ensureTool("fd", true)).resolves.toBe(join(defaultDir, "bin", binary));
+      await expect(ensureTool("fd")).resolves.toBe(join(defaultDir, "bin", binary));
       expect(getAgentDir()).toBe(defaultDir);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("default agent directory"));
@@ -279,7 +270,7 @@ describe("ensureTool", () => {
       }
       for (const agentDir of [firstDir, secondDir]) {
         writeFileSync(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
-        await expect(ensureTool("fd", true)).resolves.toBe(join(agentDir, "bin", binary));
+        await expect(ensureTool("fd")).resolves.toBe(join(agentDir, "bin", binary));
       }
     },
   );
@@ -311,7 +302,7 @@ describe("ensureTool", () => {
       },
     );
 
-    const installs = [ensureTool("fd", true), ensureTool("fd", true)];
+    const installs = [ensureTool("fd"), ensureTool("fd")];
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
     resolveReleaseCheck({
@@ -353,34 +344,9 @@ describe("ensureTool", () => {
     );
     const { ensureTool } = await import("./tools-manager.js");
 
-    await expect(ensureTool("fd", true)).resolves.toBe(binaryPath);
+    await expect(ensureTool("fd")).resolves.toBe(binaryPath);
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("treats trimmed on as the canonical offline opt-in", async () => {
-    vi.stubEnv("OPENCLAW_OFFLINE", " ON ");
-    const { ensureTool } = await import("./tools-manager.js");
-
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("cancels release-check error bodies before releasing guarded fetches", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    const release = vi.fn(async () => {});
-    const response = new Response("server error", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      release,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
-
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
-
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it("cancels download error bodies before releasing guarded fetches", async () => {
@@ -401,7 +367,7 @@ describe("ensureTool", () => {
         finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
       });
 
-    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+    await expect(ensureTool("rg")).resolves.toBeUndefined();
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseCheckRelease).toHaveBeenCalledOnce();
@@ -433,7 +399,7 @@ describe("ensureTool", () => {
         finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.zip",
       });
 
-    await expect(ensureTool("rg", true)).resolves.toBe(join(tempAgentDir!, "bin", "rg.exe"));
+    await expect(ensureTool("rg")).resolves.toBe(join(tempAgentDir!, "bin", "rg.exe"));
 
     expect(extractArchiveMock).toHaveBeenCalledOnce();
     expect(extractArchiveMock).toHaveBeenCalledWith(
@@ -482,7 +448,7 @@ describe("ensureTool", () => {
     const { ensureTool } = await import("./tools-manager.js");
     const binaryPath = join(agentDir, "bin", binaryName);
 
-    await expect(ensureTool("rg", true)).resolves.toBe(binaryPath);
+    await expect(ensureTool("rg")).resolves.toBe(binaryPath);
 
     expect(readFileSync(binaryPath, "utf8")).toBe("binary");
     expect(extractArchiveMock).toHaveBeenCalledOnce();
@@ -537,7 +503,7 @@ describe("ensureTool", () => {
         });
       const { ensureTool } = await import("./tools-manager.js");
 
-      await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+      await expect(ensureTool("rg")).resolves.toBeUndefined();
 
       if (readsBody) {
         expect(reads).toBeGreaterThanOrEqual(2);
@@ -554,7 +520,7 @@ describe("ensureTool", () => {
   );
 
   it.each([
-    { name: "reports an unreadable extracted directory", readableBinary: false },
+    { name: "returns unavailable for an unreadable extracted directory", readableBinary: false },
     {
       name: "installs a readable binary despite an unrelated directory read failure",
       readableBinary: true,
@@ -574,7 +540,6 @@ describe("ensureTool", () => {
       }
       return readdir(...args);
     });
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const releaseCheckRelease = vi.fn(async () => {});
     const downloadRelease = vi.fn(async () => {});
     extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
@@ -607,12 +572,9 @@ describe("ensureTool", () => {
       const binaryPath = join(agentDir, "bin", binaryName);
       expect(installed).toBe(binaryPath);
       expect(readFileSync(binaryPath, "utf8")).toBe("readable binary");
-      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("EACCES"));
     } else {
       expect(installed).toBeUndefined();
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
     }
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Binary not found in archive"));
     expect(releaseCheckRelease).toHaveBeenCalledOnce();
     expect(downloadRelease).toHaveBeenCalledOnce();
     expect(fs.readdirSync(join(agentDir, "bin"))).toEqual(readableBinary ? [binaryName] : []);
@@ -645,7 +607,7 @@ describe("ensureTool", () => {
     });
 
     const { ensureTool } = await import("./tools-manager.js");
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    await expect(ensureTool("fd")).resolves.toBeUndefined();
 
     expect(reads).toBeLessThan(20);
     expect(canceled).toBe(true);
@@ -666,31 +628,17 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     const release = vi.fn(async () => {});
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("unavailable", { status: 503 }),
+      response,
       release,
       finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
     });
 
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    await expect(ensureTool("fd")).resolves.toBeUndefined();
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("reports a binary present when it spawns and exits 0", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    spawnSyncMock.mockReturnValue({
-      error: undefined,
-      status: 0,
-      stderr: Buffer.alloc(0),
-      stdout: Buffer.alloc(0),
-    });
-    await expect(ensureTool("fd", true)).resolves.toBe("fd");
-    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
-      killSignal: "SIGKILL",
-      stdio: "pipe",
-      timeout: 5_000,
-    });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

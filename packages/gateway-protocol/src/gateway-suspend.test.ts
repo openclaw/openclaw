@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendResumeParams,
-  GatewaySuspendBlockerSchema,
   validateGatewaySuspendPrepareResult,
   validateGatewaySuspendStatusResult,
   validateGatewaySuspendPrepareParams,
   validateGatewaySuspendHandoffParams,
+  GatewaySuspendHandoffResultSchema,
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
@@ -22,10 +22,13 @@ describe("gateway suspension protocol", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };
     expect(validateGatewaySuspendHandoffParams(params)).toBe(true);
+    expect(validateGatewaySuspendHandoffParams({ ...params, commit: true })).toBe(true);
     for (const rejected of [
       { ...params, target: undefined },
       { ...params, force: true },
       { ...params, waitMs: 0 },
+      { ...params, commit: false },
+      { ...params, commit: "true" },
       { ...params, target: { ...target, processInstanceId: " " } },
       { ...params, target: { ...target, pid: 0 } },
       { ...params, target: { ...target, port: 18789 } },
@@ -33,6 +36,16 @@ describe("gateway suspension protocol", () => {
     ]) {
       expect(validateGatewaySuspendHandoffParams(rejected)).toBe(false);
     }
+    const receipt = { suspensionId: "held-lease", expiresAtMs: 2_000 };
+    expect(Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "armed" })).toBe(
+      true,
+    );
+    expect(
+      Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "committed" }),
+    ).toBe(true);
+    expect(
+      Value.Check(GatewaySuspendHandoffResultSchema, { ...receipt, status: "scheduled" }),
+    ).toBe(false);
   });
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
@@ -70,17 +83,7 @@ describe("gateway suspension protocol", () => {
     );
   });
 
-  it("keeps the historical terminal-session blocker wire-compatible", () => {
-    expect(
-      Value.Check(GatewaySuspendBlockerSchema, {
-        kind: "terminal-session",
-        count: 1,
-        message: "1 open terminal session(s)",
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts closed draining prepare results without changing existing result variants", () => {
+  it("accepts legacy terminal blockers in closed draining and busy prepare results", () => {
     const draining = {
       status: "draining",
       suspensionId: "suspension-1",
@@ -101,18 +104,9 @@ describe("gateway suspension protocol", () => {
         blockers: draining.blockers,
       }),
     ).toBe(true);
-    expect(
-      validateGatewaySuspendPrepareResult({
-        status: "ready",
-        suspensionId: "suspension-1",
-        expiresAtMs: 2_000,
-        activeCount: 0,
-        blockers: [],
-      }),
-    ).toBe(true);
   });
 
-  it("accepts closed draining status results without changing existing status variants", () => {
+  it("accepts running status and closed draining status results", () => {
     const draining = {
       status: "draining",
       expiresAtMs: 2_000,
@@ -124,7 +118,6 @@ describe("gateway suspension protocol", () => {
     expect(validateGatewaySuspendStatusResult(draining)).toBe(true);
     expect(validateGatewaySuspendStatusResult({ ...draining, suspensionId: "id" })).toBe(false);
     expect(validateGatewaySuspendStatusResult({ status: "running" })).toBe(true);
-    expect(validateGatewaySuspendStatusResult({ status: "ready", expiresAtMs: 2_000 })).toBe(true);
   });
 
   it.each([

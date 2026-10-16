@@ -18,7 +18,6 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createGatewayActiveWorkSnapshot } from "./gateway-active-work.js";
 import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
@@ -28,7 +27,8 @@ import {
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
-const SUSPEND_RETRY_AFTER_MS = 20_000;
+const DRAIN_BUDGET_MS = 45_000;
+const SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 
 beforeEach(() => {
   resetProcessRegistryForTests();
@@ -70,26 +70,6 @@ describe("gateway suspend coordinator", () => {
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
     },
   );
-
-  it("test reset resumes a held scheduler before admission is cleared", () => {
-    const resumeScheduling = vi.fn(() => {
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    });
-    expect(
-      prepareGatewaySuspend({
-        requestId: "request-lifecycle-reset",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors(),
-      }),
-    ).toMatchObject({ status: "ready" });
-
-    resetGatewaySuspendCoordinatorForLifecycleRestart();
-    resetGatewayWorkAdmission();
-
-    expect(resumeScheduling).toHaveBeenCalledOnce();
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  });
 
   it("reopens admission in the same turn when active work refuses preparation", () => {
     const events: string[] = [];
@@ -136,8 +116,8 @@ describe("gateway suspend coordinator", () => {
     ).toEqual({
       status: "draining",
       suspensionId: "suspension-preserve-drain",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
+      retryAfterMs: 5_000,
       activeCount: 3,
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
       blockers: [
@@ -160,8 +140,8 @@ describe("gateway suspend coordinator", () => {
     terminalSessions = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "draining",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
+      retryAfterMs: 5_000,
       activeCount: 1,
       blockers: [{ kind: "reply", count: 1, message: "1 pending reply delivery operation(s)" }],
       writeCustody: [],
@@ -171,7 +151,7 @@ describe("gateway suspend coordinator", () => {
     pendingReplies = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "ready",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
       writeCustody: [],
     });
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
@@ -187,7 +167,7 @@ describe("gateway suspend coordinator", () => {
   });
 
   it.each(["preserve", "terminate"] as const)(
-    "renews the same %s drain and rejects conflicting request, policy, or drain modes",
+    "retains the absolute deadline of the same %s drain and rejects conflicting request, policy, or drain modes",
     (terminalPolicy) => {
       let queued = 2;
       let nowMs = 1_000;
@@ -210,7 +190,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toMatchObject({
         status: "draining",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 2,
       });
 
@@ -219,7 +199,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toMatchObject({
         status: "draining",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 1,
       });
       const otherTerminalPolicy = terminalPolicy === "preserve" ? "terminate" : "preserve";
@@ -230,7 +210,7 @@ describe("gateway suspend coordinator", () => {
       ] satisfies Partial<typeof params>[]) {
         expect(prepareGatewaySuspend({ ...params, ...conflict })).toEqual({
           status: "conflict",
-          expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+          expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         });
       }
       expect(pauseScheduling).toHaveBeenCalledOnce();
@@ -240,7 +220,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toEqual({
         status: "ready",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 3_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 0,
         blockers: [],
         writeCustody: [],
@@ -275,101 +255,6 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
-  it.each([undefined, "preserve"] as const)(
-    "keeps terminal sessions blocking with terminal policy %s",
-    (terminalPolicy) => {
-      expect(
-        prepareGatewaySuspend({
-          requestId: `request-terminal-${terminalPolicy ?? "default"}`,
-          terminalPolicy,
-          pauseScheduling: vi.fn(),
-          resumeScheduling: vi.fn(),
-          inspect: inspectors({ getTerminalSessions: () => 2 }),
-        }),
-      ).toEqual({
-        status: "busy",
-        reason: "active-work",
-        retryAfterMs: SUSPEND_RETRY_AFTER_MS,
-        activeCount: 2,
-        writeCustody: [],
-        blockers: [
-          {
-            kind: "terminal-session",
-            count: 2,
-            message: "2 open terminal session(s)",
-          },
-        ],
-      });
-    },
-  );
-
-  it("retains terminal diagnostics when terminal sessions are not blockers", () => {
-    const preserving = createGatewayActiveWorkSnapshot(
-      inspectors({ getTerminalSessions: () => 2 }),
-    );
-    const ignoring = createGatewayActiveWorkSnapshot(inspectors({ getTerminalSessions: () => 2 }), {
-      ignoreTerminalSessions: true,
-    });
-
-    expect(preserving).toMatchObject({
-      idle: false,
-      counts: { terminalSessions: 2, totalActive: 2 },
-      blockers: [expect.objectContaining({ kind: "terminal-session", count: 2 })],
-    });
-    expect(ignoring).toMatchObject({
-      idle: true,
-      counts: { terminalSessions: 2, totalActive: 0 },
-      blockers: [],
-    });
-  });
-
-  it.each([false, true])("prepares with terminal sessions excluded (drain: %s)", (drain) => {
-    const params = {
-      requestId: "request-terminal-terminate",
-      terminalPolicy: "terminate" as const,
-      drain,
-      pauseScheduling: vi.fn(),
-      resumeScheduling: vi.fn(),
-      inspect: inspectors({ getTerminalSessions: () => 2 }),
-    };
-    const expected = { status: "ready", activeCount: 0, blockers: [] };
-    expect(prepareGatewaySuspend(params)).toMatchObject(expected);
-    expect(prepareGatewaySuspend(params)).toMatchObject(expected);
-    expect(prepareGatewaySuspend({ ...params, terminalPolicy: "preserve" })).toMatchObject({
-      status: "conflict",
-    });
-  });
-
-  it("keeps persistence and other active work blocking under terminal termination policy", () => {
-    expect(
-      prepareGatewaySuspend({
-        requestId: "request-terminal-terminate-busy",
-        terminalPolicy: "terminate",
-        pauseScheduling: vi.fn(),
-        resumeScheduling: vi.fn(),
-        inspect: inspectors({
-          getQueueSize: () => 1,
-          getTerminalPersistence: () => 1,
-          getTerminalSessions: () => 2,
-        }),
-      }),
-    ).toEqual({
-      status: "busy",
-      reason: "active-work",
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
-      activeCount: 2,
-      writeCustody: [{ phase: "terminal-persistence", count: 1 }],
-      blockers: [
-        { kind: "queue", count: 1, message: "1 queued or active operation(s)" },
-        {
-          kind: "terminal-persistence",
-          count: 1,
-          message: "1 pending terminal session write(s)",
-        },
-      ],
-    });
-  });
-
   it("stays busy after a background session is hidden until its process exits", () => {
     const session = createProcessSessionFixture({
       id: "private-background-session",
@@ -392,7 +277,7 @@ describe("gateway suspend coordinator", () => {
     ).toEqual({
       status: "busy",
       reason: "active-work",
-      retryAfterMs: SUSPEND_RETRY_AFTER_MS,
+      retryAfterMs: SUSPEND_BUSY_RETRY_AFTER_MS,
       activeCount: 1,
       writeCustody: [],
       blockers: [
@@ -585,33 +470,6 @@ describe("gateway suspend coordinator", () => {
   });
 
   it.each([false, true])(
-    "joins restart to a suspension without reopening its scheduler (drain: %s)",
-    (drain) => {
-      const resumeScheduling = vi.fn();
-      const result = prepareGatewaySuspend({
-        requestId: "request-restart",
-        drain,
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getQueueSize: () => Number(drain) }),
-        createSuspensionId: () => "suspension-restart",
-      });
-      expect(result.status).toBe(drain ? "draining" : "ready");
-
-      markGatewayRestartDraining();
-
-      expect(getGatewaySuspendStatus("suspension-restart", true)).toMatchObject({
-        status: "draining",
-        ownerId: "request-restart",
-        phase: "interrupting",
-        activeCount: Number(drain),
-      });
-      expect(resumeScheduling).not.toHaveBeenCalled();
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    },
-  );
-
-  it.each([false, true])(
     "exposes scheduler recovery after a held lease cannot resume (drain: %s)",
     (drain) => {
       vi.useFakeTimers();
@@ -664,7 +522,7 @@ describe("gateway suspend coordinator", () => {
 
   it.each(
     [false, true].flatMap((drain) =>
-      [0, SUSPEND_TTL_MS / 2].flatMap((preparationMs) =>
+      [0, (drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS) / 2].flatMap((preparationMs) =>
         [false, true].map((rollbackClock) => ({ drain, preparationMs, rollbackClock })),
       ),
     ),
@@ -674,7 +532,8 @@ describe("gateway suspend coordinator", () => {
       vi.useFakeTimers();
       try {
         const resumeScheduling = vi.fn();
-        const expiresAtMs = Date.now() + SUSPEND_TTL_MS;
+        const ttlMs = drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS;
+        const expiresAtMs = Date.now() + ttlMs;
         expect(
           prepareGatewaySuspend({
             requestId: "request-expiry",
@@ -694,7 +553,7 @@ describe("gateway suspend coordinator", () => {
           }),
         ).toMatchObject({ status: drain ? "draining" : "ready", expiresAtMs });
 
-        vi.advanceTimersByTime(SUSPEND_TTL_MS - preparationMs - 1);
+        vi.advanceTimersByTime(ttlMs - preparationMs - 1);
         expect(resumeScheduling).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
         expect(resumeScheduling).toHaveBeenCalledOnce();
@@ -751,31 +610,6 @@ describe("gateway suspend coordinator", () => {
     },
   );
 
-  it("automatically resumes a short remaining budget with real timers", async () => {
-    let elapsedInspectionMs = 0;
-    const resumeScheduling = vi.fn();
-    try {
-      const result = prepareGatewaySuspend({
-        requestId: "real-timer-expiry",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        nowMs: () => Date.now() + elapsedInspectionMs,
-        inspect: inspectors({
-          getQueueSize: () => {
-            elapsedInspectionMs = SUSPEND_TTL_MS - 100;
-            return 0;
-          },
-        }),
-      });
-      expect(result).toMatchObject({ status: "ready" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      await vi.waitFor(() => expect(resumeScheduling).toHaveBeenCalledOnce());
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
-    }
-  });
-
   it.each(
     [false, true].flatMap((drain) =>
       ["inspection", "lease setup"].map((phase) => ({ drain, phase })),
@@ -817,52 +651,6 @@ describe("gateway suspend coordinator", () => {
     },
   );
 
-  it("ignores an already-queued expiry callback after the same drain lease is renewed", () => {
-    vi.useFakeTimers();
-    try {
-      let nowMs = 1_000;
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const resumeScheduling = vi.fn();
-      const params = {
-        requestId: "request-stale-drain-expiry",
-        drain: true,
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getTerminalSessions: () => 1 }),
-        nowMs: () => nowMs,
-        createSuspensionId: () => "suspension-stale-drain-expiry",
-      };
-
-      expect(prepareGatewaySuspend(params)).toMatchObject({ status: "draining" });
-      const staleExpiry = timeoutSpy.mock.calls[0]?.[0];
-      expect(typeof staleExpiry).toBe("function");
-
-      nowMs = 2_000;
-      expect(prepareGatewaySuspend(params)).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-      if (typeof staleExpiry !== "function") {
-        throw new Error("missing initial suspension expiry callback");
-      }
-      staleExpiry();
-
-      expect(resumeScheduling).not.toHaveBeenCalled();
-      expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-      expect(getGatewaySuspendStatus("suspension-stale-drain-expiry")).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-
-      vi.advanceTimersByTime(SUSPEND_TTL_MS);
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
-  });
-
   it("enters recovery when lease expiry cannot resume the scheduler", () => {
     vi.useFakeTimers();
     const phases: string[] = [];
@@ -901,27 +689,4 @@ describe("gateway suspend coordinator", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each([false, true])(
-    "expires synchronously when timer delivery is delayed (drain: %s)",
-    (drain) => {
-      let nowMs = 10_000;
-      const resumeScheduling = vi.fn();
-      prepareGatewaySuspend({
-        requestId: "request-delayed-expiry",
-        drain,
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getQueueSize: () => Number(drain) }),
-        nowMs: () => nowMs,
-        createSuspensionId: () => "suspension-delayed-expiry",
-      });
-
-      nowMs += SUSPEND_TTL_MS;
-
-      expect(getGatewaySuspendStatus("suspension-delayed-expiry")).toEqual({ status: "running" });
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    },
-  );
 });

@@ -1,4 +1,3 @@
-/** Doctor repair for a user-scope leftover that duels a system gateway unit. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import {

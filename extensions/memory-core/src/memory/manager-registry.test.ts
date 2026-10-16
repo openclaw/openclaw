@@ -1,7 +1,9 @@
 // Memory Core tests cover manager registry behavior.
 import path from "node:path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { memoryRuntime } from "../runtime-provider.js";
+import { createMemoryRuntime } from "../runtime-provider.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import {
   closeAllMemoryIndexManagers,
@@ -25,17 +27,27 @@ describe("memory index", () => {
       releaseProviderClose = resolve;
     });
     const cfg = createCfg({});
-    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ agentId: "main" });
     const callsBeforeReplacement = providerFixture.providerCalls.length;
-    const secondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
-      requireManager(result),
-    );
-    const concurrentSecondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then(
-      (result) => requireManager(result),
-    );
+    const secondPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }).then((result) => requireManager(result));
+    const concurrentSecondPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }).then((result) => requireManager(result));
     const secondProbe = secondPromise.then(async (manager) => {
       await manager.probeEmbeddingAvailability();
     });
@@ -67,7 +79,13 @@ describe("memory index", () => {
     expect(second === first).toBe(false);
     expect(concurrentSecond).toBe(second);
 
-    const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const third = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(third);
     expect(third).toBe(second);
   });
@@ -78,14 +96,22 @@ describe("memory index", () => {
       releaseProviderClose = resolve;
     });
     const cfg = createCfg({});
-    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
 
     const closePromise = first.close();
-    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
-      requireManager(result),
-    );
+    const replacementPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }).then((result) => requireManager(result));
     let replacementSettled = false;
     void replacementPromise.then(
       () => {
@@ -114,7 +140,13 @@ describe("memory index", () => {
     const firstCfg = createCfg({
       model: "first-model",
     });
-    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg: firstCfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
     let releaseProviderClose: () => void = () => {};
@@ -123,11 +155,13 @@ describe("memory index", () => {
     });
 
     const secondPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "second-model" }),
       agentId: "main",
     }).then((result) => requireManager(result));
     await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
     const thirdPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "third-model" }),
       agentId: "main",
     }).then((result) => requireManager(result));
@@ -150,8 +184,16 @@ describe("memory index", () => {
 
   it("canonicalizes agent ids before builtin manager acquisition", async () => {
     const cfg = createCfg({ model: "canonical-model" });
-    const first = await RuntimeMemoryIndexManager.get({ cfg, agentId: "Main-Agent" });
-    const second = await RuntimeMemoryIndexManager.get({ cfg, agentId: "main-agent" });
+    const first = await RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "Main-Agent",
+    });
+    const second = await RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main-agent",
+    });
     if (!first || !second) {
       throw new Error("Expected canonical memory index managers");
     }
@@ -169,8 +211,16 @@ describe("memory index", () => {
     firstCfg.agents.defaults.workspace = path.join(fixture.paths.root, "workspace-a");
     secondCfg.agents.defaults.workspace = path.join(fixture.paths.root, "workspace-b");
 
-    const first = await RuntimeMemoryIndexManager.get({ cfg: firstCfg, agentId: "main" });
-    const second = await RuntimeMemoryIndexManager.get({ cfg: secondCfg, agentId: "main" });
+    const first = await RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: firstCfg,
+      agentId: "main",
+    });
+    const second = await RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: secondCfg,
+      agentId: "main",
+    });
     if (!first || !second) {
       throw new Error("Expected workspace memory index managers");
     }
@@ -180,11 +230,17 @@ describe("memory index", () => {
     expect((first as unknown as { closed: boolean }).closed).toBe(true);
   });
 
-  it("does not block another agent while one scope retires its manager", async () => {
+  it("does not block another agent while one scope retires its manager", async ({ signal }) => {
     const firstCfg = createCfg({
       model: "first-model",
     });
-    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg: firstCfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
     let releaseProviderClose: () => void = () => {};
@@ -193,39 +249,32 @@ describe("memory index", () => {
     });
 
     const replacementPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "second-model" }),
       agentId: "main",
     });
     await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
     const otherAgentPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "other-model" }),
       agentId: "other",
     });
-    let otherAgentSettled = false;
-    void otherAgentPromise.then(
-      () => {
-        otherAgentSettled = true;
-      },
-      () => {
-        otherAgentSettled = true;
-      },
-    );
     try {
-      await vi.waitFor(() => expect(otherAgentSettled).toBe(true));
+      const otherAgent = requireManager(await withinTest(otherAgentPromise, signal));
+      trackManager(otherAgent);
+      expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
     } finally {
       releaseProviderClose();
       providerFixture.providerCloseGate = null;
     }
 
-    const otherAgent = requireManager(await otherAgentPromise);
     const replacement = requireManager(await replacementPromise);
-    trackManager(otherAgent);
     trackManager(replacement);
-    expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
   });
 
   it("global teardown waits for an admitted builtin manager replacement", async () => {
     const first = await RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "first-model" }),
       agentId: "main",
     });
@@ -240,6 +289,7 @@ describe("memory index", () => {
     });
 
     const replacementPromise = RuntimeMemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createCfg({ model: "second-model" }),
       agentId: "main",
     });
@@ -273,7 +323,13 @@ describe("memory index", () => {
 
   it("declines a maintenance manager that arrives during global teardown", async () => {
     const cfg = createCfg({});
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
     await manager.probeEmbeddingAvailability();
     let releaseProviderClose: () => void = () => {};
@@ -285,7 +341,12 @@ describe("memory index", () => {
     try {
       await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
       await expect(
-        RuntimeMemoryIndexManager.get({ cfg, agentId: "main", purpose: "maintenance" }),
+        RuntimeMemoryIndexManager.get({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+          purpose: "maintenance",
+        }),
       ).resolves.toBeNull();
     } finally {
       releaseProviderClose();
@@ -296,11 +357,19 @@ describe("memory index", () => {
 
   it("retains failed reload retirement through healthy acquisition and final close", async () => {
     const cfg = createCfg({});
-    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
-    const retirement = memoryRuntime.prepareReload({
+    providerFixture.providerCloseFailuresRemaining = 1;
+    const retirement = createMemoryRuntime({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+    }).prepareReload({
       retireRuntime: true,
       retiringEmbeddingProviders: [],
     });
@@ -308,48 +377,68 @@ describe("memory index", () => {
       await expect(retirement.drain()).resolves.toEqual({
         errors: [expect.objectContaining({ message: "provider close failed" })],
       });
-      expect(providerFixture.providerCloseCalls).toBe(2);
+      expect(providerFixture.providerCloseCalls).toBe(1);
     } finally {
       retirement.resume();
     }
 
-    const replacement = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const replacement = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(replacement);
     expect(replacement).not.toBe(first);
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
     await replacement.probeEmbeddingAvailability();
-    expect(requireManager(await getMemorySearchManager({ cfg, agentId: "main" }))).toBe(
-      replacement,
-    );
+    expect(
+      requireManager(
+        await getMemorySearchManager({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+        }),
+      ),
+    ).toBe(replacement);
 
     await closeAllMemoryIndexManagers();
-    expect(providerFixture.providerCloseCalls).toBe(4);
+    expect(providerFixture.providerCloseCalls).toBe(3);
     await closeAllMemoryIndexManagers();
-    expect(providerFixture.providerCloseCalls).toBe(4);
+    expect(providerFixture.providerCloseCalls).toBe(3);
   });
 
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {
     const cfg = createCfg({});
-    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
+    providerFixture.providerCloseFailuresRemaining = 1;
 
     await expect(closeMemoryIndexManagersForAgent({ agentId: "main" })).rejects.toThrow(
       "provider close failed",
     );
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
 
     let releaseProviderClose: () => void = () => {};
     providerFixture.providerCloseGate = new Promise<void>((resolve) => {
       releaseProviderClose = resolve;
     });
     const callsBeforeReplacement = providerFixture.providerCalls.length;
-    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
-      requireManager(result),
-    );
+    const replacementPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }).then((result) => requireManager(result));
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(3));
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(2));
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeReplacement);
     } finally {
       releaseProviderClose();
@@ -361,12 +450,18 @@ describe("memory index", () => {
     expect(replacement === first).toBe(false);
   });
 
-  it("retains a failed global close owner until provider retirement succeeds", async () => {
+  it("reports failed global cleanup until an explicit close succeeds", async () => {
     const cfg = createCfg({});
-    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const first = requireManager(
+      await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(first);
     await first.probeEmbeddingAvailability();
-    providerFixture.providerCloseFailuresRemaining = 2;
+    providerFixture.providerCloseFailuresRemaining = 1;
     providerFixture.providerCloseFailure = undefined;
 
     let globalCloseRejected = false;
@@ -377,28 +472,37 @@ describe("memory index", () => {
       },
     );
     expect(globalCloseRejected).toBe(true);
-    expect(providerFixture.providerCloseCalls).toBe(2);
+    expect(providerFixture.providerCloseCalls).toBe(1);
+
+    const unavailable = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
+    expect(unavailable.manager).toBeNull();
+    expect(unavailable.error).toContain("Embedding provider retirement failed");
 
     let releaseProviderClose: () => void = () => {};
     providerFixture.providerCloseGate = new Promise<void>((resolve) => {
       releaseProviderClose = resolve;
     });
     const callsBeforeReplacement = providerFixture.providerCalls.length;
-    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
-      requireManager(result),
-    );
-    let concurrentGlobalClose: Promise<void> = Promise.resolve();
+    const retryGlobalClose = closeAllMemorySearchManagers();
+    const replacementPromise = getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }).then((result) => requireManager(result));
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(3));
+      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(2));
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeReplacement);
-      concurrentGlobalClose = closeAllMemorySearchManagers();
     } finally {
       releaseProviderClose();
       providerFixture.providerCloseGate = null;
     }
 
     const replacement = await replacementPromise;
-    await concurrentGlobalClose;
+    await retryGlobalClose;
     trackManager(replacement);
     expect(replacement === first).toBe(false);
     expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
@@ -410,6 +514,7 @@ describe("memory index", () => {
     const secondAcquire = vi.fn(async () => undefined);
     const first = requireManager(
       await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
         cfg,
         agentId: "main",
         acquireLocalService: firstAcquire,
@@ -419,6 +524,7 @@ describe("memory index", () => {
 
     const second = requireManager(
       await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
         cfg,
         agentId: "main",
         acquireLocalService: secondAcquire,
@@ -427,6 +533,7 @@ describe("memory index", () => {
     trackManager(second);
     const secondAgain = requireManager(
       await getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
         cfg,
         agentId: "main",
         acquireLocalService: secondAcquire,
@@ -437,12 +544,14 @@ describe("memory index", () => {
     expect(Object.is(secondAgain, second)).toBe(true);
   });
 
-  it("retries embedding provider close before releasing the manager", async () => {
+  it("retains failed embedding provider close for the next explicit close", async () => {
     providerFixture.providerCloseFailuresRemaining = 1;
     const cfg = createCfg({});
     const manager = await getFreshManager(cfg);
 
     await manager.probeEmbeddingAvailability();
+    await expect(manager.close()).rejects.toThrow("provider close failed");
+    expect(providerFixture.providerCloseCalls).toBe(1);
     await manager.close();
 
     expect(providerFixture.providerCloseCalls).toBe(2);

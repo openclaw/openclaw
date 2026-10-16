@@ -1,82 +1,38 @@
 /**
  * Tests channel message helper behavior and mocked runtime interactions.
  */
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/adapter.js";
+import { describe, expect, it, vi } from "vitest";
+import * as channelInbound from "./channel-inbound.js";
 import {
   defineChannelMessageAdapter,
   type ChannelMessageDurableFinalAdapter,
 } from "./channel-outbound.js";
 
 describe("defineChannelMessageAdapter", () => {
-  const loadPluginSdkSubpaths = async () =>
-    await Promise.all([
-      import("openclaw/plugin-sdk/channel-outbound"),
-      import("openclaw/plugin-sdk/channel-message"),
-      import("openclaw/plugin-sdk/channel-inbound"),
-      import("openclaw/plugin-sdk/channel-reply-pipeline"),
-    ] as const);
-  let pluginSdkSubpaths: Awaited<ReturnType<typeof loadPluginSdkSubpaths>>;
-
-  beforeAll(async () => {
-    pluginSdkSubpaths = await loadPluginSdkSubpaths();
-  });
-
-  it("keeps channel plugin SDK subpaths aligned", async () => {
-    const [channelOutbound, channelMessage, , channelReplyPipeline] = pluginSdkSubpaths;
-
-    expect(channelOutbound.createChannelMessageReplyPipeline).toBe(
-      channelReplyPipeline.createChannelReplyPipeline,
-    );
-    expect(channelMessage.createChannelMessageReplyPipeline).toBe(
-      channelOutbound.createChannelMessageReplyPipeline,
-    );
-    expect(channelMessage.createReplyPrefixOptions).toBe(
-      channelReplyPipeline.createReplyPrefixOptions,
-    );
-    expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
-    expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
-  });
-
-  it("keeps new outbound helpers off the deprecated compatibility facade", () => {
-    const [channelOutbound, channelMessage] = pluginSdkSubpaths;
-
-    expect(channelOutbound.isCompleteAgentPreamble).toBeTypeOf("function");
-    expect(channelMessage).not.toHaveProperty("isCompleteAgentPreamble");
-  });
-
   it("preserves legacy count-shaped dispatch projections", () => {
-    const [, channelMessage, channelInbound] = pluginSdkSubpaths;
     const legacyResult = {
       queuedFinal: false,
       counts: { tool: 1, block: 2, final: 1 },
     };
-    const facades = [
-      {
-        counts: channelMessage.resolveChannelTurnDispatchCounts,
-        visible: channelMessage.hasVisibleChannelTurnDispatch,
-        final: channelMessage.hasFinalChannelTurnDispatch,
-      },
-      {
-        counts: channelInbound.resolveInboundReplyDispatchCounts,
-        visible: channelInbound.hasVisibleInboundReplyDispatch,
-        final: channelInbound.hasFinalInboundReplyDispatch,
-      },
-    ];
-
-    for (const facade of facades) {
-      expect(facade.counts(legacyResult)).toEqual({ tool: 1, block: 2, final: 1 });
-      expect(facade.visible(legacyResult)).toBe(true);
-      expect(facade.final(legacyResult)).toBe(true);
-      const receiptResult = {
-        ...legacyResult,
-        queuedFinal: true,
-        settledReceipt: { anyVisibleDelivered: false, counts: {} },
-      };
-      expect(facade.counts(receiptResult)).toEqual({ tool: 0, block: 0, final: 0 });
-      expect(facade.visible(receiptResult)).toBe(false);
-      expect(facade.final(receiptResult)).toBe(false);
-    }
+    expect(channelInbound.resolveInboundReplyDispatchCounts(legacyResult)).toEqual({
+      tool: 1,
+      block: 2,
+      final: 1,
+    });
+    expect(channelInbound.hasVisibleInboundReplyDispatch(legacyResult)).toBe(true);
+    expect(channelInbound.hasFinalInboundReplyDispatch(legacyResult)).toBe(true);
+    const receiptResult = {
+      ...legacyResult,
+      queuedFinal: true,
+      settledReceipt: { anyVisibleDelivered: false, counts: {} },
+    };
+    expect(channelInbound.resolveInboundReplyDispatchCounts(receiptResult)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+    expect(channelInbound.hasVisibleInboundReplyDispatch(receiptResult)).toBe(false);
+    expect(channelInbound.hasFinalInboundReplyDispatch(receiptResult)).toBe(false);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

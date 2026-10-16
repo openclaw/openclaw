@@ -1,18 +1,11 @@
-// Xai helper module supports tool config shared behavior.
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeXaiModelId } from "../model-id.js";
-
-export function coerceXaiToolConfig(
-  config: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  return isRecord(config) ? config : {};
-}
 
 export function resolveNormalizedXaiToolModel(params: {
   config?: Record<string, unknown>;
   defaultModel: string;
 }): string {
-  const value = coerceXaiToolConfig(params.config).model;
+  const value = asNonArrayRecord(params.config).model;
   return typeof value === "string" && value.trim()
     ? normalizeXaiModelId(value.trim())
     : params.defaultModel;
@@ -22,7 +15,7 @@ export function resolvePositiveIntegerToolConfig(
   config: Record<string, unknown> | undefined,
   key: string,
 ): number | undefined {
-  const raw = coerceXaiToolConfig(config)[key];
+  const raw = asNonArrayRecord(config)[key];
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return undefined;
   }

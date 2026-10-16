@@ -24,9 +24,7 @@ private final class LocalSocketLifecycleLease: @unchecked Sendable {
             .path
         let lockPath = "\(canonicalSocketPath).lifecycle.lock"
         let reserved = self.processLock.withLock { () -> Bool in
-            guard !self.reservedPaths.contains(lockPath) else { return false }
-            self.reservedPaths.insert(lockPath)
-            return true
+            self.reservedPaths.insert(lockPath).inserted
         }
         guard reserved else {
             throw ExecApprovalsSocketPathGuardError.lifecycleLockBusy(path: lockPath)
@@ -95,6 +93,32 @@ private final class LocalSocketLifecycleLease: @unchecked Sendable {
 
 /// Owns the listener generation and drains accepted requests before releasing its path.
 final class LocalSocketServer: @unchecked Sendable {
+    @MainActor
+    struct Startup<Listener: AnyObject> {
+        var listener: Listener?
+        var task: Task<Void, Never>?
+        var cleanup: Task<Void, Never>?
+        var generation: UInt64 = 0
+
+        mutating func stop(using stopListener: (Listener) -> Task<Void, Never>) -> Task<Void, Never>? {
+            self.generation &+= 1
+            let startup = self.task
+            startup?.cancel()
+            let shutdown = self.listener.map(stopListener)
+            self.task = nil
+            self.listener = nil
+            guard startup != nil || shutdown != nil else { return self.cleanup }
+            let previous = self.cleanup
+            let cleanup = Task {
+                await previous?.value
+                await startup?.value
+                await shutdown?.value
+            }
+            self.cleanup = cleanup
+            return cleanup
+        }
+    }
+
     private struct OpenedSocket {
         let fd: Int32
         let identity: ExecApprovalsSocketPathIdentity

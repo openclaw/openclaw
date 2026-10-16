@@ -2,7 +2,10 @@
 // oxfmt-ignore
 import { getFeishuLifecycleTestMocks, resetFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import { EventDispatcher } from "@larksuiteoapi/node-sdk";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  createChannelIngressQueueForTests,
+  observeChannelIngressQueueWrite,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -50,12 +53,22 @@ it("suppresses rich-post transport twins and retained legacy records without blo
       storePath: `${state.stateDir}/sessions.json`,
     });
     runtime.config.current = () => cfg;
-    runtime.state.openChannelIngressQueue = () =>
-      createChannelIngressQueueForTests({
+    const ingressReady = createDeferred<(eventId: string) => Promise<boolean>>();
+    runtime.state.openChannelIngressQueue = <
+      T,
+      TMetadata = unknown,
+      TCompletedMetadata = unknown,
+    >() => {
+      const ingressQueue = createChannelIngressQueueForTests<T, TMetadata, TCompletedMetadata>({
         channelId: "feishu",
         accountId: "test",
         stateDir: state.stateDir,
       });
+      ingressReady.resolve((eventId) =>
+        observeChannelIngressQueueWrite(ingressQueue, "complete", eventId),
+      );
+      return ingressQueue;
+    };
     const queue = createChannelIngressQueueForTests({
       channelId: "feishu",
       accountId: "test",
@@ -77,10 +90,11 @@ it("suppresses rich-post transport twins and retained legacy records without blo
     await closeOpenClawStateDatabaseAsync();
     feishuDedupeState.reset();
     expect(await hasProcessedFeishuMessage("om-legacy", "test")).toBe(true);
+    const monitorRuntime = createNonExitingRuntimeEnv();
     const monitor = monitorSingleAccount({
       cfg,
       account: resolveFeishuAccount({ cfg, accountId: "test" }),
-      runtime: createNonExitingRuntimeEnv(),
+      runtime: monitorRuntime,
       abortSignal: controller.signal,
       fireAndForget: false,
       botOpenIdSource: { kind: "prefetched", botOpenId: "ou-bot", source: "provider" },
@@ -88,12 +102,19 @@ it("suppresses rich-post transport twins and retained legacy records without blo
     void monitor.catch(ready.reject);
     try {
       const dispatcher = await ready.promise;
+      const observeCompletion = await ingressReady.promise;
       let sequence = 0;
-      const send = async (messageId: string, createTime = "1758000000000", imageKey?: string) => {
+      const send = async (
+        messageId: string,
+        createTime = "1758000000000",
+        media: { imageKey?: string; fileKey?: string } = {},
+      ) => {
         sequence += 1;
+        const eventId = `evt-post-${sequence}`;
+        const completed = observeCompletion(eventId);
         await dispatcher.invoke({
           schema: "2.0",
-          header: { event_id: `evt-post-${sequence}`, event_type: "im.message.receive_v1" },
+          header: { event_id: eventId, event_type: "im.message.receive_v1" },
           event: {
             sender: { sender_id: { open_id: "ou-user" }, sender_type: "user" },
             message: {
@@ -108,18 +129,20 @@ it("suppresses rich-post transport twins and retained legacy records without blo
                   content: [
                     [
                       { tag: "text", text: "Hello rich post", style: ["bold"] },
-                      ...(imageKey ? [{ tag: "img", image_key: imageKey }] : []),
+                      ...(media.imageKey ? [{ tag: "img", image_key: media.imageKey }] : []),
                     ],
                   ],
                 },
+                ...(media.fileKey
+                  ? { files: [{ file_key: media.fileKey, file_name: "report.csv" }] }
+                  : {}),
               }),
             },
           },
         });
-        await vi.waitFor(async () => {
-          expect(await queue.listPending()).toEqual([]);
-          expect(await queue.listClaims()).toEqual([]);
-        });
+        await expect(completed).resolves.toBe(true);
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
         // Ingress adoption clears the queue before reply delivery settles.
         await Promise.all(mocks.withReplyDispatcherMock.mock.results.map((result) => result.value));
       };
@@ -129,6 +152,8 @@ it("suppresses rich-post transport twins and retained legacy records without blo
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
       await send("om-legacy", "1758000000001");
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      await send("om-legacy", "1758000000001", { fileKey: "file_report" });
+      expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
       await send("om-different", "1758000000002");
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
       expect(
@@ -137,12 +162,18 @@ it("suppresses rich-post transport twins and retained legacy records without blo
         ),
       ).toEqual([1, 1]);
       // A legacy raw-ID hit must not suppress an attachment-bearing revision.
-      await send("om-legacy", "1758000000001", "img_fixture");
+      await send("om-legacy", "1758000000001", { imageKey: "img_fixture" });
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(3);
-      await send("om-legacy", "1758000000001", "img_fixture");
+      await send("om-legacy", "1758000000001", { imageKey: "img_fixture" });
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(3);
-      await send("om-media-fresh-id", "1758000000001", "img_fixture");
+      await send("om-media-fresh-id", "1758000000001", { imageKey: "img_fixture" });
       expect(mocks.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(4);
+    } catch (error) {
+      console.error("Feishu post-replay lifecycle diagnostics", {
+        logs: vi.mocked(monitorRuntime.log).mock.calls,
+        errors: vi.mocked(monitorRuntime.error).mock.calls,
+      });
+      throw error;
     } finally {
       controller.abort();
       await monitor;

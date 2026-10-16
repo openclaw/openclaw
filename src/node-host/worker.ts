@@ -1,6 +1,5 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
-import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
@@ -25,19 +24,19 @@ function writeStderrLine(message: string): void {
 export async function runNodeHostWorker(
   options: { desktopSharingEnabled?: boolean } = {},
 ): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   ensureNodeHostStateReady();
   const nodeConfig = await loadNodeHostConfig();
   // The private app worker is a capability superset; persisted headless
   // command allowlists never apply here.
   const prepared = await prepareNodeHostRuntime({
-    enableDuplexPluginCommands: true,
-    enableWorkerRuns: true,
     installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
     desktopSharingEnabled: options.desktopSharingEnabled,
   });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
-  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
+  const { promise: stopped, resolve: resolveStopped, reject: rejectStopped } = createDeferredCore();
 
   const stop = async (exitCode: number) => {
     if (stopping) {
@@ -48,8 +47,10 @@ export async function runNodeHostWorker(
       client.close();
       await runtime.close();
       process.exitCode = exitCode;
-    } finally {
       resolveStopped();
+    } catch (error) {
+      process.exitCode = exitCode || 1;
+      rejectStopped(error);
     }
   };
 
@@ -89,6 +90,9 @@ export async function runNodeHostWorker(
 
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
+    if (stopping) {
+      return;
+    }
     const message = parseNodeHostWorkerInput(line);
     if (!message) {
       writeMessage({ type: "protocol-error", error: "invalid worker request" });
@@ -142,15 +146,16 @@ export async function runNodeHostWorker(
   input.on("close", () => void stop(0));
   const onInterrupt = () => void stopNodeHostWorkerFromSignal(input, stop, 130);
   const onTerminate = () => void stopNodeHostWorkerFromSignal(input, stop, 143);
-  process.once("SIGINT", onInterrupt);
-  process.once("SIGTERM", onTerminate);
+  process.on("SIGINT", onInterrupt);
+  process.on("SIGTERM", onTerminate);
   try {
     await stopped;
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
-    // runtime.close() drains only runtime-owned owners. A plugin-owned child keeps
-    // ref'd pipes past that point and pins the loop, so exit must not wait for a drain.
-    requestExitAfterOneShotOutput();
+    input.close();
+    // The supervisor keeps its writer until this process exits. Terminal worker
+    // shutdown must retire our read side rather than waiting for the parent EOF.
+    process.stdin.destroy();
   }
 }

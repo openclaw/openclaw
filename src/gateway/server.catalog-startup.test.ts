@@ -3,7 +3,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
-  getRemoteModelCatalogPricing,
+  getActiveRemoteModelCatalog,
   getRemoteModelCatalogProviderOverlay,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
@@ -14,65 +14,71 @@ import * as bootstrap from "./server-startup-bootstrap.js";
 import { startGatewayServer } from "./server.js";
 
 describe("Gateway startup catalog", () => {
-  it.each([false, true])("captures metadata before bootstrap awaits, absent=%s", async (absent) => {
-    const bundle = {
-      schemaVersion: 1,
-      generatedAt: 200,
-      sourceCommit: "fixture",
-      providers: { anthropic: { models: [{ id: "startup-model" }] } },
-      pricing: { "anthropic/startup-model": { input: 1, output: 2 } },
-    };
-    const stored = {
-      id: 1,
-      bundle_json: JSON.stringify(bundle),
-      generated_at: 200,
-      min_version: null,
-      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-      etag: null,
-      last_modified: null,
-      checked_at: 200,
-    };
-    const read = vi.fn(() => (absent ? undefined : stored));
-    setRemoteModelCatalogOverlaySourcesForTest({
-      bundledGeneratedAt: () => 100,
-      readStoredCatalog: read,
-    });
-    const pending = createDeferred();
-    const stopped = new Error("fixture stops bootstrap");
-    const prepare = vi
-      .spyOn(bootstrap, "prepareGatewayServerBootstrap")
-      .mockImplementationOnce(async () => {
-        await pending.promise;
-        throw stopped;
+  it.each([false, true])(
+    "captures metadata before entering bootstrap, absent=%s",
+    async (absent) => {
+      const bundle = {
+        schemaVersion: 1,
+        generatedAt: 200,
+        sourceCommit: "fixture",
+        providers: { anthropic: { models: [{ id: "startup-model" }] } },
+        pricing: { "anthropic/startup-model": { input: 1, output: 2 } },
+      };
+      const stored = {
+        id: 1,
+        bundle_json: JSON.stringify(bundle),
+        generated_at: 200,
+        min_version: null,
+        source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
+        etag: null,
+        last_modified: null,
+        checked_at: 200,
+      };
+      const read = vi.fn(() => (absent ? undefined : stored));
+      setRemoteModelCatalogOverlaySourcesForTest({
+        bundledGeneratedAt: () => 100,
+        readStoredCatalog: read,
       });
-    const startup = startGatewayServerCore(0).catch((error: unknown) => error);
-    try {
-      read.mockReturnValue({
-        ...stored,
-        bundle_json: JSON.stringify({
-          ...bundle,
-          providers: { anthropic: { models: [{ id: "downloaded-model" }] } },
-          pricing: { "anthropic/startup-model": { input: 3, output: 4 } },
-        }),
-      });
-      expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
-        absent ? undefined : bundle.providers.anthropic,
-      );
-      expect(getRemoteModelCatalogPricing({})).toEqual(
-        absent
-          ? undefined
-          : {
-              "anthropic/startup-model": { cost: { input: 1, output: 2 }, explicit: false },
-            },
-      );
-    } finally {
-      pending.resolve();
-      const outcome = await startup;
-      prepare.mockRestore();
-      setRemoteModelCatalogOverlaySourcesForTest();
-      expect(outcome).toBe(stopped);
-    }
-  });
+      const pending = createDeferred();
+      const enteredBootstrap = createDeferred();
+      const stopped = new Error("fixture stops bootstrap");
+      const prepare = vi
+        .spyOn(bootstrap, "prepareGatewayServerBootstrap")
+        .mockImplementationOnce(async () => {
+          enteredBootstrap.resolve();
+          await pending.promise;
+          throw stopped;
+        });
+      const startup = startGatewayServerCore(0).catch((error: unknown) => error);
+      try {
+        await enteredBootstrap.promise;
+        read.mockReturnValue({
+          ...stored,
+          bundle_json: JSON.stringify({
+            ...bundle,
+            providers: { anthropic: { models: [{ id: "downloaded-model" }] } },
+            pricing: { "anthropic/startup-model": { input: 3, output: 4 } },
+          }),
+        });
+        expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
+          absent ? undefined : bundle.providers.anthropic,
+        );
+        expect(getActiveRemoteModelCatalog({})?.pricing).toEqual(
+          absent
+            ? undefined
+            : {
+                "anthropic/startup-model": { cost: { input: 1, output: 2 }, explicit: false },
+              },
+        );
+      } finally {
+        pending.resolve();
+        const outcome = await startup;
+        prepare.mockRestore();
+        setRemoteModelCatalogOverlaySourcesForTest();
+        expect(outcome).toBe(stopped);
+      }
+    },
+  );
 });
 
 describe("Gateway provider settings startup", () => {
@@ -104,7 +110,7 @@ describe("Gateway provider settings startup", () => {
         try {
           const port = await getFreePort();
           await state.writeConfig({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
             channels: { telegram: { botToken: "123456:synthetic-test-token" } },
             gateway: { auth: { mode: "token", token } },

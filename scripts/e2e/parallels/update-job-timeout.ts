@@ -8,7 +8,6 @@ interface TimedUpdateJobOptions {
   run(this: void, context: { signal: AbortSignal }): Promise<void> | void;
   timeoutDescription: string;
   timeoutMs: number;
-  writeLog(this: void): Promise<void>;
 }
 
 export async function runTimedUpdateJob({
@@ -18,7 +17,6 @@ export async function runTimedUpdateJob({
   run,
   timeoutDescription,
   timeoutMs,
-  writeLog,
 }: TimedUpdateJobOptions): Promise<number> {
   let timedOut = false;
   const controller = new AbortController();
@@ -45,21 +43,17 @@ export async function runTimedUpdateJob({
     const outcome = await Promise.race([runOutcome, timeoutPromise]);
     if (outcome === "timeout") {
       await waitForAbortSettle(runOutcome, resolvedAbortSettleMs);
-      await writeLog();
       return 1;
     }
     if (outcome.status === "fail") {
       append(`${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}\n`);
-      await writeLog();
       return 1;
     }
-    await writeLog();
     return 0;
   } catch (error) {
     if (!timedOut) {
       append(`${error instanceof Error ? error.message : String(error)}\n`);
     }
-    await writeLog();
     return 1;
   } finally {
     if (timeout) {

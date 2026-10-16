@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -92,32 +93,6 @@ function getEnvValueCaseInsensitive(
   return actualKey ? env[actualKey] : undefined;
 }
 
-function parseRegQueryValue(stdout: string, valueName: string): string | null {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(valueName)}\\s+REG_[A-Z0-9_]+\\s+(.+)$`, "im");
-  const match = stdout.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function runRegQuery(
-  regExe: string,
-  key: string,
-  valueName: string,
-  use64BitView: boolean,
-  timeoutMs: number,
-): string {
-  const args = ["query", key, "/v", valueName];
-  if (use64BitView) {
-    args.push("/reg:64");
-  }
-  return execFileSync(regExe, args, {
-    env: resolveDiagnosticProcessEnv(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-}
-
 /** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
 export function queryWindowsRegistryValue(
   key: string,
@@ -129,7 +104,7 @@ export function queryWindowsRegistryValue(
     return null;
   }
 
-  for (const use64BitView of [true, false]) {
+  for (const viewArgs of [["/reg:64"], []]) {
     const timeoutMs =
       deadlineMs === undefined
         ? REG_QUERY_TIMEOUT_MS
@@ -137,9 +112,20 @@ export function queryWindowsRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
-      const stdout = runRegQuery(regExe, key, valueName, use64BitView, timeoutMs);
-      const parsed = parseRegQueryValue(stdout, valueName);
+      const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
+        env: resolveDiagnosticProcessEnv(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: timeoutMs,
+        windowsHide: true,
+      });
+      const pattern = new RegExp(
+        `^\\s*${escapeRegExp(valueName)}\\s+REG_[A-Z0-9_]+\\s+(.+)$`,
+        "im",
+      );
+      const parsed = stdout.match(pattern)?.[1]?.trim();
       if (parsed) {
         return parsed;
       }
@@ -151,20 +137,14 @@ export function queryWindowsRegistryValue(
 }
 
 function getRegistryProgramFilesRoots(): Partial<WindowsInstallRoots> {
+  const readRoot = (valueName: string) =>
+    normalizeWindowsInstallRoot(
+      queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, valueName) ?? undefined,
+    ) ?? undefined;
   return {
-    programFiles:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir") ?? undefined,
-      ) ?? undefined,
-    programFilesX86:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)") ??
-          undefined,
-      ) ?? undefined,
-    programW6432:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir") ?? undefined,
-      ) ?? undefined,
+    programFiles: readRoot("ProgramFilesDir"),
+    programFilesX86: readRoot("ProgramFilesDir (x86)"),
+    programW6432: readRoot("ProgramW6432Dir"),
   };
 }
 

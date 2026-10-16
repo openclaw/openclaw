@@ -16,10 +16,6 @@ enum DashboardGatewaysRequest: Equatable {
 extension DashboardWindowController {
     static let gatewaysMessageHandlerName = "openclawGateways"
 
-    func hasTLSParams(_ params: GatewayTLSParams?) -> Bool {
-        self.tlsParams == params
-    }
-
     func webView(
         _ webView: WKWebView,
         didReceive challenge: URLAuthenticationChallenge,
@@ -64,6 +60,13 @@ extension DashboardWindowController {
               message.webView === self.webView,
               message.frameInfo.isMainFrame
         else {
+            return
+        }
+        if let payload = message.body as? [String: Any], payload["type"] as? String == "reload" {
+            guard self.isShowingFailurePage, self.signedOut == nil,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  self.webView.url?.absoluteString == "about:blank" else { return }
+            self.reloadDashboard()
             return
         }
         if let payload = message.body as? [String: Any],
@@ -119,11 +122,8 @@ extension DashboardWindowController {
         snapshot: DashboardGatewaySnapshot,
         dispatch: Bool) -> String
     {
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return ""
-        }
+        guard let data = try? JSONEncoder().encode(snapshot) else { return "" }
+        let json = String(bytes: data, encoding: .utf8)!
         let event = dispatch
             ? "window.dispatchEvent(new CustomEvent('openclaw:native-gateways-changed'," +
             "{detail:window.__OPENCLAW_NATIVE_GATEWAYS__}));"

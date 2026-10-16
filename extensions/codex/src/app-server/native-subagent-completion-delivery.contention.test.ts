@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import {
   CodexNativeSubagentMonitor,
@@ -13,6 +18,9 @@ import {
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
+
 const result = "Keep the accepted native result.";
 const completedChild = () =>
   childTurnCompletedNotification({
@@ -22,6 +30,52 @@ const completedChild = () =>
 
 describe("native completion durable receipts", () => {
   setupRunAttemptTestHooks();
+  it("settles a receipt received during queued retirement without an undelivered note", async () => {
+    const f = await fixture();
+    const client = createClient();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const mutate = f.store.mutate.bind(f.store);
+    vi.spyOn(f.store, "mutate").mockImplementation(async (...args) => {
+      const mutation = args[1];
+      if (mutation.kind === "consume-native-subagent-assignment" && mutation.undelivered) {
+        entered.resolve();
+        await release.promise;
+      }
+      return await mutate(...args);
+    });
+    f.deliver.mockResolvedValue({ delivered: false, path: "none", recoveryBlocked: true });
+    const parent = await f.register(client);
+    let observer: Awaited<ReturnType<typeof f.register>> | undefined;
+    let retirement: Promise<void> | undefined;
+    try {
+      await parent.ready;
+      parent.bindTurn("parent-turn");
+      await f.spawn(client);
+      await client.notify(completedChild());
+      retirement = parent.unregister();
+      await entered.promise;
+      observer = await f.register(client);
+      await observer.ready;
+      observer.bindTurn("observer-turn");
+      await client.notify(nativeCompletionNotification({ turnId: "observer-turn", result }));
+      release.resolve();
+      await retirement;
+      await observer.unregister();
+      expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+        [],
+      );
+      expect(await readVisibleSessionTranscriptMessageEntries(f.identity)).toEqual([]);
+      expect(f.deliver).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await retirement;
+      await observer?.unregister();
+      await parent.unregister();
+      client.close();
+    }
+  });
+
   it("keeps a durable delivery receipt when its next ownership read fails", async () => {
     const f = await fixture();
     const client = createClient();
@@ -63,7 +117,9 @@ describe("native completion durable receipts", () => {
         ),
       ).toHaveLength(1);
       await Promise.all(writes);
-      expect(f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+      expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual(
+        [],
+      );
       client.close();
       const replacement = await f.register(createClient());
       await replacement.ready;

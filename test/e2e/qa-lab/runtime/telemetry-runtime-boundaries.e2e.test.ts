@@ -19,7 +19,7 @@ const PRIMARY_COVERAGE_IDS = [
 ] as const;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("telemetry runtime boundaries", () => {
+describe.each([false, true])("telemetry runtime codeMode=%s", (codeMode) => {
   it("writes exact QA Lab evidence for real bus telemetry and task followthrough", async () => {
     const repoRoot = process.cwd();
     const artifactRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
@@ -28,6 +28,10 @@ describe("telemetry runtime boundaries", () => {
     const runtime = await runQaSuite({
       alternateModel: "mock-openai/gpt-5.6-luna",
       concurrency: 1,
+      mutateConfig: (cfg) => ({
+        ...cfg,
+        tools: { ...cfg.tools, codeMode: { enabled: codeMode } },
+      }),
       outputDir,
       primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",

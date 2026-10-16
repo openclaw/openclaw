@@ -13,7 +13,6 @@ import { runSqliteWorkerStoreWrite } from "./sqlite-worker-store.js";
 const { tempDirs: dirs, open } = useSqliteWorkerStoreFixture("sqlite-worker-preparation-");
 
 it.each([
-  { mib: 0, owner: "client" },
   { mib: 40, owner: "client" },
   { mib: 0, owner: "host" },
 ] as const)(
@@ -69,10 +68,13 @@ it.each([
       expect(first).toMatchObject({
         writes: 1,
         readerOwnership: {
-          preparation: [undefined, undefined],
           execution: { operation: "append", ownerKind: "worker", actorId: expect.any(Number) },
         },
       });
+      expect(first.readerOwnership?.preparation).toEqual([
+        first.readerOwnership?.execution,
+        first.readerOwnership?.execution,
+      ]);
       expect(await following).toMatchObject({ writes: 2, readerOwnership: first.readerOwnership });
       await closing;
       expect(closed).toBe(true);

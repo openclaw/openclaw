@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { DelegatedToolPolicyContext } from "./delegated-tool-policy.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -19,7 +20,7 @@ export type SpawnedRunMetadata = {
   workspaceDir?: string | null;
 };
 
-export type SpawnedToolContext = {
+export type SpawnedToolContext = DelegatedToolPolicyContext & {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -30,8 +31,6 @@ export type SpawnedToolContext = {
   /** Effective parent-turn model; saved preferences may describe a later turn. */
   requesterModel?: ModelRef;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
 };
 
 type NormalizedSpawnedRunMetadata = {
@@ -96,10 +95,10 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
     | null,
 ): string | undefined {
   const normalized = normalizeSpawnedRunMetadata(metadata);
-  if (normalized.spawnedBy) {
+  if (normalized.spawnedBy && normalized.workspaceDir) {
     return normalized.workspaceDir;
   }
-  // Dashboard worktree sessions are not subagents, so their managed cwd is
-  // also the workspace that sandbox setup must mount on every later turn.
+  // Visible children can record lineage without an inherited workspace.
+  // Their managed cwd must remain the sandbox workspace on later turns too.
   return normalizeOptionalString(metadata?.cwd);
 }

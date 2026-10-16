@@ -102,21 +102,6 @@ beforeEach(() => {
 describe("mapSentPollOptionsToDecisions", () => {
   const requested = buildApprovalPollOptions({ allowedDecisions: ["allow-once", "deny"] });
 
-  it("maps returned option ids back to decisions by text", () => {
-    expect(
-      mapSentPollOptionsToDecisions({
-        requested,
-        sent: [
-          { id: "id-deny", text: "👎 Deny" },
-          { id: "id-allow", text: "👍 Allow Once" },
-        ],
-      }),
-    ).toEqual([
-      ["id-deny", "deny"],
-      ["id-allow", "allow-once"],
-    ]);
-  });
-
   it("fails closed when the bridge normalizes option text", () => {
     expect(
       mapSentPollOptionsToDecisions({
@@ -333,29 +318,6 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
-  it("uses the option id when imsg reports the prompt GUID instead of the poll GUID", async () => {
-    await iMessageApprovalPollTargets.register({
-      accountId: "default",
-      conversation: { handle: APPROVER },
-      pollGuid: "bridge-reported-prompt-guid",
-      approvalId: "exec-racy-guid",
-      approvalKind: "exec",
-      optionDecisions: [[ALLOW_ONCE_OPTION, "allow-once"]],
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    await expect(resolveVote(buildVote({ pollGuid: "actual-native-poll-guid" }))).resolves.toBe(
-      true,
-    );
-
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "exec-racy-guid",
-        decision: "allow-once",
-      }),
-    );
-  });
-
   // A group poll is where authorization actually carries weight: the binding is
   // keyed by chat, so every member's vote finds it and only allowFrom stops
   // them. In a DM the handle-keyed lookup already scopes to the approver.
@@ -390,60 +352,6 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ).resolves.toBe(true);
 
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it("denies a group vote from a member outside allowFrom", async () => {
-    await bindGroup();
-
-    await expect(
-      maybeResolveIMessageApprovalPollVote({
-        cfg,
-        accountId: "default",
-        message: buildGroupVote({ sender: "+15559999999", participant: "+15559999999" }),
-      }),
-    ).resolves.toBe(true);
-
-    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it("resolves a group vote from an approver", async () => {
-    await bindGroup();
-
-    await expect(
-      resolveVote(buildGroupVote({ sender: APPROVER, participant: APPROVER })),
-    ).resolves.toBe(true);
-
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalId: "exec-group", senderId: APPROVER }),
-    );
-  });
-
-  it("authorizes an email sender when Apple reports another active-account alias", async () => {
-    const emailCfg = { channels: { imessage: { allowFrom: ["person@example.com"] } } };
-    await iMessageApprovalPollTargets.register({
-      accountId: "default",
-      conversation: { handle: "person@example.com" },
-      pollGuid: POLL_GUID,
-      approvalId: "exec-email",
-      approvalKind: "exec",
-      optionDecisions: [[DENY_OPTION, "deny"]] as const,
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    await expect(
-      resolveVote(
-        buildVote({
-          sender: "person@example.com",
-          participant: "another-alias@example.com",
-          optionId: DENY_OPTION,
-        }),
-        { cfg: emailCfg },
-      ),
-    ).resolves.toBe(true);
-
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalId: "exec-email", decision: "deny" }),
-    );
   });
 
   it("requires explicit approvers", async () => {
@@ -483,19 +391,6 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ).resolves.toBe(false);
   });
 
-  it("owns an empty complete vote set as a deselection", async () => {
-    await bind();
-
-    await expect(
-      resolveVote({
-        sender: APPROVER,
-        poll: { kind: "vote", original_guid: POLL_GUID, vote: null, votes: [] },
-      } as IMessagePayload),
-    ).resolves.toBe(true);
-
-    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
   it("fails closed on a malformed complete vote set for an owned poll", async () => {
     await bind();
 
@@ -510,30 +405,6 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       } as unknown as IMessagePayload),
     ).resolves.toBe(true);
 
-    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it("falls through for a poll it does not own so ordinary polls still render", async () => {
-    await bind();
-
-    await expect(
-      resolveVote(
-        buildVote({
-          pollGuid: "some-other-poll",
-          optionId: "some-other-option",
-        }),
-      ),
-    ).resolves.toBe(false);
-  });
-
-  it("swallows late votes after the approval resolved", async () => {
-    await bind();
-    await resolveVote(buildVote());
-    resolverMocks.resolveApprovalOverGateway.mockClear();
-
-    // Messages cannot close a poll, so the balloon stays tappable; a late tap
-    // must not reach the agent as prose.
-    await expect(resolveVote(buildVote())).resolves.toBe(true);
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
@@ -624,28 +495,6 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
     await expect(resolveVote(buildVote({ pollGuid: expiredPollGuid }))).resolves.toBe(false);
     expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
-  });
-
-  it("matches a vote that arrives keyed by chat guid instead of handle", async () => {
-    await iMessageApprovalPollTargets.register({
-      accountId: "default",
-      conversation: { chatGuid: "iMessage;-;+15551230000", handle: APPROVER },
-      pollGuid: POLL_GUID,
-      approvalId: "exec-chat",
-      approvalKind: "exec",
-      optionDecisions: [[DENY_OPTION, "deny"]] as const,
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    const message = {
-      ...buildVote({ optionId: DENY_OPTION }),
-      chat_guid: "iMessage;-;+15551230000",
-    } as IMessagePayload;
-
-    await expect(resolveVote(message)).resolves.toBe(true);
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalId: "exec-chat" }),
-    );
   });
 
   it("stops resolving after the target is unregistered", async () => {

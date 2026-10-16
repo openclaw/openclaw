@@ -201,7 +201,7 @@ export function listOpenClawPluginManifestMetadata(
     ...listChildPluginDirs(resolveDefaultPluginExtensionsDir(env), 4, order, "global"),
   );
   const uniqueCandidates = uniqueCandidateDirs(candidates);
-  const byManifestId = new Map<string, CandidateDir>();
+  const seenManifestIds = new Set<string>();
   const records: PluginManifestMetadataRecord[] = [];
   for (const candidate of uniqueCandidates) {
     const manifest = readManifestObject(candidate.pluginDir);
@@ -210,11 +210,10 @@ export function listOpenClawPluginManifestMetadata(
     }
     const manifestId = normalizeTrimmedString(manifest.id);
     if (manifestId) {
-      const existing = byManifestId.get(manifestId);
-      if (existing && existing.rank <= candidate.rank) {
+      if (seenManifestIds.has(manifestId)) {
         continue;
       }
-      byManifestId.set(manifestId, candidate);
+      seenManifestIds.add(manifestId);
     }
     records.push({ pluginDir: candidate.pluginDir, manifest, origin: candidate.origin });
   }

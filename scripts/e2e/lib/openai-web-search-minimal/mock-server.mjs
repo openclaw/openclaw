@@ -1,4 +1,3 @@
-// Mock server for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -40,22 +39,13 @@ function hasWebSearchTool(tools) {
       if (!tool || typeof tool !== "object") {
         return false;
       }
-      if (tool.type === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.name === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.function?.name === "web_search") {
-        return true;
-      }
-      return false;
+      return (
+        tool.type === "web_search" ||
+        (tool.type === "function" &&
+          (tool.name === "web_search" || tool.function?.name === "web_search"))
+      );
     })
   );
-}
-
-function bodyContainsForceReject(body) {
-  return JSON.stringify(body).includes("FORCE_SCHEMA_REJECT");
 }
 
 function responseEvents(text) {
@@ -143,7 +133,7 @@ const handleRequest = (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      if (bodyContainsForceReject(body)) {
+      if (JSON.stringify(body).includes("FORCE_SCHEMA_REJECT")) {
         writeOpenAiReject(res);
         return;
       }

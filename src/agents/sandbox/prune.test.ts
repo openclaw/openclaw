@@ -1,11 +1,19 @@
 // Sandbox prune tests cover runtime removal ordering and registry cleanup
 // behavior for stale sandbox entries.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { SandboxRegistryEntry } from "./registry.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 let maybePruneSandboxes: typeof import("./prune.js").maybePruneSandboxes;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -49,6 +57,7 @@ vi.mock("./docker-backend.js", () => ({
   dockerSandboxBackendManager: backendMocks,
 }));
 
+// mock-isolation: Prune selection uses synthetic rows; worker predicate behavior lives in registry tests.
 vi.mock("./registry.js", () => ({
   assertSandboxBrowserRegistryEntryCurrent: registryMocks.assertSandboxBrowserRegistryEntryCurrent,
   readBrowserRegistry: registryMocks.readBrowserRegistry,
@@ -58,19 +67,15 @@ vi.mock("./registry.js", () => ({
   removeSandboxRegistryGeneration: (
     _kind: string,
     entry: SandboxRegistryEntry,
-    assertCurrent: () => void,
+    assertCurrent?: () => void,
   ) => {
-    assertCurrent();
+    assertCurrent?.();
     return registryMocks.removeBrowserRegistryEntry(entry.containerName);
   },
   removeSandboxRegistryRuntime: async (
     entry: SandboxRegistryEntry,
     removeRuntime: (current: SandboxRegistryEntry) => Promise<void>,
-    options?: { shouldRemove?: (current: SandboxRegistryEntry) => boolean },
   ) => {
-    if (options?.shouldRemove && !options.shouldRemove(entry)) {
-      return;
-    }
     await removeRuntime(entry);
     await registryMocks.removeRegistryEntry(entry.containerName);
   },
@@ -136,6 +141,48 @@ describe("maybePruneSandboxes", () => {
 
     expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
+  });
+
+  it("rejects hosted custody released during registry inspection before runtime removal", async () => {
+    const root = roots.make("sandbox-prune-custody-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const owner = acquireGatewayStateOwner({
+        databasePath: resolveOpenClawStateSqlitePath(),
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      const assertCurrent = await captureSandboxStateOwner();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const staleRegistry = await registryMocks.readRegistry();
+      registryMocks.readRegistry.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return staleRegistry;
+      });
+      const pruning = maybePruneSandboxes(buildPruneConfig(), assertCurrent);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pruning,
+          "Pruning skipped registry inspection",
+        );
+        owner.release();
+        resume.resolve();
+        const result = await pruning.catch((error: unknown) => error);
+        expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+        expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      } finally {
+        resume.resolve();
+        await pruning.catch(() => {});
+        owner.release();
+      }
+    });
   });
 
   it("uses each registry owner's prune policy for containers and browsers", async () => {

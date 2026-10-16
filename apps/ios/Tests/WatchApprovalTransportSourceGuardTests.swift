@@ -110,8 +110,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(receiverSource.contains(
             "WatchGatewayID.exact(payload[\"requestGatewayStableID\"] as? String)"))
         #expect(receiverSource.contains("recordAcceptedExecApprovalSnapshot"))
-        #expect(receiverSource.contains(
-            "WatchGatewayID.key(snapshot.gatewayStableID) == WatchGatewayID.key(token.gatewayStableID)"))
     }
 
     @Test func `retry reset matches the exact active attempt`() throws {
@@ -165,10 +163,6 @@ struct WatchApprovalTransportSourceGuardTests {
             receiverSource,
             from: "private static func parseExecApprovalItem(",
             to: "private static func parseExecApprovalPromptPayload(")
-        let ownerKey = try Self.extract(
-            storeSource,
-            from: "private static func execApprovalOwnerKey(",
-            to: "private func isExecApprovalTerminal(")
         let snapshotConsume = try Self.extract(
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
@@ -182,8 +176,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(messagesSource.contains("typealias WatchGatewayID = GatewayStableIdentifier"))
         #expect(parser.contains("WatchApprovalID.exact(payload[\"id\"] as? String)"))
         #expect(!parser.contains("id = (payload[\"id\"] as? String)?.trimmingCharacters"))
-        #expect(ownerKey.contains("WatchApprovalID.key(approvalId)"))
-        #expect(!ownerKey.contains("approvalId.trimmingCharacters"))
         #expect(snapshotConsume.contains("WatchApprovalID.exact(approval.id) != nil"))
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))

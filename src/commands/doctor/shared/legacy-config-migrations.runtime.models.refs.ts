@@ -39,10 +39,6 @@ function isChannelModelOverridePath(path: string): boolean {
   return path.includes(".modelByChannel.");
 }
 
-function isModelPolicyAllowPath(path: string): boolean {
-  return path.endsWith(".modelPolicy.allow");
-}
-
 function isMediaModelPath(path: string): boolean {
   return ["image", "video", "music"].includes(pathKey(path)) && path.includes(".mediaModels.");
 }
@@ -81,7 +77,9 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
     return value.some((entry, index) =>
       typeof entry === "string" &&
       key &&
-      (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+      (MODEL_REF_ARRAY_KEYS.has(key) ||
+        path.endsWith(".modelPolicy.allow") ||
+        path.endsWith(".modelPolicy.deny"))
         ? Boolean(normalizeKnownModelRef(entry))
         : scanKnownModelRefs(entry, undefined, `${path}.${index}`),
     );
@@ -109,7 +107,10 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
   );
 }
 
-type ModelRefNormalizer = (value: string) => string | null;
+type ModelRefNormalizer = (
+  value: string,
+  providerModelPair?: Record<string, unknown>,
+) => string | null;
 
 function rewriteModelRefString(
   value: string,
@@ -262,15 +263,6 @@ function rewriteModelRefMapKeys(
   return { value: changed ? next : record, changed };
 }
 
-type ProviderCatalogModelRow = {
-  index: number;
-  model: unknown;
-  modelRecord?: Record<string, unknown>;
-  originalId?: string;
-  normalizedId?: string;
-  changed?: boolean;
-};
-
 function rewriteProviderCatalogModelIds(
   providers: Record<string, unknown>,
   path: string,
@@ -283,7 +275,7 @@ function rewriteProviderCatalogModelIds(
     if (!provider || !Array.isArray(provider.models)) {
       continue;
     }
-    const rows: ProviderCatalogModelRow[] = provider.models.map((model, index) => {
+    const rows = provider.models.map((model: unknown, index) => {
       const modelRecord = getRecord(model);
       if (!modelRecord || typeof modelRecord.id !== "string") {
         return { index, model };
@@ -348,7 +340,7 @@ function rewriteProviderCatalogModelIds(
         merged = getRecord(result.value) ?? merged;
         changes.push(
           result.conflicts.length > 0
-            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept canonical values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
+            ? `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}; kept existing values for conflicting fields: ${result.conflicts.toSorted().join(", ")}.`
             : `Merged ${path}.${providerId}.models.${candidate.index} into model id ${JSON.stringify(row.normalizedId)}.`,
         );
       }
@@ -391,7 +383,9 @@ export function rewriteModelRefs(
     const next = value.map((entry, index) => {
       if (
         typeof entry === "string" &&
-        (MODEL_REF_ARRAY_KEYS.has(key) || isModelPolicyAllowPath(path))
+        (MODEL_REF_ARRAY_KEYS.has(key) ||
+          path.endsWith(".modelPolicy.allow") ||
+          path.endsWith(".modelPolicy.deny"))
       ) {
         const rewritten = rewriteModelRefString(entry, `${path}.${index}`, changes, normalize);
         changed ||= rewritten !== entry;
@@ -414,7 +408,7 @@ export function rewriteModelRefs(
   const providerModelPair = provider !== undefined && model !== undefined;
   if (provider?.trim() && model !== undefined) {
     const ref = `${provider}/${model}`;
-    const rewritten = normalize(ref);
+    const rewritten = normalize(ref, record);
     if (rewritten && rewritten !== ref) {
       const slash = rewritten.indexOf("/");
       working = {

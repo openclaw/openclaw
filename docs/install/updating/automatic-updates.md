@@ -132,7 +132,7 @@ unattended updates.
 
 | Channel           | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stable`          | After a built-in delay with deterministic jitter for a spread rollout, announces an update campaign.                                                                |
+| `stable`          | After a built-in delay with a repeatable offset to spread the rollout, announces an update campaign.                                                                |
 | `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                                       |
 | `beta`            | Checks on a built-in interval and announces an update campaign as soon as a newer release is available.                                                             |
 | `dev`             | With `auto.enabled`, git installs check hourly. When upstream commits are available, the Gateway announces an update campaign pinned to the exact announced commit. |

@@ -53,8 +53,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
 }
@@ -368,7 +366,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.locator(".sidebar-identity-card").click();
       await sidebar
-        .locator("wa-dropdown.sidebar-identity-menu")
+        .locator(".sidebar-identity-menu")
         .getByRole("menuitem", { exact: true, name: "Settings" })
         .click();
       await page.locator('.settings-sidebar__item[href="/logs"]').click();

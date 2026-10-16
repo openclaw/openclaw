@@ -1,4 +1,5 @@
 // Resolves OpenClaw home and platform-specific config directories.
+import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -6,9 +7,20 @@ import {
   resolveEffectiveHomeDir,
   resolveOsHomeDir,
 } from "@openclaw/normalization-core/home-dir";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 export { resolveEffectiveHomeDir, resolveOsHomeDir };
+
+const userPathBaseDirectory = resolveGlobalSingleton(
+  Symbol.for("openclaw.userPathBaseDirectory"),
+  () => new AsyncLocalStorage<string>(),
+);
+
+/** Preserve invocation-relative paths while an updater parks its physical cwd. */
+export function withUserPathBaseDirectory<T>(cwd: string | undefined, operation: () => T): T {
+  return cwd === undefined ? operation() : userPathBaseDirectory.run(path.resolve(cwd), operation);
+}
 
 /** Resolves the effective home or falls back to cwd when no home source exists. */
 export function resolveRequiredHomeDir(
@@ -73,15 +85,15 @@ function resolvePathWithHome(
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveHome(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
-      homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  const expanded = trimmed.startsWith("~")
+    ? expandHomePrefix(trimmed, {
+        home: resolveHome(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+        env: opts?.env,
+        homedir: opts?.homedir,
+      })
+    : trimmed;
+  const base = userPathBaseDirectory.getStore();
+  return base ? path.resolve(base, expanded) : path.resolve(expanded);
 }
 
 /** Resolves a user-supplied path after trimming and expanding against the effective home. */

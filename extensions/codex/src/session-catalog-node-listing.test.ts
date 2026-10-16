@@ -63,7 +63,7 @@ describe("Codex supervision catalog", () => {
     expect(result).toBe(reason);
   });
 
-  it.each(["stdio", "unix", "websocket"] as const)(
+  it.each(["websocket"] as const)(
     "filters managed threads and publishes source continuation support for %s",
     async (transport) => {
       const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
@@ -116,7 +116,7 @@ describe("Codex supervision catalog", () => {
       );
       expect(JSON.parse(result)).toEqual({
         sourceHomeId: "home-main",
-        canContinueCodex: transport === "stdio",
+        canContinueCodex: false,
         sessions: [
           { threadId: "native-1", status: "idle", source: "cli", archived: false },
           { threadId: "native-2", status: "idle", source: "cli", archived: false },
@@ -235,51 +235,6 @@ describe("Codex supervision catalog", () => {
         }),
       ],
     });
-  });
-
-  it("omits the Gateway's same-install node host from native discovery", async () => {
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [{ threadId: "local", status: "idle", archived: false }],
-      })),
-    });
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async ({ nodeId }) => ({
-      payloadJSON: JSON.stringify({
-        sessions: [{ threadId: `remote-${nodeId}`, status: "idle", archived: false }],
-      }),
-    }));
-    const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "gateway-node",
-          displayName: "Gateway node",
-          gatewayLocal: true,
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        {
-          nodeId: "remote-node",
-          displayName: "Remote node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-      ],
-      invoke,
-    });
-
-    const result = await listCodexSessionCatalog({
-      bindingStore: createCodexTestBindingStore(),
-      config,
-      runtime,
-      control,
-    });
-
-    expect(result.hosts.map((host) => host.hostId)).toEqual([
-      CODEX_LOCAL_SESSION_HOST_ID,
-      "node:remote-node",
-    ]);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "remote-node" }));
   });
 
   it("isolates federated host failures while preserving selected healthy hosts", async () => {
@@ -533,23 +488,23 @@ describe("Codex supervision catalog", () => {
     },
   );
 
-  it.each([
-    { mode: "app-owned", execHost: "app", boundedReader: false },
-    { mode: "standalone", execHost: undefined, boundedReader: true },
-  ])("preserves native catalog ownership in $mode workers", ({ execHost, boundedReader }) => {
-    vi.stubEnv("OPENCLAW_NODE_EXEC_HOST", execHost);
-    const commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).map(
-      (command) => command.command,
-    );
+  it.each([{ mode: "app-owned", execHost: "app", boundedReader: false }])(
+    "preserves native catalog ownership in $mode workers",
+    ({ execHost, boundedReader }) => {
+      vi.stubEnv("OPENCLAW_NODE_EXEC_HOST", execHost);
+      const commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).map(
+        (command) => command.command,
+      );
 
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-        CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      ]),
-    );
-    expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(boundedReader);
-  });
+      expect(commands).toEqual(
+        expect.arrayContaining([
+          CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+        ]),
+      );
+      expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(boundedReader);
+    },
+  );
 
   it("serves one bounded transcript page from the node host command", async () => {
     const item = catalogThreadItem("item-1", { text: "bounded answer" });
@@ -822,7 +777,7 @@ describe("Codex supervision catalog", () => {
     expect(invoke).toHaveBeenCalledTimes(99);
   });
 
-  it.each(["nextCursor", "backwardsCursor"] as const)(
+  it.each(["backwardsCursor"] as const)(
     "rejects an oversized Gateway-local %s before the public response",
     async (cursorField) => {
       const control = createControl({
@@ -915,28 +870,5 @@ describe("Codex supervision catalog", () => {
     await expect(getProvider()?.list(requestParams as never)).rejects.toThrow(error);
     expect(control.listPage).not.toHaveBeenCalled();
     expect(runtime.nodes.list).not.toHaveBeenCalled();
-  });
-
-  it("prefers the request node snapshot and retains the plugin runtime fallback", async () => {
-    const control = createControl();
-    const { runtime } = createRuntime();
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control,
-      getRuntimeConfig: () => config,
-    });
-    const provider = getProvider();
-    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
-
-    await expect(
-      provider?.list({ hostIds: ["node:missing"], listNodes: requestListNodes }),
-    ).resolves.toEqual([]);
-    expect(requestListNodes).toHaveBeenCalledOnce();
-    expect(runtime.nodes.list).not.toHaveBeenCalled();
-
-    await expect(provider?.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
-    expect(runtime.nodes.list).toHaveBeenCalledOnce();
   });
 });

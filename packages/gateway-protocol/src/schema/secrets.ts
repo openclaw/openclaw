@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -10,7 +9,6 @@ import { withSince } from "./since.js";
  * These payloads request secret materialization from the gateway while keeping
  * caller scope, allowed paths, and provider overrides explicit.
  */
-/** Empty request payload for reloading configured secret providers. */
 export const SecretsReloadParamsSchema = closedObject({});
 
 const SecretStoreNameSchema = Type.String({
@@ -63,16 +61,17 @@ export const SecretStoreEntrySchema = Type.Union([
   SecretStoreEnvEntrySchema,
 ]);
 
-/** Empty request payload for listing the team secret store. */
 export const SecretsStoreListParamsSchema = closedObject({});
 
-/** Team secret-store inventory. */
 export const SecretsStoreListResultSchema = closedObject({
   entries: Type.Array(SecretStoreEntrySchema),
 });
 
 /** Create or replace one team secret-store entry. */
 export const SecretsStoreSetParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
+  inheritExistingKind: Type.Optional(withSince("2026.9", Type.Boolean())),
+  valueSource: Type.Optional(withSince("2026.9", Type.Literal("argv"))),
   name: SecretStoreMutationNameSchema,
   value: Type.String({ maxLength: 64 * 1024 }),
   kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
@@ -81,13 +80,36 @@ export const SecretsStoreSetParamsSchema = closedObject({
 
 /** Soft-delete one team secret-store entry. */
 export const SecretsStoreDeleteParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
   name: SecretStoreMutationNameSchema,
+});
+
+export const SecretsStoreImportParamsSchema = closedObject({
+  expectedOwnerId: NonEmptyString,
+  inheritExistingKind: Type.Boolean(),
+  entries: Type.Array(
+    closedObject({
+      name: SecretStoreNameSchema,
+      value: Type.String({ maxLength: 64 * 1024 }),
+      kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+    }),
+    { minItems: 1 },
+  ),
+});
+
+export const SecretsStoreAllowedHostsParamsSchema = closedObject({
+  expectedOwnerId: NonEmptyString,
+  name: SecretStoreNameSchema,
+  allowedHosts: SecretStoreAllowedHostsSchema,
 });
 
 /** Mutation acknowledgement including whether the active runtime was refreshed. */
 export const SecretsStoreMutationResultSchema = closedObject({
   ok: Type.Literal(true),
   reloaded: Type.Boolean(),
+  kind: Type.Optional(
+    withSince("2026.9", Type.Union([Type.Literal("secret"), Type.Literal("env")])),
+  ),
   warningCount: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
@@ -112,7 +134,6 @@ export const SecretsResolveParamsSchema = closedObject({
   ),
 });
 
-/** Static type for secret resolution requests. */
 export type SecretsResolveParams = Static<typeof SecretsResolveParamsSchema>;
 
 /** One resolved secret assignment path plus its provider-owned value. */
@@ -130,5 +151,4 @@ export const SecretsResolveResultSchema = closedObject({
   inactiveRefPaths: Type.Optional(Type.Array(NonEmptyString)),
 });
 
-/** Static type for secret resolution responses. */
 export type SecretsResolveResult = Static<typeof SecretsResolveResultSchema>;

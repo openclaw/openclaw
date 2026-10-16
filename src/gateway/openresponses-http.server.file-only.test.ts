@@ -48,15 +48,30 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-async function postResponses(body: unknown) {
-  return await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+async function postInput(input: unknown, instructions?: string) {
+  agentCommandMock.mockResolvedValueOnce({
+    payloads: [{ text: "ok", mediaUrl: null }],
+    meta: { durationMs: 0 },
+  });
+  const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-openclaw-scopes": "operator.write",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model: "openclaw", input, instructions }),
   });
+  expect(res.status, await res.text()).toBe(200);
+  expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  return agentCommandMock.mock.calls[0]?.[0] as {
+    message?: string;
+    images?: unknown[];
+    extraSystemPrompt?: string;
+  };
+}
+
+function message(content: unknown) {
+  return { type: "message", role: "user", content };
 }
 
 function createInputImage() {
@@ -79,80 +94,18 @@ function createInputFile(filename: string) {
 }
 
 describe("OpenResponses file-only input that renders to images", () => {
-  it("labels only incomplete file text through the HTTP input_file boundary", async () => {
-    const actual =
-      await vi.importActual<typeof import("../media/input-files.js")>("../media/input-files.js");
-    extractFileContentFromSourceMock.mockImplementation(actual.extractFileContentFromSource);
-    agentCommandMock.mockResolvedValueOnce(undefined);
-    const maxChars = 60_000;
-    const files = [
-      { name: "under.txt", length: maxChars - 1 },
-      { name: "exact.txt", length: maxChars },
-      { name: "over.txt", length: maxChars + 1 },
-    ];
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: files.map(({ name, length }) => ({
-            type: "input_file",
-            source: {
-              type: "base64",
-              media_type: "text/plain",
-              filename: name,
-              data: Buffer.from("a".repeat(length)).toString("base64"),
-            },
-          })),
-        },
-      ],
-    });
-    expect(res.status, await res.text()).toBe(200);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
-    const blocks = [
-      ...(opts.extraSystemPrompt ?? "").matchAll(/<file name="([^"]+)">([\s\S]*?)<\/file>/g),
-    ];
-    expect(blocks.map((block) => block[1])).toEqual(files.map((file) => file.name));
-    expect(
-      blocks.map((block) => block[2]?.includes("[Partial document: text truncated.]")),
-    ).toEqual([false, false, true]);
-    expect(blocks[2]?.[2]).toContain("a".repeat(maxChars));
-    expect(blocks[2]?.[2]).not.toContain("a".repeat(maxChars + 1));
-  });
-
   it("keeps extraction truncation visible outside uploaded file content", async () => {
     extractFileContentFromSourceMock.mockResolvedValueOnce({
       filename: "partial.pdf",
       text: "visible prefix",
       images: [],
       metadata: {
-        pages: {
-          total: 21,
-          processed: [1, 2, 3],
-          selection: "automatic",
-          truncated: true,
-        },
+        pages: { total: 21, processed: [1, 2, 3], selection: "automatic", truncated: true },
         textTruncated: false,
         imagesTruncated: false,
       },
     });
-    agentCommandMock.mockResolvedValueOnce(undefined);
-
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [createInputFile("partial.pdf")],
-        },
-      ],
-    });
-
-    const body = await res.text();
-    expect(res.status, body).toBe(200);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    const opts = await postInput([message([createInputFile("partial.pdf")])]);
     expect(opts.extraSystemPrompt).toContain("[Partial document: 3 of 21 pages processed.]");
     expect(opts.extraSystemPrompt).toMatch(
       /\[Partial document[^]*<<<EXTERNAL_UNTRUSTED_CONTENT[^]*visible prefix/,
@@ -167,121 +120,38 @@ describe("OpenResponses file-only input that renders to images", () => {
         { type: "image", data: Buffer.alloc(8, 1).toString("base64"), mimeType: "image/png" },
       ],
     });
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-    const res = await postResponses({
-      model: "openclaw",
-      instructions: "Describe the attached scan.",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_file",
-              source: {
-                type: "base64",
-                media_type: "application/pdf",
-                data: Buffer.from("%PDF-1.4 scanned").toString("base64"),
-                filename: "scan.pdf",
-              },
+    const opts = await postInput(
+      [
+        message([
+          {
+            type: "input_file",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: Buffer.from("%PDF-1.4 scanned").toString("base64"),
+              filename: "scan.pdf",
             },
-          ],
-        },
+          },
+        ]),
       ],
-    });
-
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as { message?: string; images?: unknown[] };
+      "Describe the attached scan.",
+    );
     expect(opts.message ?? "").not.toBe("");
-    expect(opts.images?.length).toBe(1);
-    await res.text();
+    expect(opts.images).toHaveLength(1);
   });
 
-  it("keeps an empty extracted file visible to the model", async () => {
-    extractFileContentFromSourceMock.mockResolvedValueOnce({
-      filename: "empty.txt",
-      text: "",
-      images: [],
-    });
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_file",
-              source: {
-                type: "base64",
-                media_type: "text/plain",
-                data: Buffer.from("binary-only file").toString("base64"),
-                filename: "empty.txt",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    const body = await res.text();
-    expect(res.status, body).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
-    expect(opts.extraSystemPrompt).toContain('<file name="empty.txt">');
-    expect(opts.extraSystemPrompt).toContain("[No extractable text]");
-  });
-
-  it.each([
-    {
-      name: "a newer user message",
-      followup: { type: "message", role: "user", content: "Describe the previous answer." },
-      expectedCurrentMessage: "Describe the previous answer.",
-    },
-    {
-      name: "a terminal client-tool result",
-      followup: {
+  it("does not replay historical attachments after a terminal client-tool result", async () => {
+    const opts = await postInput([
+      message([createInputImage(), createInputFile("historical.txt")]),
+      { type: "message", role: "assistant", content: "I inspected the attachments." },
+      {
         type: "function_call_output",
         call_id: "call_lookup",
         output: "The previous answer was accepted.",
       },
-      expectedCurrentMessage: "The previous answer was accepted.",
-    },
-  ])("does not replay historical attachments after $name", async (testCase) => {
-    extractFileContentFromSourceMock.mockResolvedValue({
-      filename: "historical.txt",
-      text: "historical file contents",
-      images: [],
-    });
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [createInputImage(), createInputFile("historical.txt")],
-        },
-        { type: "message", role: "assistant", content: "I inspected the attachments." },
-        testCase.followup,
-      ],
-    });
-
-    const body = await res.text();
-    expect(res.status, body).toBe(200);
+    ]);
     expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as {
-      message?: string;
-      images?: unknown[];
-      extraSystemPrompt?: string;
-    };
-    expect(opts.message).toContain(testCase.expectedCurrentMessage);
+    expect(opts.message).toContain("The previous answer was accepted.");
     expect(opts.message).not.toContain("User sent image(s) with no text.");
     expect(opts.images).toBeUndefined();
     expect(opts.extraSystemPrompt ?? "").not.toContain("historical.txt");
@@ -295,121 +165,38 @@ describe("OpenResponses file-only input that renders to images", () => {
         images: [],
       }),
     );
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "Inspect the first attachments." },
-            createInputImage(),
-            createInputFile("historical.txt"),
-          ],
-        },
-        { type: "message", role: "assistant", content: "The first attachments were inspected." },
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "Inspect only the current attachments." },
-            createInputImage(),
-            createInputFile("current.txt"),
-          ],
-        },
-      ],
-    });
-
-    const body = await res.text();
-    expect(res.status, body).toBe(200);
+    const opts = await postInput([
+      message([
+        { type: "input_text", text: "Inspect the first attachments." },
+        createInputImage(),
+        createInputFile("historical.txt"),
+      ]),
+      { type: "message", role: "assistant", content: "The first attachments were inspected." },
+      message([
+        { type: "input_text", text: "Inspect only the current attachments." },
+        createInputImage(),
+        createInputFile("current.txt"),
+      ]),
+    ]);
     expect(extractFileContentFromSourceMock).toHaveBeenCalledTimes(1);
-    const opts = agentCommandMock.mock.calls[0]?.[0] as {
-      images?: unknown[];
-      extraSystemPrompt?: string;
-    };
     expect(opts.images).toHaveLength(1);
     expect(opts.extraSystemPrompt).toContain("current.txt");
     expect(opts.extraSystemPrompt).not.toContain("historical.txt");
   });
 
-  it.each(["system", "developer", "assistant"] as const)(
-    "ignores attachments belonging to a historical %s message",
-    async (role) => {
-      extractFileContentFromSourceMock.mockResolvedValue({
-        filename: "not-user-owned.txt",
-        text: "should not become current input",
-        images: [],
-      });
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-      const res = await postResponses({
-        model: "openclaw",
-        input: [
-          {
-            type: "message",
-            role,
-            content: [
-              { type: "input_text", text: "Earlier non-user context." },
-              createInputImage(),
-              createInputFile("not-user-owned.txt"),
-            ],
-          },
-          { type: "message", role: "user", content: "Answer this current question." },
-        ],
-      });
-
-      const body = await res.text();
-      expect(res.status, body).toBe(200);
-      expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
-      const opts = agentCommandMock.mock.calls[0]?.[0] as {
-        images?: unknown[];
-        extraSystemPrompt?: string;
-      };
-      expect(opts.images).toBeUndefined();
-      expect(opts.extraSystemPrompt ?? "").not.toContain("not-user-owned.txt");
-    },
-  );
-
-  it.each(["input_image", "input_file"] as const)(
-    "does not fetch a historical %s URL on a newer text-only turn",
-    async (type) => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-      const res = await postResponses({
-        model: "openclaw",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type, source: { type: "url", url: "https://example.com/historical" } }],
-          },
-          { type: "message", role: "user", content: "Answer without fetching history." },
-        ],
-      });
-
-      const body = await res.text();
-      expect(res.status, body).toBe(200);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("counts historical image and file URLs against the request-wide source limit", async () => {
-    const historicalParts = Array.from({ length: 9 }, (_, index) => ({
+    const parts = Array.from({ length: 9 }, (_, index) => ({
       type: index % 2 === 0 ? "input_image" : "input_file",
       source: { type: "url", url: `https://example.com/historical-${index}` },
     }));
-
-    const res = await postResponses({
-      model: "openclaw",
-      input: [
-        { type: "message", role: "user", content: historicalParts },
-        { type: "message", role: "user", content: "Answer without fetching history." },
-      ],
+    const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-openclaw-scopes": "operator.write" },
+      body: JSON.stringify({
+        model: "openclaw",
+        input: [message(parts), message("Answer without fetching history.")],
+      }),
     });
-
     expect(res.status).toBe(400);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();

@@ -97,7 +97,7 @@ export async function callWhatsAppGatewaySendConcurrently(
 
 function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
   if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
-    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+    throw new Error("WhatsApp concurrent Gateway check requires a live RPC connection.");
   }
   return {
     logs: gateway.logs,

@@ -19,6 +19,7 @@ export async function prepareGatewayShutdownRuntime() {
     { closeProviderTransportDispatcherPool },
     { prepareActivePluginRegistryShutdown },
     { waitForPluginCacheRetirement },
+    { loadSubagentSessionCleanupRuntime },
   ] = await Promise.all([
     import("./server-close.runtime.js"),
     import("../plugins/hook-runner-global.js"),
@@ -34,8 +35,9 @@ export async function prepareGatewayShutdownRuntime() {
     import("../agents/provider-transport-dispatcher-pool.js"),
     import("../plugins/runtime.js"),
     import("../plugins/plugin-cache.js"),
+    import("../agents/subagents/registry/subagent-session-cleanup.js"),
   ]);
-  await prepareActivePluginRegistryShutdown();
+  await Promise.all([prepareActivePluginRegistryShutdown(), loadSubagentSessionCleanupRuntime()]);
 
   return {
     prepareGatewayClose,

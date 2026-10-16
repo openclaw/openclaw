@@ -3,8 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set(["claude-cli"]);
-
 /** Resolve a legacy choice and its diagnostics from one manifest generation. */
 export function resolveLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
@@ -24,7 +22,7 @@ export function resolveLegacyOnboardAuthChoice(
     // normalization keeps this alias out of the accepted CLI choice list.
     return { authChoice: "setup-token" };
   }
-  if (typeof authChoice !== "string" || !LEGACY_REPLACEMENT_AUTH_CHOICES.has(authChoice)) {
+  if (authChoice !== "claude-cli") {
     return { authChoice };
   }
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, params);

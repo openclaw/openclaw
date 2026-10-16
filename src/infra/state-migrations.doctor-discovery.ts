@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listLegacyRegistryWorktreesForMigration,
   listRegistryWorktreesForMigration,
@@ -16,6 +17,11 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+
+export function resolveConcreteBindingAccountId(value: unknown): string | undefined {
+  const accountId = normalizeOptionalString(value);
+  return accountId && accountId !== "*" ? accountId : undefined;
+}
 
 export async function prepareDoctorAgentDatabaseDiscovery(
   cfg: OpenClawConfig,

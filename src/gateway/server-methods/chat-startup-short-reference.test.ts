@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -23,6 +24,7 @@ describe("chat.startup short references", () => {
     "establishes observation before reading only for a live connection (%s)",
     async (live) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
         const scope = { agentId: "main", sessionKey: key, sessionId: "observation-startup" };
         await upsertSessionEntryCore(scope, {
@@ -83,6 +85,7 @@ describe("chat.startup short references", () => {
               message: expect.objectContaining({ content: lateMessage.content }),
             }),
             new Set([client.connId]),
+            { prepareSessionProjection: expect.any(Function) },
           );
           expect(broadcastToConnIds.mock.invocationCallOrder[0]).toBeLessThan(
             respond.mock.invocationCallOrder[0]!,
@@ -108,6 +111,7 @@ describe("chat.startup short references", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = rolePolicyConfig();
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const client = roleClient(visibility === "foreign" ? "none" : "view");
         await upsertSessionEntryCore(
           {
@@ -141,6 +145,7 @@ describe("chat.startup short references", () => {
   );
   it("returns canonical history and bounded ambiguity through the existing resolver", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
       const scope = { agentId: "main", sessionKey: key, sessionId: "short-startup" };
       await upsertSessionEntryCore(scope, {

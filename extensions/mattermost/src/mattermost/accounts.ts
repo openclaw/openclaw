@@ -68,14 +68,11 @@ const {
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
-  if (config.chatmode === "oncall") {
+  if (config.chatmode === "oncall" || config.chatmode === "onchar") {
     return true;
   }
   if (config.chatmode === "onmessage") {
     return false;
-  }
-  if (config.chatmode === "onchar") {
-    return true;
   }
   return config.requireMention;
 }

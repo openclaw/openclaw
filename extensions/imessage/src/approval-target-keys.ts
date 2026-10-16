@@ -3,6 +3,7 @@
 // must survive the outbound/inbound key asymmetry described on
 // enumerateApprovalTargetKeys. Kept transport-neutral so neither binding module
 // depends on the other.
+import type { IMessagePayload } from "./monitor/types.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 export type IMessageApprovalConversationKey = {
@@ -25,9 +26,7 @@ function chatIdToKeyValue(chatId: number | string | undefined): string | null {
   return value || null;
 }
 
-export function enumerateConversationKeyForms(
-  conversation: IMessageApprovalConversationKey,
-): string[] {
+function enumerateConversationKeyForms(conversation: IMessageApprovalConversationKey): string[] {
   const forms: string[] = [];
   const chatGuid = conversation.chatGuid?.trim();
   if (chatGuid) {
@@ -98,19 +97,31 @@ export function buildIMessageApprovalConversationKeyForTarget(
 }
 
 /** Conversation key for an inbound event, mirroring the outbound key forms. */
-export function buildIMessageApprovalConversationKeyForInbound(params: {
-  chatGuid?: string | null;
-  chatIdentifier?: string | null;
-  chatId?: number | string | null;
-  isGroup?: boolean | null;
-  actorHandle: string;
-}): IMessageApprovalConversationKey {
+export function buildIMessageApprovalConversationKeyForInbound(
+  message: IMessagePayload,
+  actorHandle: string,
+): IMessageApprovalConversationKey {
   return {
-    ...(params.chatGuid?.trim() ? { chatGuid: params.chatGuid.trim() } : {}),
-    ...(params.chatIdentifier?.trim() ? { chatIdentifier: params.chatIdentifier.trim() } : {}),
-    ...(chatIdToKeyValue(params.chatId ?? undefined) ? { chatId: params.chatId as number } : {}),
+    ...(message.chat_guid?.trim() ? { chatGuid: message.chat_guid.trim() } : {}),
+    ...(message.chat_identifier?.trim() ? { chatIdentifier: message.chat_identifier.trim() } : {}),
+    ...(chatIdToKeyValue(message.chat_id ?? undefined)
+      ? { chatId: message.chat_id as number }
+      : {}),
     // Group sends are keyed by chat only: the actor handle is a member, not the
     // conversation, so including it would never match the outbound key.
-    ...(params.isGroup ? {} : { handle: params.actorHandle }),
+    ...(message.is_group ? {} : { handle: actorHandle }),
   };
+}
+
+export function resolveIMessageApprovalControlActor(message: IMessagePayload): string {
+  // Received rows can inherit the local identity from destination_caller_id;
+  // only authoritative self-sends may use that fallback as their actor.
+  const sender = normalizeIMessageHandle(message.sender ?? "");
+  const destination = normalizeIMessageHandle(message.destination_caller_id ?? "");
+  const receivedSenderIsLocalFallback =
+    message.is_from_me !== true && Boolean(sender) && sender === destination;
+  return (
+    (receivedSenderIsLocalFallback ? "" : sender) ||
+    (message.is_from_me === true ? destination : "")
+  );
 }

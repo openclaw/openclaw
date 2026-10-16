@@ -6,20 +6,15 @@ function normalizeSources(
   sources: readonly MemorySearchSource[] | undefined,
   sessionMemoryEnabled: boolean,
 ): MemorySearchSource[] {
-  const normalized = new Set<MemorySearchSource>();
   const input = sources?.length ? sources : DEFAULT_SOURCES;
-  for (const source of input) {
-    if (source === "memory") {
-      normalized.add("memory");
-    }
-    if (source === "sessions" && sessionMemoryEnabled) {
-      normalized.add("sessions");
-    }
-  }
-  if (normalized.size === 0) {
-    normalized.add("memory");
-  }
-  return Array.from(normalized);
+  const normalized = [
+    ...new Set(
+      input.filter(
+        (source) => source === "memory" || (source === "sessions" && sessionMemoryEnabled),
+      ),
+    ),
+  ];
+  return normalized.length > 0 ? normalized : [...DEFAULT_SOURCES];
 }
 
 /** Resolve query and indexed sources from already-selected memory policy facts. */
@@ -31,17 +26,16 @@ export function resolveMemorySearchSourcePolicy(params: {
   sources: MemorySearchSource[];
   searchSources: MemorySearchSource[];
   sessionMemory: boolean;
+  sessionSourceExcluded: boolean;
 } {
   const { configuredSources, rememberAcrossConversations, configuredSessionMemory } = params;
   const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
-  const searchSources = normalizeSources(
-    configuredSources,
-    configuredSessionMemory ||
-      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
-  );
+  const searchSources = normalizeSources(configuredSources, sessionMemory);
   const sources = normalizeSources(
     rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
     sessionMemory,
   );
-  return { sources, searchSources, sessionMemory };
+  const sessionSourceExcluded =
+    configuredSources?.includes("sessions") === true && !searchSources.includes("sessions");
+  return { sources, searchSources, sessionMemory, sessionSourceExcluded };
 }

@@ -1,11 +1,14 @@
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type {
   NodeWorkerWorkspaceSeedInput,
+  NodeWorkerWorkspaceQuiescenceInput,
   NodeWorkerWorkspaceProcessInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
@@ -82,6 +85,9 @@ export type WorkerWorkspaceCommand = {
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
   process?: NodeWorkerWorkspaceProcessInput;
+  quiescence?: NodeWorkerWorkspaceQuiescenceInput;
+  /** Legacy scripts own their detached lease helper, not the foreground command scope. */
+  legacyQuiescence?: true;
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {
@@ -146,12 +152,15 @@ export type WorkerWorkspaceSyncRequest = {
   sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
-  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+  source:
+    | { kind: "local"; path: string; projectKey?: string }
+    | { kind: "device-folder"; deviceId: string; path: string }
+    | WorkerRepositoryWorkspaceSource;
 };
 
 export type WorkerWorkspaceSyncResult =
   | {
-      mode: "git" | "plain";
+      mode: "git" | "plain" | "device-folder";
       remoteWorkspaceDir: string;
       manifestRef: string;
     }
@@ -171,7 +180,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   assertCurrent?: () => void;
   stagedResult: {
     ref: string;
-    record(ref: string): void;
+    record(ref: string): void | Promise<void>;
   };
 };
 
@@ -189,6 +198,7 @@ export type WorkerWorkspaceReconcileRequest = {
     | {
         kind: "repository";
         authorize?: () => void;
+        markPhase?: (phase: string) => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
@@ -222,6 +232,7 @@ export type WorkerWorkspaceQuiescence = {
 };
 
 type WorkerTurnLaunchRequest = {
+  assertCurrent?: SessionSourceAssertion;
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
@@ -237,6 +248,7 @@ export type WorkerWorkspaceTunnelHandle = {
   ownerEpoch: number;
   launchTurn?: never;
   measureLaunchTurn?: never;
+  readLaunchToolNames?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   stageAttachments?(request: {
     localPath: string;
@@ -251,12 +263,16 @@ export type WorkerWorkspaceTunnelHandle = {
   stop(): Promise<void>;
 };
 
+export type WorkerTurnProcessResult = SpawnResult & { nodeLoss?: WorkerNodeLostError };
+
 export type WorkerTurnTunnelHandle = Omit<
   WorkerWorkspaceTunnelHandle,
-  "launchTurn" | "measureLaunchTurn"
+  "launchTurn" | "measureLaunchTurn" | "readLaunchToolNames"
 > & {
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
-  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+  /** Placement tool implementations available in the destination's installed supervisor. */
+  readLaunchToolNames(): Promise<readonly string[]>;
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<WorkerTurnProcessResult>;
 };
 
 export type WorkerTunnelHandle = WorkerWorkspaceTunnelHandle | WorkerTurnTunnelHandle;

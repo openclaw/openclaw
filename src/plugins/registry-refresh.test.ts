@@ -65,6 +65,7 @@ describe("plugin registry refresh config ownership", () => {
       await seedInstalledPluginIndex({}, { config, env: state.env });
       const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
       const controller = new AbortController();
+      const refusal = new Error("plugin lease cancelled");
       const assertCurrent = vi.fn();
       const warn = vi.fn();
       const create = configIO.createConfigIO;
@@ -74,7 +75,7 @@ describe("plugin registry refresh config ownership", () => {
           ...io,
           readConfigFileSnapshot: async () => {
             const snapshot = await io.readConfigFileSnapshot();
-            controller.abort(new Error("plugin lease cancelled"));
+            controller.abort(refusal);
             return snapshot;
           },
         };
@@ -97,7 +98,7 @@ describe("plugin registry refresh config ownership", () => {
           },
         ),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-      expect(registryError).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(registryError).toBe(refusal);
       expect(assertCurrent).toHaveBeenCalled();
       expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
       expect(warn).not.toHaveBeenCalled();
@@ -106,7 +107,7 @@ describe("plugin registry refresh config ownership", () => {
   });
 
   it.each([undefined, null, false, 0])(
-    "preserves a one-shot transactional authority refusal: %s",
+    "preserves a one-shot live authority refusal: %s",
     async (refusal) => {
       await withOpenClawTestState(
         { label: "registry-refresh-transaction-refusal" },
@@ -117,17 +118,15 @@ describe("plugin registry refresh config ownership", () => {
           const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
           const warn = vi.fn();
           await withPluginLifecycleLease({ env: state.env }, async (lease) => {
-            const assertOwnedInTransaction = vi
-              .fn<typeof lease.assertOwnedInTransaction>((database) =>
-                lease.assertOwnedInTransaction(database),
-              )
+            const assertCurrent = vi
+              .fn(() => lease.assertCurrent())
               .mockImplementationOnce(() => {
                 // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw falsey values; retain exact refusal identity.
                 throw refusal;
               });
             const result = await refreshPluginRegistryAfterConfigMutation({
               reason: "source-changed",
-              lease: { ...lease, assertOwnedInTransaction },
+              lease: { ...lease, assertCurrent },
               logger: { warn },
             }).then(
               () => ({ ok: true }),
@@ -137,7 +136,7 @@ describe("plugin registry refresh config ownership", () => {
             if ("error" in result) {
               expect(result.error).toBe(refusal);
             }
-            expect(assertOwnedInTransaction).toHaveBeenCalledOnce();
+            expect(assertCurrent).toHaveBeenCalledOnce();
           });
           expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
           expect(warn).not.toHaveBeenCalled();

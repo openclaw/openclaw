@@ -1,7 +1,4 @@
-export function resolveGatewayClientPlatformIdentity(platform: string): {
-  platform: string;
-  deviceFamily?: string;
-} {
+export function resolveGatewayClientPlatformIdentity(platform: string) {
   switch (platform) {
     case "darwin":
       return { platform: "macos", deviceFamily: "Mac" };

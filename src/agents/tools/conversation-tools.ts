@@ -46,8 +46,7 @@ const ConversationsSendSchema = Type.Object(
 
 const ConversationsTurnSchema = Type.Object(
   {
-    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN.source }),
-    message: Type.String({ minLength: 1 }),
+    ...ConversationsSendSchema.properties,
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
   },
   { additionalProperties: false },
@@ -59,14 +58,6 @@ type ConversationToolOptions = {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
-};
-
-type ConversationToolDeps = {
-  callGateway: AgentToolGatewayRequestCaller;
-};
-
-const defaultDeps: ConversationToolDeps = {
-  callGateway: callAgentToolGatewayRequest,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -82,7 +73,6 @@ function requireOwner(options: ConversationToolOptions): void {
 function conversationMessageExecutor(
   action: "send" | "turn",
   options: ConversationToolOptions,
-  deps: ConversationToolDeps,
 ): AnyAgentTool["execute"] {
   return async (toolCallId, args, signal) => {
     requireOwner(options);
@@ -129,15 +119,12 @@ function conversationMessageExecutor(
       };
     }
     return jsonResult(
-      await deps.callGateway<ConversationSendResult | ConversationTurnResult>(request),
+      await callAgentToolGatewayRequest<ConversationSendResult | ConversationTurnResult>(request),
     );
   };
 }
 
-export function createConversationsListTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsListTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversations",
     name: "conversations_list",
@@ -152,7 +139,7 @@ export function createConversationsListTool(
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
       const channel = readToolStringParam(params, "channel");
       const query = readToolStringParam(params, "query");
-      const result = await deps.callGateway<ConversationListResult>({
+      const result = await callAgentToolGatewayRequest<ConversationListResult>({
         method: "conversations.list",
         params: {
           agentId: resolveToolAgentId(options),
@@ -167,10 +154,7 @@ export function createConversationsListTool(
   };
 }
 
-export function createConversationsSendTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsSendTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversation Send",
     name: "conversations_send",
@@ -179,14 +163,11 @@ export function createConversationsSendTool(
       "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
     outputSchema: ConversationSendResultSchema,
-    execute: conversationMessageExecutor("send", options, deps),
+    execute: conversationMessageExecutor("send", options),
   };
 }
 
-export function createConversationsTurnTool(
-  options: ConversationToolOptions = {},
-  deps: ConversationToolDeps = defaultDeps,
-): AnyAgentTool {
+export function createConversationsTurnTool(options: ConversationToolOptions = {}): AnyAgentTool {
   return {
     label: "Conversation Turn",
     name: "conversations_turn",
@@ -195,6 +176,6 @@ export function createConversationsTurnTool(
       "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
     parameters: ConversationsTurnSchema,
     outputSchema: ConversationTurnResultSchema,
-    execute: conversationMessageExecutor("turn", options, deps),
+    execute: conversationMessageExecutor("turn", options),
   };
 }

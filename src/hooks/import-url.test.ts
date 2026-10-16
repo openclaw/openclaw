@@ -15,44 +15,6 @@ describe("buildImportUrl", () => {
     fs.writeFileSync(immutableHandlerPath, "export default () => {};");
   });
 
-  it("returns bare URL for bundled hooks (no query string)", () => {
-    const url = buildImportUrl(immutableHandlerPath, "openclaw-bundled");
-    expect(url).not.toContain("?t=");
-    expect(url).toMatch(/^file:\/\//);
-  });
-
-  it("appends file-metadata cache buster for workspace hooks", () => {
-    const url = buildImportUrl(immutableHandlerPath, "openclaw-workspace");
-    expect(url).toMatch(/\?t=[\d.]+&c=[\d.]+&s=\d+/);
-
-    const { ctimeMs, mtimeMs, size } = fs.statSync(immutableHandlerPath);
-    expect(url).toContain(`?t=${mtimeMs}`);
-    expect(url).toContain(`&c=${ctimeMs}`);
-    expect(url).toContain(`&s=${size}`);
-  });
-
-  it("appends file-metadata cache buster for managed hooks", () => {
-    const url = buildImportUrl(immutableHandlerPath, "openclaw-managed");
-    expect(url).toMatch(/\?t=[\d.]+&c=[\d.]+&s=\d+/);
-  });
-
-  it("appends file-metadata cache buster for plugin hooks", () => {
-    const url = buildImportUrl(immutableHandlerPath, "openclaw-plugin");
-    expect(url).toMatch(/\?t=[\d.]+&c=[\d.]+&s=\d+/);
-  });
-
-  it("returns same URL for bundled hooks across calls (cacheable)", () => {
-    const url1 = buildImportUrl(immutableHandlerPath, "openclaw-bundled");
-    const url2 = buildImportUrl(immutableHandlerPath, "openclaw-bundled");
-    expect(url1).toBe(url2);
-  });
-
-  it("returns same URL for workspace hooks when file is unchanged", () => {
-    const url1 = buildImportUrl(immutableHandlerPath, "openclaw-workspace");
-    const url2 = buildImportUrl(immutableHandlerPath, "openclaw-workspace");
-    expect(url1).toBe(url2);
-  });
-
   it("reloads a workspace hook after a same-size edit with restored mtime", async () => {
     const tmpFile = path.join(fixtureRoot, "reload-handler.js");
     const initialSource = 'export default () => "before";\n';

@@ -14,7 +14,6 @@ const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
 );
 
 /**
- * Register a reply dispatcher for global tracking.
  * Returns an unregister function to call when the dispatcher is no longer needed.
  */
 export function registerDispatcher(pending: () => number): () => void {
@@ -27,9 +26,6 @@ export function registerDispatcher(pending: () => number): () => void {
   };
 }
 
-/**
- * Get the total number of pending replies across all dispatchers.
- */
 export function getTotalPendingReplies(): number {
   let total = 0;
   for (const dispatcher of activeDispatchers) {

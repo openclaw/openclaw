@@ -1,7 +1,7 @@
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { hashCliSessionText } from "../cli-session.js";
-import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 
 export function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
   return (

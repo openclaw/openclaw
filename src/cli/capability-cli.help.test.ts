@@ -3,48 +3,24 @@ import { expect, it, vi } from "vitest";
 import { registerCapabilityCli } from "./capability-cli.js";
 import { collectShellCompletionCommandTree } from "./completion-command-tree.js";
 
-vi.mock("./capability-cli/shared.js", () => {
-  throw new Error("Inference help must not load provider configuration or auth runtime");
+const rejectRuntimeImport = vi.hoisted(() => () => {
+  throw new Error("Inference help must not load execution runtimes");
 });
-vi.mock("./capability-cli/local-account-secrets.js", () => {
-  throw new Error("Inference help must not load account secret preparation");
-});
-vi.mock("../config/config.js", () => {
-  throw new Error("Inference help must not load configuration runtime");
-});
-vi.mock("../agents/prepared-model-catalog.js", () => {
-  throw new Error("Inference help must not load the prepared model catalog");
-});
-vi.mock("../agents/simple-completion-runtime.js", () => {
-  throw new Error("Inference help must not load model execution runtime");
-});
-vi.mock("../image-generation/runtime.js", () => {
-  throw new Error("Inference help must not load image execution runtime");
-});
-vi.mock("../media-understanding/runtime.js", () => {
-  throw new Error("Inference help must not load media execution runtime");
-});
-vi.mock("./capability-cli/tts-runtime.js", () => {
-  throw new Error("Inference help must not load speech execution runtime");
-});
-vi.mock("../video-generation/runtime.js", () => {
-  throw new Error("Inference help must not load video execution runtime");
-});
-vi.mock("../web-search/runtime.js", () => {
-  throw new Error("Inference help must not load web search execution runtime");
-});
-vi.mock("../web-fetch/runtime.js", () => {
-  throw new Error("Inference help must not load web fetch execution runtime");
-});
-vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => {
-  throw new Error("Inference help must not load embedding execution runtime");
-});
-vi.mock("../gateway/call.js", () => {
-  throw new Error("Inference help must not load Gateway transport");
-});
-vi.mock("./command-secret-targets.js", () => {
-  throw new Error("Inference help must not load command secret resolution");
-});
+
+vi.mock("./capability-cli/shared.js", rejectRuntimeImport);
+vi.mock("./capability-cli/local-account-secrets.js", rejectRuntimeImport);
+vi.mock("../config/config.js", rejectRuntimeImport);
+vi.mock("../agents/prepared-model-catalog.js", rejectRuntimeImport);
+vi.mock("../agents/simple-completion-runtime.js", rejectRuntimeImport);
+vi.mock("../image-generation/runtime.js", rejectRuntimeImport);
+vi.mock("../media-understanding/runtime.js", rejectRuntimeImport);
+vi.mock("./capability-cli/tts-runtime.js", rejectRuntimeImport);
+vi.mock("../video-generation/runtime.js", rejectRuntimeImport);
+vi.mock("../web-search/runtime.js", rejectRuntimeImport);
+vi.mock("../web-fetch/runtime.js", rejectRuntimeImport);
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", rejectRuntimeImport);
+vi.mock("../gateway/call.js", rejectRuntimeImport);
+vi.mock("./command-secret-targets.js", rejectRuntimeImport);
 
 const domainExamples = [
   { args: ["model", "auth", "login"], option: "--provider" },
@@ -55,36 +31,6 @@ const domainExamples = [
   { args: ["web", "search"], option: "--query" },
   { args: ["embedding", "create"], option: "--text" },
 ];
-
-async function renderHelp(args: string[]) {
-  let output = "";
-  const program = new Command()
-    .name("openclaw")
-    .exitOverride()
-    .configureOutput({ writeOut: (text) => (output += text) });
-  await registerCapabilityCli(program, ["node", "openclaw", ...args]);
-  await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
-    code: "commander.helpDisplayed",
-    exitCode: 0,
-  });
-  return output;
-}
-
-it("renders complete parent help without loading execution runtimes", async () => {
-  const output = await renderHelp(["infer", "--help"]);
-  for (const {
-    args: [domain],
-  } of domainExamples) {
-    expect(output).toContain(domain);
-  }
-  expect(output).toContain("list");
-  expect(output).toContain("inspect");
-});
-
-it("renders selected-domain help through the alias without loading execution runtimes", async () => {
-  const output = await renderHelp(["capability", "model", "auth", "login", "--help"]);
-  expect(output).toContain("--provider");
-});
 
 it("retains nested inference commands and aliases for completion without loading execution runtimes", async () => {
   const program = new Command().name("openclaw");

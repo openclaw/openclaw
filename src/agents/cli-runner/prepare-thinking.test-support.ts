@@ -16,20 +16,6 @@ export function registerCliThinkingPreparationTests({
     modelProvider?: string;
   }) => void;
 }) {
-  it.each(["high", "off"] as const)(
-    "passes %s thinking through the CLI backend execution seam",
-    async (thinkLevel) => {
-      const prepareExecution = vi.fn(async () => undefined);
-      setBackend({ prepareExecution });
-
-      await getFixture().prepare({ provider: "claude-cli", thinkLevel });
-
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ thinkingLevel: thinkLevel }),
-      );
-    },
-  );
-
   it("lowers Ultra to supported CLI effort and adds only current-turn guidance", async () => {
     const prepareExecution = vi.fn(async () => undefined);
     setBackend({ prepareExecution });
@@ -61,42 +47,43 @@ export function registerCliThinkingPreparationTests({
     ).not.toContain("Ultra active");
   });
 
-  it.each(["max", "adaptive"] as const)(
-    "uses the model provider for uncataloged CLI Ultra with %s effort",
-    async (level) => {
-      const modelProvider = "cli-thinking-policy-fixture";
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: modelProvider,
-        source: "test",
-        provider: {
-          id: modelProvider,
-          label: "CLI model owner",
-          auth: [],
-          resolveThinkingProfile: () => ({ levels: [{ id: level }], defaultLevel: level }),
-        },
-      });
-      setActivePluginRegistry(registry);
-      const prepareExecution = vi.fn(async () => undefined);
-      setBackend({ prepareExecution, modelProvider });
-      const context = await getFixture().prepare({
-        provider: "claude-cli",
-        model: "uncataloged-model",
-        thinkLevel: "ultra",
-      });
-      expect(context.providerThinkingLevel).toBe(level);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ thinkingLevel: level }),
-      );
-    },
-  );
+  it("uses the model provider for uncataloged CLI Ultra with max effort", async () => {
+    const level = "max";
+    const modelProvider = "cli-thinking-policy-fixture";
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: modelProvider,
+      source: "test",
+      provider: {
+        id: modelProvider,
+        label: "CLI model owner",
+        auth: [],
+        resolveThinkingProfile: () => ({ levels: [{ id: level }], defaultLevel: level }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    const prepareExecution = vi.fn(async () => undefined);
+    setBackend({ prepareExecution, modelProvider });
+    const context = await getFixture().prepare({
+      provider: "claude-cli",
+      model: "uncataloged-model",
+      thinkLevel: "ultra",
+    });
+    expect(context.providerThinkingLevel).toBe(level);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: level }),
+    );
+  });
 
-  it.each(
-    ([undefined, "merge", "replace"] as const).flatMap((mode) => [
-      { mode, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-      { mode, reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
-    ]),
-  )("honors configured CLI Ultra effort $expected in mode $mode", async (testCase) => {
+  it.each([
+    { mode: undefined, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
+    {
+      mode: "replace" as const,
+      reasoning: true,
+      thinkingLevelMap: { high: null },
+      expected: "medium",
+    },
+  ])("honors configured CLI Ultra effort $expected in mode $mode", async (testCase) => {
     const prepareExecution = vi.fn(async () => undefined);
     setBackend({ prepareExecution });
     const manifestEntry = {

@@ -195,6 +195,21 @@ export function createControlUiSessionFixtures(
       );
       set("pinned", next.pinnedAt !== undefined);
     }
+    // Mirror the Gateway: archive and pin clear a snooze; null wakes; a new wake time restamps.
+    if (Object.hasOwn(fields, "snoozedUntil")) {
+      const snoozedUntil = fields.snoozedUntil;
+      if (typeof snoozedUntil === "number" && next.snoozedUntil !== snoozedUntil) {
+        set("snoozedUntil", snoozedUntil);
+        set("snoozedAt", ++timestamp);
+      } else if (snoozedUntil === null) {
+        set("snoozedUntil", undefined);
+        set("snoozedAt", undefined);
+      }
+    }
+    if (fields.archived === true || fields.pinned === true) {
+      set("snoozedUntil", undefined);
+      set("snoozedAt", undefined);
+    }
     // Advance the fixture's synthetic timeline without making its later events stale.
     const latestUpdatedAt = Math.max(
       0,
@@ -389,12 +404,45 @@ export function createControlUiSessionFixtures(
     }
     return undefined;
   };
-  const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
+  const materializeResponse = (params: unknown, response: unknown) => {
+    if (!isRecord(response)) {
+      return;
+    }
+    const key =
+      typeof response.key === "string"
+        ? response.key
+        : typeof response.sessionKey === "string"
+          ? response.sessionKey
+          : "";
+    if (!key.trim()) {
+      return;
+    }
+    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
+    const runId =
+      response.runStarted === true && typeof response.runId === "string"
+        ? response.runId
+        : undefined;
     const value = record(key);
-    value.row = { ...value.row, ...fields, key: canonicalKey(key) };
+    value.row = {
+      ...value.row,
+      ...(isRecord(response.entry) ? response.entry : {}),
+      ...(typeof response.sessionId === "string" ? { sessionId: response.sessionId } : {}),
+      ...(label ? { displayName: label, label } : {}),
+      ...(!runId
+        ? {
+            hasActiveRun: response.runStarted === true,
+            status: response.runStarted === true ? "running" : "done",
+          }
+        : {}),
+      key: canonicalKey(key),
+    };
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
     materializedSequence += 1;
+    if (runId) {
+      // Creation ACKs share send lifecycle ownership, including terminal-before-ACK ordering.
+      trackRun(key, runId, "running");
+    }
   };
   const list = (wireRows?: unknown[]) => {
     const rows = wireRows ?? [...listed].map(read);
@@ -590,7 +638,7 @@ export function createControlUiSessionFixtures(
     patch,
     commitAbort,
     trackRun,
-    materialize,
+    materializeResponse,
     list,
     listResponse,
     materializedCount: () => materializedSequence,

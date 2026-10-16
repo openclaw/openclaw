@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { SignalDataTypeMap } from "baileys";
 import {
@@ -106,16 +107,19 @@ export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size:
   }
 }
 
-export function hasWebCredsRegularFileSync(authDir: string): boolean {
-  try {
-    const credsPath = resolveWebCredsPath(authDir);
-    assertNoSymlinkParentsSync(resolveWebCredsParentCheck(credsPath));
-    return !statRegularFileSync(credsPath).missing;
-  } catch {
-    return false;
-  }
-}
-
 export function hasWebCredsSync(authDir: string): boolean {
   return statWebCredsFileSync(resolveWebCredsPath(authDir)) !== null;
+}
+
+export function collectWhatsAppAuthDirs(accountsRoot: string, authDirs: Set<string>): string[] {
+  try {
+    for (const entry of fs.readdirSync(accountsRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        authDirs.add(path.join(accountsRoot, entry.name));
+      }
+    }
+  } catch {
+    // Unreadable roots leave only the caller's configured auth directories.
+  }
+  return [...authDirs];
 }

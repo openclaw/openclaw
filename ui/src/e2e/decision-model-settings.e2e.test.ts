@@ -24,7 +24,11 @@ suite.define(() => {
       { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         let config: unknown = {
-          agents: { defaults: {}, entries: { main: { default: true }, scout: {} } },
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, scout: {} },
+          },
         };
         let revision = 0;
         const snapshot = () => ({
@@ -110,7 +114,7 @@ suite.define(() => {
           expect(config).toMatchObject({
             agents: {
               defaults: { decisionModel: "typesafe/jev-latest" },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
           });
           if (expected === undefined) {
@@ -139,10 +143,12 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await expect.poll(() => pickerValue(global)).toBe("typesafe/jev-latest");
+        await global.locator(".picker-select__trigger").click();
         expect(
           await page.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
         ).toBe(1);
         expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         await page.screenshot({
           path: path.join(suite.artifactDir, "global-with-chat-catalog.png"),
         });

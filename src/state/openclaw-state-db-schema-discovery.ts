@@ -1,12 +1,14 @@
 import { existsSync } from "node:fs";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
@@ -19,12 +21,17 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
   if (behavior.artifactPreservingReadOnly) {
     return (
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        ({ db }) => {
+          if (isPostgresSqlConnection(db)) {
+            requireNativeDatabaseFile("postgres", "repair");
+          }
+          return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
+        },
         { ...options, path: pathname },
       ) ?? []
     );
   }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const db = openSqliteReadOnlyDatabase(pathname, { readOnly: true });
   try {
     return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
   } finally {

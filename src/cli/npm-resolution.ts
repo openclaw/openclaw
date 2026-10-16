@@ -1,10 +1,8 @@
-// Helpers for recording npm plugin installs with optional exact-version pinning metadata.
 import {
   buildNpmResolutionFields,
   type NpmSpecResolution as NpmResolutionMetadata,
 } from "../infra/install-source-utils.js";
 
-/** CLI adapter for npm install-record pinning with styled warning output. */
 export function resolvePinnedNpmInstallRecordForCli(
   rawSpec: string,
   pin: boolean,

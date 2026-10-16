@@ -1,7 +1,6 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestRejected
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -38,11 +37,7 @@ internal class ChatTranscriptHistoryRefresh(
     if (!isCurrent()) return
     scope.launch {
       if (!isCurrent()) return@launch
-      try {
-        refresh()
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
+      runCatchingCancellable { refresh() }.onFailure { err ->
         if (isRetryableRefusal(err)) queueRecovery(owner, isCurrent, refresh)
       }
     }
@@ -73,26 +68,20 @@ internal class ChatTranscriptHistoryRefresh(
             try {
               while (isCurrent()) {
                 val shouldRead =
-                  synchronized(this@ChatTranscriptHistoryRefresh) {
-                    if (pending !== request) {
-                      false
-                    } else if (!request.requested) {
+                  synchronized(this@ChatTranscriptHistoryRefresh) read@{
+                    if (pending !== request) return@read false
+                    if (!request.requested) {
                       // Retire atomically so an event arriving as we finish starts a new reader.
                       pending = null
-                      false
-                    } else {
-                      request.requested = false
-                      true
+                      return@read false
                     }
+                    request.requested = false
+                    true
                   }
                 if (!shouldRead) break
                 delay(retryDelayMs)
                 if (!isCurrent()) break
-                try {
-                  refresh()
-                } catch (err: CancellationException) {
-                  throw err
-                } catch (err: Throwable) {
+                runCatchingCancellable { refresh() }.onFailure { err ->
                   if (isRetryableRefusal(err)) {
                     // A worker refusal does not discharge a committed transcript invalidation.
                     synchronized(this@ChatTranscriptHistoryRefresh) { request.requested = true }

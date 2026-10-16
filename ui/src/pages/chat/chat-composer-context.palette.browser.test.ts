@@ -1,9 +1,9 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../styles/chat/layout.css";
-import { renderContextNotice } from "./components/chat-composer-context.ts";
-import { syncChatPickerOverlay } from "./components/chat-picker-overlay.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { ContextNotice } from "./components/chat-composer-context.tsx";
 
 const rootStyle = document.documentElement.style;
 const previousStyle = rootStyle.cssText;
@@ -20,24 +20,27 @@ describe("mounted context usage palette", () => {
       container.className = "agent-chat__input";
       rootStyle.setProperty("--warn", "#d97706");
       rootStyle.setProperty("--danger", "#dc2626");
-      render(
-        renderContextNotice(
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: percent,
-            contextTokens: 100,
-          },
-          null,
-        ),
-        container,
+      mountSolid(
+        () =>
+          createComponent(ContextNotice, {
+            session: {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              totalTokens: percent,
+              contextTokens: 100,
+            },
+          }),
+        { container },
       );
       document.body.append(container);
       const details = container.querySelector("details")!;
-      details.open = true;
-      syncChatPickerOverlay(details);
-      await container.querySelector<WaPopup>("wa-popup")!.updateComplete;
+      details.querySelector("summary")!.click();
+      await waitForSolid(() =>
+        expect(container.querySelector("[data-anchored-overlay]")?.matches(":popover-open")).toBe(
+          true,
+        ),
+      );
       const ring = container.querySelector<HTMLElement>(".context-ring")!;
       ring.style.transition = "none";
       const fill = container.querySelector(".context-ring__fill")!;

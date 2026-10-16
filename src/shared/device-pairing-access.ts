@@ -49,15 +49,8 @@ type PairedLike = {
 };
 
 function normalizeRoleList(...items: Array<string | string[] | undefined>): string[] {
-  const roles = new Set<string>();
-  for (const item of items) {
-    // On-disk pairing records are blind-cast, so roles/role may be non-strings; the shared
-    // normalizer drops them instead of crashing on .trim() (matches the scopes path + mergeRoles).
-    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
-      roles.add(role);
-    }
-  }
-  return [...roles].toSorted();
+  // Persisted pairing records can contain non-string roles; the shared normalizer drops them.
+  return [...new Set(items.flatMap(normalizeUniqueSingleOrTrimmedStringList))].toSorted();
 }
 
 function includesAll(allowed: readonly string[], requested: readonly string[]): boolean {

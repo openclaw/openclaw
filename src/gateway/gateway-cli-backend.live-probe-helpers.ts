@@ -171,7 +171,7 @@ function assertLoopbackObjectSchemasHaveProperties(params: {
     !Object.hasOwn(schema, "properties") ||
     !asLoopbackSchemaRecord(schema.properties)
   ) {
-    throw new Error(`mcp loopback schema probe ${expectedToolName} was not normalized`);
+    throw new Error(`mcp loopback schema check ${expectedToolName} was not normalized`);
   }
 }
 
@@ -338,7 +338,7 @@ export async function verifyCliBackendImageProbe(params: {
     { expectFinal: true },
   );
   if (imageProbe?.status !== "ok") {
-    throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
+    throw new Error(`image check failed: status=${String(imageProbe?.status)}`);
   }
   assertLiveImageProbeReply(extractPayloadText(imageProbe?.result));
 }

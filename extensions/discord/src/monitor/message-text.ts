@@ -7,7 +7,6 @@ import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
-  resolveDiscordSnapshotStickers,
   type DiscordSnapshotMessage,
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
@@ -30,8 +29,7 @@ export function resolveDiscordMessageText(
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
-      .map((text) => normalizeOptionalString(text))
-      .filter(Boolean)
+      .map((text) => text.trim())
       .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
@@ -57,7 +55,7 @@ export function resolveDiscordMessageMentionDocuments(message: Message): string[
     return embedDocuments;
   }
   const componentDocuments: string[] = [];
-  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  collectDiscordTextDisplayDocuments(message.components, componentDocuments);
   return componentDocuments;
 }
 
@@ -100,7 +98,7 @@ export function resolveDiscordMessageHistoryText(
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({
-    attachments: message.attachments ?? undefined,
+    attachments: message.attachments,
     stickers: resolveDiscordMessageStickers(message),
   });
   return [text, mediaText].filter(Boolean).join("\n");
@@ -137,25 +135,10 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   );
 }
 
-function resolveDiscordMessageComponents(message: Message): unknown {
-  const components = (message as { components?: unknown }).components;
-  if (components !== undefined) {
-    return components;
-  }
-  try {
-    return (message as { rawData?: { components?: unknown } }).rawData?.components;
-  } catch {
-    return undefined;
-  }
-}
-
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
   collectDiscordTextDisplayDocuments(components, parts);
-  return parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => Boolean(part))
-    .join("\n");
+  return parts.map((part) => part.trim()).join("\n");
 }
 
 function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {
@@ -217,7 +200,7 @@ export function resolveDiscordRawMessageText(
   const content = normalizeOptionalString(message.content) ?? "";
   const mediaText = formatDiscordMediaText({
     attachments: message.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(message),
+    stickers: resolveDiscordMessageStickers(message),
   });
   const text =
     content ||

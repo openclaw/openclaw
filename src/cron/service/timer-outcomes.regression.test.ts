@@ -4,26 +4,114 @@ import {
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
-  createRunningCronServiceState,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as schedule from "../schedule.js";
+import { createCronServiceStateWithJobs } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
+import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { runMissedJobs } from "./timer-catchup.js";
 import { applyJobResult } from "./timer-outcomes.js";
-import { onTimer } from "./timer.test-support.js";
+import { onTimer, runMissedJobs } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-outcomes-regressions-",
 });
 
+function outcomeFixture(
+  startedAt: number,
+  overrides: Partial<CronJob> = {},
+  deps: Partial<Parameters<typeof createCronServiceState>[0]> = {},
+) {
+  const job = {
+    ...createIsolatedRegressionJob({
+      id: "outcome",
+      name: "outcome",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "report" },
+    }),
+    ...overrides,
+  };
+  const state = createCronServiceState({
+    storePath: `/tmp/cron-${job.id}.json`,
+    nowMs: () => startedAt,
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    ...deps,
+  });
+  return { state, job };
+}
+
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
+    const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+    const { state, job } = outcomeFixture(startedAt, {
+      schedule: { kind: "event", source: "mcp-events", options: {} },
+      state: { sourceIdentity: "source-generation" },
+    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "rate limit",
+        startedAt,
+        endedAt: startedAt + 1,
+      },
+      {
+        deferredNotifications: [],
+        ...(replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {}),
+      },
+    );
+    expect(job.enabled).toBe(true);
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.sourceIdentity).toBe("source-generation");
+  });
+
+  it.each([0, 9, 10])(
+    "keeps %i failures unchanged after a cancelled recurring run",
+    (priorErrors) => {
+      const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+      const { state, job } = outcomeFixture(startedAt, {
+        state: { consecutiveErrors: priorErrors },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      const deferredNotifications: DeferredCronNotifications = [];
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "Gateway restarting.",
+          errorClassification: { kind: "aborted" },
+          startedAt,
+          endedAt: startedAt + 1,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.enabled).toBe(true);
+      expect(job.state.lastError).toBe("Gateway restarting.");
+      expect(job.state.lastRunStatus).toBe("error");
+      expect(job.state.consecutiveErrors).toBe(priorErrors);
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(job.state.failureAlertIncident).toBeUndefined();
+      // Interrupted runs retain error scheduling, including its minimum backoff.
+      const nextRunAtMs = startedAt + (priorErrors === 0 ? 60_000 : 3_600_001);
+      expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+      expect(needsCronTimerMaintenance(job, startedAt + 60_000)).toBe(false);
+      expect(needsCronTimerMaintenance(job, nextRunAtMs)).toBe(false);
+      expect(deferredNotifications).toEqual([]);
+    },
+  );
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;
@@ -40,7 +128,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         consecutiveErrors: 1,
       },
     });
-    const state = createRunningCronServiceState({
+    const state = createCronServiceStateWithJobs({
       storePath: "/tmp/cron-recurring-rate-limit-edited.json",
       log: noopLogger,
       nowMs: () => retryStartedAt,
@@ -117,38 +205,63 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("auto-disables a recurring job on its tenth consecutive run failure", () => {
+  it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
     const sendCronFailureAlert = vi.fn(async () => undefined);
-    const state = createCronServiceState({
-      storePath: "/tmp/cron-consecutive-failure-threshold.json",
-      nowMs: () => startedAt,
-      enqueueSystemEvent,
-      sendCronFailureAlert,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-    const job = createIsolatedRegressionJob({
-      id: "recurring-failure-threshold",
-      name: "recurring failure threshold",
-      scheduledAt: startedAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
-      payload: { kind: "agentTurn", message: "fail" },
-      state: { consecutiveErrors: 8 },
-    });
+    const log = { ...noopLogger, warn: vi.fn() };
+    const diagnostics = {
+      summary: "exec stderr tail",
+      entries: [
+        {
+          ts: startedAt,
+          source: "exec",
+          severity: "error",
+          message: "exec stderr tail",
+          exitCode: 1,
+        },
+      ],
+    } satisfies NonNullable<Parameters<typeof applyJobResult>[2]["diagnostics"]>;
+    const { state, job } = outcomeFixture(
+      startedAt,
+      {
+        state: { consecutiveErrors: 8 },
+      },
+      { enqueueSystemEvent, sendCronFailureAlert, log },
+    );
     job.failureAlert = { after: 10, cooldownMs: 0 };
 
     applyJobResult(
       state,
       job,
-      { status: "error", error: "ninth failure", startedAt, endedAt: startedAt + 10 },
+      { status: "error", error: "ninth failure", diagnostics, startedAt, endedAt: startedAt + 10 },
       { deferredNotifications },
     );
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(9);
     expect(job.state.autoDisabled).toBeUndefined();
     expect(deferredNotifications).toHaveLength(0);
+    expect(job.state.lastDiagnostics?.summary).toBe("exec stderr tail");
+    expect(job.state.lastDiagnostics?.entries).toEqual([
+      {
+        ts: startedAt,
+        source: "exec",
+        severity: "error",
+        message: "exec stderr tail",
+        exitCode: 1,
+      },
+    ]);
+    expect(job.state.lastDiagnosticSummary).toBe("exec stderr tail");
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        error: "ninth failure",
+        diagnosticsSummary: "exec stderr tail",
+      },
+      "cron: job run returned error status",
+    );
 
     applyJobResult(
       state,
@@ -169,167 +282,76 @@ describe("cron timer outcome and failure policy regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
-  it("resets the auto-disable streak after a successful recurring run", () => {
-    const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
-    const state = createCronServiceState({
-      storePath: "/tmp/cron-consecutive-failure-reset.json",
-      nowMs: () => startedAt,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-    const job = createIsolatedRegressionJob({
-      id: "recurring-failure-reset",
-      name: "recurring failure reset",
-      scheduledAt: startedAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
-      payload: { kind: "agentTurn", message: "recover" },
-      state: {},
-    });
-    const apply = (status: "ok" | "error", run: number) =>
+  it.each([
+    { name: "stale", options: { scheduleOwnership: "stale" } },
+    { name: "forced", options: { scheduleMode: "preserve" } },
+  ] as const)(
+    "keeps a $name schedule enabled while alerting on its tenth failure",
+    ({ options }) => {
+      const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const { state, job } = outcomeFixture(startedAt, {
+        state: { consecutiveErrors: 9, nextRunAtMs: startedAt + 60_000 },
+      });
+
       applyJobResult(
         state,
         job,
-        {
-          status,
-          ...(status === "error" ? { error: `failure ${run}` } : {}),
-          startedAt: startedAt + run * 60_000,
-          endedAt: startedAt + run * 60_000 + 10,
-        },
-        { deferredNotifications: [] },
+        { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
+        { ...options, deferredNotifications },
       );
 
-    for (let run = 0; run < 9; run += 1) {
-      apply("error", run);
-    }
-    apply("ok", 9);
-    for (let run = 10; run < 19; run += 1) {
-      apply("error", run);
-    }
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.consecutiveErrors).toBe(9);
-    expect(job.state.autoDisabled).toBeUndefined();
-  });
-
-  it.each([
-    { name: "stale schedule", opts: { scheduleOwnership: "stale" as const } },
-    { name: "forced run", opts: { scheduleMode: "preserve" as const } },
-  ])("does not auto-disable but still alerts after a $name failure", ({ opts }) => {
-    const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
-    const deferredNotifications: DeferredCronNotifications = [];
-    const state = createCronServiceState({
-      storePath: "/tmp/cron-non-owning-failure.json",
-      nowMs: () => startedAt,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-    const job = createIsolatedRegressionJob({
-      id: "non-owning-recurring-failure",
-      name: "non-owning recurring failure",
-      scheduledAt: startedAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
-      payload: { kind: "agentTurn", message: "fail" },
-      state: { consecutiveErrors: 9, nextRunAtMs: startedAt + 60_000 },
-    });
-
-    applyJobResult(
-      state,
-      job,
-      { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
-      { ...opts, deferredNotifications },
-    );
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.consecutiveErrors).toBe(10);
-    expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(1);
-  });
-
-  it.each([
-    { status: "ok", label: "success", at: "2026-03-02T12:00:00.000Z", durationMs: 50 },
-    { status: "error", label: "error", at: "2026-03-02T12:05:00.000Z", durationMs: 25 },
-  ] as const)(
-    "keeps $status state when cron next-run computation throws (#30905)",
-    ({ status, label, at, durationMs }) => {
-      const startedAt = Date.parse(at);
-      const endedAt = startedAt + durationMs;
-      const state = createCronServiceState({
-        storePath: `/tmp/cron-30905-${label}.json`,
-        nowMs: () => endedAt,
-        runIsolatedAgentJob: createDefaultIsolatedRunner(),
-      });
-      const job = createIsolatedRegressionJob({
-        id: `apply-result-${label}-30905`,
-        name: `apply-result-${label}-30905`,
-        scheduledAt: startedAt,
-        schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
-        payload: { kind: "agentTurn", message: "ping" },
-        state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
-      });
-
-      const shouldDelete = applyJobResult(
-        state,
-        job,
-        {
-          status,
-          ...(status === "ok" ? { delivered: true } : { error: "synthetic failure" }),
-          startedAt,
-          endedAt,
-        },
-        { deferredNotifications: [] },
-      );
-
-      expect(shouldDelete).toBe(false);
-      expect(job.state.runningAtMs).toBeUndefined();
-      expect(job.state.lastRunAtMs).toBe(startedAt);
-      expect(job.state.lastStatus).toBe(status);
-      expect(job.state.consecutiveErrors).toBe(status === "error" ? 1 : 0);
-      expect(job.state.scheduleErrorCount).toBe(1);
-      expect(job.state.lastError).toMatch(/^schedule error:/);
-      expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.enabled).toBe(true);
+      expect(job.state.consecutiveErrors).toBe(10);
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(deferredNotifications).toHaveLength(1);
     },
   );
 
   it.each([
-    { status: "ok", label: "success", at: "2026-04-13T15:40:00.000Z", durationMs: 50 },
-    { status: "error", label: "error", at: "2026-04-13T15:45:00.000Z", durationMs: 25 },
+    { status: "ok", throws: true, at: "2026-03-02T12:00:00.000Z", durationMs: 50 },
+    { status: "error", throws: true, at: "2026-03-02T12:05:00.000Z", durationMs: 25 },
+    { status: "ok", throws: false, at: "2026-04-13T15:40:00.000Z", durationMs: 50 },
+    { status: "error", throws: false, at: "2026-04-13T15:45:00.000Z", durationMs: 25 },
   ] as const)(
-    "does not synthesize retries after $status when no cron slot exists (#66019)",
-    ({ status, label, at, durationMs }) => {
+    "retains $status without inventing a next slot (schedule throws: $throws; #30905, #66019)",
+    ({ status, throws, at, durationMs }) => {
       const startedAt = Date.parse(at);
       const endedAt = startedAt + durationMs;
-      const state = createCronServiceState({
-        storePath: `/tmp/cron-66019-${label}.json`,
-        nowMs: () => endedAt,
-        runIsolatedAgentJob: createDefaultIsolatedRunner(),
-      });
-      const job = createIsolatedRegressionJob({
-        id: `cron-66019-${label}`,
-        name: `cron-66019-${label}`,
-        scheduledAt: startedAt,
-        schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
-        payload: { kind: "agentTurn", message: "ping" },
-        state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
-      });
-      const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
-
+      const { state, job } = outcomeFixture(
+        startedAt,
+        {
+          schedule: {
+            kind: "cron",
+            expr: "0 7 * * *",
+            tz: throws ? "Invalid/Timezone" : "Asia/Shanghai",
+          },
+          state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+        },
+        { nowMs: () => endedAt },
+      );
+      const nextRunSpy = throws
+        ? undefined
+        : vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
       try {
         const shouldDelete = applyJobResult(
           state,
           job,
           {
             status,
-            ...(status === "ok" ? { delivered: true } : { error: "429 rate limit exceeded" }),
+            ...(status === "ok"
+              ? { delivered: true }
+              : { error: throws ? "synthetic failure" : "429 rate limit exceeded" }),
             startedAt,
             endedAt,
           },
           { deferredNotifications: [] },
         );
-
         expect(shouldDelete).toBe(false);
         expect(job.state.runningAtMs).toBeUndefined();
         expect(job.state.lastRunAtMs).toBe(startedAt);
@@ -337,8 +359,12 @@ describe("cron timer outcome and failure policy regressions", () => {
         expect(job.state.consecutiveErrors).toBe(status === "error" ? 1 : 0);
         expect(job.state.nextRunAtMs).toBeUndefined();
         expect(job.enabled).toBe(true);
+        if (throws) {
+          expect(job.state.scheduleErrorCount).toBe(1);
+          expect(job.state.lastError).toMatch(/^schedule error:/);
+        }
       } finally {
-        nextRunSpy.mockRestore();
+        nextRunSpy?.mockRestore();
       }
     },
   );
@@ -364,13 +390,14 @@ describe("cron timer outcome and failure policy regressions", () => {
       id: "transient-agent-transport",
       payload: { kind: "agentTurn", message: "ping" },
       error: "stream disconnected before completion: upstream reset",
+      provider: "anthropic",
       errorClassification: undefined,
       expectedReason: "timeout",
       expectedRetryMs: 30_000,
     },
   ] as const)(
     "applies bounded retry classification for $id",
-    ({ id, payload, error, errorClassification, expectedReason, expectedRetryMs }) => {
+    ({ id, payload, error, provider, errorClassification, expectedReason, expectedRetryMs }) => {
       const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
       const endedAt = startedAt + 500;
       const job = createIsolatedRegressionJob({
@@ -381,7 +408,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         payload,
         state: { runningAtMs: startedAt },
       });
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-${id}.json`,
         log: noopLogger,
         nowMs: () => endedAt,
@@ -394,6 +421,7 @@ describe("cron timer outcome and failure policy regressions", () => {
         {
           status: "error",
           error,
+          provider,
           ...(errorClassification ? { errorClassification } : {}),
           executionStarted: true,
           startedAt,
@@ -441,7 +469,7 @@ describe("cron timer outcome and failure policy regressions", () => {
           nextRunAtMs: expectedNextMs,
         },
       };
-      const state = createRunningCronServiceState({
+      const state = createCronServiceStateWithJobs({
         storePath: `/tmp/cron-force-run-${path}.json`,
         log: noopLogger,
         nowMs: () => nowMs,
@@ -468,69 +496,4 @@ describe("cron timer outcome and failure policy regressions", () => {
       expect(job.state.nextRunAtMs).toBe(expectedNextMs);
     },
   );
-
-  it("persists and warns with last cron run diagnostics", () => {
-    const startedAt = Date.parse("2026-04-14T12:00:00.000Z");
-    const endedAt = startedAt + 500;
-    const job = createIsolatedRegressionJob({
-      id: "diagnostics-job",
-      name: "diagnostics-job",
-      scheduledAt: startedAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
-      payload: { kind: "agentTurn", message: "diagnose" },
-      state: { runningAtMs: startedAt },
-    });
-    const log = { ...noopLogger, warn: vi.fn() };
-    const state = createCronServiceState({
-      storePath: "/tmp/cron-diagnostics-job.json",
-      log,
-      nowMs: () => endedAt,
-      runIsolatedAgentJob: createDefaultIsolatedRunner(),
-    });
-
-    applyJobResult(
-      state,
-      job,
-      {
-        status: "error",
-        error: "failed",
-        diagnostics: {
-          summary: "exec stderr tail",
-          entries: [
-            {
-              ts: startedAt,
-              source: "exec",
-              severity: "error",
-              message: "exec stderr tail",
-              exitCode: 1,
-            },
-          ],
-        },
-        startedAt,
-        endedAt,
-      },
-      { deferredNotifications: [] },
-    );
-
-    expect(job.state.lastDiagnostics?.summary).toBe("exec stderr tail");
-    expect(job.state.lastDiagnostics?.entries).toEqual([
-      {
-        ts: startedAt,
-        source: "exec",
-        severity: "error",
-        message: "exec stderr tail",
-        exitCode: 1,
-      },
-    ]);
-    expect(job.state.lastDiagnosticSummary).toBe("exec stderr tail");
-    expect(log.warn).toHaveBeenCalledWith(
-      {
-        jobId: "diagnostics-job",
-        jobName: "diagnostics-job",
-        error: "failed",
-        diagnosticsSummary: "exec stderr tail",
-      },
-      "cron: job run returned error status",
-    );
-  });
 });

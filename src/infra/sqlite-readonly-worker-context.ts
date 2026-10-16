@@ -1,26 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type {
-  SqliteAuthProfileReadOptions,
-  SqliteReadOnlyWorkerValue,
-} from "./sqlite-readonly-worker-protocol.js";
-import type {
-  createSqliteReadOnlyWorkerSession,
-  SqliteReadOnlyWorkerLaunch,
-} from "./sqlite-readonly-worker-session.js";
+import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
   active: boolean;
   busy: boolean;
   controller: AbortController;
-  pending: Set<Promise<SqliteReadOnlyWorkerValue>>;
+  pending: Set<Promise<unknown>>;
   deadlineOwnedByCaller: boolean;
-  worker?: ReturnType<typeof createSqliteReadOnlyWorkerSession>;
-  authWorker?: {
-    source: SqliteAuthProfileReadOptions["source"];
-    launch: SqliteReadOnlyWorkerLaunch;
-    session: ReturnType<typeof createSqliteReadOnlyWorkerSession>;
-  };
-  authTail: Promise<void>;
+  worker?: SqliteReadOnlyWorkerSession;
+  releaseReadWorker?: () => Promise<void>;
 };
 export const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
 

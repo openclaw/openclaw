@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Security
+import Testing
 
 /// A test owns the listener until `stop()`, after closing its dashboard windows.
 @MainActor
@@ -64,30 +65,27 @@ final class DashboardHTTPFixture {
             onPostResponseData: onPostResponseData)
         server.start()
         do {
-            let deadline = ContinuousClock.now + .seconds(5)
-            while true {
-                try Task.checkCancellation()
+            try await server.changes.wait("dashboard fixture listener") {
                 switch listener.state {
-                case .ready:
-                    guard let port = listener.port, port.rawValue != 0 else {
-                        throw URLError(.cannotFindHost)
-                    }
-                    return DashboardHTTPFixture(
-                        server: server,
-                        port: port.rawValue,
-                        usesTLS: tlsIdentity != nil)
-                case let .failed(error):
-                    throw error
-                case .cancelled:
-                    throw CancellationError()
-                default:
-                    guard ContinuousClock.now < deadline else {
-                        throw URLError(.timedOut, userInfo: [
-                            NSLocalizedDescriptionKey: "Dashboard HTTP fixture listener timed out: \(listener.state)",
-                        ])
-                    }
-                    try await Task.sleep(for: .milliseconds(10))
+                case .ready, .failed, .cancelled: true
+                default: false
                 }
+            }
+            switch listener.state {
+            case .ready:
+                guard let port = listener.port, port.rawValue != 0 else {
+                    throw URLError(.cannotFindHost)
+                }
+                return DashboardHTTPFixture(
+                    server: server,
+                    port: port.rawValue,
+                    usesTLS: tlsIdentity != nil)
+            case let .failed(error):
+                throw error
+            case .cancelled:
+                throw CancellationError()
+            default:
+                throw URLError(.cannotFindHost)
             }
         } catch {
             server.stop()
@@ -107,6 +105,12 @@ final class DashboardHTTPFixture {
         self.server.activeConnectionCount
     }
 
+    func waitUntilIdle(_ stage: String, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await self.server.changes.wait(stage, sourceLocation: sourceLocation) {
+            self.server.activeConnectionCount == 0
+        }
+    }
+
     func stop() {
         self.server.stop()
     }
@@ -114,6 +118,8 @@ final class DashboardHTTPFixture {
 
 /// All mutable transport state belongs to queue; UI tests may block the main actor.
 private final class DashboardHTTPFixtureServer: @unchecked Sendable {
+    let changes = AsyncTestSignal()
+
     private struct Client {
         let connection: NWConnection
         let timeout: DispatchWorkItem
@@ -146,6 +152,7 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
         self.beforeResponse = beforeResponse
         self.requestHandler = requestHandler
         self.onPostResponseData = onPostResponseData
+        self.listener.stateUpdateHandler = { [changes = self.changes] _ in changes.notify() }
         // Network.framework requires the connection handler before listener.start.
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else {
@@ -181,7 +188,7 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
             return
         }
         let id = UUID()
-        let timeout = DispatchWorkItem { [weak self] in self?.close(id) }
+        let timeout = DispatchWorkItem { [weak self] in self?.expire(id) }
         self.clients[id] = Client(connection: connection, timeout: timeout)
         connection.start(queue: self.queue)
         self.queue.asyncAfter(deadline: .now() + 5, execute: timeout)
@@ -258,8 +265,16 @@ private final class DashboardHTTPFixtureServer: @unchecked Sendable {
         })
     }
 
+    private func expire(_ id: UUID) {
+        guard let client = self.clients[id] else { return }
+        // Complete requests held by a test's response hook belong to that test's lifetime.
+        guard client.responseTask == nil || client.didRespond else { return }
+        self.close(id)
+    }
+
     private func close(_ id: UUID) {
         guard let client = self.clients.removeValue(forKey: id) else { return }
+        self.changes.notify()
         client.timeout.cancel()
         client.responseTask?.cancel()
         client.connection.cancel()

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { publicPluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
@@ -13,14 +12,16 @@ import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import {
-  buildToolPluginManifest,
-  buildToolPluginPackageManifest,
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
   runPluginsValidateCommand,
-  validateToolPluginProject,
 } from "./plugins-authoring-command.js";
+import {
+  buildToolPluginManifest,
+  buildToolPluginPackageManifest,
+  validateToolPluginProject,
+} from "./plugins-authoring-metadata.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -126,24 +127,6 @@ describe("plugin authoring commands", () => {
     }
   });
 
-  it("generates manifest metadata from defineToolPlugin metadata", () => {
-    const metadata = createDemoMetadata();
-
-    expect(buildToolPluginManifest({ metadata, packageManifest: { version: "1.2.3" } })).toEqual({
-      id: "demo-tools",
-      name: "Demo Tools",
-      description: "Demo tool plugin.",
-      version: "1.2.3",
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      activation: { onStartup: true },
-      contracts: { tools: ["demo_echo"] },
-    });
-  });
-
   it("preserves manifest-owned metadata while updating generated fields", () => {
     const metadata = createOptionalDemoMetadata();
     const existingManifest = {
@@ -198,32 +181,6 @@ describe("plugin authoring commands", () => {
     ).toEqual([]);
   });
 
-  it("drops stale manifest-owned tool metadata when no generated metadata remains", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const manifest = buildToolPluginManifest({
-      metadata,
-      packageManifest,
-      existingManifest: {
-        id: "demo-tools",
-        name: "Demo Tools",
-        toolMetadata: {
-          stale_tool: { optional: true },
-        },
-      },
-    });
-
-    expect(manifest.toolMetadata).toBeUndefined();
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual([]);
-  });
-
   it("aligns package metadata with the selected runtime extension entry", () => {
     expect(
       buildToolPluginPackageManifest({
@@ -267,6 +224,79 @@ describe("plugin authoring commands", () => {
       log.mockRestore();
       error.mockRestore();
     }
+  });
+
+  it("reports and retires a preceding host browser declaration through explicit authoring", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-browser-authoring-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-browser-authoring",
+      pluginId: "browser-authoring",
+      toolName: "browser_authoring_echo",
+    });
+    const packagePath = path.join(rootDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageJson.openclaw.controlUi = "./browser.ts";
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      path.resolve("node_modules/esbuild"),
+      path.join(rootDir, "node_modules/esbuild"),
+      "dir",
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
+    fs.writeFileSync(
+      generatedPath,
+      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
+    );
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new Error(`runtime exit ${code}`);
+    });
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true }),
+      ).rejects.toThrow("runtime exit 1");
+      expect(fs.existsSync(generatedPath)).toBe(true);
+      await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+      expect(fs.existsSync(generatedPath)).toBe(false);
+      const authoredPath = path.join(rootDir, "openclaw.plugin.json");
+      const authoredBeforeFailure = fs.readFileSync(authoredPath, "utf8");
+      const previousEntry = JSON.parse(authoredBeforeFailure).controlUi.entry;
+      const previousAssets = fs.readFileSync(path.join(rootDir, previousEntry));
+      fs.mkdirSync(generatedPath);
+      fs.writeFileSync(path.join(generatedPath, "unowned.txt"), "preserve");
+      fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "next";');
+      await expect(runPluginsBuildCommand({ root: rootDir, entry: entryPath })).rejects.toThrow();
+      expect(fs.readFileSync(authoredPath, "utf8")).toBe(authoredBeforeFailure);
+      expect(fs.readFileSync(path.join(rootDir, previousEntry))).toEqual(previousAssets);
+      expect(fs.readFileSync(path.join(generatedPath, "unowned.txt"), "utf8")).toBe("preserve");
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("preserves shared output when authoring a backend without browser source", async () => {
+    const rootDir = tempDirs.make("openclaw-plugin-backend-authoring-");
+    const outside = tempDirs.make("openclaw-plugin-shared-output-");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir: rootDir,
+      packageName: "openclaw-plugin-backend-authoring",
+      pluginId: "backend-authoring",
+      toolName: "backend_authoring_echo",
+    });
+    const outsideManifest = path.join(outside, "openclaw.plugin.json");
+    fs.writeFileSync(outsideManifest, '{"id":"other-project"}');
+    fs.symlinkSync(
+      outside,
+      path.join(rootDir, "dist"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
+    expect(fs.readFileSync(outsideManifest, "utf8")).toBe('{"id":"other-project"}');
   });
 
   it("keeps validation errors on stderr and sanitizes JSON paths", async () => {
@@ -366,30 +396,6 @@ describe("plugin authoring commands", () => {
     },
   );
 
-  it("keeps generated contract arrays ordered", () => {
-    const metadata = createDemoMetadata();
-    const extraTool = {
-      ...expectDefined(metadata.tools[0], "demo tool metadata"),
-      name: "demo_extra",
-    };
-    const metadataWithTools = { ...metadata, tools: [...metadata.tools, extraTool] };
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const generated = buildToolPluginManifest({ metadata: metadataWithTools, packageManifest });
-    const manifest = {
-      ...generated,
-      contracts: { tools: ["demo_extra", "demo_echo"] },
-    };
-
-    expect(
-      validateToolPluginProject({
-        metadata: metadataWithTools,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
-  });
-
   it("projects undefined TypeBox options into the persisted manifest shape", () => {
     const entry = defineToolPlugin({
       id: "undefined-schema-options",
@@ -431,74 +437,6 @@ describe("plugin authoring commands", () => {
         packageManifest,
       }),
     ).toEqual([]);
-  });
-
-  it.each([
-    {
-      label: "own prototype key versus different own key",
-      expected: '{"__proto__":{}}',
-      actual: '{"safe":{}}',
-      stale: true,
-    },
-    {
-      label: "different own key versus own prototype key",
-      expected: '{"safe":{}}',
-      actual: '{"__proto__":{}}',
-      stale: true,
-    },
-    {
-      label: "matching own prototype keys",
-      expected: '{"__proto__":{}}',
-      actual: '{"__proto__":{}}',
-      stale: false,
-    },
-  ])("compares $label in generated schemas", ({ expected, actual, stale }) => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const metadataWithSchema = {
-      ...metadata,
-      configSchema: { type: "object", properties: JSON.parse(expected) as Record<string, unknown> },
-    };
-    const generated = buildToolPluginManifest({ metadata: metadataWithSchema, packageManifest });
-    const manifest = {
-      ...generated,
-      configSchema: { type: "object", properties: JSON.parse(actual) as Record<string, unknown> },
-    };
-
-    expect(
-      validateToolPluginProject({
-        metadata: metadataWithSchema,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(
-      stale
-        ? ["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]
-        : [],
-    );
-  });
-
-  it("still rejects a changed generated config schema", () => {
-    const metadata = createDemoMetadata();
-    const packageManifest = { version: "1.2.3", openclaw: { extensions: ["./src/index.ts"] } };
-    const generated = buildToolPluginManifest({ metadata, packageManifest });
-    const manifest = {
-      ...generated,
-      configSchema: {
-        ...(generated.configSchema as Record<string, unknown>),
-        additionalProperties: true,
-      },
-    };
-
-    expect(
-      validateToolPluginProject({
-        metadata,
-        entry: "./src/index.ts",
-        manifest,
-        packageManifest,
-      }),
-    ).toEqual(["openclaw.plugin.json generated metadata is stale. Run openclaw plugins build."]);
   });
 
   it("rejects a missing generated manifest without changing package metadata", async () => {
@@ -667,160 +605,118 @@ describe("plugin authoring commands", () => {
     }
   });
 
-  it.each(["write", "rename"] as const)(
-    "keeps the project intact when package publication fails during %s",
-    async (failure) => {
-      const tmpDir = tempDirs.make("openclaw-plugin-build-failure-");
-      const packagePath = path.join(tmpDir, "package.json");
-      const entryPath = writeSourceToolPluginProject({
-        tmpDir,
-        packageName: "openclaw-plugin-build-failure",
-        pluginId: "build-failure",
-        toolName: "build_failure_echo",
-      });
-      fs.chmodSync(packagePath, 0o640);
-      fs.chmodSync(tmpDir, 0o3770);
-      const originalPackage = fs.readFileSync(packagePath);
-      const originalMode = fs.statSync(packagePath).mode & 0o7777;
-      const originalDirectoryMode = fs.statSync(tmpDir).mode & 0o7777;
-      const originalEntries = fs.readdirSync(tmpDir).toSorted();
-      const error = Object.assign(new Error("publication failed"), {
-        code: failure === "write" ? "ENOSPC" : "EPERM",
-      });
-      let stagedHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
-      const realOpen = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
-        const handle = await realOpen(file, flags, mode);
-        if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
-          stagedHandle = handle;
-        }
-        return handle;
-      });
-      const realWrite = fsp.writeFile.bind(fsp);
-      vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
-        if (failure === "write" && file === stagedHandle) {
-          await realWrite(file, "partial");
-          throw error;
-        }
-        return realWrite(file, data, options);
-      });
-      const realWriteSync = fs.writeFileSync.bind(fs);
-      vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
-        if (failure === "write" && file === packagePath) {
-          realWriteSync(file, "partial");
-          throw error;
-        }
-        return realWriteSync(file, data, options);
-      });
-      const realRename = fsp.rename.bind(fsp);
-      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-        if (failure === "rename" && to === packagePath) {
-          throw error;
-        }
-        return realRename(from, to);
-      });
-      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-
-      try {
-        await expect(
-          runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
-        ).rejects.toMatchObject({
-          code: error.code,
-        });
-        expect(fs.readFileSync(packagePath)).toEqual(originalPackage);
-        expect(fs.statSync(packagePath).mode & 0o7777).toBe(originalMode);
-        expect(fs.statSync(tmpDir).mode & 0o7777).toBe(originalDirectoryMode);
-        expect(fs.readdirSync(tmpDir).toSorted()).toEqual(originalEntries);
-        expect(log).not.toHaveBeenCalled();
-      } finally {
-        vi.restoreAllMocks();
+  it("keeps the project intact when package publication fails during write", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-build-failure-");
+    const packagePath = path.join(tmpDir, "package.json");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-build-failure",
+      pluginId: "build-failure",
+      toolName: "build_failure_echo",
+    });
+    fs.chmodSync(packagePath, 0o640);
+    fs.chmodSync(tmpDir, 0o3770);
+    const originalPackage = fs.readFileSync(packagePath);
+    const originalMode = fs.statSync(packagePath).mode & 0o7777;
+    const originalDirectoryMode = fs.statSync(tmpDir).mode & 0o7777;
+    const originalEntries = fs.readdirSync(tmpDir).toSorted();
+    const error = Object.assign(new Error("publication failed"), { code: "ENOSPC" });
+    let stagedHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+    const realOpen = fsp.open.bind(fsp);
+    vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
+      if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
+        stagedHandle = handle;
       }
-    },
-  );
-
-  it.each(["write", "rename"] as const)(
-    "reports a manifest %s failure after publishing package metadata",
-    async (failure) => {
-      const tmpDir = tempDirs.make("openclaw-plugin-manifest-failure-");
-      const packagePath = path.join(tmpDir, "package.json");
-      const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
-      const entryPath = writeSourceToolPluginProject({
-        tmpDir,
-        packageName: "openclaw-plugin-manifest-failure",
-        pluginId: "manifest-failure",
-        toolName: "manifest_failure_echo",
-      });
-      const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-      packageManifest.openclaw.extensions = [];
-      fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
-      const packageBefore = fs.readFileSync(packagePath);
-      const manifestBefore = '{\n  "id": "previous"\n}\n';
-      fs.writeFileSync(manifestPath, manifestBefore);
-      const error = Object.assign(new Error("manifest publication failed"), {
-        code: failure === "write" ? "ENOSPC" : "EPERM",
-      });
-      let packagePublications = 0;
-      let manifestFailureInjected = false;
-      let stagedHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
-      const isManifestStage = (file: unknown) =>
-        packagePublications === 1 &&
-        typeof file === "string" &&
-        path.dirname(file) === tmpDir &&
-        file.endsWith(".tmp");
-      const realOpen = fsp.open.bind(fsp);
-      vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
-        const handle = await realOpen(file, flags, mode);
-        if (isManifestStage(file)) {
-          stagedHandle = handle;
-        }
-        return handle;
-      });
-      const realWrite = fsp.writeFile.bind(fsp);
-      vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
-        // Both writers are exercised: package.json must publish before the
-        // manifest fault, whether its temporary file uses a path or a handle.
-        if (failure === "write" && (isManifestStage(file) || file === stagedHandle)) {
-          await realWrite(file, "partial");
-          manifestFailureInjected = true;
-          throw error;
-        }
-        return realWrite(file, data, options);
-      });
-      const realRename = fsp.rename.bind(fsp);
-      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-        if (failure === "rename" && to === manifestPath && packagePublications === 1) {
-          manifestFailureInjected = true;
-          throw error;
-        }
-        await realRename(from, to);
-        if (to === packagePath) {
-          packagePublications += 1;
-        }
-      });
-      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-
-      try {
-        await expect(
-          runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
-        ).rejects.toMatchObject({ code: error.code });
-        expect(packagePublications).toBe(1);
-        expect(manifestFailureInjected).toBe(true);
-        expect(fs.readFileSync(packagePath)).not.toEqual(packageBefore);
-        expect(JSON.parse(fs.readFileSync(packagePath, "utf8"))).toMatchObject({
-          openclaw: { extensions: ["./src/index.ts"] },
-        });
-        expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
-        expect(fs.readdirSync(tmpDir).toSorted()).toEqual([
-          "openclaw.plugin.json",
-          "package.json",
-          "src",
-        ]);
-        expect(log).not.toHaveBeenCalled();
-      } finally {
-        vi.restoreAllMocks();
+      return handle;
+    });
+    const realWrite = fsp.writeFile.bind(fsp);
+    vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
+      if (file === stagedHandle) {
+        await realWrite(file, "partial");
+        throw error;
       }
-    },
-  );
+      return realWrite(file, data, options);
+    });
+    const realWriteSync = fs.writeFileSync.bind(fs);
+    vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+      if (file === packagePath) {
+        realWriteSync(file, "partial");
+        throw error;
+      }
+      return realWriteSync(file, data, options);
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
+      ).rejects.toMatchObject({
+        code: error.code,
+      });
+      expect(fs.readFileSync(packagePath)).toEqual(originalPackage);
+      expect(fs.statSync(packagePath).mode & 0o7777).toBe(originalMode);
+      expect(fs.statSync(tmpDir).mode & 0o7777).toBe(originalDirectoryMode);
+      expect(fs.readdirSync(tmpDir).toSorted()).toEqual(originalEntries);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("reports a manifest rename failure after publishing package metadata", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-manifest-failure-");
+    const packagePath = path.join(tmpDir, "package.json");
+    const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-manifest-failure",
+      pluginId: "manifest-failure",
+      toolName: "manifest_failure_echo",
+    });
+    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageManifest.openclaw.extensions = [];
+    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    const packageBefore = fs.readFileSync(packagePath);
+    const manifestBefore = '{\n  "id": "previous"\n}\n';
+    fs.writeFileSync(manifestPath, manifestBefore);
+    const error = Object.assign(new Error("manifest publication failed"), { code: "EPERM" });
+    let packagePublications = 0;
+    let manifestFailureInjected = false;
+    const realRename = fsp.rename.bind(fsp);
+    vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      if (to === manifestPath && packagePublications === 1) {
+        manifestFailureInjected = true;
+        throw error;
+      }
+      await realRename(from, to);
+      if (to === packagePath) {
+        packagePublications += 1;
+      }
+    });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
+      ).rejects.toMatchObject({ code: error.code });
+      expect(packagePublications).toBe(1);
+      expect(manifestFailureInjected).toBe(true);
+      expect(fs.readFileSync(packagePath)).not.toEqual(packageBefore);
+      expect(JSON.parse(fs.readFileSync(packagePath, "utf8"))).toMatchObject({
+        openclaw: { extensions: ["./src/index.ts"] },
+      });
+      expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      expect(fs.readdirSync(tmpDir).toSorted()).toEqual([
+        "openclaw.plugin.json",
+        "package.json",
+        "src",
+      ]);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-init-"));
@@ -840,67 +736,6 @@ describe("plugin authoring commands", () => {
       log.mockRestore();
       fs.rmSync(tmpDir, { force: true, recursive: true });
     }
-  });
-
-  it("scaffolds a dist-entry tool plugin project", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-init-"));
-    const projectDir = path.join(tmpDir, "stock-quotes");
-
-    await runPluginsInitCommand("stock-quotes", {
-      directory: projectDir,
-      name: 'Stock "Quotes"',
-    });
-
-    expect(fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8")).toContain(
-      'name: "Stock \\"Quotes\\""',
-    );
-    expect(
-      JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8")),
-    ).toMatchObject({
-      dependencies: {
-        typebox: "^1.1.38",
-      },
-      peerDependencies: {
-        openclaw: ">=2026.5.17",
-      },
-      devDependencies: {
-        openclaw: "latest",
-        typescript: "7.0.2",
-        vitest: "^3.2.0",
-      },
-      scripts: {
-        "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
-        "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
-        test: "vitest run --config ./vitest.config.ts",
-      },
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        compat: {
-          pluginApi: ">=2026.5.17",
-        },
-        build: {
-          openclawVersion: VERSION,
-        },
-      },
-    });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8")),
-    ).toMatchObject({
-      id: "stock-quotes",
-      name: 'Stock "Quotes"',
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
-      contracts: { tools: ["echo"] },
-    });
-    expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(
-      "getToolPluginMetadata",
-    );
-    expect(fs.readFileSync(path.join(projectDir, "vitest.config.ts"), "utf8")).toContain(
-      'include: ["src/**/*.test.ts"]',
-    );
   });
 
   it("scaffolds a provider plugin project with ClawHub validation and release metadata", async () => {

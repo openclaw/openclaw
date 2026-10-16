@@ -1,0 +1,57 @@
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
+import {
+  listUserProfileAuthLinksInDatabase,
+  readPersonalAuthProfileAuthorizationInDatabase,
+  readPersonalCatalogProfilesInDatabase,
+  readUserModelAccountSummaryInDatabase,
+  readUserModelAccountSelectionInDatabase,
+} from "./user-model-accounts.js";
+
+type UserModelAccountReadType =
+  | "userModelAccounts.authorization"
+  | "userModelAccounts.links"
+  | "userModelAccounts.catalog"
+  | "userModelAccounts.summary"
+  | "userModelAccounts.selection";
+
+export function readUserModelAccountCommand(
+  db: EngineConnection,
+  command: Extract<OpenClawStateReadCommand, { type: UserModelAccountReadType }>,
+) {
+  if (command.type === "userModelAccounts.authorization") {
+    return {
+      type: command.type,
+      authorization: runSqliteDeferredTransactionSync(db, () =>
+        readPersonalAuthProfileAuthorizationInDatabase(db, command.authProfileId),
+      ),
+    };
+  }
+  if (command.type === "userModelAccounts.selection") {
+    return {
+      type: command.type,
+      selection: readUserModelAccountSelectionInDatabase(db, command),
+    };
+  }
+  if (command.type === "userModelAccounts.summary") {
+    return {
+      type: command.type,
+      account: runSqliteDeferredTransactionSync(db, () =>
+        readUserModelAccountSummaryInDatabase(db, command),
+      ),
+    };
+  }
+  if (command.type === "userModelAccounts.links") {
+    return {
+      type: command.type,
+      links: runSqliteDeferredTransactionSync(db, () =>
+        listUserProfileAuthLinksInDatabase(db, command.profileId),
+      ),
+    };
+  }
+  return {
+    type: command.type,
+    catalog: readPersonalCatalogProfilesInDatabase(db, command.selection),
+  };
+}

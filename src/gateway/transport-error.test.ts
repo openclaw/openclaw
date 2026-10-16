@@ -122,7 +122,7 @@ describe("Gateway RPC transport availability", () => {
     {
       label: "already-dispatched request timeout",
       error: new GatewayProtocolRequestTimeoutError({
-        method: "skills.proposals.inspect",
+        method: "skills.workshop.read",
         timeoutMs: 1_500,
         requestSent: true,
       }),

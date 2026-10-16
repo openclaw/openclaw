@@ -35,7 +35,7 @@ test.each(inventorySizes)(
   "lists 37 sparse matches from %i stored rows through the real tool and Gateway handler",
   async (rowCount) => {
     const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.agentsConfig = { entries: { main: {} } };
     const selected = ensureProfileForEmail("inventory-owner@example.test");
     const other = ensureProfileForEmail("inventory-other@example.test");
     const entries: Record<string, SessionEntry> = {};

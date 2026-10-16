@@ -55,6 +55,7 @@ export async function runCodeModeExecutor(
       ),
     );
   } catch (error) {
+    options.inlineHost?.onFailure?.(error, "host");
     if (input.kind === "resume") {
       await input.continuation.dispose();
     }

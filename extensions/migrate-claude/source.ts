@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { exists, isDirectory, readJsonObject, resolveHomePath } from "./helpers.js";
 
 type ClaudeArchivePath = {
@@ -83,10 +84,7 @@ async function safeReadDir(dir: string): Promise<Dirent[]> {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
+    const code = extractErrorCode(error);
     if (code === "ENOENT" || code === "ENOTDIR") {
       return [];
     }
@@ -108,10 +106,7 @@ async function isConfiguredAutoMemoryDirectory(dir: string): Promise<boolean> {
   try {
     return (await fs.stat(dir)).isDirectory();
   } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
+    const code = extractErrorCode(error);
     if (code === "ENOENT" || code === "ENOTDIR") {
       return false;
     }

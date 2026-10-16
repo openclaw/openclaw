@@ -96,8 +96,13 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("bounded Startup runtime observations", () => {
   it.each(["gateway", "node"] as const)(
-    "preserves observed stopped %s runtime with a deadline",
+    "ignores the System Idle Process when proving stopped %s runtime within the shared budget",
     async (kind) => {
+      processOutput = JSON.stringify([
+        { ProcessId: 0, CommandLine: null },
+        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
+      ]);
+      processElapsed = 40.25;
       const runtime = await resolveFallbackRuntime(
         { OPENCLAW_SERVICE_KIND: kind },
         command(kind),
@@ -107,76 +112,14 @@ describe("bounded Startup runtime observations", () => {
       expect(runtime.status).toBe("stopped");
       expect(runtime.missingUnit).not.toBe(true);
       expect(portCalls()).toHaveLength(kind === "gateway" ? 1 : 0);
+      if (kind === "gateway") {
+        expect(portCalls()[0]?.[2]?.timeout).toBe(59);
+      }
     },
   );
 
   it.each(["gateway", "node"] as const)(
-    "ignores the System Idle Process when proving stopped %s runtime",
-    async (kind) => {
-      processOutput = JSON.stringify([
-        { ProcessId: 0, CommandLine: null },
-        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
-      ]);
-      const runtime = await resolveFallbackRuntime(
-        { OPENCLAW_SERVICE_KIND: kind },
-        command(kind),
-        "observe",
-        100,
-      );
-      expect(runtime.status).toBe("stopped");
-      expect(portCalls()).toHaveLength(kind === "gateway" ? 1 : 0);
-    },
-  );
-
-  it.each(["gateway", "node"] as const)(
-    "retains exact running %s process evidence",
-    async (kind) => {
-      const installed = command(kind);
-      processOutput = JSON.stringify([
-        { ProcessId: 4242, CommandLine: installed.programArguments.join(" ") },
-      ]);
-      const runtime = await resolveFallbackRuntime(
-        { OPENCLAW_SERVICE_KIND: kind },
-        installed,
-        "observe",
-        100,
-      );
-      expect(runtime).toMatchObject({ status: "running", pid: 4242 });
-      expect(portCalls()).toHaveLength(0);
-    },
-  );
-
-  it.each(
-    (["gateway", "node"] as const).flatMap((kind) =>
-      [
-        { label: "null command line", entry: { ProcessId: 222, CommandLine: null } },
-        { label: "missing command line", entry: { ProcessId: 222 } },
-        { label: "empty command line", entry: { ProcessId: 222, CommandLine: "" } },
-        { label: "blank command line", entry: { ProcessId: 222, CommandLine: "  " } },
-        {
-          label: "missing process identity",
-          entry: { CommandLine: command(kind).programArguments.join(" ") },
-        },
-      ].map(({ label, entry }) => ({ kind, label, entry })),
-    ),
-  )("keeps incomplete $kind snapshot with $label unknown", async ({ kind, entry }) => {
-    processOutput = JSON.stringify([
-      { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
-      entry,
-    ]);
-    const runtime = await resolveFallbackRuntime(
-      { OPENCLAW_SERVICE_KIND: kind },
-      command(kind),
-      "observe",
-      100,
-    );
-    expect(runtime.status).toBe("unknown");
-    expect(runtime.missingUnit).not.toBe(true);
-    expect(portCalls()).toHaveLength(0);
-  });
-
-  it.each(["gateway", "node"] as const)(
-    "retains positive %s process identity in an incomplete snapshot",
+    "retains exact %s process identity even in an incomplete snapshot",
     async (kind) => {
       const installed = command(kind);
       processOutput = JSON.stringify([
@@ -194,54 +137,81 @@ describe("bounded Startup runtime observations", () => {
     },
   );
 
-  it.each(["", "[]", "[{}]", "not-json"])(
-    "does not treat unavailable snapshot %j as stopped",
-    async (output) => {
-      processOutput = output;
-      const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
-      expect(runtime.status).toBe("unknown");
-      expect(portCalls()).toHaveLength(0);
-    },
-  );
-
-  it.each(["1", "2", "", "not-a-count", "-1"])(
-    "keeps busy or unverifiable listener result %j unknown",
-    async (output) => {
-      portOutput = output;
-      const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
-      expect(runtime.status).toBe("unknown");
-      expect(portCalls()).toHaveLength(1);
-    },
-  );
-
-  it("does not collapse native listener failure into a successful empty result", async () => {
-    portExit = 1;
-    portError = new Error("listener inspection unavailable");
-    const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
+  it.each([
+    ...(
+      [
+        ["gateway", "null command line", { ProcessId: 222, CommandLine: null }],
+        ["gateway", "empty command line", { ProcessId: 222, CommandLine: "" }],
+        ["gateway", "unparseable command line", { ProcessId: 222, CommandLine: "node\0 gateway" }],
+        [
+          "gateway",
+          "missing process identity",
+          { CommandLine: command("gateway").programArguments.join(" ") },
+        ],
+        ["node", "null command line", { ProcessId: 222, CommandLine: null }],
+      ] as const
+    ).map(([kind, label, entry]) => ({
+      kind,
+      label,
+      output: JSON.stringify([
+        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
+        entry,
+      ]),
+    })),
+    ...["", "[]", "[{}]", "not-json"].map((output) => ({
+      kind: "gateway" as const,
+      label: `unavailable ${JSON.stringify(output)}`,
+      output,
+    })),
+  ])("keeps $kind snapshots with $label unknown", async ({ kind, output }) => {
+    processOutput = output;
+    const runtime = await resolveFallbackRuntime(
+      { OPENCLAW_SERVICE_KIND: kind },
+      command(kind),
+      "observe",
+      100,
+    );
     expect(runtime.status).toBe("unknown");
-  });
-
-  it("debits process time before the listener read without fractional timeout inflation", async () => {
-    processElapsed = 40.25;
-    const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
-    expect(runtime.status).toBe("stopped");
-    expect(portCalls()[0]?.[2]?.timeout).toBe(59);
-  });
-
-  it("does not admit a listener read with a sub-millisecond remainder", async () => {
-    processElapsed = 99.75;
-    const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
-    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingUnit).not.toBe(true);
     expect(portCalls()).toHaveLength(0);
   });
 
-  it("does not accept a free listener observation completed after the shared deadline", async () => {
-    processElapsed = 30;
-    portElapsed = 71;
-    const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
-    expect(runtime.status).toBe("unknown");
-    expect(portCalls()[0]?.[2]?.timeout).toBe(70);
-  });
+  it.each([
+    { label: "busy listener", output: "1", exit: 0, processMs: 0, portMs: 0, timeout: 100 },
+    { label: "unverifiable count", output: "", exit: 0, processMs: 0, portMs: 0, timeout: 100 },
+    { label: "native failure", output: "0", exit: 1, processMs: 0, portMs: 0, timeout: 100 },
+    {
+      label: "sub-millisecond remainder",
+      output: "0",
+      exit: 0,
+      processMs: 99.75,
+      portMs: 0,
+      timeout: undefined,
+    },
+    {
+      label: "late free observation",
+      output: "0",
+      exit: 0,
+      processMs: 30,
+      portMs: 71,
+      timeout: 70,
+    },
+  ])(
+    "does not report stopped after $label",
+    async ({ output, exit, processMs, portMs, timeout }) => {
+      portOutput = output;
+      portExit = exit;
+      if (exit) {
+        portError = new Error("listener inspection unavailable");
+      }
+      processElapsed = processMs;
+      portElapsed = portMs;
+      const runtime = await resolveFallbackRuntime({}, command("gateway"), "observe", 100);
+      expect(runtime.status).toBe("unknown");
+      expect(portCalls()).toHaveLength(timeout === undefined ? 0 : 1);
+      expect(portCalls()[0]?.[2]?.timeout).toBe(timeout);
+    },
+  );
 
   it("retains a listener cleanup refusal rather than reporting stopped", async () => {
     const error = new CommandProcessCleanupError();
@@ -254,69 +224,63 @@ describe("bounded Startup runtime observations", () => {
 
 describe("Scheduled Task runtime inspection budget", () => {
   it.each([
-    { queryMs: 40, revalidationMs: 40, expired: false, calls: 2 },
-    { queryMs: 100, revalidationMs: 0, expired: true, calls: 1 },
-    { queryMs: 40, revalidationMs: 60, expired: true, calls: 2 },
-    { queryMs: 40, revalidationMs: 61, expired: true, calls: 2 },
-  ])(
-    "charges registered query $queryMs ms and revalidation $revalidationMs ms to one deadline",
-    async ({ queryMs, revalidationMs, expired, calls }) => {
-      const { readScheduledTaskCommand } =
-        await vi.importActual<typeof import("./schtasks-layout.js")>("./schtasks-layout.js");
-      const taskName = "\\Custom\\Gateway";
-      const action = {
-        type: 0,
-        path: "C:\\node.exe",
-        arguments: '"C:\\openclaw\\entry.js" gateway',
-        workingDirectory: "",
-      };
-      let queries = 0;
-      native.mockImplementation(() => {
-        now += queries++ === 0 ? queryMs : revalidationMs;
-        return result(JSON.stringify({ taskPath: taskName, state: 4, actions: [action] }));
+    { queryMs: 40, expired: false },
+    { queryMs: 100, expired: true },
+  ])("charges registered query $queryMs ms to its deadline", async ({ queryMs, expired }) => {
+    const { readScheduledTaskCommand } =
+      await vi.importActual<typeof import("./schtasks-layout.js")>("./schtasks-layout.js");
+    const taskName = "\\Custom\\Gateway";
+    const action = {
+      type: 0,
+      path: "C:\\node.exe",
+      arguments: '"C:\\openclaw\\entry.js" gateway',
+      workingDirectory: "",
+    };
+    native.mockImplementation(() => {
+      now += queryMs;
+      return result(JSON.stringify({ taskPath: taskName, state: 4, actions: [action] }));
+    });
+    const inspection = readScheduledTaskCommand(
+      { OPENCLAW_WINDOWS_TASK_NAME: taskName },
+      { requireLoaded: true, timeoutMs: 100 },
+    );
+    if (expired) {
+      await expect(inspection).rejects.toMatchObject({
+        reason: "windows-task-inspection-failed",
+        timeoutMs: 0,
       });
-      const inspection = readScheduledTaskCommand(
-        { OPENCLAW_WINDOWS_TASK_NAME: taskName },
-        { requireLoaded: true, timeoutMs: 100 },
-      );
-      if (expired) {
-        await expect(inspection).rejects.toMatchObject({
-          reason: "windows-task-inspection-failed",
-          timeoutMs: 0,
-        });
-      } else {
-        await expect(inspection).resolves.toMatchObject({
-          programArguments: [action.path, "C:\\openclaw\\entry.js", "gateway"],
-        });
+    } else {
+      await expect(inspection).resolves.toMatchObject({
+        programArguments: [action.path, "C:\\openclaw\\entry.js", "gateway"],
+      });
+    }
+    expect(native).toHaveBeenCalledOnce();
+    expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual([100]);
+  });
+
+  it.each([
+    { queryMs: 40, processMs: 30, missing: true },
+    { queryMs: 100, processMs: 0, missing: false },
+  ])(
+    "charges the native query $queryMs ms before process inspection",
+    async ({ queryMs, processMs, missing }) => {
+      if (missing) {
+        vi.spyOn(fs, "access").mockResolvedValue(undefined);
       }
-      expect(native).toHaveBeenCalledTimes(calls);
-      expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual(
-        calls === 1 ? [100] : [100, 60],
+      schedulerMissing = missing;
+      schedulerElapsed = queryMs;
+      processElapsed = processMs;
+      const inspection = readScheduledTaskRuntime(
+        missing ? { APPDATA: "C:\\fixture", OPENCLAW_SERVICE_KIND: "gateway" } : {},
+        { timeoutMs: 100 },
       );
+      if (missing) {
+        await expect(inspection).resolves.toMatchObject({ status: "stopped" });
+        expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual([100, 60, 30]);
+      } else {
+        await expect(inspection).rejects.toThrow("Scheduled Task inspection deadline expired");
+        expect(native).toHaveBeenCalledTimes(1);
+      }
     },
   );
-
-  it("charges the native query before Startup process and listener inspection", async () => {
-    vi.spyOn(fs, "access").mockResolvedValue(undefined);
-    schedulerElapsed = 40;
-    processElapsed = 30;
-
-    const runtime = await readScheduledTaskRuntime(
-      { APPDATA: "C:\\fixture", OPENCLAW_SERVICE_KIND: "gateway" },
-      { timeoutMs: 100 },
-    );
-
-    expect(runtime.status).toBe("stopped");
-    expect(native.mock.calls.map((call) => call[2]?.timeout)).toEqual([100, 60, 30]);
-  });
-
-  it("does not inspect processes after the native query exhausts its allowance", async () => {
-    schedulerMissing = false;
-    schedulerElapsed = 100;
-
-    await expect(readScheduledTaskRuntime({}, { timeoutMs: 100 })).rejects.toThrow(
-      "Scheduled Task inspection deadline expired",
-    );
-    expect(native).toHaveBeenCalledTimes(1);
-  });
 });

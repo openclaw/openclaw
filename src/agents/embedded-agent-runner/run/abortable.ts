@@ -83,23 +83,29 @@ export function joinWithRunLivenessDeadline(input: {
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
+    // The provider may already be running; cancellation still owns the result.
+    void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
+  return withAbortListener(signal, () => promise, createAbortableError);
+}
+
+/** Start work under an already-checked signal, preserving the caller's abort error contract. */
+export function withAbortListener<T>(
+  signal: AbortSignal,
+  start: () => Promise<T>,
+  createError: (signal: AbortSignal) => Error,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
+    const settle = (complete: () => void) => {
       signal.removeEventListener("abort", onAbort);
-      reject(createAbortableError(signal));
+      complete();
     };
+    const onAbort = () => settle(() => reject(createError(signal)));
     signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (err: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(err, "Non-Error rejection"));
-      },
+    start().then(
+      (value) => settle(() => resolve(value)),
+      (err: unknown) => settle(() => reject(toErrorObject(err, "Non-Error rejection"))),
     );
   });
 }

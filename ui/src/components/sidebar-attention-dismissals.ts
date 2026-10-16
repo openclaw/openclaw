@@ -9,6 +9,7 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
+  "outbox",
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",

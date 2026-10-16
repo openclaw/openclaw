@@ -27,7 +27,6 @@ export type ChatInputHistoryKeyInput = {
   key: "ArrowUp" | "ArrowDown";
   selectionStart: number;
   selectionEnd: number;
-  valueLength: number;
   altKey: boolean;
   ctrlKey: boolean;
   metaKey: boolean;
@@ -40,21 +39,6 @@ export type ChatInputHistoryKeyResult = {
   handled: boolean;
   preventDefault: boolean;
   restoreCaret: "up" | "down" | null;
-  decision:
-    | "blocked:history-loading"
-    | "blocked:modifier-or-composition"
-    | "blocked:selection-range"
-    | "blocked:arrowup-not-at-start"
-    | "blocked:arrowdown-editing-mode"
-    | "blocked:history-boundary"
-    | "handled:enter-history-up"
-    | "handled:history-up"
-    | "handled:history-down";
-  historyNavigationActiveBefore: boolean;
-  historyNavigationActiveAfter: boolean;
-  selectionStart: number;
-  selectionEnd: number;
-  valueLength: number;
 };
 
 function collectUserInputHistory(
@@ -118,16 +102,6 @@ export function handleChatDraftChange(
   resetChatInputHistoryNavigation(state);
 }
 
-function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
-  if (state.chatInputHistoryIndex === -1) {
-    return false;
-  }
-  return (
-    state.chatInputHistorySessionKey !== state.sessionKey ||
-    state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage
-  );
-}
-
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
   if (
     state.chatInputHistoryItems !== null &&
@@ -173,63 +147,33 @@ export function handleChatInputHistoryKey(
 ): ChatInputHistoryKeyResult {
   // Programmatic draft updates can bypass handleChatDraftChange(); if the current
   // draft no longer matches the active recalled item, drop back to editing mode.
-  if (hasStaleActiveHistorySelection(state)) {
+  if (
+    state.chatInputHistoryIndex !== -1 &&
+    (state.chatInputHistorySessionKey !== state.sessionKey ||
+      state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage)
+  ) {
     resetChatInputHistoryNavigation(state);
   }
-  const historyNavigationActiveBefore = state.chatInputHistoryIndex !== -1;
-  const baseResult = {
-    handled: false,
-    preventDefault: false,
-    restoreCaret: null,
-    historyNavigationActiveBefore,
-    historyNavigationActiveAfter: historyNavigationActiveBefore,
-    selectionStart: input.selectionStart,
-    selectionEnd: input.selectionEnd,
-    valueLength: input.valueLength,
-  };
-
-  if (state.chatLoading) {
-    return { ...baseResult, decision: "blocked:history-loading" };
-  }
-
   if (
+    state.chatLoading ||
     input.altKey ||
     input.ctrlKey ||
     input.metaKey ||
     input.shiftKey ||
     input.isComposing ||
-    input.keyCode === 229
+    input.keyCode === 229 ||
+    input.selectionStart !== input.selectionEnd ||
+    (state.chatInputHistoryIndex === -1 &&
+      (input.key === "ArrowDown" || input.selectionStart !== 0))
   ) {
-    return { ...baseResult, decision: "blocked:modifier-or-composition" };
-  }
-
-  if (input.selectionStart !== input.selectionEnd) {
-    return { ...baseResult, decision: "blocked:selection-range" };
-  }
-
-  if (!historyNavigationActiveBefore) {
-    if (input.key === "ArrowDown") {
-      return { ...baseResult, decision: "blocked:arrowdown-editing-mode" };
-    }
-    if (input.selectionStart !== 0) {
-      return { ...baseResult, decision: "blocked:arrowup-not-at-start" };
-    }
+    return { handled: false, preventDefault: false, restoreCaret: null };
   }
 
   const direction = input.key === "ArrowUp" ? "up" : "down";
   const navigated = navigateChatInputHistory(state, direction);
   return {
-    ...baseResult,
     handled: navigated,
     preventDefault: navigated,
     restoreCaret: navigated ? direction : null,
-    decision: !navigated
-      ? "blocked:history-boundary"
-      : !historyNavigationActiveBefore
-        ? "handled:enter-history-up"
-        : direction === "up"
-          ? "handled:history-up"
-          : "handled:history-down",
-    historyNavigationActiveAfter: state.chatInputHistoryIndex !== -1,
   };
 }

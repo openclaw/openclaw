@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -66,12 +67,27 @@ async function waitForConversation(params: {
   const deadline = Date.now() + 30_000;
   let latest: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
-    latest = await listConversations(params.gateway, params.agentId);
+    try {
+      latest = await listConversations(params.gateway, params.agentId);
+    } catch (error) {
+      const cause = error instanceof Error ? error.cause : undefined;
+      if (
+        !(cause instanceof GatewayClientRequestError) ||
+        cause.code !== "UNAVAILABLE" ||
+        cause.message !== "Conversation binding ownership changed. Retry the request."
+      ) {
+        throw error;
+      }
+      // Seed binding publications can invalidate this read while ownership is converging.
+      latest = [];
+    }
     const match = findConversation(latest, params.accountId, params.targetIncludes);
     if (match) {
       return match;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(
     `timed out waiting for ${params.agentId} to own ${params.accountId}/${params.targetIncludes}: ${JSON.stringify(latest)}`,
@@ -89,7 +105,9 @@ async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: st
     ) {
       return;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(`Gateway did not apply config revision ${hash}`);
 }

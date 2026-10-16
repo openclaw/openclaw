@@ -23,15 +23,20 @@ describe("npm install failure reports", () => {
       ].join("\n");
       const step = await runStep({
         name: "package-install",
-        argv: [
-          process.execPath,
-          "-e",
-          "process.stderr.write(process.argv[1]); process.exitCode = 1",
-          stderr,
-        ],
+        argv: ["npm", "install", "-g", "openclaw"],
         cwd: process.cwd(),
         env: context.env,
-        runCommand: runCommandWithTimeout,
+        // Keep the classified package manager independent of the fixture's Node/Bun runner.
+        runCommand: (_argv, options) =>
+          runCommandWithTimeout(
+            [
+              process.execPath,
+              "-e",
+              "process.stderr.write(process.argv[1]); process.exitCode = 1",
+              stderr,
+            ],
+            options,
+          ),
         stepIndex: 0,
         totalSteps: 1,
       });
@@ -93,8 +98,8 @@ describe("npm install failure reports", () => {
 
   it.each([
     ["ENOSPC", "Free disk space"],
-    ["E404", "Check the configured npm registry"],
-    ["ETARGET", "Check the configured npm registry"],
+    ["E404", "Run npm cache verify"],
+    ["ETARGET", "Run npm cache verify"],
     ["ECONNRESET", "npm failure code: ECONNRESET"],
     ["PRIVATE_IDENTIFIER", "npm failure code: unknown"],
   ])("bounds the first five npm lines for %s", async (code, guidance) => {
@@ -168,3 +173,84 @@ describe("npm install failure reports", () => {
     }
   });
 });
+
+it.each([
+  { name: "package-install", code: "ETARGET", spec: "file-type@22.1.1" },
+  { name: "global update", code: "ETARGET", spec: "file-type@22.1.1" },
+  { name: "package-install", code: "E404", spec: "@example/dependency@*" },
+])(
+  "replaces the redacted phase with actionable $name $code facts for $spec",
+  async ({ name, code, spec }) => {
+    const step = await runStep({
+      name: "package-install",
+      argv: ["npm", "install", "-g", "openclaw@latest", "--registry=https://private.invalid"],
+      cwd: "/private/install",
+      env: context.env,
+      runCommand: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: [
+          `npm error code ${code}`,
+          code === "ETARGET"
+            ? `npm error notarget No matching version found for ${spec}.`
+            : `npm error 404 '${spec}' is not in this registry.`,
+          "trailing output\n".repeat(800),
+        ].join("\n"),
+      }),
+      stepIndex: 0,
+      totalSteps: 1,
+    });
+    expect(step.failureFacts?.[0]).toMatchObject({
+      npmErrorCode: code,
+      packageSpec: spec,
+    });
+    expect(step.stderrTail).not.toContain(code);
+    const legacyReport = await prepareUpdateFailureReport(
+      {
+        attemptId: "legacy-report",
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "global-install-failed",
+          durationMs: 1,
+          steps: [{ ...step, name: "[redacted-command]", failureFacts: undefined, stderrTail: "" }],
+        },
+      },
+      context,
+    );
+    expect(legacyReport.body).toContain("Failed phase [redacted-command]: exit 1");
+    for (const recorded of [false, true]) {
+      const named = { ...step, name };
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "etarget-report",
+          result: {
+            status: "error",
+            mode: "npm",
+            reason: "global-install-failed",
+            before: { version: "2026.9.4" },
+            after: { version: "2026.9.4" },
+            durationMs: 1,
+            steps: recorded ? [] : [named],
+          },
+          ...(recorded
+            ? {
+                recordedRun: {
+                  runId: "etarget-report",
+                  steps: updateRunStepsFromResultStep(named),
+                },
+              }
+            : {}),
+        },
+        context,
+      );
+      expect(report.body).toContain(`Failed phase package-install: exit 1 (${code} ${spec})`);
+      expect(report.body).toContain("npm cache verify");
+      expect(report.body).toContain("registry/mirror");
+      expect(report.body).toContain(`npm view ${spec.includes("*") ? `'${spec}'` : spec} version`);
+      expect(report.body).not.toContain("[redacted-command]");
+      expect(report.body).not.toContain("private.invalid");
+      expect(report.body).not.toContain("/private/install");
+    }
+  },
+);

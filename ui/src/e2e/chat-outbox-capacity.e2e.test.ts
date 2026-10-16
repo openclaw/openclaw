@@ -136,7 +136,10 @@ suite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { width: 1280, height: 900 },
-          recordVideo: { dir: path.join(proofDir, "video"), size: { width: 1280, height: 900 } },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: path.join(proofDir, "video"), size: { width: 1280, height: 900 } }
+              : undefined,
         },
         async ({ page }) => {
           const runId = "mock-active-capacity-run";

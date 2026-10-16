@@ -74,13 +74,8 @@ function projectClawHubVerdictItem(
 }
 
 function normalizeAutoVerdictRegistryBase(registry: string): string | null {
-  try {
-    const url = new URL(registry);
-    const normalizedPath = url.pathname.replace(/\/+$/, "");
-    return `${url.origin}${normalizedPath}`;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(registry);
+  return url ? `${url.origin}${url.pathname.replace(/\/+$/, "")}` : null;
 }
 
 function canAutoFetchVerdictRegistry(registry: string): boolean {

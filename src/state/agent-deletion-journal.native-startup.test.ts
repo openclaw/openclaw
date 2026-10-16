@@ -15,8 +15,9 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
+import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -73,7 +74,7 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
       const database = openOpenClawAgentDatabase(options);
       const execution = captureOpenClawAgentDatabaseExecution(options);
       const writer = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
-      const insertDeletion = () =>
+      const insertDeletion = () => {
         writer
           .prepare(
             `INSERT INTO agent_deletion_journal
@@ -93,6 +94,8 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
             0,
             0,
           );
+        publishAgentDeletionJournalStatus(writer, "worker", "pending");
+      };
       const incarnations = new Set<string>();
       const startupStages = new Set<string>();
       let afterAuthorize: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
@@ -202,6 +205,7 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         writer
           .prepare("DELETE FROM agent_deletion_journal WHERE operation_id = ?")
           .run("raw-startup-deletion");
+        publishAgentDeletionJournalStatus(writer, "worker", "absent");
         writer.close();
         recordAgentDatabaseAdmissions([], { env: state.env, source: "startup" });
         await execution.release();

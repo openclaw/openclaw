@@ -26,8 +26,8 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
-function createFixture() {
-  const fixture = createCatalogFixture(makeTempDir, 0);
+async function createFixture() {
+  const fixture = await createCatalogFixture(makeTempDir, 0);
   for (const name of [
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
     "OPENCLAW_STATE_DIR",
@@ -47,7 +47,7 @@ describe("catalog request existing directory ownership", () => {
   });
 
   it("serves repeated catalog requests from prepared provenance without copying shared state", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const prepared = await prepareWorkspaceBuildGroup(
       [{ agentId: "main", agentDir: fixture.agentDir, config: fixture.config, env: fixture.env }],
       "static",
@@ -62,6 +62,8 @@ describe("catalog request existing directory ownership", () => {
     await closeOpenClawStateDatabaseByPathAsync(database.path);
     const { pool } = createCatalogInspectionPool(fixture.env);
     try {
+      // Worker startup and the copy probe are real; this contract does not measure their latency.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       for (let tick = 0; tick < 3; tick++) {
         const { inspection, ...result } = await pool.run(
           {
@@ -86,8 +88,12 @@ describe("catalog request existing directory ownership", () => {
         }
       }
     } finally {
-      await pool.close();
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      try {
+        await pool.close();
+      } finally {
+        vi.useRealTimers();
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
+      }
     }
   });
 
@@ -96,7 +102,7 @@ describe("catalog request existing directory ownership", () => {
     { label: "foreign owner", existing: ["foreign"], conflict: true },
     { label: "ambiguous owners", existing: ["main", "foreign"], conflict: true },
   ])("preserves $label across the request", async ({ existing, conflict }) => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const config = {
       ...fixture.config,
       agents: {
@@ -156,6 +162,7 @@ describe("catalog request existing directory ownership", () => {
     if (conflict) {
       expect(result).toEqual({
         status: "failed",
+        authCredentials: [],
         error: `Conflicting registered agent owners for ${agentDir}`,
       });
       expect(fs.existsSync(fixture.marker)).toBe(false);

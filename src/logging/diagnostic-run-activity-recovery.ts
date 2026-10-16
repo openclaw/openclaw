@@ -22,13 +22,13 @@ type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
   toolName: string;
   toolCallId?: string;
   startedAt: number;
-  lastProgressAt: number;
   deadlineAtMs?: number;
 };
 
 type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
   sessionKey?: string;
   requestTimeoutMs?: number;
+  deadlineAtMs?: number;
 };
 
 export type DiagnosticRecoveryActivity = {

@@ -256,6 +256,30 @@ describe("plugin approval forwarding", () => {
       expect(payload?.interactive).toBeUndefined();
     });
 
+    it("does not forward reviewer cards through an older channel capability", async () => {
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: { authorizeActorAction: () => ({ authorized: true }) },
+        }),
+      );
+      const cfg = {
+        approvals: {
+          plugin: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "slack", to: "U123" }],
+            slack: { approvers: ["team:T11111111:user:U11111111"] },
+          },
+        },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg });
+
+      await expect(forwarder.handlePluginApprovalRequested!(makePluginRequest())).resolves.toBe(
+        false,
+      );
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
     it("renders only request-scoped plugin approval decisions", async () => {
       const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       const result = await forwarder.handlePluginApprovalRequested!(

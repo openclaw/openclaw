@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, vi } from "vitest";
 import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-sdk/src/host/workspace-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
 const listAgentIds = vi.hoisted(() => vi.fn(() => ["main", "research-analyst", "alpha"]));
@@ -18,6 +19,13 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
   })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
+    backend: "builtin",
+  })),
+);
+const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
   vi.fn<
     (workspaceDir: string) =>
@@ -37,6 +45,12 @@ vi.mock("../../agents/workspace-access.js", async (importOriginal) => ({
 
 beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
+  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+  getActiveMemoryProviderCore.mockReset();
+  captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
+    authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
+    release: vi.fn(),
+  });
 });
 
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
@@ -60,9 +74,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
           copy.id = id;
           return copy;
         })
-      : cfg.agents?.list
-        ? cfg.agents.list
-        : [{ id: "main", default: true }],
+      : [{ id: "main" }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));
@@ -73,6 +85,12 @@ vi.mock("../../agents/memory-search.js", () => ({
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
+}));
+
+vi.mock("../operator-run-authority.js", () => ({
+  captureGatewayOperatorRunAuthority,
 }));
 
 import { createDoctorHandlers } from "./doctor.js";
@@ -127,17 +145,6 @@ const invokeDoctorMemory = async (
     isWebchatConnect: () => false,
   });
 };
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 function respondPayload(respond: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
   const call = respond.mock.calls[callIndex];
@@ -262,6 +269,8 @@ export {
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
   getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
   getAgentWorkspaceAccess,
   previewGroundedRemMarkdown,
   dedupeDreamDiaryEntries,
@@ -272,7 +281,6 @@ export {
   loadShortTermPromotionDreamingStats,
   DOCTOR_MEMORY_TARGET_METHODS,
   invokeDoctorMemory,
-  expectRecordFields,
   respondPayload,
   mockCallArg,
   findRecordByField,

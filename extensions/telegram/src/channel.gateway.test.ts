@@ -609,7 +609,7 @@ describe("telegramPlugin gateway startup", () => {
     }
     await Promise.all([first, second]);
     await expect(queued).resolves.toMatchObject({
-      message: "telegram startup probe wait aborted",
+      message: "telegram startup check wait aborted",
     });
     expect(startedProbes).toBe(2);
   });

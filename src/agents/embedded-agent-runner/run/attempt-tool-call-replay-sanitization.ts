@@ -2,14 +2,11 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  normalizeOpenAIResponsesToolCallIds,
-} from "../../embedded-agent-helpers/openai.js";
+import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers/turns.js";
@@ -27,16 +24,11 @@ import {
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
-import type { TranscriptPolicy } from "../../transcript-policy.js";
-import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import { isRunnerToolCallBlock, type RunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
-
-type ReplayToolCallSanitizeReport = {
-  messages: AgentMessage[];
-  droppedAssistantMessages: number;
-};
 
 function isReplaySafeThinkingTurn(
   content: unknown[],
@@ -49,13 +41,12 @@ function isReplaySafeThinkingTurn(
       continue;
     }
     const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
-    if (!hasToolCallInput(block) || !toolCallId || seenToolCallIds.has(toolCallId)) {
+    if (!toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    const rawName = typeof block.name === "string" ? block.name : "";
     const resolvedName = resolveReplayToolCallName(
-      rawName,
+      block,
       toolCallId,
       isCompleted(block) ? undefined : allowedToolNames,
     );
@@ -96,18 +87,18 @@ function collectFollowingToolResults(
 }
 
 function resolveReplayToolCallName(
-  rawName: string,
-  rawId: string,
+  block: RunnerToolCallBlock,
+  rawId: unknown,
   allowedToolNames?: Set<string>,
 ): string | null {
+  if (!hasToolCallInput(block) || !hasNonEmptyString(rawId)) {
+    return null;
+  }
+  const rawName = typeof block.name === "string" ? block.name : "";
   if (rawName.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS * 2) {
     return null;
   }
-  const normalized = resolveToolCallName(rawName, allowedToolNames, rawId, true);
-  if (!normalized) {
-    return null;
-  }
-  const trimmed = normalized.trim();
+  const trimmed = resolveToolCallName(rawName, allowedToolNames, rawId, true)?.trim();
   if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
     return null;
   }
@@ -118,7 +109,7 @@ function sanitizeReplayToolCallInputs(
   messages: AgentMessage[],
   allowedToolNames?: Set<string>,
   allowProviderOwnedThinkingReplay?: boolean,
-): ReplayToolCallSanitizeReport {
+) {
   let changed = false;
   let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
@@ -173,14 +164,8 @@ function sanitizeReplayToolCallInputs(
         continue;
       }
 
-      if (!hasToolCallInput(block) || !hasNonEmptyString(block.id)) {
-        messageChanged = true;
-        continue;
-      }
-
-      const rawName = typeof block.name === "string" ? block.name : "";
       const resolvedName = resolveReplayToolCallName(
-        rawName,
+        block,
         block.id,
         isCompleted(block) ? undefined : allowedToolNames,
       );
@@ -219,14 +204,10 @@ function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined):
 
 function sanitizeAnthropicReplayToolResults(
   messages: AgentMessage[],
-  options?: {
-    disallowEmbeddedUserToolResultsForSignedThinkingReplay?: boolean;
-  },
+  disallowEmbeddedUserToolResultsForSignedThinkingReplay: boolean,
 ): AgentMessage[] {
   let changed = false;
   const out: AgentMessage[] = [];
-  const disallowEmbeddedUserToolResultsForSignedThinkingReplay =
-    options?.disallowEmbeddedUserToolResultsForSignedThinkingReplay === true;
 
   for (const [index, message] of messages.entries()) {
     if (!message) {
@@ -257,7 +238,6 @@ function sanitizeAnthropicReplayToolResults(
         return true;
       }
       if (shouldStripEmbeddedToolResults) {
-        changed = true;
         return false;
       }
       const resultIds = normalizeUniqueTrimmedStringList([
@@ -266,10 +246,6 @@ function sanitizeAnthropicReplayToolResults(
         typedBlock.tool_use_id,
         typedBlock.tool_call_id,
       ]);
-      if (resultIds.length === 0) {
-        changed = true;
-        return false;
-      }
       return validToolUseIds.size > 0 && resultIds.some((id) => validToolUseIds.has(id));
     });
 
@@ -351,7 +327,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
+  return normalizeOpenAIResponsesToolCallIds(repaired);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(
@@ -399,9 +375,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         : sanitized.messages;
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
-      nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
-        disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
-      });
+      nextMessages = sanitizeAnthropicReplayToolResults(
+        nextMessages,
+        allowProviderOwnedThinkingReplay,
+      );
     }
     if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
       const beforeStrip = nextMessages;
@@ -424,7 +401,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
     }

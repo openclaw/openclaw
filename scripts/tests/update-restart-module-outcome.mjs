@@ -14,6 +14,7 @@ import {
   collectNestedErrorCandidates,
   toErrorObject,
 } from "../../packages/normalization-core/src/error-coercion.ts";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { MAX_TIMER_TIMEOUT_MS } from "../../packages/normalization-core/src/number-coercion.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import {
@@ -144,6 +145,7 @@ async function fixture({
   const values = {
     theme: new Proxy({}, { get: () => (value) => value }),
     normalizeOptionalString,
+    expectDefined,
     resolveServiceRefreshEnv: (env) => env,
     resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
     isPackageManagerUpdateMode: (mode) => ["npm", "pnpm", "bun"].includes(mode),
@@ -161,6 +163,7 @@ async function fixture({
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
     getUpdateRun: () => undefined,
+    getUpdateRunAsync: async () => undefined,
     isContainerEnvironment: () => false,
     resolveStateDir: () => "/fixture/state",
     mutateRun: (runId, update, options) => {
@@ -181,6 +184,8 @@ async function fixture({
       events.push("command:" + command);
       assert.equal(command, "restart");
       activation.assertCurrent?.();
+      // The command owner reports activation before awaiting the restart child.
+      activation.onGatewayStartAttempted?.();
       if (commandFailure) {
         throw commandFailure;
       }
@@ -207,6 +212,7 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
     convergeUpdatePlugins: async (params) => ({ resultWithPostUpdate: params.result }),
@@ -240,7 +246,6 @@ async function fixture({
     },
     readBuiltGatewayBuildId: async () => undefined,
     readActiveGatewayLockPort: async () => 19305,
-    createUpdateFailureFact: (fact) => fact,
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,
@@ -259,23 +264,70 @@ async function fixture({
   const realNames = [
     "update-command-service",
     "update-command-post-update",
+    "update-command-mutable-signals",
+    "update-command-execution-guards",
     "update-command-result",
+    "../../infra/acquire-with-wait",
+    "../../infra/update-failure-result",
+    "../../infra/package-update-refusal",
+    "../../infra/update-failure-public-codes",
+    "../../infra/update-run-step-key",
+    "../../infra/update-preflight-details",
+    "../../infra/update-recovery",
+    "../daemon-cli/restart-health.types",
+    "../../daemon/service-inspection-error",
+    "../../plugins/clawhub-error-codes",
+    "../../plugins/install-types",
+    "../../logging/diagnostic-support-redaction",
+    "../../logging/redact",
+    "../../logging/redact-linear-matchers",
+    "../../logging/redact-pem",
+    "../../security/config-regex",
+    "../../security/safe-regex",
+    "../../infra/map-size",
+    "../../../packages/acp-core/src/structured-auth-redaction",
+    "../../logging/redact-patterns",
+    "../../logging/redact-pattern-runtime",
     "../../infra/update-run-step",
     "update-command-verification",
     "update-command-terminal",
     "update-command-terminal-publication",
     "../daemon-cli/restart-health-deadline",
+    "../../../packages/retry/src/index",
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "../../infra/update-candidate-predecessor-stop",
+    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
+    "update-command-service-recovery",
     "update-command-plugins-internals",
     "../../process/exec-result",
+    "../../shared/null-writer",
     "../../shared/update-outcome",
     "../../infra/update-run-report",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
+    // Post-update state reads and Doctor facts use their production owners,
+    // including schema validation and the failure-fact redaction closure.
+    "../../../packages/terminal-core/src/ansi",
+    "../../../packages/terminal-core/src/ansi-sequences",
+    "../../logging/redact-performance",
+    "../../logging/redact-prefilter",
+    "../../logging/redact-bounded",
+    "../../logging/secret-redaction-registry",
+    "../../shared/global-singleton",
+    "../../shared/regexp",
+    "../../infra/acquire-with-wait",
+    "../../infra/update-doctor-result",
+    "../../infra/update-doctor-config-schema",
+    "../../infra/update-doctor-lint-schema",
+    "../../infra/update-run-schema",
+    "../../infra/update-recovery-receipt-schema",
+    "../../infra/update-run-driver-schema",
+    "../../infra/update-snapshot-capacity-schema",
+    "../../infra/update-failure-facts",
     "../../infra/update-doctor-config",
     "../../infra/update-failure-facts-format",
     "../../../packages/gateway-protocol/src/update-run-vocabulary",
@@ -440,10 +492,18 @@ for (const [name, makeError] of thrownCases) {
   void test(`production finishUpdate: ${name} retains transaction backup`, async () => {
     const f = await fixture({ error: makeError() });
     await assert.rejects(f.finish(), (error) => {
-      assert.ok(error instanceof f.failureClass);
+      assert.ok(error instanceof f.failureClass, error.stack);
       assert.equal(error.result.status, "error");
       assert.equal(error.result.recovery.serviceRestartSafe, false);
       assert.equal(error.result.reason, "restart-unhealthy");
+      assert.ok(
+        error.result.steps.some((step) =>
+          step.failureFacts?.some(
+            (fact) => fact.check === "gateway-recovery" && fact.code === "gateway-probe-failed",
+          ),
+        ),
+        JSON.stringify(error.result.steps),
+      );
       return true;
     });
     assert.equal(f.counts().verifyCalls, 2);
@@ -520,7 +580,7 @@ void test("current-main still-starting keeps the restart unverified and records 
 
 // Synthetic tiny package bytes, real production transaction/filesystem owners.
 // This is not authenticated Gateway health or published-driver artifact proof.
-for (const failure of ["ERR_MODULE_NOT_FOUND", "ENOENT", "verified-result-control"]) {
+for (const failure of ["missing-module", "ENOENT", "verified-result-control"]) {
   void test(`filesystem swap: ${failure} cannot retire an unverified backup`, async (t) => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "restart-142102-"));
     t.after(() => fs.rm(base, { recursive: true, force: true }));
@@ -530,11 +590,16 @@ for (const failure of ["ERR_MODULE_NOT_FOUND", "ENOENT", "verified-result-contro
       installRoot: disk.root,
       packageTransaction: disk.transaction,
       verifyOnDisk: async () => {
-        if (failure === "ERR_MODULE_NOT_FOUND") {
+        if (failure === "missing-module") {
           try {
             await disk.oldEntry.late();
           } catch (error) {
-            observed = error.code;
+            assert.ok(error instanceof Error);
+            // The missing import can fail during resolution or while loading its resolved file.
+            assert.match(error.message, /^(?:Cannot find module|ENOENT reading) /);
+            const missingChunk = path.join(await fs.realpath(disk.root), "dist/old-142102.mjs");
+            assert.ok(error.message.includes(missingChunk));
+            observed = failure;
             throw error;
           }
           assert.fail("old hashed chunk unexpectedly survived the swap");

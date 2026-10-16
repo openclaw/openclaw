@@ -11,7 +11,7 @@ import { loadChannelOutboundAdapter } from "../outbound/load.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.public.js";
 
-const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
+const loadChannelPlugin = createChannelRegistryLoader((entry) => entry.plugin);
 
 const emptyRegistry = createTestRegistry([]);
 

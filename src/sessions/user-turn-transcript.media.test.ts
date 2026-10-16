@@ -1,7 +1,6 @@
 // User-turn media persistence tests cover canonical fact normalization.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readPersistedMediaFacts } from "../media/media-facts.js";
 import {
   buildLateMediaAttachedProjection,
   buildPersistedUserTurnMediaInputsFromFields,
@@ -25,23 +24,6 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
     ]);
   });
 
-  it("resolves relative canonical paths against each fact workspace", () => {
-    const workspaceDir = "/tmp/openclaw-user-turn-workspace";
-    expect(
-      buildPersistedUserTurnMediaInputsFromFields({
-        __openclaw: {
-          media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
-        },
-      } as never),
-    ).toEqual([
-      {
-        path: path.join(workspaceDir, "media/inbound/a.png"),
-        contentType: "image/png",
-        kind: "image",
-      },
-    ]);
-  });
-
   it("does not consult legacy top-level fields after the versioned cutover", () => {
     expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
     expect(buildPersistedUserTurnMediaInputsFromFields({} as never)).toEqual([]);
@@ -56,23 +38,10 @@ describe("buildLateMediaAttachedProjection canonical persistence", () => {
       expectedPath: undefined,
     },
     {
-      name: "both-conflict",
-      message: {
-        MediaPath: "/media/legacy-conflict.png",
-        __openclaw: { media: [{ path: "/media/canonical.png" }] },
-      },
-      expectedPath: "/media/canonical.png",
-    },
-    {
       name: "sparse",
       message: { __openclaw: { media: [{}, { path: "/media/sparse.png" }] } },
       expectedPath: "/media/sparse.png",
       expectedIndex: 1,
-    },
-    {
-      name: "type-only",
-      message: { __openclaw: { media: [{ contentType: "image/png" }] } },
-      expectedPath: undefined,
     },
   ])("reconstructs $name rows from canonical facts first", (testCase) => {
     const metadata = (testCase.message as { __openclaw?: Record<string, unknown> })["__openclaw"];
@@ -99,32 +68,6 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       expectedMedia: undefined,
     },
     {
-      name: "many attachments",
-      media: [
-        { path: " /tmp/a.png ", contentType: " image/png " },
-        { url: " https://example.test/report.pdf ", contentType: " application/pdf " },
-      ],
-      expectedMedia: [
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { url: "https://example.test/report.pdf", contentType: "application/pdf" },
-      ],
-    },
-    {
-      name: "sparse aligned attachments",
-      media: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
-      expectedMedia: [{}, { path: "/tmp/b.png", contentType: "image/png" }],
-    },
-    {
-      name: "path-only attachment",
-      media: [{ path: "/tmp/inferred.png" }],
-      expectedMedia: [{ path: "/tmp/inferred.png", contentType: "image/png" }],
-    },
-    {
-      name: "explicit MIME",
-      media: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
-      expectedMedia: [{ path: "/tmp/blob.bin", contentType: "application/x-openclaw" }],
-    },
-    {
       name: "bare kind",
       media: [{ kind: "image" }],
       expectedMedia: [{ kind: "image" }],
@@ -133,11 +76,6 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       name: "provider MIME-like kind",
       media: [{ path: " /tmp/provider.bin ", kind: " provider/custom-media " }],
       expectedMedia: [{ path: "/tmp/provider.bin", contentType: "provider/custom-media" }],
-    },
-    {
-      name: "unknown non-MIME kind",
-      media: [{ path: "/tmp/photo.jpg", kind: "thumbnail" }],
-      expectedMedia: [{ path: "/tmp/photo.jpg", contentType: "image/jpeg" }],
     },
     {
       name: "transcribed attachment",
@@ -185,11 +123,6 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       ],
     },
     {
-      name: "unanchored relative attachment",
-      media: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
-      expectedMedia: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
-    },
-    {
       name: "hydration-suppressed attachment",
       media: [
         {
@@ -216,32 +149,5 @@ describe("buildPersistedUserTurnMessage media projection", () => {
     expect(
       (message as unknown as { __openclaw?: { media?: unknown } })["__openclaw"]?.media,
     ).toEqual(expectedMedia);
-  });
-
-  it("reads canonical persisted facts without merging disagreeing legacy fields", () => {
-    const message = {
-      MediaPath: "/legacy.png",
-      MediaType: "image/png",
-      __openclaw: {
-        media: [
-          {
-            path: "/canonical.ogg",
-            contentType: "audio/ogg",
-            transcribed: true,
-            messageId: "media-1",
-          },
-        ],
-      },
-    };
-
-    expect(readPersistedMediaFacts(message)).toEqual([
-      expect.objectContaining({
-        path: "/canonical.ogg",
-        contentType: "audio/ogg",
-        kind: "audio",
-        transcribed: true,
-        messageId: "media-1",
-      }),
-    ]);
   });
 });

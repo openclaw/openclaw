@@ -43,12 +43,24 @@ export function applyCompletionsAnthropicCacheControl(
   }
   shapedPayloads.add(payload);
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  const tools = Array.isArray(payload.tools) ? payload.tools.filter(isRecord) : [];
+  const tools = Array.isArray(payload.tools) ? payload.tools : [];
+  let lastToolIndex = -1;
+  for (let index = 0; index < tools.length; index++) {
+    const tool: unknown = tools[index];
+    if (isRecord(tool)) {
+      lastToolIndex = index;
+      if (Object.hasOwn(tool, "cache_control")) {
+        const unmarked = { ...tool };
+        delete unmarked.cache_control;
+        tools[index] = unmarked;
+      }
+    }
+  }
   const blocks = messages
     .filter(isRecord)
     .flatMap((message) => (Array.isArray(message.content) ? message.content.filter(isRecord) : []));
   // This policy owns at most three breakpoints: tools, stable system, history.
-  for (const block of [...tools, ...blocks]) {
+  for (const block of blocks) {
     delete block.cache_control;
   }
   if (!cacheControl) {
@@ -93,9 +105,9 @@ export function applyCompletionsAnthropicCacheControl(
     return false;
   };
 
-  const lastTool = tools.at(-1);
-  if (markTools && lastTool) {
-    lastTool.cache_control = cacheControl;
+  if (markTools && lastToolIndex >= 0) {
+    // Request-specific markers must not mutate a reusable provider descriptor.
+    tools[lastToolIndex] = { ...tools[lastToolIndex], cache_control: cacheControl };
   }
   // String-only endpoints cannot carry block markers; wrappers retain this decision.
   if (!markMessages) {

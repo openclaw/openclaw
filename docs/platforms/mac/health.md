@@ -23,7 +23,7 @@ refreshes health on demand.
   dot, channel summary, and an optional failure detail line, with **Retry now** and
   **Open logs** buttons.
 - **Dashboard → Settings → Channels** surfaces per-channel status and controls (login QR,
-  logout, probe, last disconnect/error).
+  logout, check, last disconnect/error).
 
 The health row uses these states:
 
@@ -40,13 +40,13 @@ Reported failures such as a stale socket or unavailable inbound processing
 still take precedence over a ready-looking connection.
 
 A missing HTTP status does not by itself mean a timeout. The app preserves
-the Gateway's reported probe error.
+the Gateway's reported check error.
 
 ## How health refresh works
 
 The app calls the Gateway's `health` RPC over its existing WebSocket
 connection (not a CLI shell-out) every ~60s and on demand. This reads the
-Gateway's health snapshot. It does not request an active channel probe or
+Gateway's health snapshot. It does not request an active channel check or
 send messages. The app caches the last
 good snapshot and the last error separately so the UI loads instantly and
 does not flicker while offline.

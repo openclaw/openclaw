@@ -6,4 +6,8 @@ export * from "../providers/anthropic-server-fallback.js";
 export * from "../providers/anthropic-thinking-replay.js";
 export * from "../providers/anthropic-tool-projection.js";
 export * from "../providers/anthropic-usage.js";
-export { resolveAnthropicServerCompactionPlan } from "../transports/anthropic-payload-policy.js";
+export { applyAnthropicThinkingOptions } from "../transports/anthropic-transport-options.js";
+export {
+  isDirectAnthropicModel,
+  resolveAnthropicServerCompactionPlan,
+} from "../transports/anthropic-payload-policy.js";

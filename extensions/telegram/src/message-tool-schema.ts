@@ -1,20 +1,18 @@
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
+function optionalBoolean(description: string) {
+  return Type.Optional(Type.Boolean({ description }));
+}
+
 export function createTelegramPollExtraToolSchemas() {
   return {
     pollDurationSeconds: optionalPositiveIntegerSchema(),
-    pollAnonymous: Type.Optional(
-      Type.Boolean({
-        description:
-          "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
-      }),
+    pollAnonymous: optionalBoolean(
+      "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
     ),
-    pollPublic: Type.Optional(
-      Type.Boolean({
-        description:
-          "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
-      }),
+    pollPublic: optionalBoolean(
+      "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
     ),
   };
 }
@@ -35,11 +33,8 @@ export function createTelegramReactionEmojiSchema() {
 /** Schema additions for Telegram-native rich sends through the existing send action. */
 export function createTelegramRichSendExtraToolSchemas() {
   return {
-    asVideoNote: Type.Optional(
-      Type.Boolean({
-        description:
-          "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
-      }),
+    asVideoNote: optionalBoolean(
+      "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
     ),
     location: Type.Optional(
       Type.Object(

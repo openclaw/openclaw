@@ -1,3 +1,15 @@
+import type { CliJsonlStreamingParserOptions } from "./cli-output-contracts.js";
+import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+
+export function createClaudeParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
+  return createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    ...overrides,
+  });
+}
+
 export function createOpenAiCompatibleCliUsageCases() {
   return [
     {
@@ -71,6 +83,29 @@ export function joinJsonlFrames(...frames: unknown[]) {
 
 export function claudeStreamEvent(event: Record<string, unknown>) {
   return { type: "stream_event", event };
+}
+
+export function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_start",
+    ...(index === undefined ? {} : { index }),
+    content_block: contentBlock,
+  });
+}
+
+export function claudeBlockStop(index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_stop",
+    ...(index === undefined ? {} : { index }),
+  });
+}
+
+export function claudeInputJsonDelta(partialJson: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "input_json_delta", partial_json: partialJson },
+  });
 }
 
 export function claudeTextDelta(text: string, index?: number | string) {

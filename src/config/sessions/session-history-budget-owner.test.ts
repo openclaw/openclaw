@@ -16,7 +16,10 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
@@ -28,12 +31,12 @@ import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-a
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import * as entryEviction from "./session-accessor.sqlite-lifecycle.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   joinSessionHistoryBudgetSweeps,
   type SessionHistoryBudgetQueueObservation,
 } from "./session-history-budget.test-support.js";
-import * as entryEviction from "./session-history-entry-eviction.runtime.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -57,6 +60,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   workerChannel.unsubscribe(trackWorker);
   // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.
@@ -178,12 +182,25 @@ it.each([
         protectedKey,
       ),
     ).toEqual({ current_session_id: currentId });
-    // Forget both the handle and process validation, exposing registration as well as lease drift.
-    closeOpenClawAgentDatabasesForTest(state.root);
+    // Forget cached reads without revoking the active sweep's database workers.
+    const databaseOptions = {
+      agentId: target.agentId ?? "main",
+      path: databasePath,
+      env: state.env,
+    };
+    const forgetCachedDatabase = () => {
+      const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+      if (cached) {
+        closeCachedOpenClawAgentDatabase(cached);
+      }
+      clearOpenClawAgentDatabaseValidationCache(state.root);
+      expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+    };
+    forgetCachedDatabase();
 
     let capEntryCalls = 0;
-    const deleteEntry = entryEviction.deleteDiskBudgetArchivedSessionEntry;
-    vi.spyOn(entryEviction, "deleteDiskBudgetArchivedSessionEntry").mockImplementation(
+    const deleteEntry = entryEviction.deleteDiskBudgetSessionEntryLifecycle;
+    vi.spyOn(entryEviction, "deleteDiskBudgetSessionEntryLifecycle").mockImplementation(
       async (...args) => {
         if (victim === "cap-entry" && args[0].target.canonicalKey === sessionKey) {
           capEntryCalls += 1;
@@ -194,30 +211,17 @@ it.each([
               sessionKey,
             ),
           ).toEqual({ current_session_id: originalId });
-          // Evict the host handle before the lazy loader without revoking this active sweep's workers.
-          const databaseOptions = {
-            agentId: target.agentId ?? "main",
-            path: databasePath,
-            env: state.env,
-          };
-          const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
-          if (cached) {
-            closeCachedOpenClawAgentDatabase(cached, { eviction: true });
-          }
-          clearOpenClawAgentDatabaseValidationCache(state.root);
-          expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+          forgetCachedDatabase();
         }
         return await deleteEntry(...args);
       },
     );
     const order: string[] = [];
-    const materialize = archives.materializeSessionStateDeletePlans;
-    vi.spyOn(archives, "materializeSessionStateDeletePlans").mockImplementation(async (plans) => {
-      const result = await materialize(plans);
-      if (victim === "history" && plans.some((plan) => plan.sessionId === originalId)) {
-        expect(
-          result.find((plan) => plan.sessionId === originalId)?.archive?.bytes.byteLength,
-        ).toBeGreaterThan(0);
+    const materialize = archives.materializeSessionHistoryEvictionPlan;
+    vi.spyOn(archives, "materializeSessionHistoryEvictionPlan").mockImplementation(async (plan) => {
+      const result = await materialize(plan);
+      if (victim === "history" && plan.sessionId === originalId) {
+        expect(result?.archive?.bytes.byteLength).toBeGreaterThan(0);
         expect(
           readRow(
             databasePath,
@@ -378,7 +382,7 @@ it.each([
     moveRelativeCwd?.();
     // Patch commit reopened A. Remove its handle and validation before allowing
     // the REAL first measurement to return to enforcement/preview.
-    closeOpenClawAgentDatabasesForTest(state.root);
+    forgetCachedDatabase();
     release.resolve();
     if (trigger === "inspect") {
       await expect(sweep).resolves.toMatchObject({
@@ -452,13 +456,62 @@ it.each([
   },
 );
 
+it("measures the disk budget after a committed patch but not after unchanged entry attempts", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", scenario: "minimal" });
+  states.push(state);
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    storePath,
+    sessionKey: "agent:main:budget-noop",
+  };
+  const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
+  replaceSessionEntrySync(scope, { sessionId: "budget-noop", updatedAt: 1, label: "unchanged" });
+  await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  queueSpy.mockClear();
+  const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
+  const options = {
+    skipMaintenance: true,
+    preserveActivity: true,
+    maintenanceConfig: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: 1024 * 1024 * 1024,
+      highWaterBytes: 512 * 1024 * 1024,
+    }),
+  };
+  try {
+    for (const update of [() => null, () => ({ label: "unchanged" })]) {
+      await expect(patchSessionEntryCore(scope, update, options)).resolves.toMatchObject({
+        sessionId: "budget-noop",
+        updatedAt: 1,
+        label: "unchanged",
+      });
+    }
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(
+      queueSpy.mock.calls.filter(
+        ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
+      ),
+    ).toEqual([]);
+    expect(measureSpy).not.toHaveBeenCalled();
+
+    await expect(
+      patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+    ).resolves.toMatchObject({ sessionId: "budget-noop", label: "committed" });
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(measureSpy).toHaveBeenCalledExactlyOnceWith(storePath);
+  } finally {
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  }
+});
+
 it("skips an originating incognito budget kick without disk or background work", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
   states.push(state);
   const successor = state.path("successor-state");
   fs.mkdirSync(successor);
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const memory = openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: sentinel });
   const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
   const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
   kickSessionHistoryDiskBudgetMaintenance({
@@ -472,16 +525,12 @@ it("skips an originating incognito budget kick without disk or background work",
     }),
   });
   vi.stubEnv("OPENCLAW_STATE_DIR", successor);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
   expect(
     queueSpy.mock.calls.filter(
       ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
     ),
   ).toEqual([]);
   expect(measureSpy).not.toHaveBeenCalled();
-  expect(memory.db.isOpen).toBe(true);
   expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
   expect(fs.readdirSync(successor)).toEqual([]);
 });

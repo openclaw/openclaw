@@ -1,11 +1,9 @@
-/** Formatting helpers for model-list terminal tables. */
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
 
 const TRUNCATED_SUFFIX = "...";
 
-/** Formats token counts as compact decimal-K labels. */
 export const formatTokenK = (value?: number | null) => {
   if (!value || !Number.isFinite(value)) {
     return "-";
@@ -17,29 +15,24 @@ export const formatTokenK = (value?: number | null) => {
   return `${Math.round(value / 1000)}k`;
 };
 
-/** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;
 
-/** Pads a table cell to a fixed terminal visible width. */
 export const padTerminalCell = (value: string, size: number) => {
   const remaining = size - visibleWidth(value);
   return remaining > 0 ? `${value}${" ".repeat(remaining)}` : value;
 };
 
-/** Applies terminal color based on a model-list tag. */
 export const formatTag = (tag: string) => {
-  if (tag === "default") {
-    return theme.success(tag);
-  }
-  if (tag === "image") {
-    return theme.accentBright(tag);
-  }
-  if (tag === "configured") {
-    return theme.accent(tag);
-  }
-  if (tag === "missing") {
-    return theme.error(tag);
+  switch (tag) {
+    case "default":
+      return theme.success(tag);
+    case "image":
+      return theme.accentBright(tag);
+    case "configured":
+      return theme.accent(tag);
+    case "missing":
+      return theme.error(tag);
   }
   if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
     return theme.warn(tag);
@@ -50,7 +43,6 @@ export const formatTag = (tag: string) => {
   return theme.muted(tag);
 };
 
-/** Truncates model-list cells to terminal visible width with an ASCII ellipsis. */
 export const truncate = (value: string, max: number) => {
   const sanitized = sanitizeTerminalText(value);
   if (visibleWidth(sanitized) <= max) {
@@ -61,3 +53,15 @@ export const truncate = (value: string, max: number) => {
   }
   return `${truncateToVisibleWidth(sanitized, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };
+
+export function groupByProvider<T extends { provider: string }>(
+  entries: readonly T[],
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.provider) ?? [];
+    group.push(entry);
+    groups.set(entry.provider, group);
+  }
+  return groups;
+}

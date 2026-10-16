@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readConfigFileSnapshot, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -9,7 +10,39 @@ import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 describe("WhatsApp QA broadcast config", () => {
-  it.each(["generated", "explicit", "legacy-default"] as const)(
+  it("preserves audio preflight when enabling message actions", () => {
+    const base: OpenClawConfig = {
+      tools: {
+        alsoAllow: ["browser"],
+        media: {
+          audio: { enabled: false },
+          models: [{ provider: "openai", model: "existing-transcriber", capabilities: ["audio"] }],
+        },
+      },
+    };
+    const cfg = buildWhatsAppQaConfig(base, {
+      allowFrom: ["+15550000001"],
+      authDir: "/tmp/whatsapp-qa-auth",
+      dmPolicy: "allowlist",
+      ownerAllowFrom: ["+15550000001"],
+      overrides: { audioPreflight: true, actions: true },
+      sutAccountId: "sut",
+    });
+
+    expect(cfg.tools).toMatchObject({
+      alsoAllow: ["browser", "message"],
+      media: {
+        audio: { enabled: true },
+        models: [
+          { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+          { provider: "openai", model: "existing-transcriber", capabilities: ["audio"] },
+        ],
+      },
+    });
+    expect(base.tools?.media?.audio?.enabled).toBe(false);
+  });
+
+  it.each(["generated", "explicit"] as const)(
     "builds valid WhatsApp broadcast config from the %s roster without replacing agents",
     async (roster) => {
       await withTempHome(
@@ -25,16 +58,11 @@ describe("WhatsApp QA broadcast config", () => {
           if (roster !== "generated") {
             base.agents = {
               ...base.agents,
-              ...(roster === "explicit"
-                ? {
-                    ownership: "explicit",
-                    defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
-                  }
-                : {}),
+              ownership: "explicit",
+              defaults: { ...base.agents?.defaults, systemAgent: { agentId: "main" } },
               entries: {
                 ...base.agents?.entries,
                 main: {
-                  ...(roster === "legacy-default" ? { default: true } : {}),
                   identity: { name: "Existing main agent" },
                   model: "mock-openai/custom-main",
                 },
@@ -53,7 +81,9 @@ describe("WhatsApp QA broadcast config", () => {
             sutAccountId: "sut",
           });
 
-          await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
+          const configPath = path.join(home, ".openclaw", "openclaw.json");
+          const authored = JSON.stringify(cfg);
+          await fs.writeFile(configPath, authored);
           const snapshot = await readConfigFileSnapshot({
             pluginValidation: "core-only",
             observe: false,

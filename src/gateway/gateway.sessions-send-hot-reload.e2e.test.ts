@@ -12,7 +12,7 @@ import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-acce
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -26,7 +26,7 @@ const TARGET_REPLY = "TARGET_REPLY_AFTER_RELOAD";
 const DISPATCH_COMPLETE = "SENDER_DISPATCH_COMPLETE";
 
 type ModelCall = {
-  kind: "dispatch" | "dispatch-complete" | "target" | "reply" | "announce";
+  kind: "dispatch" | "dispatch-complete" | "target" | "reply";
   model: string;
   raw: string;
 };
@@ -144,10 +144,31 @@ function readTargetToolResult(raw: string): Record<string, unknown> | undefined 
   return parsed && typeof parsed === "object" ? parsed : undefined;
 }
 
-async function startProvider() {
+type DiagnosticRow = {
+  kind: string;
+  model?: string;
+  phase?: string;
+  role?: string;
+  status?: string;
+  disposition?: string;
+  error?: string;
+  stopReason?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
+};
+
+function diagnosticText(value: unknown): string | undefined {
+  return typeof value === "string" ? value.slice(0, 160) : undefined;
+}
+
+async function startProvider(trace: (row: DiagnosticRow) => void) {
   const targetStarted = createDeferred();
   const releaseTarget = createDeferred();
   const calls: ModelCall[] = [];
+  const recordCall = (call: ModelCall) => {
+    calls.push(call);
+    trace({ kind: call.kind, model: diagnosticText(call.model) });
+  };
   let targetRunId: string | undefined;
   const server = createServer((request, response) => {
     void (async () => {
@@ -174,24 +195,26 @@ async function startProvider() {
       };
       const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes("Agent-to-agent announce step:")) {
-        calls.push({ kind: "announce", model: modelId, raw });
-        textResponse(response, "ANNOUNCE_SKIP");
-      } else if (raw.includes(TARGET_REPLY) && raw.includes("Agent-to-agent reply step:")) {
-        calls.push({ kind: "reply", model: modelId, raw });
-        textResponse(response, "REPLY_SKIP");
+      if (raw.includes(TARGET_REPLY)) {
+        recordCall({ kind: "reply", model: modelId, raw });
+        textResponse(response, "Requester received the target result.");
       } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
-        calls.push({ kind: "dispatch-complete", model: modelId, raw });
+        recordCall({ kind: "dispatch-complete", model: modelId, raw });
         const result = readTargetToolResult(raw);
+        trace({
+          kind: "tool-result",
+          status: diagnosticText(result?.status),
+          disposition: diagnosticText(result?.targetDisposition),
+        });
         targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
         textResponse(response, DISPATCH_COMPLETE);
       } else if (raw.includes(TARGET_MESSAGE)) {
-        calls.push({ kind: "target", model: modelId, raw });
+        recordCall({ kind: "target", model: modelId, raw });
         targetStarted.resolve();
         await releaseTarget.promise;
         textResponse(response, TARGET_REPLY);
       } else if (raw.includes(INITIAL_PROMPT)) {
-        calls.push({ kind: "dispatch", model: modelId, raw });
+        recordCall({ kind: "dispatch", model: modelId, raw });
         expect(body.tools).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ type: "function", name: "sessions_send" }),
@@ -199,7 +222,9 @@ async function startProvider() {
         );
         toolResponse(response);
       } else {
-        throw new Error(`unexpected model request: ${raw.slice(0, 500)}`);
+        throw new Error(
+          `unexpected model request for ${diagnosticText(modelId) || "<missing model>"}`,
+        );
       }
     })().catch((error: unknown) => {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -244,14 +269,50 @@ function modelDefinition(id: string): ModelDefinitionConfig {
 
 describe("sessions_send across prepared runtime reload", () => {
   it(
-    "finishes model-A work and re-admits the detached reply and announcement on model B",
+    "finishes model-A work and re-admits one detached requester reply on model B",
     { timeout: 90_000 },
     async () => {
-      const provider = await startProvider();
+      const started = performance.now();
+      const rows: Array<DiagnosticRow & { elapsedMs: number }> = [];
+      const trace = (row: DiagnosticRow) => {
+        if (rows.length < 64) {
+          rows.push({ ...row, elapsedMs: Math.round(performance.now() - started) });
+        }
+      };
+      const provider = await startProvider(trace);
       cleanups.push(provider.close);
       let phase = "starting Gateway";
-      onTestFailed(() => console.info({ phase, calls: provider.calls }));
+      onTestFailed(() => {
+        trace({ kind: "failure", phase });
+        process.stderr.write(
+          `sessions_send reload failure: ${JSON.stringify({ phase, rows, limitReached: rows.length === 64 })}\n`,
+        );
+      });
       resetGatewayState();
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.stream !== "lifecycle" && event.stream !== "error") {
+          return;
+        }
+        const eventPhase = event.data.phase;
+        trace({
+          kind: event.stream,
+          role:
+            event.sessionKey === SENDER_SESSION
+              ? "sender"
+              : event.sessionKey === "agent:target:main"
+                ? "target"
+                : "other",
+          phase: diagnosticText(eventPhase),
+          error: diagnosticText(event.data.error),
+          stopReason: diagnosticText(event.data.stopReason),
+          timeoutPhase: diagnosticText(event.data.timeoutPhase),
+          providerStarted:
+            typeof event.data.providerStarted === "boolean"
+              ? event.data.providerStarted
+              : undefined,
+        });
+      });
+      cleanups.push(async () => unsubscribe());
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-reload-"));
       cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
       const stateDir = path.join(home, ".openclaw");
@@ -345,6 +406,7 @@ describe("sessions_send across prepared runtime reload", () => {
 
       const senderRunId = randomUUID();
       phase = "starting sender";
+      trace({ kind: "phase", phase });
       await expect(
         withTestTimeout(
           gateway.client.request<AgentResult>(
@@ -362,14 +424,15 @@ describe("sessions_send across prepared runtime reload", () => {
         ),
       ).resolves.toMatchObject({ runId: senderRunId, status: "accepted" });
       phase = "waiting for target admission";
+      trace({ kind: "phase", phase });
       await withTestTimeout(provider.targetStarted, 15_000, "target admission timed out").catch(
         (error: unknown) => {
-          throw new Error(`target admission failed: ${JSON.stringify(provider.calls)}`, {
-            cause: error,
-          });
+          trace({ kind: "target-wait-timeout" });
+          throw new Error("target admission failed", { cause: error });
         },
       );
       phase = "waiting for sender completion";
+      trace({ kind: "phase", phase });
       await expect(
         gateway.client.request<AgentResult>("agent.wait", {
           runId: senderRunId,
@@ -388,6 +451,7 @@ describe("sessions_send across prepared runtime reload", () => {
         "config.get timed out",
       );
       phase = "patching model B";
+      trace({ kind: "phase", phase });
       await expect(
         withTestTimeout(
           gateway.client.request("config.patch", {
@@ -399,8 +463,10 @@ describe("sessions_send across prepared runtime reload", () => {
         ),
       ).resolves.toMatchObject({ hash: expect.any(String) });
       phase = "releasing target";
+      trace({ kind: "phase", phase });
       provider.releaseTarget();
       phase = "waiting for target completion";
+      trace({ kind: "phase", phase });
       const targetWait = await gateway.client.request<AgentResult>("agent.wait", {
         runId: targetRunId,
         timeoutMs: 20_000,
@@ -412,6 +478,7 @@ describe("sessions_send across prepared runtime reload", () => {
       });
 
       phase = "waiting for detached reply";
+      trace({ kind: "phase", phase });
       await expect
         .poll(() => provider.calls.filter((call) => call.kind === "reply").length, {
           timeout: 20_000,
@@ -439,7 +506,6 @@ describe("sessions_send across prepared runtime reload", () => {
           expect.objectContaining({ kind: "target", model: "model-a" }),
           expect.objectContaining({ kind: "dispatch-complete", model: "model-a" }),
           expect.objectContaining({ kind: "reply", model: "model-b" }),
-          expect.objectContaining({ kind: "announce", model: "model-b" }),
         ]),
       );
       const dispatchComplete = provider.calls.find((call) => call.kind === "dispatch-complete");
@@ -449,7 +515,7 @@ describe("sessions_send across prepared runtime reload", () => {
       });
       expect(provider.calls.filter((call) => call.kind === "reply")).toHaveLength(1);
       expect(provider.calls.filter((call) => call.kind === "target")).toHaveLength(1);
-      expect(provider.calls.filter((call) => call.kind === "announce")).toHaveLength(1);
+      expect(provider.calls).toHaveLength(4);
     },
   );
 });

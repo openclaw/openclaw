@@ -4,6 +4,7 @@ import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredentials } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
 import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
@@ -45,20 +46,6 @@ function formatOpenAIOAuthTlsPreflightFix(result: { code?: string; message: stri
   }
   lines.push("- Retry the OAuth login flow.");
   return lines.join("\n");
-}
-
-function settleAfterDelay(params: {
-  delayMs: number;
-  waitForLoginToSettle: Promise<void>;
-}): Promise<"delay" | "settled"> {
-  return new Promise((resolve) => {
-    const complete = () => {
-      clearTimeout(timer);
-      resolve("settled");
-    };
-    const timer = setTimeout(() => resolve("delay"), params.delayMs);
-    params.waitForLoginToSettle.then(complete, complete);
-  });
 }
 
 function createOpenAICodexOAuthError(
@@ -118,10 +105,14 @@ function createManualCodeInputHandler(params: {
     }
 
     for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
-      const outcome = await settleAfterDelay({
+      const outcome = await raceWithTimeout(
+        params.waitForLoginToSettle.then(
+          () => "settled" as const,
+          () => "settled" as const,
+        ),
         delayMs,
-        waitForLoginToSettle: params.waitForLoginToSettle,
-      });
+        () => "delay" as const,
+      );
       if (outcome === "settled") {
         return await new Promise<string>(() => {});
       }

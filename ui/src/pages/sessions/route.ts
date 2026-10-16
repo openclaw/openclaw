@@ -1,7 +1,8 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 
@@ -21,27 +22,26 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, statusFilter };
 }
 
-async function loadSessionsRoute(
-  context: ApplicationContext,
-  location: RouteLocation,
-): Promise<SessionsRouteData> {
-  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
-  // The mounted page owns list issuance, including scope/status navigation
-  // during a search. Prefetching here bypasses its single in-flight request.
-  return routeOptions(location);
-}
-
 export const page = definePage({
   ...routePageSpec("sessions"),
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
     return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
   },
-  loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
+  loader: async (context: ApplicationContext, { location }): Promise<SessionsRouteData> => {
+    await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    // The mounted page owns list issuance, including scope/status navigation
+    // during a search. Prefetching here bypasses its single in-flight request.
+    return routeOptions(location);
+  },
   component: () =>
-    import("./sessions-page.ts").then(() => ({
+    import("./sessions-page.tsx").then((module) => ({
       header: true,
-      render: (data: SessionsRouteData | undefined) =>
-        html`<openclaw-sessions-page .routeData=${data}></openclaw-sessions-page>`,
+      renderSolid: (props: SolidRouteProps<SessionsRouteData>) =>
+        createComponent(module.SessionsPage, {
+          get routeData() {
+            return props.data;
+          },
+        }),
     })),
 });

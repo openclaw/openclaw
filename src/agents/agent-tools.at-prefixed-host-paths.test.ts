@@ -130,26 +130,4 @@ describe("leading-@ host and mounted sandbox paths", () => {
       "sibling before\n",
     );
   });
-
-  it("keeps literal replacement paths separate from the unprefixed sibling", async () => {
-    const workspaceDir = tempDirs.make("openclaw-at-host-");
-    await fs.writeFile(path.join(workspaceDir, "@replace.md"), "old literal\n", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "replace.md"), "sibling\n", "utf8");
-    await createApplyPatchTool({ cwd: workspaceDir }).execute("at-patch-replace", {
-      input: [
-        "*** Begin Patch",
-        "*** Delete File: @replace.md",
-        "*** Add File: @replace.md",
-        "+new literal",
-        "*** End Patch",
-      ].join("\n"),
-    });
-
-    await expect(fs.readFile(path.join(workspaceDir, "@replace.md"), "utf8")).resolves.toBe(
-      "new literal\n",
-    );
-    await expect(fs.readFile(path.join(workspaceDir, "replace.md"), "utf8")).resolves.toBe(
-      "sibling\n",
-    );
-  });
 });

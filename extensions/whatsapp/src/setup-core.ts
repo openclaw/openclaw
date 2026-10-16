@@ -17,6 +17,7 @@ export const whatsappSetupAdapter: ChannelSetupAdapter = {
     alwaysUseAccounts: true,
     buildPatch: (input) => (input.authDir ? { authDir: input.authDir } : {}),
   }),
+  configPromotion: "preserve-root",
   singleAccountKeysToMove: ["authDir"],
 };
 

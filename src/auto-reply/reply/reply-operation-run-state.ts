@@ -6,6 +6,7 @@ import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
 
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
@@ -34,6 +35,8 @@ export type ReplyPreRunRejectionCode =
 
 export type ReplyOperationRunState = {
   replyCompletion?: ReplyCompletion;
+  /** The source delivery owner can keep spawned completion turns private. */
+  sessionEventDelivery?: false;
   heartbeat?: {
     prepareReply: (
       replyResult: ReplyPayload | ReplyPayload[] | undefined,
@@ -52,6 +55,11 @@ export type ReplyOperationRunState = {
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;
   preRunRejection?: ReplyPreRunRejectionCode;
+  /**
+   * Armed by the admitted interactive run owner. Interruption recovery consumes it once;
+   * true means the session lane will answer instead.
+   */
+  continueStalledTurn?: (guidance?: string, owner?: ReplyOperation) => boolean;
 };
 
 // Carries this invocation's admission decision through reply option spreads so
@@ -66,6 +74,17 @@ export function resolveReplyOperationRunState(
   options: object | undefined,
 ): ReplyOperationRunState | undefined {
   return (options as ReplyOptionsWithOperationRunState | undefined)?.[REPLY_OPERATION_RUN_STATE];
+}
+
+/** Either source owner can prevent its retained background work from adding delivery. */
+export function resolveReplySessionEventDelivery(
+  options: object | undefined,
+  run: { internalEventExecution?: Pick<SessionEventExecution, "deliver"> },
+): false | undefined {
+  return run.internalEventExecution?.deliver === false ||
+    resolveReplyOperationRunState(options)?.sessionEventDelivery === false
+    ? false
+    : undefined;
 }
 
 export function recordReplyOperationAgentTurn(
@@ -87,7 +106,7 @@ export function recordReplyOperationAgentTurn(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
     if (outcome?.kind === "settled") {
-      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
       state.backgroundWorkStarted = Boolean(
         outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
       );

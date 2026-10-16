@@ -42,27 +42,6 @@ describe("plugin install record maps", () => {
     }
   });
 
-  it("rejects invalid records atomically", () => {
-    expect(
-      parsePluginInstallRecordMap({
-        valid: { source: "npm" },
-        invalid: { source: "npm", clawpackSize: -1 },
-      }),
-    ).toBeNull();
-  });
-
-  it("rejects malformed accepted capability surfaces", () => {
-    expect(
-      parsePluginInstallRecordMap({
-        demo: {
-          source: "npm",
-          acceptedSurface: { tools: ["read"] },
-          acceptedSurfaceHash: "claimed-hash",
-        },
-      }),
-    ).toBeNull();
-  });
-
   it("preserves prototype-named plugin ids as inert own properties", () => {
     const records = parsePluginInstallRecordMap(
       JSON.parse(

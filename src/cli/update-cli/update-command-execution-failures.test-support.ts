@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import {
+  bindExecutionGuards,
   executionParams,
   inspectOrStopService,
   mocks,
@@ -23,7 +24,7 @@ export function registerExecutionFailureTests() {
         }));
       }
 
-      const execution = await executeMutableUpdate(params);
+      const execution = await executeMutableUpdate(await bindExecutionGuards(params));
 
       expect(execution).toMatchObject({
         mutationStarted: false,
@@ -54,7 +55,9 @@ export function registerExecutionFailureTests() {
             : new Error("activation failed");
       mocks.runPackageUpdate.mockRejectedValue(failure);
 
-      const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams("package")),
+      );
 
       expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
       expect(execution?.failure?.cause).toBe(failure);
@@ -71,7 +74,7 @@ export function registerExecutionFailureTests() {
             check: "managed-service",
             code: "service-manager-access-denied",
             message: expect.stringContaining(
-              "The service-manager probe could not start (EACCES/EPERM).",
+              "The service-manager check could not start (EACCES/EPERM).",
             ),
           },
         ]);

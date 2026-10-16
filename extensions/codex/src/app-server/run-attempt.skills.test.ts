@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
@@ -26,6 +27,18 @@ describe("Codex app-server skill catalog delivery", () => {
     await seedRunSessionOwnerForTest("session-1", sessionKey);
     let started = createDeferred<void>();
     const received: string[] = [];
+    const personalUser = "Synthetic selected personal preferences.";
+    const personalPath = path.join(tempDir, "users", "alice", "USER.md");
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as { bootstrapFiles: unknown[] };
+      context.bootstrapFiles.push({
+        name: "USER.md",
+        path: personalPath,
+        content: personalUser,
+        missing: false,
+        personalUser: true,
+      });
+    });
     const harness = createStartedThreadHarness(async (method, request) => {
       if (method === "account/read") {
         return { account: { type: "apiKey" } };
@@ -91,7 +104,13 @@ describe("Codex app-server skill catalog delivery", () => {
         }),
       ]);
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
+      const result = await run;
+      if (index !== 2) {
+        expect(received[index]).toContain(personalUser);
+        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+          expect.objectContaining({ path: personalPath, injectedChars: personalUser.length }),
+        );
+      }
     }
     expect(received[0]).toContain(FIRST_CATALOG);
     expect(received[1]).toContain(SECOND_CATALOG);
@@ -103,6 +122,7 @@ describe("Codex app-server skill catalog delivery", () => {
     );
     expect(nativeRequests.map(({ method }) => method)).toEqual(["thread/start"]);
     expect(JSON.stringify(nativeRequests)).not.toContain("available_skills");
+    expect(JSON.stringify(harness.requests)).not.toContain(personalUser);
   });
 
   it("re-delivers the catalog on the next turn when the post-compaction restore fails", async () => {

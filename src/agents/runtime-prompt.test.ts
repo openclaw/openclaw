@@ -3,12 +3,12 @@ import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
 
 const {
-  collectRuntimeChannelCapabilitiesMock,
+  resolveChannelCapabilitiesMock,
   getMachineDisplayNameMock,
   resolveChannelMessageToolHintsMock,
   resolveChannelReactionGuidanceMock,
 } = vi.hoisted(() => ({
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
+  resolveChannelCapabilitiesMock: vi.fn(() => ["voice"]),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
   resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
   resolveChannelReactionGuidanceMock: vi.fn(() => ({
@@ -17,8 +17,10 @@ const {
   })),
 }));
 
-vi.mock("./channel-tools.js", () => ({
+vi.mock("./channel-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-tools.js")>()),
   resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
+  resolveChannelPromptCapabilities: vi.fn(() => []),
   resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
 }));
 
@@ -26,8 +28,9 @@ vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-default" })),
 }));
 
-vi.mock("./runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+vi.mock("../config/channel-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/channel-capabilities.js")>()),
+  resolveChannelCapabilities: resolveChannelCapabilitiesMock,
 }));
 
 vi.mock("./shell-utils.js", () => ({
@@ -72,7 +75,7 @@ describe("resolveAgentRuntimePrompt", () => {
     });
 
     const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
-    expect(collectRuntimeChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
+    expect(resolveChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
     expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({

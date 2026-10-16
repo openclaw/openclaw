@@ -1,5 +1,7 @@
 import { ButtonStyle, TextInputStyle } from "discord-api-types/v10";
 import {
+  asBoolean,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readNonBlankString,
@@ -8,20 +10,15 @@ import type {
   DiscordComponentBlock,
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
-  DiscordComponentCallbackDataKind,
   DiscordComponentMessageSpec,
-  DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
   DiscordComponentSelectSpec,
-  DiscordComponentSelectType,
   DiscordModalFieldSpec,
   DiscordModalSpec,
 } from "./components.types.js";
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
-
-type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],
@@ -29,10 +26,11 @@ const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
 ]);
 
 function requireObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(value);
+  if (!record) {
     throw new Error(`${label} must be an object`);
   }
-  return value as Record<string, unknown>;
+  return record;
 }
 
 // Body whitespace carries Markdown; control labels still use trimmed values.
@@ -47,31 +45,48 @@ function readRequiredString(value: unknown, label: string, trim = true): string 
   return trim ? trimmed : value;
 }
 
-function readOptionalCallbackDataKind(
-  value: unknown,
-  label: string,
-): DiscordComponentCallbackDataKind | undefined {
-  const kind = normalizeOptionalString(value);
-  if (kind === undefined) {
-    return undefined;
+function readEnum<const T extends string>(value: string, label: string, values: readonly T[]): T {
+  const match = values.find((candidate) => candidate === value);
+  if (match !== undefined) {
+    return match;
   }
-  if (kind === "command" || kind === "callback") {
-    return kind;
-  }
-  throw new Error(`${label} must be one of command, callback`);
+  throw new Error(`${label} must be one of ${values.join(", ")}`);
 }
 
-function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
+function readOptionalEnum<const T extends string>(
+  value: unknown,
+  label: string,
+  values: readonly T[],
+) {
+  const normalized = normalizeOptionalString(value);
+  return normalized === undefined ? undefined : readEnum(normalized, label, values);
+}
+
+function readCallbackDataKind(value: unknown, label: string) {
+  return readOptionalEnum(value, label, ["command", "callback"]);
+}
+
+function readOptionalArray<T>(
+  value: unknown,
+  label: string,
+  readEntry: (entry: unknown, label: string) => T,
+  nonArray: "reject" | "ignore" = "reject",
+): T[] | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Array.isArray(value)) {
+    if (nonArray === "ignore") {
+      return undefined;
+    }
     throw new Error(`${label} must be an array`);
   }
-  if (value.length === 0) {
-    return undefined;
-  }
-  return value.map((entry, index) => readRequiredString(entry, `${label}[${index}]`));
+  return value.map((entry, index) => readEntry(entry, `${label}[${index}]`));
+}
+
+function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
+  const entries = readOptionalArray(value, label, readRequiredString);
+  return entries?.length ? entries : undefined;
 }
 
 function readOptionalInteger(
@@ -82,7 +97,7 @@ function readOptionalInteger(
   if (value == null) {
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${label} must be an integer`);
   }
   if (bounds?.min !== undefined && value < bounds.min) {
@@ -95,23 +110,19 @@ function readOptionalInteger(
 }
 
 function readOptionalEmoji(value: unknown, label: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const obj = asOptionalRecord(value);
+  if (!obj) {
     return undefined;
   }
-  const obj = value as { name?: unknown; id?: unknown; animated?: unknown };
   return {
     name: readRequiredString(obj.name, `${label}.name`),
     id: normalizeOptionalString(obj.id),
-    animated: typeof obj.animated === "boolean" ? obj.animated : undefined,
+    animated: asBoolean(obj.animated),
   };
 }
 
 export function normalizeModalFieldName(value: string | undefined, index: number) {
-  const trimmed = value?.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  return `field_${index + 1}`;
+  return value?.trim() || `field_${index + 1}`;
 }
 
 function readAttachmentName(value: string, label: string, filenameLabel = "a filename"): string {
@@ -130,19 +141,17 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
   return readAttachmentName(value, "Attachment reference");
 }
 
+const buttonStyles = new Map<string, ButtonStyle>([
+  ["secondary", ButtonStyle.Secondary],
+  ["success", ButtonStyle.Success],
+  ["danger", ButtonStyle.Danger],
+  ["link", ButtonStyle.Link],
+]);
+
 export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
-  switch (normalizeLowercaseStringOrEmpty(style ?? "primary")) {
-    case "secondary":
-      return ButtonStyle.Secondary;
-    case "success":
-      return ButtonStyle.Success;
-    case "danger":
-      return ButtonStyle.Danger;
-    case "link":
-      return ButtonStyle.Link;
-    default:
-      return ButtonStyle.Primary;
-  }
+  return (
+    buttonStyles.get(normalizeLowercaseStringOrEmpty(style ?? "primary")) ?? ButtonStyle.Primary
+  );
 }
 
 export function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
@@ -153,20 +162,14 @@ function parseSelectOptions(
   raw: unknown,
   label: string,
 ): DiscordComponentSelectOption[] | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(raw)) {
-    throw new Error(`${label} must be an array`);
-  }
-  return raw.map((entry, index) => {
-    const obj = requireObject(entry, `${label}[${index}]`);
+  return readOptionalArray(raw, label, (entry, entryLabel) => {
+    const obj = requireObject(entry, entryLabel);
     return {
-      label: readRequiredString(obj.label, `${label}[${index}].label`),
-      value: readRequiredString(obj.value, `${label}[${index}].value`),
+      label: readRequiredString(obj.label, `${entryLabel}.label`),
+      value: readRequiredString(obj.value, `${entryLabel}.value`),
       description: normalizeOptionalString(obj.description),
-      emoji: readOptionalEmoji(obj.emoji, `${label}[${index}].emoji`),
-      default: typeof obj.default === "boolean" ? obj.default : undefined,
+      emoji: readOptionalEmoji(obj.emoji, `${entryLabel}.emoji`),
+      default: asBoolean(obj.default),
     };
   });
 }
@@ -175,7 +178,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
   const obj = requireObject(raw, label);
   const style = normalizeOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
   const url = normalizeOptionalString(obj.url);
-  if ((style === "link" || url) && !url) {
+  if (style === "link" && !url) {
     throw new Error(`${label}.url is required for link buttons`);
   }
   return {
@@ -183,37 +186,27 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     style,
     url,
     callbackData: normalizeOptionalString(obj.callbackData),
-    callbackDataKind: readOptionalCallbackDataKind(
-      obj.callbackDataKind,
-      `${label}.callbackDataKind`,
-    ),
+    callbackDataKind: readCallbackDataKind(obj.callbackDataKind, `${label}.callbackDataKind`),
     emoji: readOptionalEmoji(obj.emoji, `${label}.emoji`),
-    disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
-    reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
+    disabled: asBoolean(obj.disabled),
+    reusable: asBoolean(obj.reusable),
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
 }
 
 function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpec {
   const obj = requireObject(raw, label);
-  const type = normalizeOptionalString(obj.type) as DiscordComponentSelectType | undefined;
-  const allowedTypes: DiscordComponentSelectType[] = [
+  const type = readOptionalEnum(obj.type, `${label}.type`, [
     "string",
     "user",
     "role",
     "mentionable",
     "channel",
-  ];
-  if (type && !allowedTypes.includes(type)) {
-    throw new Error(`${label}.type must be one of ${allowedTypes.join(", ")}`);
-  }
+  ]);
   return {
     type,
     callbackData: normalizeOptionalString(obj.callbackData),
-    callbackDataKind: readOptionalCallbackDataKind(
-      obj.callbackDataKind,
-      `${label}.callbackDataKind`,
-    ),
+    callbackDataKind: readCallbackDataKind(obj.callbackDataKind, `${label}.callbackDataKind`),
     placeholder: normalizeOptionalString(obj.placeholder),
     minValues: readOptionalInteger(obj.minValues, `${label}.minValues`, { min: 0, max: 25 }),
     maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, { min: 1, max: 25 }),
@@ -224,20 +217,11 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
 
 function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
-  const type = normalizeLowercaseStringOrEmpty(
-    readRequiredString(obj.type, `${label}.type`),
-  ) as DiscordComponentModalFieldType;
-  const supported: DiscordComponentModalFieldType[] = [
-    "text",
-    "checkbox",
-    "radio",
-    "select",
-    "role-select",
-    "user-select",
-  ];
-  if (!supported.includes(type)) {
-    throw new Error(`${label}.type must be one of ${supported.join(", ")}`);
-  }
+  const type = readEnum(
+    normalizeLowercaseStringOrEmpty(readRequiredString(obj.type, `${label}.type`)),
+    `${label}.type`,
+    ["text", "checkbox", "radio", "select", "role-select", "user-select"],
+  );
   const options = parseSelectOptions(obj.options, `${label}.options`);
   if (["checkbox", "radio", "select"].includes(type) && (!options || options.length === 0)) {
     throw new Error(`${label}.options is required for ${type} fields`);
@@ -245,7 +229,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
   if (type === "radio" && (obj.minValues != null || obj.maxValues != null)) {
     throw new Error(`${label}.minValues/maxValues are not supported for radio fields`);
   }
-  const required = typeof obj.required === "boolean" ? obj.required : undefined;
+  const required = asBoolean(obj.required);
   const maxValues = type === "checkbox" ? 10 : 25;
   return {
     type,
@@ -281,10 +265,12 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       };
     case "section": {
       const text = readNonBlankString(obj.text);
-      const textsRaw = obj.texts;
-      const texts = Array.isArray(textsRaw)
-        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`, false))
-        : undefined;
+      const texts = readOptionalArray(
+        obj.texts,
+        `${label}.texts`,
+        (entry, entryLabel) => readRequiredString(entry, entryLabel, false),
+        "ignore",
+      );
       if (!text && (!texts || texts.length === 0)) {
         throw new Error(`${label}.text or ${label}.texts is required for section blocks`);
       }
@@ -317,26 +303,23 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     }
     case "separator": {
       const spacingRaw = obj.spacing;
-      let spacing: DiscordComponentSeparatorSpacing | undefined;
-      if (spacingRaw === "small" || spacingRaw === "large") {
-        spacing = spacingRaw;
-      } else if (spacingRaw === 1 || spacingRaw === 2) {
-        spacing = spacingRaw;
-      } else if (spacingRaw !== undefined) {
+      if (
+        spacingRaw !== undefined &&
+        spacingRaw !== "small" &&
+        spacingRaw !== "large" &&
+        spacingRaw !== 1 &&
+        spacingRaw !== 2
+      ) {
         throw new Error(`${label}.spacing must be "small", "large", 1, or 2`);
       }
-      const divider = typeof obj.divider === "boolean" ? obj.divider : undefined;
       return {
         type: "separator",
-        spacing,
-        divider,
+        spacing: spacingRaw,
+        divider: asBoolean(obj.divider),
       };
     }
     case "actions": {
-      const buttonsRaw = obj.buttons;
-      const buttons = Array.isArray(buttonsRaw)
-        ? buttonsRaw.map((entry, idx) => parseButtonSpec(entry, `${label}.buttons[${idx}]`))
-        : undefined;
+      const buttons = readOptionalArray(obj.buttons, `${label}.buttons`, parseButtonSpec, "ignore");
       const select = obj.select ? parseSelectSpec(obj.select, `${label}.select`) : undefined;
       if ((!buttons || buttons.length === 0) && !select) {
         throw new Error(`${label} requires buttons or select`);
@@ -360,7 +343,7 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
         return {
           url: readRequiredString(itemObj.url, `${label}.items[${idx}].url`),
           description: normalizeOptionalString(itemObj.description),
-          spoiler: typeof itemObj.spoiler === "boolean" ? itemObj.spoiler : undefined,
+          spoiler: asBoolean(itemObj.spoiler),
         };
       });
       return {
@@ -373,7 +356,7 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       return {
         type: "file",
         file: `${DISCORD_COMPONENT_ATTACHMENT_PREFIX}${readAttachmentName(file, `${label}.file`, "an attachment filename")}`,
-        spoiler: typeof obj.spoiler === "boolean" ? obj.spoiler : undefined,
+        spoiler: asBoolean(obj.spoiler),
       };
     }
     default:
@@ -397,10 +380,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     return null;
   }
   const obj = requireObject(raw, "components");
-  const blocksRaw = obj.blocks;
-  const blocks = Array.isArray(blocksRaw)
-    ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
-    : undefined;
+  const blocks = readOptionalArray(obj.blocks, "components.blocks", parseComponentBlock, "ignore");
   const modalRaw = obj.modal;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {
@@ -424,22 +404,16 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
       fields,
     };
   }
+  const container = asOptionalRecord(obj.container);
   return {
     text: readNonBlankString(obj.text),
-    reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
-    container:
-      typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
-        ? {
-            accentColor: (obj.container as { accentColor?: unknown }).accentColor as
-              | string
-              | number
-              | undefined,
-            spoiler:
-              typeof (obj.container as { spoiler?: unknown }).spoiler === "boolean"
-                ? ((obj.container as { spoiler?: boolean }).spoiler as boolean)
-                : undefined,
-          }
-        : undefined,
+    reusable: asBoolean(obj.reusable),
+    container: container
+      ? {
+          accentColor: container.accentColor as string | number | undefined,
+          spoiler: asBoolean(container.spoiler),
+        }
+      : undefined,
     blocks,
     modal,
   };

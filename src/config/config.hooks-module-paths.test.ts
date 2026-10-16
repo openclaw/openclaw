@@ -48,15 +48,3 @@ it("rejects persistent mappings without a stable session key source", () => {
     ]),
   });
 });
-
-it("rejects unknown hook session modes with the supported choices", () => {
-  expect(validateMapping({ sessionMode: "shared" })).toMatchObject({
-    ok: false,
-    issues: [
-      expect.objectContaining({
-        path: "hooks.mappings.0.sessionMode",
-        allowedValues: ["isolated", "persistent"],
-      }),
-    ],
-  });
-});

@@ -306,55 +306,45 @@ class IncludeProcessor {
         (!isRoot || !this.rootProjectionKeys || this.rootProjectionKeys.has(key)),
     );
 
-    let included: unknown;
-    let targetPath: string | undefined;
-    let targetPaths: string[] | undefined;
-    if (typeof includeValue === "string") {
-      const loaded = this.loadFileSync(includeValue, context);
-      included = yield {
-        value: loaded.parsed,
-        pathLink,
-        hasArrayAncestor,
-        context: loaded.nestedContext,
-      };
-      targetPath = loaded.resolvedPath;
-    } else if (Array.isArray(includeValue)) {
-      const entries: Array<{ value: unknown; targetPath: string }> = [];
-      for (const item of includeValue) {
-        if (typeof item !== "string") {
-          throw new ConfigIncludeError(
-            `Invalid $include array item: expected string, got ${typeof item}`,
-            String(item),
-          );
-        }
-        const loaded = this.loadFileSync(item, context);
-        entries.push({
-          value: yield {
-            value: loaded.parsed,
-            pathLink,
-            hasArrayAncestor,
-            context: loaded.nestedContext,
-          },
-          targetPath: loaded.resolvedPath,
-        });
-      }
-      included = entries.reduce<unknown>((current, entry) => deepMerge(current, entry.value), {});
-      targetPaths = entries.map((entry) => entry.targetPath);
-    } else {
+    const multiple = Array.isArray(includeValue);
+    if (!multiple && typeof includeValue !== "string") {
       throw new ConfigIncludeError(
         `Invalid $include value: expected string or array of strings, got ${typeof includeValue}`,
         String(includeValue),
       );
     }
+    const entries: Array<{ value: unknown; targetPath: string }> = [];
+    for (const item of multiple ? includeValue : [includeValue]) {
+      if (typeof item !== "string") {
+        throw new ConfigIncludeError(
+          `Invalid $include array item: expected string, got ${typeof item}`,
+          String(item),
+        );
+      }
+      const loaded = this.loadFileSync(item, context);
+      entries.push({
+        value: yield {
+          value: loaded.parsed,
+          pathLink,
+          hasArrayAncestor,
+          context: loaded.nestedContext,
+        },
+        targetPath: loaded.resolvedPath,
+      });
+    }
+    const included = multiple
+      ? entries.reduce<unknown>((current, entry) => deepMerge(current, entry.value), {})
+      : entries[0]!.value;
 
     this.resolver.onIncludeResolved?.({
       path: includeLogicalPath(pathLink),
       value: included,
-      kind: Array.isArray(includeValue) ? "multiple" : "single",
+      kind: multiple ? "multiple" : "single",
       hasSiblingOverrides: siblingKeys.length > 0,
       hasArrayAncestor,
-      ...(targetPath ? { targetPath } : {}),
-      ...(targetPaths ? { targetPaths } : {}),
+      ...(multiple
+        ? { targetPaths: entries.map((entry) => entry.targetPath) }
+        : { targetPath: entries[0]!.targetPath }),
     });
 
     if (siblingKeys.length === 0) {
@@ -609,8 +599,7 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
 
 const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
-  readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
-    readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
+  readFileWithGuards: readConfigIncludeFileWithGuards,
   parseJson: parseJsonWithJson5Fallback,
 };
 

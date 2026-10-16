@@ -48,21 +48,18 @@ export function migrateLegacyToolNameList(
   if (!state || !Array.isArray(value)) {
     return false;
   }
-  let mutated = false;
   if (state.exactLegacy) {
     const legacyName = normalizeToolPolicyName(migration.legacyName);
     for (const [index, entry] of value.entries()) {
       if (typeof entry === "string" && normalizeToolPolicyName(entry) === legacyName) {
         value[index] = migration.canonicalName;
-        mutated = true;
       }
     }
   }
   if (state.appendCanonical) {
     value.push(migration.canonicalName);
-    mutated = true;
   }
-  return mutated;
+  return state.exactLegacy || state.appendCanonical;
 }
 
 function visitLegacyToolName(
@@ -88,13 +85,14 @@ function visitLegacyToolName(
   }
   for (const key of listKeys) {
     const list = value[key];
-    if (!hasLegacyToolNameList(list, migration)) {
+    if (
+      !(migrate
+        ? migrateLegacyToolNameList(list, migration)
+        : hasLegacyToolNameList(list, migration))
+    ) {
       continue;
     }
     matchedPaths.push([...path, key].join("."));
-    if (migrate) {
-      migrateLegacyToolNameList(list, migration);
-    }
   }
 
   for (const [key, entry] of Object.entries(value)) {

@@ -1,31 +1,24 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import {
-  markRemoteModelCatalogChecked,
+  markRemoteModelCatalogCheckedAsync,
   readRemoteModelCatalog,
-  writeRemoteModelCatalog,
+  writeRemoteModelCatalogAsync,
 } from "./remote-store.js";
 
 // Registered first so it removes directories after the database closes below.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const roots: string[] = [];
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+afterEach(closeStateDatabaseForTest);
 
 describe("remote model catalog store", () => {
-  it("stores one machine-state snapshot and rejects stale refreshes", () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-")));
-    roots.push(root);
+  it("stores one machine-state snapshot and rejects stale refreshes", async () => {
+    const root = tempDirs.make("openclaw-catalog-");
     const options = { path: path.join(root, "state.sqlite") };
     expect(readRemoteModelCatalog(options)).toBeUndefined();
     const initial = {
@@ -37,9 +30,15 @@ describe("remote model catalog store", () => {
       last_modified: null,
       checked_at: 2,
     };
-    expect(markRemoteModelCatalogChecked(1, { expected: initial }, options)).toBe(false);
+    expect(
+      await markRemoteModelCatalogCheckedAsync(
+        1,
+        { expected: initial },
+        captureOpenClawStateWorkerContext(options),
+      ),
+    ).toBe(false);
     expect(readConfigMachineState("modelCatalog.remote.v2", options)).toBeUndefined();
-    writeRemoteModelCatalog(initial, options);
+    await writeRemoteModelCatalogAsync(initial, captureOpenClawStateWorkerContext(options));
     const updated = {
       ...initial,
       bundle_json: '{"schemaVersion":1,"updated":true}',
@@ -49,8 +48,8 @@ describe("remote model catalog store", () => {
       etag: '"two"',
       checked_at: 4,
     };
-    writeRemoteModelCatalog(updated, options);
-    const retained = writeRemoteModelCatalog(
+    await writeRemoteModelCatalogAsync(updated, captureOpenClawStateWorkerContext(options));
+    const retained = await writeRemoteModelCatalogAsync(
       {
         ...updated,
         bundle_json: '{"schemaVersion":1,"older":true}',
@@ -59,11 +58,11 @@ describe("remote model catalog store", () => {
         etag: '"older"',
         checked_at: 5,
       },
-      options,
+      captureOpenClawStateWorkerContext(options),
     );
     expect(retained).toMatchObject({ status: "retained-newer", row: { generated_at: 3 } });
     expect(
-      writeRemoteModelCatalog(
+      await writeRemoteModelCatalogAsync(
         {
           ...updated,
           bundle_json: '{"schemaVersion":1,"sameGenerationDifferentBody":true}',
@@ -71,16 +70,26 @@ describe("remote model catalog store", () => {
           etag: '"different"',
           checked_at: 5,
         },
-        options,
+        captureOpenClawStateWorkerContext(options),
       ),
     ).toMatchObject({
       status: "retained-newer",
       row: { bundle_json: expect.stringContaining("updated") },
     });
     expect(
-      markRemoteModelCatalogChecked(5, { expected: { ...updated, etag: '"older"' } }, options),
+      await markRemoteModelCatalogCheckedAsync(
+        5,
+        { expected: { ...updated, etag: '"older"' } },
+        captureOpenClawStateWorkerContext(options),
+      ),
     ).toBe(false);
-    expect(markRemoteModelCatalogChecked(6, { expected: updated }, options)).toBe(true);
+    expect(
+      await markRemoteModelCatalogCheckedAsync(
+        6,
+        { expected: updated },
+        captureOpenClawStateWorkerContext(options),
+      ),
+    ).toBe(true);
     expect(readRemoteModelCatalog(options)).toMatchObject({
       id: 1,
       generated_at: 3,
@@ -98,7 +107,7 @@ describe("remote model catalog store", () => {
     });
   });
 
-  it("serves an upgraded install from the older client's row without writing it", () => {
+  it("serves an upgraded install from the older client's row without writing it", async () => {
     const options = { path: path.join(tempDirs.make("openclaw-catalog-"), "state.sqlite") };
     const legacy = {
       bundle_json: '{"schemaVersion":1,"legacy":true}',
@@ -114,10 +123,10 @@ describe("remote model catalog store", () => {
     expect(readRemoteModelCatalog(options)).toEqual({ id: 1, ...legacy });
     // A 304 revalidation adopts the row into this client's slot.
     expect(
-      markRemoteModelCatalogChecked(
+      await markRemoteModelCatalogCheckedAsync(
         20,
         { expected: legacy, etag: '"legacy"', lastModified: null },
-        options,
+        captureOpenClawStateWorkerContext(options),
       ),
     ).toBe(true);
     expect(readConfigMachineState("modelCatalog.remote.v2", options)).toEqual({
@@ -130,7 +139,7 @@ describe("remote model catalog store", () => {
     expect(readRemoteModelCatalog(options)?.generated_at).toBe(100);
   });
 
-  it("leaves this client's slot empty when the older client's row no longer matches", () => {
+  it("leaves this client's slot empty when the older client's row no longer matches", async () => {
     const options = { path: path.join(tempDirs.make("openclaw-catalog-"), "state.sqlite") };
     const legacy = {
       bundle_json: '{"schemaVersion":1,"legacy":true}',
@@ -145,10 +154,10 @@ describe("remote model catalog store", () => {
     const newer = { ...legacy, generated_at: 200, etag: '"newer"' };
     writeConfigMachineState("modelCatalog.remote", newer, options);
     expect(
-      markRemoteModelCatalogChecked(
+      await markRemoteModelCatalogCheckedAsync(
         20,
         { expected: legacy, etag: '"legacy"', lastModified: null },
-        options,
+        captureOpenClawStateWorkerContext(options),
       ),
     ).toBe(false);
     expect(readConfigMachineState("modelCatalog.remote.v2", options)).toBeUndefined();

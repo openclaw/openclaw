@@ -26,6 +26,48 @@ export async function drainStoreWriterQueuesForTest(
   }
 }
 
+/**
+ * Resolves with `gate` unless the operation expected to reach it settles first, which
+ * fails with `message` (an early rejection keeps its own error). There is deliberately no
+ * timer: a gate that is never reached fails at the Vitest test timeout, so healthy work
+ * slowed by a loaded runner cannot lose a race against a wall-clock deadline.
+ */
+export function awaitGateBeforeSettlement<T>(
+  gate: PromiseLike<T>,
+  operation: PromiseLike<unknown>,
+  message: string,
+): Promise<Awaited<T>> {
+  return Promise.race([
+    gate,
+    Promise.resolve(operation).then((): never => {
+      throw new Error(message);
+    }),
+  ]);
+}
+
+/**
+ * Settles with `work`, or rejects with the abort reason once Vitest aborts the test context
+ * `signal` (timeout or cancellation). Vitest does not unwind a suspended test body when it
+ * times out, so awaits guarded by `finally` cleanup use this to let that cleanup still run.
+ */
+export function withinTest<T>(work: PromiseLike<T>, signal: AbortSignal): Promise<Awaited<T>> {
+  let onAbort = (): void => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      const reason: unknown = signal.reason;
+      reject(reason instanceof Error ? reason : new Error("test aborted", { cause: reason }));
+    };
+  });
+  if (signal.aborted) {
+    onAbort();
+  } else {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return Promise.race([work, aborted]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+  });
+}
+
 export async function withTestTimeout<T>(
   promise: PromiseLike<T>,
   timeoutMs: number,

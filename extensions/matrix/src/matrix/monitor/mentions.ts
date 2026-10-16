@@ -13,16 +13,14 @@ function decodeVisibleHtmlEntities(value: string): string {
   });
 }
 
-function normalizeVisibleMentionText(value: string): string {
+function extractVisibleMentionText(value?: string): string {
   return normalizeLowercaseStringOrEmpty(
     decodeVisibleHtmlEntities(
-      value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+      (value ?? "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
     ).replace(/\s+/g, " "),
   );
-}
-
-function extractVisibleMentionText(value?: string): string {
-  return normalizeVisibleMentionText(value ?? "");
 }
 
 function resolveMatrixUserLocalpart(userId: string): string | null {
@@ -59,46 +57,36 @@ function resolveMatrixMentionPrefixCandidates(params: {
   const candidates: string[] = [];
   const seen = new Set<string>();
 
-  const append = (candidate?: string | null) => {
+  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
+  for (const candidate of [
+    params.userId,
+    localpart ? `@${localpart}` : null,
+    params.displayName,
+    params.displayName ? `@${params.displayName}` : null,
+    params.displayName ? `@[${params.displayName}]` : null,
+  ]) {
     const trimmed = candidate?.trim();
     if (!trimmed) {
-      return;
+      continue;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(normalized)) {
-      return;
+      continue;
     }
     seen.add(normalized);
     candidates.push(trimmed);
-  };
-
-  append(params.userId);
-  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
-  append(localpart ? `@${localpart}` : null);
-  append(params.displayName);
-  append(params.displayName ? `@${params.displayName}` : null);
-  append(params.displayName ? `@[${params.displayName}]` : null);
+  }
 
   return candidates;
 }
 
-function stripMatchedMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
-  const match = text.match(pattern);
-  if (!match) {
-    return null;
-  }
-  return text.slice(match[0].length).trimStart();
-}
-
-function stripNativeMatrixMentionPrefix(text: string, candidate: string): string | null {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(candidate)}(?:\\s*[:,])?(?:\\s+|$)`, "i");
-  return stripMatchedMatrixMentionPrefix(text, pattern);
-}
-
-function stripRegexMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
-  const flags = pattern.flags.replace(/[gy]/g, "");
-  const anchored = new RegExp(`^\\s*(?:${pattern.source})(?:\\s*[:,])?(?:\\s+|$)`, flags);
-  return stripMatchedMatrixMentionPrefix(text, anchored);
+function stripMatchedMatrixMentionPrefix(
+  text: string,
+  source: string,
+  flags: string,
+): string | null {
+  const match = text.match(new RegExp(`^\\s*${source}(?:\\s*[:,])?(?:\\s+|$)`, flags));
+  return match ? text.slice(match[0].length).trimStart() : null;
 }
 
 export function stripMatrixMentionPrefix(params: {
@@ -113,13 +101,17 @@ export function stripMatrixMentionPrefix(params: {
   }
 
   for (const candidate of resolveMatrixMentionPrefixCandidates(params)) {
-    const stripped = stripNativeMatrixMentionPrefix(text, candidate);
+    const stripped = stripMatchedMatrixMentionPrefix(text, escapeRegExp(candidate), "i");
     if (stripped !== null) {
       return stripped;
     }
   }
   for (const pattern of params.mentionRegexes ?? []) {
-    const stripped = stripRegexMatrixMentionPrefix(text, pattern);
+    const stripped = stripMatchedMatrixMentionPrefix(
+      text,
+      `(?:${pattern.source})`,
+      pattern.flags.replace(/[gy]/g, ""),
+    );
     if (stripped !== null) {
       return stripped;
     }
@@ -221,7 +213,6 @@ export function resolveMentions(params: {
   const visibleRoomMention =
     hasVisibleRoomMention(params.text) || hasVisibleRoomMention(params.content.formatted_body);
 
-  // Check formatted_body for matrix.to mention links (legacy/alternative mention format)
   const mentionedInFormattedBody = params.userId
     ? checkFormattedBodyMention({
         formattedBody: params.content.formatted_body,

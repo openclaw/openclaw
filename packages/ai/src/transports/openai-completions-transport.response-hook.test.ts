@@ -109,10 +109,29 @@ afterEach(() => {
   configureAiTransportHost(previousHost);
 });
 
-describe.each([
-  { name: "package", createStream: streamOpenAICompletions },
-  { name: "managed", createStream: createManagedFixtureStream },
-])("$name OpenAI Chat response hook", ({ createStream }) => {
+describe("OpenAI Chat response hook", () => {
+  const createStream = createManagedFixtureStream;
+  it("reports a rejected response before its body is consumed without retrying", async () => {
+    const response = Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    const readBody = vi.spyOn(response, "text");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response);
+    configureAiTransportHost({ buildModelFetch: () => fetchMock });
+    const bodyReadsDuringHook: number[] = [];
+    const onResponse = vi.fn<NonNullable<StreamOptions["onResponse"]>>(() => {
+      bodyReadsDuringHook.push(readBody.mock.calls.length);
+    });
+
+    const result = await createStream(model, context, {
+      apiKey: "fixture-token",
+      onResponse,
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onResponse.mock.calls.map(([metadata]) => metadata.status)).toEqual([503]);
+    expect(bodyReadsDuringHook).toEqual([0]);
+  });
+
   it("awaits response metadata before exposing the first stream event", async () => {
     installResponse();
     const order: string[] = [];
@@ -132,7 +151,7 @@ describe.each([
       { apiKey: "fixture-token", onResponse },
       acceptanceObserver,
     );
-    const stream = createStream(model, context, options);
+    const stream = streamOpenAICompletions(model, context, options);
     const consume = (async () => {
       for await (const event of stream) {
         order.push(event.type);
@@ -228,7 +247,7 @@ describe.each([
     const lifecycle = installResponse();
     const onFirstEventTimeout = vi.fn();
     const onResponse = vi.fn(() => new Promise<void>(() => {}));
-    const stream = createStream(model, context, {
+    const stream = streamOpenAICompletions(model, context, {
       apiKey: "fixture-token",
       firstEventTimeoutMs: 20,
       onFirstEventTimeout,

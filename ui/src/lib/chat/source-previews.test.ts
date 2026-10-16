@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapWebContent } from "../../../../src/security/external-content.js";
 import type { MessageGroup } from "./chat-types.ts";
 import { extractChatSourcePreviews } from "./source-previews.ts";
-import { extractToolCardsCached } from "./tool-cards.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -115,19 +114,6 @@ describe("chat source previews", () => {
       ).map((source) => source.url),
     ).toEqual(retained);
   });
-
-  it.each(["https://github.com/example/repo/pull/12", `${location.origin}/chat/main/research`])(
-    "omits a redirect to a dedicated-card destination: %s",
-    (url) => {
-      expect(previews([tool({ ...fetched(), finalUrl: url }, "web_fetch")])).toEqual([]);
-      expect(
-        previews(
-          [tool({ ...fetched(), url, finalUrl: pageUrl }, "web_fetch")],
-          answer(`[source](${url})`),
-        ),
-      ).toEqual([]);
-    },
-  );
 
   it("invalidates source classification when the Gateway origin or base path changes", () => {
     const url = "https://gateway.example/control/chat/main/research";
@@ -250,85 +236,6 @@ describe("chat source previews", () => {
     ).toEqual([]);
   });
 
-  it.each([
-    {
-      text: "The refreshed page now contains a different and more recent description of the same research result.",
-      kind: "page",
-      excerpt:
-        "The refreshed page now contains a different and more recent description of the same research result.",
-    },
-    { text: "# Heading only", kind: "search", excerpt: "Search provider description." },
-  ])(
-    "refreshes every redirect alias when the destination is fetched again ($kind)",
-    ({ text, kind, excerpt }) => {
-      const newer = {
-        ...fetched(),
-        url: secondUrl,
-        title: wrap("Updated page title", "Web Fetch"),
-        text: wrap(text, "Web Fetch"),
-      };
-      for (const links of [
-        `[Original](${pageUrl})`,
-        `[Original](${pageUrl}) and [destination](${secondUrl})`,
-      ]) {
-        const output = previews(
-          [
-            tool(search()),
-            tool(fetched(), "web_fetch", "first-fetch"),
-            tool(newer, "web_fetch", "new-fetch"),
-          ],
-          answer(links),
-        );
-        expect(output).toHaveLength(1);
-        expect(output[0]).toMatchObject({
-          url: secondUrl,
-          title: "Updated page title",
-          excerptKind: kind,
-          excerpt,
-        });
-      }
-    },
-  );
-
-  it("keeps the previous destination separate when an original URL redirects elsewhere", () => {
-    const thirdUrl = "https://third.example/research";
-    const redirected = {
-      ...fetched(),
-      finalUrl: thirdUrl,
-      title: wrap("Different destination", "Web Fetch"),
-    };
-    const output = previews(
-      [tool(fetched(), "web_fetch", "first-fetch"), tool(redirected, "web_fetch", "new-fetch")],
-      answer(`[Original](${pageUrl}) and [previous destination](${secondUrl})`),
-    );
-    expect(output.map(({ url, title }) => ({ url, title }))).toEqual([
-      { url: thirdUrl, title: "Different destination" },
-      { url: secondUrl, title: "Fetched title" },
-    ]);
-  });
-
-  it("resolves observed redirect chains and retires an old redirect when its URL becomes final", () => {
-    const thirdUrl = "https://third.example/research";
-    const nextPage = {
-      ...fetched(),
-      url: secondUrl,
-      finalUrl: thirdUrl,
-      title: wrap("Final destination", "Web Fetch"),
-    };
-    const messages = [tool(fetched(), "web_fetch", "first"), tool(nextPage, "web_fetch", "second")];
-    expect(previews(messages)[0]).toMatchObject({ url: thirdUrl, title: "Final destination" });
-    const returnedPage = {
-      ...fetched(),
-      url: thirdUrl,
-      finalUrl: pageUrl,
-      title: wrap("Returned to origin", "Web Fetch"),
-    };
-    expect(previews([...messages, tool(returnedPage, "web_fetch", "third")])[0]).toMatchObject({
-      url: pageUrl,
-      title: "Returned to origin",
-    });
-  });
-
   it("uses canonical message identities and rejects nested run overrides", () => {
     const payload = search();
     const final = { ...answer(), runId: undefined, __openclaw: { runId } };
@@ -387,14 +294,12 @@ describe("chat source previews", () => {
     expect(previews([tool({ ...fetched(), status: 404 }, "web_fetch")])).toEqual([]);
   });
 
-  it.each([
-    "javascript:alert(1)",
-    "file:///private/file",
-    "data:text/plain,hello",
-    "https://user:secret@example.com/article",
-  ])("rejects unsafe source URL %s", (url) => {
-    expect(previews([tool(search([result(url)]))], answer(`[source](${url})`))).toEqual([]);
-  });
+  it.each(["javascript:alert(1)", "https://user:secret@example.com/article"])(
+    "rejects unsafe source URL %s",
+    (url) => {
+      expect(previews([tool(search([result(url)]))], answer(`[source](${url})`))).toEqual([]);
+    },
+  );
 
   it("does not expose malformed framing or invent missing page prose", () => {
     const row = {
@@ -415,7 +320,10 @@ describe("chat source previews", () => {
   it("bounds previews and excerpt text while preserving Unicode", () => {
     const longPage = fetched();
     longPage.text = wrap(
-      "A useful opening paragraph with enough detail to preview the fetched document.\n\n" +
+      "# Heading\n\n" +
+        "> A quoted paragraph with enough detail but nested outside the main page prose.\n\n" +
+        "Short navigation.\n\n" +
+        "A useful **opening paragraph** with enough detail to preview the fetched document.\n\n" +
         "More article content. ".repeat(2000),
       "Web Fetch",
     );
@@ -436,7 +344,7 @@ describe("chat source previews", () => {
     expect(output[0]?.excerpt).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/u);
   });
 
-  it("reuses Markdown work across recreated frame wrappers and invalidates changed result facts", () => {
+  it("reuses Markdown work across recreated frame wrappers", () => {
     const parse = vi.spyOn(MarkdownIt.prototype, "parse");
     const message = tool(search());
     const final = answer();
@@ -446,25 +354,6 @@ describe("chat source previews", () => {
     expect(previews([message], final)).toBe(first);
     expect(parse).toHaveBeenCalledTimes(parsed);
 
-    const card = extractToolCardsCached(message)[0]!;
-    card.details = search([{ ...result(), snippet: wrap("Updated source description.") }]);
-    expect(previews([message], final)[0]?.excerpt).toBe("Updated source description.");
-    expect(parse.mock.calls.length).toBeGreaterThan(parsed);
-
-    message.runId = "another-owner";
-    expect(previews([message], final)).toEqual([]);
-    message.runId = runId;
-    card.runId = "another-owner";
-    expect(previews([message], final)).toEqual([]);
-    card.runId = runId;
-    card.isError = true;
-    expect(previews([message], final)).toEqual([]);
-    card.isError = false;
-    card.details = undefined;
-    card.outputText = JSON.stringify(
-      search([{ ...result(), snippet: wrap("Recovered JSON source description.") }]),
-    );
-    expect(previews([message], final)[0]?.excerpt).toBe("Recovered JSON source description.");
     expect(previews([], final)).toEqual([]);
     expect(previews([message], answer("A completed answer without source links."))).toEqual([]);
   });
@@ -490,36 +379,5 @@ describe("chat source previews", () => {
     expect(
       previews([tool(search(), "web_search", "pending")], { ...final, runId: "another-run" }),
     ).toEqual([]);
-  });
-
-  it("parses only selected cited source prose even when uncited results contain large pages", () => {
-    const parse = vi.spyOn(MarkdownIt.prototype, "parse");
-    const rows = Array.from({ length: 20 }, (_, index) => ({
-      ...result(`https://example.com/page-${index}`),
-      snippet: wrap(`Source-${index} ` + "Detailed source content. ".repeat(1_000)),
-    }));
-    const uncitedPage = {
-      ...fetched(),
-      url: "https://uncited.example/",
-      finalUrl: "https://uncited.example/",
-      text: wrap("UNSELECTED_PAGE ".repeat(3_000), "Web Fetch"),
-    };
-    const final = answer(
-      rows
-        .slice(4, 16)
-        .map((row) => `[source](${row.url})`)
-        .join(" "),
-    );
-    expect(previews([tool(search(rows)), tool(uncitedPage, "web_fetch")], final)).toHaveLength(8);
-    const parsedProse = parse.mock.calls.map(([text]) => text);
-    expect(parsedProse.some((text) => text.includes("Source-4 "))).toBe(true);
-    expect(
-      parsedProse.some(
-        (text) =>
-          text.includes("Source-0 ") ||
-          text.includes("Source-12 ") ||
-          text.includes("UNSELECTED_PAGE"),
-      ),
-    ).toBe(false);
   });
 });

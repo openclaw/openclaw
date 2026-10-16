@@ -7,7 +7,6 @@ import {
 // Archive extraction facade for size limits, staged writes, and traversal checks.
 export {
   ARCHIVE_LIMIT_ERROR_CODE,
-  ArchiveFormatError,
   ArchiveLimitError,
   ArchiveSecurityError,
   DEFAULT_MAX_ARCHIVE_BYTES_ZIP,

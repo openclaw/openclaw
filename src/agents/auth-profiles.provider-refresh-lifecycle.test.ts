@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetFileLockStateForTest } from "../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import { isPluginRegistryLoadInFlight } from "../plugins/loader-cache.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -26,40 +26,27 @@ function writeLifecycleProviderPlugin(registerBody: string) {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: PLUGIN_ID,
-    body: `module.exports = {
-      id: ${JSON.stringify(PLUGIN_ID)},
-      register(api) {
-        ${registerBody}
-      },
-    };`,
+    registration: registerBody,
   });
   fs.writeFileSync(
     path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: plugin.id,
-        providers: [PROVIDER_ID],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      id: plugin.id,
+      providers: [PROVIDER_ID],
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+    }),
     "utf8",
   );
   return plugin;
 }
 
-beforeEach(() => {
+function reset() {
   clearRuntimeAuthProfileStoreSnapshots();
   resetFileLockStateForTest();
   resetPluginLoaderTestStateForTest();
-});
-
-afterEach(() => {
-  clearRuntimeAuthProfileStoreSnapshots();
-  resetFileLockStateForTest();
-  resetPluginLoaderTestStateForTest();
-});
+}
+beforeEach(reset);
+afterEach(reset);
 
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -112,12 +99,7 @@ describe("provider OAuth refresh lifecycle", () => {
           onlyPluginIds: [plugin.id],
         };
         let authResolution: ReturnType<typeof resolveApiKeyForProfile> | undefined;
-        let registrationStarted = false;
         const startAuthDuringRegister = vi.fn(() => {
-          if (registrationStarted) {
-            throw new Error("provider lifecycle fixture registered more than once");
-          }
-          registrationStarted = true;
           expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(true);
           authResolution = resolveApiKeyForProfile({
             cfg: config,

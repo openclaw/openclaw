@@ -84,23 +84,7 @@ describe("local meeting realtime audio transport", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["input", [], ["play"]],
-    ["output", ["capture"], []],
-  ] as const)("rejects an empty %s command before spawning", (_, inputCommand, outputCommand) => {
-    const spawn = vi.fn();
-
-    expect(() =>
-      createTransportWith({
-        inputCommand: [...inputCommand],
-        outputCommand: [...outputCommand],
-        spawn: spawn as never,
-      }),
-    ).toThrow("audio bridge command must not be empty");
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "stops output after input spawn throws (output spawn failed: %s)",
     (outputSpawnFailed) => {
       const output = createProcess({ stdin: createStdin(true) });

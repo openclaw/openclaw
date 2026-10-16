@@ -9,5 +9,5 @@ internal fun localizedWearUppercase(value: String): String = wearUppercase(value
 
 internal fun wearUppercase(
   value: String,
-  locale: Locale = Locale.getDefault(),
+  locale: Locale,
 ): String = value.uppercase(locale)

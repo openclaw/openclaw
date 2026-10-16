@@ -25,10 +25,11 @@ import {
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigTimeoutFallback,
-  shouldBuildCodexPluginThreadConfig,
+  buildCodexPluginThreadConfigInputFingerprint,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
+  buildScheduledCodexAppAuthorityInputFingerprint,
   intersectCodexPluginThreadConfigWithScheduledAuthority,
   readCurrentCodexScheduledAppPolicy,
 } from "./scheduled-app-authority.js";
@@ -46,8 +47,9 @@ type CodexPluginThreadConfigDeadlineRequest = (
 
 type BuildCodexPluginThreadConfigWithinDeadlineParams = Omit<
   Parameters<typeof buildCodexPluginThreadConfig>[0],
-  "request"
+  "request" | "policy"
 > & {
+  policy: ResolvedCodexPluginsPolicy;
   requestTimeoutMs: number;
   signal: AbortSignal;
   request: CodexPluginThreadConfigDeadlineRequest;
@@ -72,20 +74,19 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   hostedAppsSupported?: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
-  const pluginThreadConfigRequired =
-    params.hostedAppsSupported === false ||
-    Boolean(params.scheduledRuntimeAuthority) ||
-    !params.nativeToolSurfaceEnabled ||
-    shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
     params.hostedAppsSupported !== false &&
     (params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority)
       ? params.pluginConfig
       : disableCodexPluginThreadConfig(params.pluginConfig);
-  const resolvedPluginPolicy = pluginThreadConfigRequired
-    ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
-    : undefined;
+  const policy = resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig);
+  const pluginThreadConfigRequired =
+    params.hostedAppsSupported === false ||
+    Boolean(params.scheduledRuntimeAuthority) ||
+    !params.nativeToolSurfaceEnabled ||
+    policy.configured;
+  const resolvedPluginPolicy = pluginThreadConfigRequired ? policy : undefined;
   return {
     pluginThreadConfigRequired,
     pluginThreadConfigPluginConfig,
@@ -161,92 +162,93 @@ async function buildCodexPluginThreadConfigWithinDeadline(
       );
     }
     return buildCodexPluginThreadConfigTimeoutFallback({
-      pluginConfig: buildParams.pluginConfig,
+      policy: buildParams.policy,
       appCacheKey: buildParams.appCacheKey,
       message: `Codex plugin discovery exceeded its ${timeoutMs} ms startup budget; plugin apps were disabled for this turn.`,
     });
   }
 }
 
-/** Creates the recovery metadata and bounded builder used by thread startup. */
-export function createCodexPluginThreadConfigStartupProvider(params: {
-  inputFingerprint: string | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  policy: ResolvedCodexPluginsPolicy | undefined;
-  requestTimeoutMs: number;
-  signal: AbortSignal;
-  pluginConfig?: unknown;
-  client: Pick<CodexAppServerClient, "request">;
-  configCwd?: string;
-  appCache?: CodexAppInventoryCache;
+/** Captures fingerprint inputs before startup work and binds the provider at admission. */
+export function prepareCodexPluginThreadConfigStartupProvider(prepared: {
+  startupPolicy: ReturnType<typeof resolveCodexPluginThreadConfigStartupPolicy>;
   appCacheKey: string;
-  metadataCache?: CodexPluginMetadataCache;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
-  const {
-    client,
-    policy,
-    inputFingerprint,
-    enabledPluginConfigKeys,
-    appCache,
-    metadataCache: configuredMetadataCache,
-    ...buildParams
-  } = params;
-  const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
-  return {
-    enabled: true,
-    // The bound context stores admitted apps only; native config owns excluded
-    // app IDs and tool/link overrides that can change between turns.
-    requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
-    inputFingerprint,
-    enabledPluginConfigKeys,
-    accountAppRecoveryEnabled: policy?.allowAllPlugins,
-    recoverablePluginConfigKeys: policy
-      ? resolveRecoverableCodexPluginConfigKeys({
-          policy,
-          metadataCache,
-          appCacheKey: params.appCacheKey,
-          configCwd: params.configCwd,
-        })
-      : undefined,
-    build: async (buildOptions?: { threadId?: string }) => {
-      const config = await buildCodexPluginThreadConfigWithinDeadline({
-        ...buildParams,
-        threadId: buildOptions?.threadId,
-        appCache: appCache ?? defaultCodexAppInventoryCache,
+  const { startupPolicy, appCacheKey } = prepared;
+  const policy = startupPolicy.resolvedPluginPolicy;
+  if (!policy) {
+    return undefined;
+  }
+  const { pluginThreadConfigPluginConfig: pluginConfig, enabledPluginConfigKeys } = startupPolicy;
+  const inputFingerprint = buildScheduledCodexAppAuthorityInputFingerprint(
+    buildCodexPluginThreadConfigInputFingerprint({ policy, appCacheKey }),
+    prepared.scheduledRuntimeAuthority,
+  );
+  return (params: {
+    requestTimeoutMs: number;
+    signal: AbortSignal;
+    client: Pick<CodexAppServerClient, "request">;
+    configCwd?: string;
+    appCache?: CodexAppInventoryCache;
+    metadataCache?: CodexPluginMetadataCache;
+    scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
+  }) => {
+    const { client, appCache, metadataCache: configuredMetadataCache, ...buildParams } = params;
+    const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
+    return {
+      enabled: true,
+      // The bound context stores admitted apps only; native config owns excluded
+      // app IDs and tool/link overrides that can change between turns.
+      requiresCurrentPolicyCheck: Boolean(policy.enabled || params.scheduledRuntimeAuthority),
+      inputFingerprint,
+      enabledPluginConfigKeys,
+      accountAppRecoveryEnabled: policy.allowAllPlugins,
+      recoverablePluginConfigKeys: resolveRecoverableCodexPluginConfigKeys({
+        policy,
         metadataCache,
-        failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
-        transform: params.scheduledRuntimeAuthority
-          ? async (builtConfig, request) =>
-              intersectCodexPluginThreadConfigWithScheduledAuthority(
-                builtConfig,
-                params.scheduledRuntimeAuthority,
-                await readCurrentCodexScheduledAppPolicy({
-                  request,
-                  configCwd: params.configCwd,
-                  threadId: buildOptions?.threadId,
-                }),
-              )
-          : undefined,
-        request: (method, requestParams, options) => client.request(method, requestParams, options),
-      });
-      return params.scheduledRuntimeAuthority && params.inputFingerprint
-        ? { ...config, inputFingerprint: params.inputFingerprint }
-        : config;
-    },
+        appCacheKey,
+        configCwd: params.configCwd,
+      }),
+      build: async (buildOptions?: { threadId?: string }) => {
+        const config = await buildCodexPluginThreadConfigWithinDeadline({
+          ...buildParams,
+          pluginConfig,
+          policy,
+          appCacheKey,
+          threadId: buildOptions?.threadId,
+          appCache: appCache ?? defaultCodexAppInventoryCache,
+          metadataCache,
+          failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
+          transform: params.scheduledRuntimeAuthority
+            ? async (builtConfig, request) =>
+                intersectCodexPluginThreadConfigWithScheduledAuthority(
+                  builtConfig,
+                  params.scheduledRuntimeAuthority,
+                  await readCurrentCodexScheduledAppPolicy({
+                    request,
+                    configCwd: params.configCwd,
+                    threadId: buildOptions?.threadId,
+                  }),
+                )
+            : undefined,
+          request: (method, requestParams, options) =>
+            client.request(method, requestParams, options),
+        });
+        return params.scheduledRuntimeAuthority && inputFingerprint
+          ? { ...config, inputFingerprint }
+          : config;
+      },
+    };
   };
 }
 
 function resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs: number): number {
-  const finiteRequestTimeoutMs =
-    Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
-      ? requestTimeoutMs
-      : CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS * CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR;
   return Math.min(
     CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS,
     Math.max(
       CODEX_PLUGIN_THREAD_CONFIG_MIN_TIMEOUT_MS,
-      Math.floor(finiteRequestTimeoutMs / CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR),
+      Math.floor(requestTimeoutMs / CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR),
     ),
   );
 }

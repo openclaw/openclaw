@@ -76,7 +76,7 @@ describe("createMusicGenerateTool status actions", () => {
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; the completion agent will send the finished music here.",
+        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished music here.",
       },
     ]);
     expect(result?.details).toMatchObject({

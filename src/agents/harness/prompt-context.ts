@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import type { AgentHarnessAttemptParamsV2 } from "./types.js";
 
-/** Bound transcript reads to the model budget while preserving complete messages. */
+/** Bound transcript reads to the model budget while preserving owned tool frames. */
 export function resolveAgentHarnessHistoryLimits(
   contextTokenBudget?: number,
 ): SessionModelContextLimits {

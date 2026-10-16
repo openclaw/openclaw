@@ -74,9 +74,13 @@ Open the receiver Control UI. Shared rows appear under the source node's heading
 
 Publication is shared with the receiver's permitted viewers, not just the named owner. Viewers need `operator.read`; on role-restricted Gateways, their profile's role must also permit viewing others' sessions (`sessions.others: "view"`, `"suggest"`, or `"write"`). Owner-only and unprofiled restricted viewers cannot see published rows. See [Operator scopes](/gateway/operator-scopes).
 
-The catalog refreshes by polling, not a live transcript stream. The source node must remain connected for listings and reads. Long transcripts are paginated; individual text fields are redacted and clipped when necessary.
+The catalog refreshes by polling, not a live transcript stream. The source node must remain connected for listings and reads. Long transcripts are paginated; individual text fields are clipped when necessary and are not secret-masked.
 
-Progressive catalog listings used during chat startup wait at most five seconds in the foreground. Concurrent viewers share the node request and receive a pending host, retaining its last good page when available. The refreshed page arrives through the catalog's normal host update. Targeted metadata lookups, pagination, and callers without progress updates still await a complete response. Pending requests and retained pages belong to the receiver's Session Share service; configuration changes, node reconnections, and service retirement invalidate them.
+Catalog listings, searches, and pagination use one complete snapshot per requested paired node. The receiver retains at most 32 node snapshots and runs at most four refreshes concurrently. Discovery alone does not invoke nodes. At capacity, a new host returns a loading result immediately. A later catalog request can admit it after work settles and an idle, less recently requested snapshot can be replaced. The receiver refreshes it in the background every 30 seconds, with one refresh at a time per node and a five-minute budget for all source pages (at most 30 seconds per invocation). A snapshot is limited to 10,000 sessions and 16 MiB of serialized pages. Exceeding either limit fails the refresh explicitly without publishing a partial catalog; reduce the shared groups on the source node. A failed refresh backs off from 30 seconds to at most five minutes. Snapshots older than 60 seconds are unavailable until a refresh succeeds; transcript reads always recheck sharing on the source.
+
+A cold listing returns an explicit loading host immediately. Progressive callers receive the snapshot through the catalog's normal host update; other callers can refresh the catalog. Unavailable or expired snapshots return no rows, including while a refresh is running. Warm callers receive a complete page from the snapshot without waiting for the source. Configuration changes, observed node disconnections or reconnections, and service retirement invalidate snapshots and pending publications. The receiver checks node connections during catalog requests, background discovery, and before publishing a refresh. There is no remote share-change subscription: source changes reach the receiver on the next successful background refresh. Updating the receiver requires no configuration or stored-state migration.
+
+The source reads its session metadata inventory in a background worker and reuses it across pages and refreshes while the database revision is unchanged. Writes from the source Gateway, database replacement, and configuration changes invalidate that inventory. Every page still prepares current creator identities and rechecks whether its selected sessions remain shared before publication.
 
 Listings leave cold transcript archives untouched and use any stored title metadata. To read cold history, open the session on the source Gateway first so its normal history owner restores the archive. Each source page also bounds raw transcript reads to 8 MiB; a single larger entry returns an explicit error instead of being silently skipped. Inspect that entry on the source Gateway.
 
@@ -116,7 +120,7 @@ The source chooses what to publish; the receiver trusts the paired device for th
 
 With the two-command allowlist, the node exposes no shell execution, filesystem browsing, terminal uploads, plugin tools, MCP servers, skills, worker hosting, or computer use. Both commands are read-only, and every transcript read rechecks whether the session is still shared. The receiver does not need access to the source Gateway's HTTP endpoint or authentication credentials.
 
-Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Redaction masks known credential patterns; it does not make arbitrary conversation content safe to publish. Choose groups deliberately and treat received transcripts as untrusted text.
+Sharing a session exposes its user and assistant conversation text and catalog metadata, which may include workspace paths or branch names. Included text is not secret-masked. Review credentials and other sensitive content before publishing. Choose groups deliberately and treat received transcripts as untrusted text.
 
 ## Troubleshooting
 
@@ -140,7 +144,7 @@ Refresh the catalog. The source may be offline, the session may have been delete
 
 **Catalog refreshes sometimes take 30 seconds**
 
-When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs discovery and node invocation phases that take at least one second. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
+When receiver diagnostics and warning logs are enabled, `gateway/session-catalog` logs background refreshes that take at least one second, at most once per minute. These refreshes do not delay catalog list responses. A `TIMEOUT` with `nodeCommandDispatched: false` occurred before dispatch; `true` means the receiver dispatched the command, so inspect the source node and its connection. It does not prove that the source handler started. An absent field leaves dispatch unknown. These records include bounded node error codes and durations, without node identifiers, request parameters, or error messages.
 
 **Names do not link to local profiles**
 

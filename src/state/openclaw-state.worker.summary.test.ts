@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
@@ -16,6 +17,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
+import { pluginStateLookup } from "../plugin-state/plugin-state-store.sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -64,7 +66,6 @@ it("retains the shared native handle until its last actor closes and preserves r
   );
   backends.add(first).add(second);
   await first[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
-  await second[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
   const database = openOpenClawStateDatabase();
   const key = { pluginId: "native-borrow-fixture", namespace: "shared", key: "answer" };
   const register = (backend: typeof first, value: number) => {
@@ -104,13 +105,9 @@ it("retains the shared native handle until its last actor closes and preserves r
     }
   };
   expect(register(first, 1)).toEqual({ ok: true, value: undefined });
-  // A read-only lookup does not borrow the native writer; promote this actor before closing its sibling.
+  // Promote this actor before closing its sibling.
   expect(register(second, 1)).toEqual({ ok: true, value: undefined });
-  expect(
-    runWithSqliteWorkerStateContext(context, () =>
-      second.execute({ type: "pluginState.lookup", input: key }),
-    ),
-  ).toEqual({ ok: true, value: 1 });
+  expect(pluginStateLookup(key)).toEqual(1);
 
   await first.close();
   expect(database.db.isOpen).toBe(true);
@@ -123,12 +120,7 @@ it("retains the shared native handle until its last actor closes and preserves r
     createSqliteWorkerBackend(undefined, { databasePath: reopenedContext.admission.databasePath }),
   );
   backends.add(reopened);
-  await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
-  expect(
-    runWithSqliteWorkerStateContext(reopenedContext, () =>
-      reopened.execute({ type: "pluginState.lookup", input: key }),
-    ),
-  ).toEqual({ ok: true, value: 2 });
+  expect(pluginStateLookup(key)).toEqual(2);
 });
 
 it.each(["kv", "health"] as const)(
@@ -144,12 +136,8 @@ it.each(["kv", "health"] as const)(
       }),
     );
     backends.add(kv);
-    await kv[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
-    expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        kv.execute({ type: "pluginState.lookup", input: key }),
-      ),
-    ).toEqual({ ok: true, value: undefined });
+    await kv[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
+    expect(pluginStateLookup(key)).toBeUndefined();
     expect(readFileSync(databasePath)).toEqual(Buffer.alloc(0));
     const stages: string[] = [];
     withStateDatabaseSchemaMaintenance({ databasePath }, () => {
@@ -159,7 +147,7 @@ it.each(["kv", "health"] as const)(
         grant();
       });
       admission.bindDatabaseAuthority({
-        databasePath,
+        databasePath: context.admission.identity.canonicalPath,
         assertRequest: context.admission.assertCurrent,
         assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
         acquireSchema: () => acquireStateDatabaseSchemaLease(databasePath),
@@ -237,11 +225,7 @@ it.each(["kv", "health"] as const)(
         ),
       ).toBe(true);
     } else {
-      expect(
-        runWithSqliteWorkerStateContext(context, () =>
-          kv.execute({ type: "pluginState.lookup", input: key }),
-        ),
-      ).toEqual({ ok: true, value: { value: 42 } });
+      expect(pluginStateLookup(key)).toEqual({ value: 42 });
     }
     await (firstToClose === "kv" ? health : kv).close();
     expect(database.db.isOpen).toBe(false);
@@ -251,22 +235,11 @@ it.each(["kv", "health"] as const)(
       createSqliteWorkerBackend(undefined, { databasePath }),
     );
     backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
-    expect(
-      runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "pluginState.lookup", input: key }),
-      ),
-    ).toEqual({ ok: true, value: { value: 42 } });
-    expect(
-      runWithSqliteWorkerStateContext(reopenedContext, () =>
-        reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-      ),
-    ).toMatchObject({
-      state: {
-        entries: {
-          [configPath]: {
-            lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
-          },
+    expect(pluginStateLookup(key)).toEqual({ value: 42 });
+    expect(readConfigHealthStateInDatabase(openOpenClawStateDatabase().db)).toMatchObject({
+      entries: {
+        [configPath]: {
+          lastObservedSuspiciousSignature: firstToClose === "kv" ? "second" : "first",
         },
       },
     });
@@ -293,41 +266,71 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(first).add(second);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       runWithSqliteWorkerStateContext(context, () =>
-        first.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
+        first.execute({
+          type: "claws.install-schema-versions",
+          input: { artifactPreservingReadOnly: false },
+        }),
       ),
-    ).toEqual({ state: { entries: {} }, basis: {} });
+    ).toEqual([]);
     expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
-    const write = (backend: typeof first, key: string) =>
-      runWithSqliteWorkerStateContext(context, () =>
-        operation === "config.health.patch"
-          ? backend.execute({
-              type: operation,
-              input: {
-                configPath: `/${key}.json`,
-                patch: { last_observed_suspicious_signature: key },
-                expected: null,
-                updatedAtMs: 100,
-              },
-            })
-          : backend.execute({
-              type: operation,
-              input: {
-                scope,
-                maxEntries: 10,
-                record: prepareSqliteAuditRecord(scope, {
-                  key,
-                  value: { marker: key },
-                  createdAt: 100,
-                }),
-              },
-            }),
-      );
+    const write = (backend: typeof first, key: string) => {
+      const execute = () =>
+        runWithSqliteWorkerStateContext(context, () =>
+          operation === "config.health.patch"
+            ? backend.execute({
+                type: operation,
+                input: {
+                  configPath: `/${key}.json`,
+                  patch: { last_observed_suspicious_signature: key },
+                  expected: null,
+                  updatedAtMs: 100,
+                },
+              })
+            : backend.execute({
+                type: operation,
+                input: {
+                  scope,
+                  maxEntries: 10,
+                  record: prepareSqliteAuditRecord(scope, {
+                    key,
+                    value: { marker: key },
+                    createdAt: 100,
+                  }),
+                },
+              }),
+        );
+      if (operation === "config.health.patch") {
+        return execute();
+      }
+      const stages: string[] = [];
+      const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+        stages.push(request.stage);
+        context.admission.assertCurrent();
+        grant();
+      });
+      const nativePost = admission.port.postMessage.bind(admission.port);
+      // Service the actual grant before this same-thread backend waits for its response.
+      const dispatch = vi
+        .spyOn(admission.port, "postMessage")
+        .mockImplementation((message, transferList) => {
+          nativePost(message, transferList);
+          admission.service();
+        });
+      try {
+        const result = withSqliteWorkerOperationAdmission({ port: admission.port }, execute);
+        expect(stages).toEqual(["transaction", "commit"]);
+        return result;
+      } finally {
+        dispatch.mockRestore();
+        admission.finish();
+      }
+    };
     const expectedResult = operation === "config.health.patch" ? true : undefined;
     expect(write(first, "first")).toBe(expectedResult);
     expect(write(second, "second")).toBe(expectedResult);
@@ -345,20 +348,14 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
-      expect(
-        runWithSqliteWorkerStateContext(reopenedContext, () =>
-          reopened.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
-        ),
-      ).toMatchObject({
-        state: {
-          entries: {
-            "/first.json": { lastObservedSuspiciousSignature: "first" },
-            "/second.json": { lastObservedSuspiciousSignature: "second" },
-            "/third.json": { lastObservedSuspiciousSignature: "third" },
-          },
+      expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({
+        entries: {
+          "/first.json": { lastObservedSuspiciousSignature: "first" },
+          "/second.json": { lastObservedSuspiciousSignature: "second" },
+          "/third.json": { lastObservedSuspiciousSignature: "third" },
         },
       });
     } else {

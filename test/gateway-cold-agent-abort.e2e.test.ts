@@ -95,9 +95,13 @@ it(
         },
       });
       await instance.startGateway();
+      const started = instance;
       client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
+        url: started.url,
+        token: started.gatewayToken,
+      }).catch(async (error: unknown) => {
+        // Capture the owned child before cleanup retires it.
+        throw new Error(`${String(error)}\n${await started.diagnose()}`, { cause: error });
       });
       final = client.request(
         "agent",

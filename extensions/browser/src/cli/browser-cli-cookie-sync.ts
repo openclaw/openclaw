@@ -13,7 +13,7 @@ import {
   assertSystemCookiePlatform,
   readSystemProfileCookies,
   resolveSystemCookieSource,
-} from "../system-profile-api.js";
+} from "../browser/system-profiles.js";
 import {
   callBrowserRequest,
   runBrowserCliCommand,

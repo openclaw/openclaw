@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 
@@ -16,10 +17,9 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
       recursive: true,
       mode: fs.constants.COPYFILE_FICLONE,
     });
-    await fs.promises.copyFile(
-      path.join(preparedRoot, "node-host-launcher.mjs"),
-      path.join(root, "node-host-launcher.mjs"),
-    );
+    for (const filename of ["cli-invocation.mjs", "node-host-launcher.mjs"]) {
+      await fs.promises.copyFile(path.join(preparedRoot, filename), path.join(root, filename));
+    }
     const dependencies = path.resolve("node_modules");
     const fixtureDependencies = path.join(root, "node_modules");
     await fs.promises.mkdir(fixtureDependencies);
@@ -80,6 +80,7 @@ export function writeCandidateAuthorityEntrypoints(params: {
   events: string;
   ready: string;
   proceed: string;
+  receiptEndpoint: string;
   boundary: "candidate" | "doctor";
 }): string {
   const workerPath = path.join(params.root, "dist", workerDeclaration.distWorkerPath);
@@ -88,6 +89,7 @@ export function writeCandidateAuthorityEntrypoints(params: {
     import fs from 'node:fs';
     import fsp from 'node:fs/promises';
     import {setTimeout} from 'node:timers/promises';
+    ${fixtureReceiptClientSource(params.receiptEndpoint)}
     ${candidateAuthorityWorker.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
     const source=${JSON.stringify(candidateAuthorityWorker.href)};
     const role=process.argv[2]==='--doctor'?'doctor':process.argv[2]==='config'?'validate':process.argv.includes('--lint')?'readiness':process.argv[2]==='doctor'?'doctor':'candidate';
@@ -106,6 +108,7 @@ export function writeCandidateAuthorityEntrypoints(params: {
         if(role===${JSON.stringify(params.boundary)}) {
           fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(observation));
           fs.renameSync(${JSON.stringify(params.ready + ".tmp")},${JSON.stringify(params.ready)});
+          sendReceipt(${JSON.stringify(params.ready)},'config-backup');
           while(!fs.existsSync(${JSON.stringify(params.proceed)})) await setTimeout(10);
         }
       }

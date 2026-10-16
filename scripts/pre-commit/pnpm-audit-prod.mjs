@@ -583,7 +583,7 @@ export async function runPnpmAuditProd({
         reason: `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies.`,
       };
       stdout.write(
-        `${result.reason} Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n`,
+        `${result.reason} Upstream repository advisories were not checked; this is not a full vulnerability assessment.\n`,
       );
       return 0;
     }

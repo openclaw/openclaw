@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  assertProviderAuthAuthority,
+  attachProviderAuthAuthority,
+} from "../../plugins/provider-auth-authority.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -18,6 +22,7 @@ import {
   resetModelGenerationFixtureState,
 } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
@@ -34,7 +39,10 @@ vi.mock("../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: compactAuthMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: compactAuthMocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles:
+    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync:
     compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles,
   getApiKeyForModelCore: compactAuthMocks.getApiKeyForModelCore,
 }));
@@ -116,6 +124,85 @@ function compactSession(
 }
 
 describe("harness compaction cancellation", () => {
+  it.each([
+    { supplied: false, revoke: false },
+    { supplied: false, revoke: true },
+    { supplied: true, revoke: false },
+    { supplied: true, revoke: true },
+  ])(
+    "retains credential authority through compaction supplied=$supplied revoke=$revoke",
+    async ({ supplied, revoke }) => {
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Compaction credential retired");
+        }
+      };
+      const model = makeProviderModelFixture({
+        provider: "local-proxy",
+        id: "proxy-model",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example/v1",
+      });
+      const plan = {
+        providerForAuth: model.provider,
+        authProfileProviderForAuth: model.provider,
+        selectedAuthMode: "api_key" as const,
+      };
+      compactAuthMocks.resolveModelAsync.mockResolvedValue({ model });
+      compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
+        createAuthProfileStoreFixture({}),
+      );
+      compactAuthMocks.prepareAgentRuntimeAuth.mockReturnValue({
+        plan,
+        attempts: [{ kind: "direct", plan }],
+      });
+      compactAuthMocks.getApiKeyForModelCore.mockResolvedValue(
+        attachProviderAuthAuthority(
+          { apiKey: "fixture-key", mode: "api-key", source: "plugin" },
+          assertCurrent,
+        ),
+      );
+      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async (params) => {
+        expect(params.resolvedApiKey).toBe("fixture-key");
+        current = false;
+        expect(() => assertProviderAuthAuthority(params.runtimeModel)).toThrow(
+          "Compaction credential retired",
+        );
+        return { ok: true, compacted: true };
+      });
+      registerCompactor(compact);
+      const operation = compactSession(
+        {
+          provider: model.provider,
+          model: model.id,
+          ...(supplied
+            ? {
+                runtimeModel: attachProviderAuthAuthority(model, assertCurrent),
+                resolvedApiKey: "fixture-key",
+              }
+            : {}),
+        },
+        {
+          sourceAuthority: {
+            assertActive: () => {},
+            operatorAuthority: undefined,
+            prepareDispatch: async () => {
+              current = !revoke;
+            },
+          },
+        },
+      );
+      if (revoke) {
+        await expect(operation).rejects.toThrow("Compaction credential retired");
+        expect(compact).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).resolves.toMatchObject({ ok: true, compacted: true });
+        expect(compact).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it.each(["manual", "required_preflight", "source revocation"] as const)(
     "keeps the original model authority through registered %s compaction and closes the host afterward",
     async (dispatch) => {

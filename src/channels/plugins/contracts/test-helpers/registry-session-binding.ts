@@ -13,9 +13,12 @@ import {
 } from "../../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
-import type { OpenKeyedStoreOptions } from "../../../../plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateActionAuthority,
+} from "../../../../plugin-sdk/plugin-state-runtime.js";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
@@ -136,11 +139,13 @@ async function createContractMatrixThreadBindingManager() {
     await getContractApi<MatrixContractApi>("matrix");
   setMatrixRuntime({
     state: {
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests("matrix", options),
+      openKeyedStoreV2: (
+        options: OpenAsyncKeyedStoreOptions,
+        authority: PluginStateActionAuthority = { assertCurrent() {} },
+      ) => createPluginStateKeyedStoreV2ForTests("matrix", options, authority),
       resolveStateDir: () => matrixSessionBindingStateDir,
     },
-  } as never);
+  });
   const manager = await createMatrixThreadBindingManager({
     accountId: matrixSessionBindingAuth.accountId,
     auth: matrixSessionBindingAuth,

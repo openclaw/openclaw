@@ -10,7 +10,7 @@ import {
   type NodeSession,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNullableRecord,
@@ -18,12 +18,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { createBrowserControlContext } from "../browser-control-state.js";
-import {
-  inspectBrowserDashboard,
-  requestBrowserDashboard,
-  stopBrowserDashboard,
-  assertBrowserDashboardTargetCurrent,
-} from "../browser-dashboard.js";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
@@ -181,6 +175,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { stopBrowserDashboard, inspectBrowserDashboard, requestBrowserDashboard } =
+        await import("../browser-dashboard.js");
       const run =
         methodRaw === "DELETE"
           ? stopBrowserDashboard
@@ -208,6 +204,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { inspectBrowserDashboard, assertBrowserDashboardTargetCurrent } =
+        await import("../browser-dashboard.js");
       const authority = { signal: requestSignal, assertCurrent: assertRequesterCurrent };
       const dashboard = await inspectBrowserDashboard(scope.data, authority);
       const tab = dashboard.browserTab;

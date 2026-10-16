@@ -1,169 +1,89 @@
-/** Tests final Gateway snapshots are emitted before ACP prompt resolution. */
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
-import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import type { GatewayClient } from "../gateway/client.js";
-import { createLoadSessionRequest, createPromptRequest } from "./translator.bridge-test-helpers.js";
+import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
+  createChatEvent,
+  createPendingPromptHarness,
+  DEFAULT_SESSION_KEY,
+} from "./translator.prompt-harness.test-support.js";
 
-vi.mock("./commands.js", () => ({
-  getAvailableCommands: () => [],
-}));
+vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 describe("acp final chat snapshots", () => {
-  async function createSnapshotHarness() {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        return new Promise(() => {});
+  it.each(["Hello", "A rewritten snapshot that is longer"])(
+    "keeps the emitted answer baseline after %s",
+    async (snapshot) => {
+      const { agent, sessionUpdate, promptPromise, runId } = await createPendingPromptHarness();
+      for (const [state, text] of [
+        ["delta", "Hello wide"],
+        ["delta", snapshot],
+        ["final", "Hello wide world"],
+      ]) {
+        await agent.handleGatewayEvent(
+          createChatEvent({
+            sessionKey: DEFAULT_SESSION_KEY,
+            runId,
+            state,
+            message: { content: [{ type: "text", text }] },
+          }),
+        );
       }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-    await agent.loadSession(createLoadSessionRequest("snapshot-session"));
-    sessionUpdate.mockClear();
-    const promptPromise = agent.prompt(createPromptRequest("snapshot-session", "hello"));
-    const runId = sessionStore.getSession("snapshot-session")?.activeRunId;
-    if (!runId) {
-      throw new Error("Expected ACP prompt run to be active");
-    }
-    return { agent, sessionUpdate, promptPromise, runId, sessionStore };
-  }
+      await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+      expect(
+        sessionUpdate.mock.calls.flatMap(([{ update }]) =>
+          update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
+        ),
+      ).toEqual(["Hello wide", " world"]);
+    },
+  );
 
-  it("emits final snapshot text before resolving end_turn", async () => {
-    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
-      await createSnapshotHarness();
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "final",
-        stopReason: "end_turn",
-        message: {
-          content: [{ type: "text", text: "FINAL TEXT SHOULD BE EMITTED" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  it("streams append-only frames and emits only the final missing tail before settlement", async () => {
+    const { agent, sessionUpdate, promptPromise, runId } = await createPendingPromptHarness();
+    const send = (payload: Record<string, unknown>) =>
+      agent.handleGatewayEvent(
+        createChatEvent({ sessionKey: DEFAULT_SESSION_KEY, runId, ...payload }),
+      );
+    await send({ state: "delta", message: { content: [{ type: "text", text: "Hello" }] } });
+    await send({ state: "delta", deltaText: " wide" });
     expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "snapshot-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "FINAL TEXT SHOULD BE EMITTED" },
-      },
+      sessionId: "session-1",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " wide" } },
     });
-    expect(sessionStore.getSession("snapshot-session")?.activeRunId).toBeNull();
-  });
-
-  it("does not duplicate text when final repeats the last delta snapshot", async () => {
-    const { agent, sessionUpdate, promptPromise, runId } = await createSnapshotHarness();
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "delta",
-        message: {
-          content: [{ type: "text", text: "Hello world" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "final",
-        stopReason: "end_turn",
-        message: {
-          content: [{ type: "text", text: "Hello world" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    const chunks = sessionUpdate.mock.calls.filter(
-      (call: unknown[]) =>
-        (call[0] as Record<string, unknown>)?.update &&
-        (call[0] as Record<string, Record<string, unknown>>).update?.sessionUpdate ===
-          "agent_message_chunk",
-    );
-    expect(chunks).toHaveLength(1);
-  });
-
-  it("streams append-only frames before emitting the final missing tail", async () => {
-    const { agent, sessionUpdate, promptPromise, runId } = await createSnapshotHarness();
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "delta",
-        message: {
-          content: [{ type: "text", text: "Hello" }],
-        },
-      },
-    } as unknown as EventFrame);
-
-    await agent.handleGatewayEvent({
-      type: "event",
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "delta",
-        deltaText: " wide",
-      },
+    await send({
+      state: "delta",
+      message: { content: [{ type: "text", text: "Hello wide" }] },
     });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "snapshot-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: " wide" },
-      },
+    await send({
+      state: "final",
+      stopReason: "max_tokens",
+      message: { content: [{ type: "text", text: "Hello wide world" }] },
     });
-
-    await agent.handleGatewayEvent({
-      event: "chat",
-      payload: {
-        sessionKey: "snapshot-session",
-        runId,
-        state: "final",
-        stopReason: "max_tokens",
-        message: {
-          content: [{ type: "text", text: "Hello wide world" }],
-        },
-      },
-    } as unknown as EventFrame);
-
     await expect(promptPromise).resolves.toEqual({ stopReason: "max_tokens" });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "snapshot-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Hello" },
-      },
+    expect(
+      sessionUpdate.mock.calls.flatMap(([notification]) =>
+        notification.update.sessionUpdate === "agent_message_chunk"
+          ? [notification.update.content]
+          : [],
+      ),
+    ).toEqual([
+      { type: "text", text: "Hello" },
+      { type: "text", text: " wide" },
+      { type: "text", text: " world" },
+    ]);
+  });
+});
+
+describe("acp prompt size hardening", () => {
+  it("rejects oversized prompt blocks without leaking active runs", async () => {
+    await expectOversizedPromptRejected({
+      sessionId: "prompt-limit-oversize",
+      text: "a".repeat(2 * 1024 * 1024 + 1),
     });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "snapshot-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: " world" },
-      },
+  });
+
+  it("rejects oversize final messages from cwd prefix without leaking active runs", async () => {
+    await expectOversizedPromptRejected({
+      sessionId: "prompt-limit-prefix",
+      text: "a".repeat(2 * 1024 * 1024),
     });
   });
 });

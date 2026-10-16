@@ -122,7 +122,7 @@ export function readLastComputerActParams(
 }
 
 export function createVisionComputerTool(options: ComputerToolOptions = {}) {
-  return createComputerTool({ modelHasVision: true, ...options });
+  return createComputerTool(options);
 }
 
 export function resetComputerToolMocks() {

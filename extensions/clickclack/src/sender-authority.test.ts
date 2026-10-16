@@ -336,75 +336,69 @@ describe("ClickClack sender authority", () => {
   );
 });
 
-it.each([
-  ["message", "outbound"],
-  ["outbound", "message"],
-] as const)(
-  "keeps a revoked %s sender independent from an active %s account",
-  async (revoked, active) => {
-    const gates = { alpha: createRequestGate(), beta: createRequestGate() };
-    const requests = installTransport({
-      beforeResponse: (stage, account) => (stage === "dm" ? gates[account].hold() : undefined),
+it("keeps a revoked outbound sender independent from an active message account", async () => {
+  const gates = { alpha: createRequestGate(), beta: createRequestGate() };
+  const requests = installTransport({
+    beforeResponse: (stage, account) => (stage === "dm" ? gates[account].hold() : undefined),
+  });
+  const alpha = createAuthority();
+  const beta = createAuthority();
+  const first = observe(
+    senders("outbound").text({
+      cfg,
+      accountId: "alpha",
+      to: "dm:usr_alpha",
+      text: "Alpha reply",
+      ...alpha.context,
+    }),
+  );
+  const second = observe(
+    senders("message").text({
+      cfg,
+      accountId: "beta",
+      to: "dm:usr_beta",
+      text: "Beta reply",
+      replyToId: "msg_quote",
+      ...beta.context,
+    }),
+  );
+  try {
+    await Promise.all([gates.alpha.entered(first), gates.beta.entered(second)]);
+    alpha.revoke();
+    gates.alpha.release();
+    expect(await first).toMatchObject({
+      status: "rejected",
+      error: { message: expect.stringContaining("sender retired") },
     });
-    const alpha = createAuthority();
-    const beta = createAuthority();
-    const first = observe(
-      senders(revoked).text({
-        cfg,
-        accountId: "alpha",
-        to: "dm:usr_alpha",
-        text: "Alpha reply",
-        ...alpha.context,
-      }),
-    );
-    const second = observe(
-      senders(active).text({
-        cfg,
-        accountId: "beta",
-        to: "dm:usr_beta",
-        text: "Beta reply",
-        replyToId: "msg_quote",
-        ...beta.context,
-      }),
-    );
-    try {
-      await Promise.all([gates.alpha.entered(first), gates.beta.entered(second)]);
-      alpha.revoke();
-      gates.alpha.release();
-      expect(await first).toMatchObject({
-        status: "rejected",
-        error: { message: expect.stringContaining("sender retired") },
-      });
-      gates.beta.release();
-      expect(await second).toMatchObject({ status: "fulfilled", value: { messageId: "msg_beta" } });
-      const alphaRequests = requests.filter(({ url }) => new URL(url).hostname === "alpha.example");
-      const betaRequests = requests.filter(({ url }) => new URL(url).hostname === "beta.example");
-      expectAccountRequests(alphaRequests, "alpha");
-      expectAccountRequests(betaRequests, "beta");
-      expect(requestPaths(alphaRequests)).toEqual(["POST /api/dms"]);
-      expect(requestPaths(betaRequests)).toEqual([
-        "POST /api/dms",
-        "POST /api/dms/dcn_beta/messages",
-      ]);
-      expect(jsonBody(alphaRequests[0])).toEqual({
-        workspace_id: "wsp_alpha",
-        member_ids: ["usr_alpha"],
-      });
-      expect(jsonBody(betaRequests[0])).toEqual({
-        workspace_id: "wsp_beta",
-        member_ids: ["usr_beta"],
-      });
-      expect(jsonBody(betaRequests[1])).toEqual({
-        body: "Beta reply",
-        quoted_message_id: "msg_quote",
-      });
-    } finally {
-      gates.alpha.release();
-      gates.beta.release();
-      await Promise.all([first, second]);
-    }
-  },
-);
+    gates.beta.release();
+    expect(await second).toMatchObject({ status: "fulfilled", value: { messageId: "msg_beta" } });
+    const alphaRequests = requests.filter(({ url }) => new URL(url).hostname === "alpha.example");
+    const betaRequests = requests.filter(({ url }) => new URL(url).hostname === "beta.example");
+    expectAccountRequests(alphaRequests, "alpha");
+    expectAccountRequests(betaRequests, "beta");
+    expect(requestPaths(alphaRequests)).toEqual(["POST /api/dms"]);
+    expect(requestPaths(betaRequests)).toEqual([
+      "POST /api/dms",
+      "POST /api/dms/dcn_beta/messages",
+    ]);
+    expect(jsonBody(alphaRequests[0])).toEqual({
+      workspace_id: "wsp_alpha",
+      member_ids: ["usr_alpha"],
+    });
+    expect(jsonBody(betaRequests[0])).toEqual({
+      workspace_id: "wsp_beta",
+      member_ids: ["usr_beta"],
+    });
+    expect(jsonBody(betaRequests[1])).toEqual({
+      body: "Beta reply",
+      quoted_message_id: "msg_quote",
+    });
+  } finally {
+    gates.alpha.release();
+    gates.beta.release();
+    await Promise.all([first, second]);
+  }
+});
 
 it("reports the legacy accepted text identity before a later attachment is revoked", async () => {
   const sender = clickClackPlugin.outbound?.sendMedia;

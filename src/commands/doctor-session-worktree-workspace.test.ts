@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -37,6 +41,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -55,6 +60,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
   await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir }, async () => {
     const env = { ...process.env };
     const cfg = { agents: { entries: { main: { workspace: repoRoot }, ops: { workspace } } } };
+    setRuntimeConfigSnapshot(cfg);
     // Persisted legacy project setup, not a public Git registration-flow proof.
     ensureProjectRegistrySchema({ env });
     const project = runOpenClawStateWriteTransaction(
@@ -71,7 +77,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       env,
       sessionKey: `agent:${agentId}:legacy-worktree`,
     }));
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: "legacy",
       name: "legacy",
       repoFingerprint: "0123456789abcdef",
@@ -128,7 +134,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     }
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Repaired canonical workspace metadata for 2 of 2"),
+      expect.stringContaining("Repaired saved workspace metadata for 2 of 2"),
       "Session worktrees",
     );
   });

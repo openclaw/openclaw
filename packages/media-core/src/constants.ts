@@ -24,9 +24,6 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (mime.startsWith("video/")) {
     return "video";
   }
-  if (mime === "application/pdf") {
-    return "document";
-  }
   if (mime.startsWith("text/")) {
     return "document";
   }
@@ -45,8 +42,6 @@ export function maxBytesForKind(kind: MediaKind): number {
       return MAX_AUDIO_BYTES;
     case "video":
       return MAX_VIDEO_BYTES;
-    case "document":
-      return MAX_DOCUMENT_BYTES;
     default:
       return MAX_DOCUMENT_BYTES;
   }

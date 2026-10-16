@@ -1,11 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
@@ -26,10 +22,10 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
     "openclaw/plugin-sdk/acp-runtime",
   );
-  acpHost.read.mockImplementation(actual.readAcpSessionEntry);
+  acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
   return {
     ...actual,
-    readAcpSessionEntry: acpHost.read,
+    readAcpSessionEntryAsync: acpHost.read,
   };
 });
 
@@ -40,8 +36,9 @@ export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
 };
 
 export function useTelegramThreadBindingsFixture() {
+  let stateRuntime = initialStateRuntime;
   let state: OpenClawTestState;
-  let store: PluginStateKeyedStore<TelegramThreadBindingRecord>;
+  let store: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
   const managers = new Set<Awaited<ReturnType<typeof createTelegramThreadBindingManager>>>();
   const stopManagers = async () => {
     for (const manager of managers) {
@@ -50,7 +47,7 @@ export function useTelegramThreadBindingsFixture() {
     managers.clear();
   };
   const installStore = (
-    next: PluginStateKeyedStore<TelegramThreadBindingRecord>,
+    next: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>,
     allowLegacySync = false,
   ) => {
     store = next;
@@ -63,31 +60,37 @@ export function useTelegramThreadBindingsFixture() {
             if (!allowLegacySync) {
               throw new Error("Bundled bindings must not execute host SQLite");
             }
-            return createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+            return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
           },
           // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
-          openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
+          openKeyedStoreV2: (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"],
         },
       }),
     );
   };
   beforeEach(async () => {
+    // A source-reload case may reset modules while retaining this fixture.
+    stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
     acpHost.read.mockReset();
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
     );
-    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntry);
+    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
     await stopManagers();
     state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-telegram-bindings-",
     });
-    resetPluginStateStoreForTests({ closeDatabase: false });
+    stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
-      createPluginStateKeyedStoreForTests("telegram", {
-        namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-        maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-      }),
+      stateRuntime.createPluginStateKeyedStoreV2ForTests(
+        "telegram",
+        {
+          namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+          maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+        },
+        { assertCurrent() {} },
+      ),
     );
     await store.clear();
   });
@@ -95,7 +98,7 @@ export function useTelegramThreadBindingsFixture() {
     vi.useRealTimers();
     await stopManagers();
     clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
+    stateRuntime.resetPluginStateStoreForTests();
     await state.cleanup();
   });
   return {

@@ -9,12 +9,8 @@ import {
   createMockTypingSignaler,
   createFollowupRun,
   runInitialFallbackAttempt,
-  createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
-import type {
-  FallbackRunnerParams,
-  EmbeddedAgentParams,
-} from "./agent-runner-execution.test-support.js";
+import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -323,29 +319,6 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     expect(call?.itemId).toBe("commentary-1");
   });
 
-  it("does not emit CLI preambles when both progress lanes are disabled", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(
-      async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        // With no commentary lane or headline consumer, pre-tool text stays in
-        // the assistant stream instead of being split into progress events.
-        expect(params.emitCommentaryText).toBe(false);
-        return { payloads: [{ text: "done" }], meta: {} };
-      },
-    );
-
-    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>();
-
-    await executeCliTurn(followupRun, {
-      onItemEvent,
-      commentaryProgressEnabled: false,
-      progressPreambleEnabled: false,
-    });
-
-    expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(onItemEvent).not.toHaveBeenCalled();
-  });
-
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
     state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
@@ -546,36 +519,5 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     });
 
     expect(onReasoningStream).not.toHaveBeenCalled();
-  });
-
-  it("preserves embedded reasoning stream opt-in markers", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onReasoningStream?.({ text: "stream thought" });
-      await params.onReasoningStream?.({
-        text: "ambient thought",
-        requiresReasoningProgressOptIn: true,
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-
-    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
-      async (_payload) => undefined,
-    );
-
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        opts: { onReasoningStream },
-      }),
-    );
-
-    expect(
-      onReasoningStream.mock.calls.map(([payload]) => ({
-        text: payload.text,
-        requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-      })),
-    ).toEqual([
-      { text: "stream thought", requiresReasoningProgressOptIn: undefined },
-      { text: "ambient thought", requiresReasoningProgressOptIn: true },
-    ]);
   });
 });

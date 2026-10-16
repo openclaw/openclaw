@@ -1,9 +1,3 @@
-/**
- * Realtime voice consult-question extraction and result summarization helpers.
- *
- * These utilities connect Talk tool calls to spoken follow-up answers by
- * pulling human-readable questions/results out of provider-owned payloads.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
@@ -67,10 +61,7 @@ export function readRealtimeVoiceConsultQuestion(
   return readTrimmedStringAlias(args as Record<string, unknown>, keys);
 }
 
-/** Normalize consult questions for stable matching across punctuation/casing. */
-export function normalizeRealtimeVoiceConsultQuestion(
-  value: string | undefined,
-): string | undefined {
+function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): string | undefined {
   return (
     value
       ?.toLowerCase()
@@ -80,7 +71,6 @@ export function normalizeRealtimeVoiceConsultQuestion(
   );
 }
 
-/** Compare two consult questions with exact, containment, and token-overlap matching. */
 export function matchRealtimeVoiceConsultQuestions(
   left: string | undefined,
   right: string | undefined,

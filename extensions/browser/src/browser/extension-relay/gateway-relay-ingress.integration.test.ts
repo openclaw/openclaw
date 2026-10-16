@@ -10,7 +10,7 @@ import {
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../control-service.js";
-import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
+import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import type { RelayOwnerClient } from "./owner-client.js";
 import { RELAY_OWNER_LIMIT } from "./owner-protocol.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
@@ -48,6 +48,7 @@ it.each(["peer-close", "preparation-failure", "superseded"] as const)(
         }
         return attach;
       });
+      const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
       const server = http.createServer();
       server.on("upgrade", (req, socket, head) => {
         void handleGatewayExtensionUpgrade(req, socket, head);

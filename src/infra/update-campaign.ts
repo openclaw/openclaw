@@ -27,14 +27,14 @@ type UpdateCampaignAdoptionResult =
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
   inspect?: Partial<GatewayActiveWorkInspectors>;
-  apply: (context: { forced: boolean }) => Promise<"handoff" | "applied" | "failed">;
+  apply: (context: {
+    forced: boolean;
+    target: UpdateCampaignTarget;
+  }) => Promise<"handoff" | "applied" | "failed">;
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
 function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
-  if (a.kind !== b.kind) {
-    return false;
-  }
   if (a.kind === "package" && b.kind === "package") {
     return a.version === b.version;
   }
@@ -49,7 +49,6 @@ function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
 
 /** Owns the single in-memory automatic-update campaign for this process. */
 export class UpdateCampaignController {
-  private readonly createId = randomUUID;
   private campaign: UpdateCampaignState | undefined;
   private target: UpdateCampaignTarget | undefined;
   private announcement: UpdateCampaignAnnouncement | undefined;
@@ -73,6 +72,20 @@ export class UpdateCampaignController {
     return true;
   }
 
+  /** Rearm an existing Git announcement using its owner-held apply policy. */
+  refreshGitTarget(target: Extract<UpdateCampaignTarget, { kind: "git" }>): boolean {
+    if (this.campaign?.state === "applying") {
+      return false;
+    }
+    const announcement = this.announcement;
+    if (announcement?.target.kind === "git") {
+      this.announce({ ...announcement, target });
+    } else {
+      this.reconcileTarget(target);
+    }
+    return true;
+  }
+
   announce(announcement: UpdateCampaignAnnouncement): void {
     if (!this.reconcileTarget(announcement.target)) {
       return;
@@ -89,7 +102,7 @@ export class UpdateCampaignController {
     this.announcement = announcement;
     const now = this.scheduler.now();
     this.campaign = {
-      id: this.createId(),
+      id: randomUUID(),
       state: "waiting-for-idle",
       announcedAtMs: now,
       forceAtMs: now + CAMPAIGN_FORCE_DELAY_MS,
@@ -261,17 +274,18 @@ export class UpdateCampaignController {
     });
     if (runApply) {
       // An apply can settle after clear/new announce; only its originating campaign may be cleared.
-      void trackAsyncWork(() => announcement.apply({ forced })).then(
+      const clearIfCurrent = () => {
+        if (this.campaign?.id === campaign.id) {
+          this.clear();
+        }
+      };
+      void trackAsyncWork(() => announcement.apply({ forced, target: announcement.target })).then(
         (outcome) => {
-          if (outcome === "failed" && this.campaign?.id === campaign.id) {
-            this.clear();
+          if (outcome === "failed") {
+            clearIfCurrent();
           }
         },
-        () => {
-          if (this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
+        clearIfCurrent,
       );
     }
   }

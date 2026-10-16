@@ -1,7 +1,10 @@
 // Approval kind is shared by exec and plugin approval routing surfaces.
-import type { ExecApprovalRequest } from "./exec-approvals-core.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals-core.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 export type ChannelApprovalKind = "exec" | "plugin" | "system-agent";
 export type ApprovalRequestChannelRouteClass = "bound-or-explicit" | "unbound";
@@ -11,6 +14,11 @@ export type ApprovalRequestInput =
   | ExecApprovalRequest
   | PluginApprovalRequest
   | SystemAgentApprovalRequest;
+
+export type ApprovalResolved =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 
 /** Canonical request shape used after the Gateway read boundary. */
 export type ApprovalRequest =
@@ -27,31 +35,28 @@ export type NormalizedApprovalRequest<TRequest extends ApprovalRequestInput> =
         ? TRequest & { approvalKind: "system-agent" }
         : never;
 
-function deriveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
+/** Resolve approval ownership from the typed request payload, never from id spelling. */
+export function resolveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
   const isSystemAgent = "proposalHash" in request.request && "sessionId" in request.request;
   if (isSystemAgent) {
     return "system-agent";
   }
   const isExec = "command" in request.request;
   const isPlugin = "title" in request.request && "description" in request.request;
-  if ([isSystemAgent, isExec, isPlugin].filter(Boolean).length !== 1) {
+  if (isExec === isPlugin) {
     throw new Error("approval request payload does not identify exactly one owner");
   }
   return isExec ? "exec" : "plugin";
 }
 
 function isExecApprovalRequest(request: ApprovalRequestInput): request is ExecApprovalRequest {
-  return deriveApprovalRequestKind(request) === "exec";
+  return resolveApprovalRequestKind(request) === "exec";
 }
 
-function isPluginApprovalRequest(request: ApprovalRequestInput): request is PluginApprovalRequest {
-  return deriveApprovalRequestKind(request) === "plugin";
-}
-
-function isSystemAgentApprovalRequest(
-  request: ApprovalRequestInput,
-): request is SystemAgentApprovalRequest {
-  return deriveApprovalRequestKind(request) === "system-agent";
+export function isPluginApprovalRequest(request: {
+  request: object;
+}): request is PluginApprovalRequest {
+  return resolveApprovalRequestKind(request) === "plugin";
 }
 
 function hasExecApprovalKind(
@@ -84,13 +89,5 @@ export function normalizeApprovalRequest(request: ApprovalRequestInput): Approva
   if (isPluginApprovalRequest(request)) {
     return hasPluginApprovalKind(request) ? request : { ...request, approvalKind: "plugin" };
   }
-  if (isSystemAgentApprovalRequest(request)) {
-    return { ...request, approvalKind: "system-agent" };
-  }
-  throw new Error("approval request payload does not identify exactly one owner");
-}
-
-/** Resolve approval ownership from the typed request payload, never from id spelling. */
-export function resolveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
-  return deriveApprovalRequestKind(request);
+  return { ...request, approvalKind: "system-agent" };
 }

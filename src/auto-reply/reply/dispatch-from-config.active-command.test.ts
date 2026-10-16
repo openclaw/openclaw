@@ -1,6 +1,10 @@
 // Exercises control-command reachability without relaxing ordinary reply admission.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  raceWithTimeoutResult,
+} from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -15,7 +19,7 @@ import {
   globalBeforeAll0,
   replyRunRegistry,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -66,14 +70,20 @@ function startOperation(sessionKey: string, sessionId = "active-session") {
 
 describe("dispatch active command admission", () => {
   it.each([
-    { source: "native", body: "/help", commandName: "help" },
-    { source: "text", body: "/status", commandName: "status" },
-    { source: "native", body: "/status", commandName: "status" },
+    { source: "text", target: false },
+    { source: "native", target: false },
+    { source: "native", target: true },
   ] as const)(
-    "delivers authorized $source $body while its session operation is active",
-    async ({ source, body, commandName }) => {
-      const sessionKey = "agent:main:command-reply-active";
-      const activeOperation = startOperation(sessionKey);
+    "delivers authorized $source /status beside an active operation (separate target: $target)",
+    async ({ source, target }) => {
+      const sessionKey = target
+        ? "agent:main:telegram:group:status-target"
+        : "agent:main:command-reply-active";
+      const sourceSessionKey = target ? "agent:main:telegram:slash:user-auth" : sessionKey;
+      const activeOperation = startOperation(
+        sessionKey,
+        target ? "status-target-active-session" : undefined,
+      );
       onTestFinished(() => activeOperation.complete());
       const waitingForActive = createDeferred<{ status: "waiting_for_active" }>();
       const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
@@ -84,12 +94,19 @@ describe("dispatch active command admission", () => {
         return waitForIdle(key, ...args);
       });
 
-      const acknowledgement = { text: "Command completed." };
-      const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
+      const acknowledgement = {
+        text: target ? "🧠 Model: mock | ⚙️ Status: ok" : "Command completed.",
+      };
+      const replyResolver = vi.fn(async () =>
+        target ? acknowledgement : markCommandReplyForDelivery(acknowledgement),
+      );
       const dispatcher = createDispatcher();
       const dispatchPromise = dispatchReplyFromConfig({
-        ctx: commandContext(source, body, commandName, {
-          SessionKey: sessionKey,
+        ctx: commandContext(source, "/status", "status", {
+          SessionKey: sourceSessionKey,
+          ...(target
+            ? { Provider: "telegram", Surface: "telegram", CommandTargetSessionKey: sessionKey }
+            : {}),
         }),
         cfg: structuredClone(cfg),
         dispatcher,
@@ -109,6 +126,9 @@ describe("dispatch active command admission", () => {
         expect(replyResolver).toHaveBeenCalledOnce();
         expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
         expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+        if (target) {
+          expect(activeOperation.result).toBeNull();
+        }
       } finally {
         activeOperation.complete();
         await dispatchPromise;
@@ -171,6 +191,8 @@ describe("dispatch active command admission", () => {
     async (controlName, controlBody) => {
       const sessionKey = "agent:main:login-ticket";
       const releaseLogin = createDeferred();
+      const loginStarted = createDeferred();
+      const controlStarted = createDeferred();
       const loginEntered = vi.fn();
       const controlEntered = vi.fn();
       const shellEntered = vi.fn();
@@ -192,12 +214,18 @@ describe("dispatch active command admission", () => {
         });
       const login = dispatchCommand("/login openrouter", "login", async () => {
         loginEntered();
+        loginStarted.resolve();
         await releaseLogin.promise;
         return markCommandReplyForDelivery({ text: "Login ended." });
       });
       const pending = [login];
       try {
-        await vi.waitFor(() => expect(loginEntered).toHaveBeenCalledOnce());
+        await awaitGateBeforeSettlement(
+          loginStarted.promise,
+          login,
+          "login dispatch settled before entering its reply resolver",
+        );
+        expect(loginEntered).toHaveBeenCalledOnce();
         const shell = dispatchCommand("/bash echo ready", "bash", async () => {
           shellEntered();
           return markCommandReplyForDelivery({ text: "Shell command completed." });
@@ -205,11 +233,17 @@ describe("dispatch active command admission", () => {
         pending.push(shell);
         const control = dispatchCommand(controlBody, controlName, async () => {
           controlEntered();
+          controlStarted.resolve();
           return markCommandReplyForDelivery({ text: "Control command completed." });
         });
         pending.push(control);
 
-        await vi.waitFor(() => expect(controlEntered).toHaveBeenCalledOnce());
+        await awaitGateBeforeSettlement(
+          controlStarted.promise,
+          control,
+          "control dispatch settled before entering its reply resolver",
+        );
+        expect(controlEntered).toHaveBeenCalledOnce();
         expect(shellEntered).not.toHaveBeenCalled();
         expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
         releaseLogin.resolve();
@@ -260,53 +294,6 @@ describe("dispatch active command admission", () => {
     }
     await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
-
-  it("admits authorized native /status on the source while the target has an active run", async () => {
-    const sourceSessionKey = "agent:main:telegram:slash:user-auth";
-    const targetSessionKey = "agent:main:telegram:group:status-target";
-    const targetOperation = startOperation(targetSessionKey, "status-target-active-session");
-
-    const replyResolver = vi.fn(async () => ({
-      text: "🧠 Model: mock | ⚙️ Status: ok",
-    }));
-    const dispatcher = createDispatcher();
-    const ctx = commandContext("native", "/status", "status", {
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: sourceSessionKey,
-      CommandTargetSessionKey: targetSessionKey,
-    });
-
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: structuredClone(cfg),
-      dispatcher,
-      replyResolver,
-    });
-
-    type DispatchOutcome =
-      | { status: "settled"; result: Awaited<typeof dispatchPromise> }
-      | { status: "pending" };
-    const outcome = await raceWithTimeoutResult<DispatchOutcome>(
-      dispatchPromise.then((result) => ({ status: "settled" as const, result })),
-      200,
-      { status: "pending" as const },
-    );
-    expect(outcome).toMatchObject({
-      status: "settled",
-      result: {
-        queuedFinal: true,
-      },
-    });
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "🧠 Model: mock | ⚙️ Status: ok",
-    });
-    expect(targetOperation.result).toBeNull();
-    expect(replyRunRegistry.get(targetSessionKey)).toBe(targetOperation);
-    targetOperation.complete();
     expect(getActiveReplyRunCount()).toBe(0);
   });
 });

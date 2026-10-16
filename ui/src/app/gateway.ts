@@ -33,8 +33,9 @@ export type ApplicationGatewaySnapshot = {
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  reconnectAt?: number;
   lastErrorAuthReason?: string | null;
-  /** This connection owns its identity; users.self resolves the canonical profile. */
+  /** This connection owns identity: undefined is unresolved; null is resolved profileless. */
   selfUser?: AuthenticatedUser | null;
 };
 

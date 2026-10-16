@@ -1,12 +1,13 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import {
+  formatMigrationWarningSummary,
+  MIGRATION_WARNING_EXAMPLE_LIMIT,
+} from "../infra/migration-warning-summary.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
-
-const HISTORICAL_WARNING_EXAMPLES = 5;
 
 export function formatSessionSqliteMigrationWarnings(
   targets: readonly Pick<DoctorSessionSqliteTargetReport, "storePath" | "issues">[],
@@ -15,21 +16,24 @@ export function formatSessionSqliteMigrationWarnings(
   return targets.flatMap((target) => {
     let historicalCount = 0;
     // Bound presentation only: raw reports and recovery receipts keep every claim.
-    const warnings = target.issues.filter(isSessionSqliteMigrationWarning).flatMap((issue) => {
+    const warnings = target.issues.flatMap((issue) => {
       if (
         issue.code === "historical_transcript_deferred" &&
-        ++historicalCount > HISTORICAL_WARNING_EXAMPLES
+        ++historicalCount > MIGRATION_WARNING_EXAMPLE_LIMIT
       ) {
         return [];
       }
       return [`${target.storePath}: [${issue.code}] ${issue.message}`];
     });
-    if (historicalCount > HISTORICAL_WARNING_EXAMPLES) {
+    if (historicalCount > MIGRATION_WARNING_EXAMPLE_LIMIT) {
       warnings.unshift(
-        `${target.storePath}: Deferred ${historicalCount} historical transcript claim(s); ` +
-          `showing ${HISTORICAL_WARNING_EXAMPLES} example(s), ${historicalCount - HISTORICAL_WARNING_EXAMPLES} omitted. ` +
-          "Available originals and migration manifests remain protected. " +
-          `Inspect all findings with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json", env)}".`,
+        formatMigrationWarningSummary({
+          summary: `${target.storePath}: Deferred ${historicalCount} historical transcript claim(s)`,
+          count: historicalCount,
+          detail:
+            "Available originals and migration manifests remain protected. " +
+            `Inspect all findings with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json", env)}".`,
+        }),
       );
     }
     return warnings;

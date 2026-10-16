@@ -6,8 +6,7 @@ import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
-import { runMissedJobs } from "./service/timer.js";
-import { onTimer } from "./service/timer.test-support.js";
+import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
@@ -142,9 +141,6 @@ describe("CronService startup catch-up repair scoping", () => {
     await status(state);
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
 
-    if (state.timer) {
-      state.timer.cancel();
-    }
     state.stopped = true;
     now = startNow + 3_000;
 
@@ -163,9 +159,6 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(completed?.state.nextRunAtMs).toBe(tomorrowNaturalSlot);
     expect(completed?.state.startupCatchupAtMs).toBeUndefined();
 
-    if (restartedState.timer) {
-      restartedState.timer.cancel();
-    }
     restartedState.stopped = true;
     await store.cleanup();
   });

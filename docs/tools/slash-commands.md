@@ -25,8 +25,9 @@ command handling is enabled for the surface.
   </Card>
   <Card title="Directives" icon="sliders">
     `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`,
-    `/exec`, `/model`, `/queue` — stripped from the message before the model
-    sees it. Most persist session settings when sent alone. `/exec` security
+    `/exec`, `/model`, `/queue` — interpreted before the model processes a
+    message. Most persist session settings when sent alone. The command and
+    delivered acknowledgement remain in conversation history. `/exec` security
     and approval options apply only to their message.
   </Card>
   <Card title="Inline shortcuts" icon="bolt">
@@ -37,14 +38,16 @@ command handling is enabled for the surface.
 
 <AccordionGroup>
   <Accordion title="Directive behavior details">
-    - Directives are stripped from the message before the model sees it.
+    - Inline directives are stripped from the task text before the model processes it.
       Removal leaves the remaining text's spacing and line endings intact,
       including code indentation. Only the recognized directive, its arguments,
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
     - In **directive-only** messages (the message is only directives), they
-      persist to the session and reply with an acknowledgement.
+      persist to the session and reply with an acknowledgement. Both the literal
+      command and its delivered acknowledgement are retained as user/assistant
+      messages for later turns.
       `/exec security=... ask=...` is the exception: these options apply only
       to the current message and never change later turns. Include them with
       the task. Use [session permission modes](/gateway/permission-modes) for
@@ -60,6 +63,18 @@ command handling is enabled for the surface.
       senders see directives treated as plain text.
   </Accordion>
 </AccordionGroup>
+
+Command replies delivered through the shared dispatcher are part of the conversation
+on every channel. Native command menus and button selections on Discord and
+Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+These exchanges appear in session history and later model context.
+Login codes, pairing codes,
+login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
+recorded copy; delivered instructions and command execution are unchanged.
+`/new` and `/reset` record their command and confirmation in the new session,
+without changing the old transcript. `/stop` records the command with its abort
+notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
+do not rewrite transcript history.
 
 <a id="config" />
 
@@ -78,7 +93,7 @@ command handling is enabled for the surface.
     plugins: false,
     debug: false,
     restart: true, // enables /restart and /update
-    ownerAllowFrom: ["discord:123456789012345678"],
+    ownerAllowFrom: ["discord:user:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
@@ -142,9 +157,13 @@ command handling is enabled for the surface.
   first owner. Control UI pairing has an explicit owner checkbox. Authorized
   non-owners receive a refusal with the exact configuration command for their
   sender ID when using an owner-only command such as `/restart` or `/update`.
-  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
-  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`.
-  Doctor rewrites recognized channel entries and reports their list positions.
+  Use the channel's direct-user target, for example `discord:user:123456789012345678`
+  or `telegram:123456789`. Doctor preserves `user:` when the channel requires it
+  to distinguish users from shared conversations. This keeps the same owner usable
+  for both command authorization and heartbeat delivery.
+  If an older update removed that kind, run `openclaw doctor --fix`. Doctor restores
+  it only from matching config backup history; otherwise it reports the exact
+  owner entry to correct after you confirm the user ID.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
@@ -246,7 +265,7 @@ plugins, and installed skills.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|ultrafast\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
@@ -262,8 +281,8 @@ plugins, and installed skills.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off` persists a session override. Use the Sessions UI `inherit` option to clear it.
-        - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`. Direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
+        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
       </Accordion>
@@ -272,7 +291,7 @@ plugins, and installed skills.
 
         **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set. Omission changes only this session.
 
-        Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
+        Configured `/<alias>` shorthands recognize aliases from `agents.defaults.models` and the current agent's `agents.entries.<id>.models`. They accept the same trailing scope and `--runtime` options as `/model <alias>`; another agent's aliases do not apply.
 
         | Goal | Command | Effect |
         | --- | --- | --- |
@@ -318,6 +337,7 @@ user skill directly.
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
     | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/learn undo <id>` | Owner-only. Revert every skill change one background review made, as the notice's **Undo** button does |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
     | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |
@@ -394,7 +414,7 @@ User-invocable skills are exposed as slash commands:
     By default, skill commands route to the model as a normal request.
 
     Skills can declare `command-dispatch: tool` to route directly to a tool
-    (deterministic, no model involvement).
+    (fixed rules, no model involvement).
 
   </Accordion>
   <Accordion title="Native command arguments">
@@ -610,7 +630,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.
     - Chat login applies saved credentials directly to the running Gateway. If sign-in status cannot be confirmed, use `/login refresh`, then `/models`; you do not need to repeat authentication.
-    - **`/stop`** targets the active chat session to abort the current run.
+    - **`/stop`** targets the active chat session to abort the selected run and stop its ordinary Gateway or sandbox commands, including commands that already yielded a process handle. Later model runs, commands, and queued input remain untouched while Stop prepares cancellation. It waits for command cleanup and reports an error if cleanup cannot be confirmed. Services started with `background: true` keep running; stop those separately with their process handle.
 
   </Accordion>
   <Accordion title="Slack specifics">

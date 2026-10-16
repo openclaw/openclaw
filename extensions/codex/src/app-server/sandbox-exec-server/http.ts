@@ -137,11 +137,13 @@ async function runSandboxHttpRequest(
     }
     return termination;
   };
-  const abortOnSessionClose = () => {
-    lifecycle.failed = true;
-    void terminate().catch((error: unknown) => {
+  const cleanup = () =>
+    terminate().catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
     });
+  const abortOnSessionClose = () => {
+    lifecycle.failed = true;
+    void cleanup();
   };
   notifications.signal.addEventListener("abort", abortOnSessionClose, { once: true });
   child.once("close", () => {
@@ -153,45 +155,8 @@ async function runSandboxHttpRequest(
     }
     embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
   });
-  void readSandboxHttpResponse({
-    child,
-    lifecycle,
-    terminate,
-    requestId,
-    notifications,
-    streamResponse: params.streamResponse,
-  }).then(response.resolve, response.reject);
-  try {
-    if (notifications.signal.aborted) {
-      abortOnSessionClose();
-    } else {
-      owner.assertCurrent();
-      child.stdin.end(JSON.stringify(params));
-    }
-    // Headers can finish the RPC while its body or backend finalization is still running.
-    await completion.promise;
-    await termination;
-  } catch (error) {
-    lifecycle.failed = true;
-    response.reject(error);
-    await terminate().catch((cleanupError: unknown) => {
-      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error: cleanupError });
-    });
-    throw error;
-  } finally {
-    notifications.signal.removeEventListener("abort", abortOnSessionClose);
-  }
-}
-
-function readSandboxHttpResponse(params: {
-  child: SandboxPipeChildOwner["process"];
-  lifecycle: { failed: boolean };
-  terminate: () => Promise<void>;
-  requestId: string;
-  notifications: CodexSandboxExecSessionNotifications;
-  streamResponse: boolean;
-}): Promise<JsonObject> {
-  return new Promise((resolve, reject) => {
+  const { streamResponse } = params;
+  void new Promise<JsonObject>((resolve, reject) => {
     let headerResolved = false;
     let failed = false;
     let childFailure: string | null = null;
@@ -207,20 +172,16 @@ function readSandboxHttpResponse(params: {
         return;
       }
       failed = true;
-      params.lifecycle.failed = true;
-      void params.terminate().catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
-      });
+      lifecycle.failed = true;
+      void cleanup();
       if (headerResolved) {
-        if (params.notifications.isOpen()) {
-          params.notifications.send("http/request/bodyDelta", {
-            requestId: params.requestId,
-            seq: lastBodySeq + 1,
-            deltaBase64: "",
-            done: true,
-            error: message,
-          });
-        }
+        notifications.send("http/request/bodyDelta", {
+          requestId,
+          seq: lastBodySeq + 1,
+          deltaBase64: "",
+          done: true,
+          error: message,
+        });
         return;
       }
       reject(new Error(message));
@@ -235,78 +196,70 @@ function readSandboxHttpResponse(params: {
       }
       output.chunks.push(buffer);
     };
-    if (params.streamResponse) {
-      params.child.stdout.setEncoding("utf8");
-      params.child.stderr.setEncoding("utf8");
-    }
-    params.child.stdout.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (streamResponse) {
+        child[stream].setEncoding("utf8");
       }
-      if (!params.streamResponse) {
-        bufferOutput("stdout", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stdoutBuffer += text;
-      let newline = stdoutBuffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = stdoutBuffer.slice(0, newline).trim();
-        stdoutBuffer = stdoutBuffer.slice(newline + 1);
-        if (line) {
-          try {
-            const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
-            const type = requireString(message.type, "http stream message type");
-            if (type === "headers") {
-              headerResolved = true;
-              resolve({
-                status: requireNumber(message.status, "http status"),
-                headers: readHttpHeaders(message.headers),
-                bodyBase64: "",
-              });
-            } else if (type === "bodyDelta") {
-              const seq = requireNumber(message.seq, "http body sequence");
-              lastBodySeq = Math.max(lastBodySeq, seq);
-              if (params.notifications.isOpen()) {
-                params.notifications.send("http/request/bodyDelta", {
-                  requestId: params.requestId,
+      child[stream].on("data", (chunk: Buffer | string) => {
+        if (failed) {
+          return;
+        }
+        if (!streamResponse) {
+          bufferOutput(stream, chunk);
+          return;
+        }
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        if (stream === "stderr") {
+          stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
+          return;
+        }
+        stdoutBuffer += text;
+        let newline = stdoutBuffer.indexOf("\n");
+        while (newline >= 0) {
+          const line = stdoutBuffer.slice(0, newline).trim();
+          stdoutBuffer = stdoutBuffer.slice(newline + 1);
+          if (line) {
+            try {
+              const message = requireObject(JSON.parse(line) as JsonValue, "http stream message");
+              const type = requireString(message.type, "http stream message type");
+              if (type === "headers") {
+                headerResolved = true;
+                resolve({
+                  status: requireNumber(message.status, "http status"),
+                  headers: readHttpHeaders(message.headers),
+                  bodyBase64: "",
+                });
+              } else if (type === "bodyDelta") {
+                const seq = requireNumber(message.seq, "http body sequence");
+                lastBodySeq = Math.max(lastBodySeq, seq);
+                notifications.send("http/request/bodyDelta", {
+                  requestId,
                   seq,
                   deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
                   done: message.done === true,
                   error: typeof message.error === "string" ? message.error : null,
                 });
               }
+            } catch (error) {
+              fail(error instanceof Error ? error.message : String(error));
             }
-          } catch (error) {
-            fail(error instanceof Error ? error.message : String(error));
           }
+          newline = stdoutBuffer.indexOf("\n");
         }
-        newline = stdoutBuffer.indexOf("\n");
-      }
-      if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
-        fail(
-          `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
-        );
-      }
-    });
-    params.child.stderr.on("data", (chunk: Buffer | string) => {
-      if (failed) {
-        return;
-      }
-      if (!params.streamResponse) {
-        bufferOutput("stderr", chunk);
-        return;
-      }
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      stderr = sliceUtf16Safe(`${stderr}${text}`, -4096);
-    });
-    params.child.once("error", (error) => {
+        if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
+          fail(
+            `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
+          );
+        }
+      });
+    }
+    child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.
       childFailure ??= error.message;
-      params.lifecycle.failed = true;
+      lifecycle.failed = true;
     });
-    params.child.once("close", (code) => {
+    child.once("close", (code) => {
       const exitCode = code ?? 1;
       if (failed) {
         return;
@@ -316,7 +269,7 @@ function readSandboxHttpResponse(params: {
         return;
       }
       if (exitCode === 0) {
-        if (!params.streamResponse) {
+        if (!streamResponse) {
           try {
             const parsed = JSON.parse(Buffer.concat(buffered.stdout.chunks).toString("utf8")) as {
               status?: unknown;
@@ -337,17 +290,35 @@ function readSandboxHttpResponse(params: {
           return;
         }
         if (!headerResolved) {
-          params.lifecycle.failed = true;
+          lifecycle.failed = true;
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;
       }
-      if (!params.streamResponse) {
+      if (!streamResponse) {
         stderr = Buffer.concat(buffered.stderr.chunks).toString("utf8");
       }
       fail(stderr.trim() || `sandbox http/request failed with code ${exitCode}`);
     });
-  });
+  }).then(response.resolve, response.reject);
+  try {
+    if (notifications.signal.aborted) {
+      abortOnSessionClose();
+    } else {
+      owner.assertCurrent();
+      child.stdin.end(JSON.stringify(params));
+    }
+    // Headers can finish the RPC while its body or backend finalization is still running.
+    await completion.promise;
+    await termination;
+  } catch (error) {
+    lifecycle.failed = true;
+    response.reject(error);
+    await cleanup();
+    throw error;
+  } finally {
+    notifications.signal.removeEventListener("abort", abortOnSessionClose);
+  }
 }
 
 const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
@@ -365,9 +336,6 @@ import urllib.request
 
 def emit(payload):
     print(json.dumps(payload, separators=(",", ":")), flush=True)
-
-def response_headers(response):
-    return [{"name": name, "value": value} for name, value in response.headers.items()]
 
 BLOCKED_HOSTNAMES = {
     "localhost",
@@ -404,9 +372,7 @@ def is_blocked_hostname(hostname):
     normalized = normalize_hostname(hostname)
     return (
         normalized in BLOCKED_HOSTNAMES
-        or normalized.endswith(".localhost")
-        or normalized.endswith(".local")
-        or normalized.endswith(".internal")
+        or normalized.endswith((".localhost", ".local", ".internal"))
     )
 
 def is_blocked_ip(address):
@@ -419,12 +385,9 @@ def is_blocked_ip(address):
         return True
     if str(parsed).lower() in CLOUD_METADATA_IP_ADDRESSES:
         return True
-    if isinstance(parsed, ipaddress.IPv4Address):
-        if any(parsed in network for network in BLOCKED_IPV4_NETWORKS):
-            return True
-    else:
-        if any(parsed in network for network in BLOCKED_IPV6_NETWORKS):
-            return True
+    networks = BLOCKED_IPV4_NETWORKS if isinstance(parsed, ipaddress.IPv4Address) else BLOCKED_IPV6_NETWORKS
+    if any(parsed in network for network in networks):
+        return True
     return (
         parsed.is_loopback
         or parsed.is_private
@@ -525,7 +488,7 @@ def pinned_getaddrinfo(original_getaddrinfo):
     return getaddrinfo
 
 def handle_response(input_data, response):
-    headers = response_headers(response)
+    headers = [{"name": name, "value": value} for name, value in response.headers.items()]
     status = int(getattr(response, "status", getattr(response, "code", 0)))
     if input_data.get("streamResponse"):
         emit({"type": "headers", "status": status, "headers": headers})

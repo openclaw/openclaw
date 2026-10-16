@@ -9,6 +9,9 @@ import {
   registerParent,
   successfulSendInputOutput,
   turnStartedNotification,
+  childTurnCompletedNotification,
+  deliveredNativeCompletion,
+  observeCompletionAttempts,
 } from "./native-subagent-monitor.test-support.js";
 
 type Client = ReturnType<typeof createClient>;
@@ -194,19 +197,14 @@ describe("native wait assignment projection", () => {
     });
   });
 
-  it.each(["completed-wait", "ended-turn", "retired-parent", "foreign-parent", "mailbox"])(
+  it.each(["ended-turn", "foreign-parent"])(
     "does not refresh an ineligible wait: %s",
     async (scenario) => {
-      const { client, monitor, events, receiverParent } = await awaitingAdmission({
-        ...(scenario === "foreign-parent" ? { receiverParent: "foreign-parent" } : {}),
-        ...(scenario === "mailbox" ? { receivers: [] } : {}),
-      });
-      if (scenario === "completed-wait") {
-        await waitItem(client, "completed", ["receiver"]);
-      } else if (scenario === "ended-turn") {
+      const { client, events, receiverParent } = await awaitingAdmission(
+        scenario === "foreign-parent" ? { receiverParent: "foreign-parent" } : {},
+      );
+      if (scenario === "ended-turn") {
         await endTurn(client, "waiter", "waiter-turn", "interrupted");
-      } else if (scenario === "retired-parent") {
-        await monitor.retireParent("parent-thread");
       }
       const eventCount = events.length;
       await acceptFollowup(client, receiverParent);
@@ -232,4 +230,104 @@ describe("native wait assignment projection", () => {
       })),
     });
   });
+});
+
+const completedChild = () =>
+  childTurnCompletedNotification({
+    status: "completed",
+    items: [
+      {
+        type: "agentMessage",
+        id: "child-final",
+        phase: "final_answer",
+        text: "The build passed.",
+      },
+    ],
+  });
+
+it.each([
+  { status: "completed", bound: true },
+  { status: "interrupted", bound: false },
+] as const)(
+  "delivers child completion queued after its parent is $status, bound=$bound",
+  async ({ status, bound }) => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+      recoveryPollDelaysMs: [],
+    });
+    const attempts = observeCompletionAttempts();
+    const parent = await registerParent(monitor);
+    try {
+      if (bound) {
+        parent.bindTurn("parent-turn");
+      } else {
+        await client.notify(turnStartedNotification("parent-turn", { threadId: "parent-thread" }));
+      }
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      await client.notify(
+        childTurnCompletedNotification({
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          status,
+        }),
+      );
+      await client.notify(deliveredNativeCompletion());
+      const childCompletion = completedChild();
+      await client.notify(childCompletion);
+      if (!bound) {
+        parent.bindTurn("parent-turn");
+      }
+      await parent.unregister();
+      await client.notify(childCompletion);
+      await attempts.settle();
+
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionId: "child-thread",
+          result: "The build passed.",
+          status: "succeeded",
+        }),
+      );
+    } finally {
+      await parent.unregister();
+      await attempts.settle();
+      await monitor.dispose();
+    }
+  },
+);
+
+it("still consumes foreground receipts when an older parent owner has settled", async () => {
+  const client = createClient();
+  const runtime = createRuntime();
+  const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+    recoveryPollDelaysMs: [],
+  });
+  const attempts = observeCompletionAttempts();
+  const older = await registerParent(monitor);
+  const parent = await registerParent(monitor);
+  try {
+    older.bindTurn("older-turn");
+    parent.bindTurn("parent-turn");
+    await client.notify(
+      childTurnCompletedNotification({
+        threadId: "parent-thread",
+        turnId: "older-turn",
+        status: "completed",
+      }),
+    );
+    await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+    await client.notify(deliveredNativeCompletion());
+    await client.notify(completedChild());
+    await parent.unregister();
+    await older.unregister();
+    await attempts.settle();
+
+    expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  } finally {
+    await parent.unregister();
+    await older.unregister();
+    await attempts.settle();
+    await monitor.dispose();
+  }
 });

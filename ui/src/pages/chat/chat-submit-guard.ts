@@ -1,17 +1,34 @@
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import {
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store-scope.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import type { QueuedChatSendResult } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readQueuedMessageById } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 const submissionActionIds = new WeakMap<Event, string>();
+type AttachmentAdmission = {
+  signatures: ReadonlySet<string>;
+  isCurrent(): boolean;
+};
+const pendingAttachmentAdmissions = new WeakMap<ChatHost, Set<AttachmentAdmission>>();
+
+export type ChatSubmitGuard = {
+  releaseAttachments(): void;
+  canRetireAttachment(attachment: ChatAttachment): boolean;
+};
 
 function yieldChatSubmitToInput(): Promise<void> {
+  // The supported browser floor supplies MessageChannel for this input yield.
   return new Promise<void>((resolve) => {
     const channel = new MessageChannel();
     channel.port1.addEventListener(
@@ -39,9 +56,8 @@ export async function withChatSubmitHandoff(
   },
   deliver: (item: ChatQueueItem) => Promise<QueuedChatSendResult>,
 ): Promise<QueuedChatSendResult> {
-  const yieldsToInput = options.yieldToInput && typeof MessageChannel !== "undefined";
   const startsImmediately =
-    yieldsToInput &&
+    options.yieldToInput &&
     options.isCurrent() &&
     host.connected &&
     host.client &&
@@ -58,7 +74,7 @@ export async function withChatSubmitHandoff(
   // Admission is durable, but delivery has not made a transport attempt yet.
   // Present that handoff inline without flashing the waiting-message tray.
   const submission =
-    yieldsToInput && host.connected && options.isCurrent()
+    options.yieldToInput && host.connected && options.isCurrent()
       ? chatOutboxOwner(host).beginSubmission(host, queued.id, {
           inline: Boolean(startsImmediately),
           isCurrent: () => host.connected && options.isCurrent(),
@@ -66,7 +82,7 @@ export async function withChatSubmitHandoff(
       : undefined;
   try {
     let current = queued;
-    if (yieldsToInput) {
+    if (options.yieldToInput) {
       // The shared outbox retains foreground custody while the browser accepts
       // input, including when terminal history settles before this task resumes.
       await yieldChatSubmitToInput();
@@ -96,10 +112,16 @@ export async function withChatSubmitHandoff(
 export async function withChatSubmitGuard<T>(
   host: ChatHost,
   key: string,
-  run: () => Promise<T>,
-  action?: Event,
+  options: {
+    action?: Event;
+    attachments?: readonly ChatAttachment[];
+    scope: StoredChatOutboxScope;
+    isCurrent(): boolean;
+  },
+  run: (guard: ChatSubmitGuard) => Promise<T>,
 ): Promise<T | undefined> {
   let guardKey = key;
+  const { action, scope } = options;
   if (action) {
     const actionId = submissionActionIds.get(action) ?? generateUUID();
     submissionActionIds.set(action, actionId);
@@ -110,9 +132,45 @@ export async function withChatSubmitGuard<T>(
     return undefined;
   }
   guards.add(guardKey);
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const attachments: AttachmentAdmission = {
+    signatures: new Set(
+      options.attachments?.map((attachment) => chatAttachmentDraftSignature("", [attachment])),
+    ),
+    isCurrent: () =>
+      options.isCurrent() &&
+      storedChatOutboxScopeKey(resolveUiConversationIdentity(host, host.sessionKey)) === scopeKey,
+  };
+  let pending = pendingAttachmentAdmissions.get(host);
+  if (attachments.signatures.size) {
+    pending ??= new Set();
+    pending.add(attachments);
+    pendingAttachmentAdmissions.set(host, pending);
+  }
+  const releaseAttachments = () => {
+    if (!pending?.delete(attachments)) {
+      return;
+    }
+    if (!pending.size) {
+      pendingAttachmentAdmissions.delete(host);
+    }
+  };
   try {
-    return await run();
+    return await run({
+      releaseAttachments,
+      canRetireAttachment: (attachment) => {
+        const signature = chatAttachmentDraftSignature("", [attachment]);
+        return (
+          attachments.isCurrent() &&
+          attachments.signatures.has(signature) &&
+          ![...(pendingAttachmentAdmissions.get(host) ?? [])].some(
+            (claim) => claim.isCurrent() && claim.signatures.has(signature),
+          )
+        );
+      },
+    });
   } finally {
+    releaseAttachments();
     guards.delete(guardKey);
   }
 }

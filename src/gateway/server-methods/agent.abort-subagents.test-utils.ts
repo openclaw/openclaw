@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
+  resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -56,8 +57,6 @@ export function registerAgentAbortSubagentTests() {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
-      mocks.registryPersist.mockImplementation(() => {});
-      mocks.registryPersistOrThrow.mockImplementation(() => {});
       mocks.registryCallGateway.mockImplementation(async () => await new Promise(() => {}));
       const pending = new Promise(() => {});
       let capturedSignal: AbortSignal | undefined;
@@ -84,14 +83,18 @@ export function registerAgentAbortSubagentTests() {
         },
         { context, reqId: runId, client },
       );
-      for (const [childSessionKey, requesterTurnRunId, queued] of [
-        [ownedChildSessionKey, runId, false],
-        ...(collect ? [[queuedChildSessionKey, runId, true] as const] : []),
-        [unrelatedChildSessionKey, "other-parent-turn", false],
+      for (const [childSessionKey, requesterTurnRunId, queued, sessionId] of [
+        [ownedChildSessionKey, runId, false, "active-collector-session"],
+        ...(collect
+          ? [[queuedChildSessionKey, runId, true, "queued-collector-session"] as const]
+          : []),
+        [unrelatedChildSessionKey, "other-parent-turn", false, "unrelated-child-session"],
       ] as const) {
         await registerSubagentRun({
           runId: childSessionKey,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId },
           controllerSessionKey:
             cascade && requesterTurnRunId !== runId ? "agent:main:other" : "agent:main:main",
           requesterSessionKey: "agent:main:main",
@@ -125,6 +128,7 @@ export function registerAgentAbortSubagentTests() {
         });
         childOperation.attachBackend({
           kind: "embedded",
+          runId: ownedChildSessionKey,
           isStreaming: () => true,
           cancel: () => {
             if (!releaseOnParent) {
@@ -170,13 +174,13 @@ export function registerAgentAbortSubagentTests() {
         });
         expect(mockCallArg(foreignRespond)).toBe(false);
         expect(capturedSignal?.aborted).toBe(false);
-        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)?.execution.status).toBe(
-          "running",
-        );
+        expect(
+          (await getSubagentRunByChildSessionKey(ownedChildSessionKey))?.execution.status,
+        ).toBe("running");
         if (collect) {
-          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)?.execution.status).toBe(
-            "queued",
-          );
+          expect(
+            (await getSubagentRunByChildSessionKey(queuedChildSessionKey))?.execution.status,
+          ).toBe("queued");
           expect(queuedDispatch).not.toHaveBeenCalled();
         }
         const abortRespond = vi.fn();
@@ -208,15 +212,15 @@ export function registerAgentAbortSubagentTests() {
           expectRecordFields(mockCallArg(abortRespond, 0, 1), { aborted: true, runIds: [runId] });
         }
         expect(capturedSignal?.aborted).toBe(true);
-        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
+        expect(await getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
           endedReason: "subagent-killed",
           killReconciliation: { suppressTaskDelivery: true },
         });
         expect(
-          getSubagentRunByChildSessionKey(unrelatedChildSessionKey)?.execution.endedAt,
+          (await getSubagentRunByChildSessionKey(unrelatedChildSessionKey))?.execution.endedAt,
         ).toBeUndefined();
         if (collect) {
-          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(queuedChildSessionKey)).toMatchObject({
             execution: { status: "terminal" },
             endedReason: "subagent-killed",
           });
@@ -228,11 +232,14 @@ export function registerAgentAbortSubagentTests() {
       } finally {
         childOperation?.complete();
         swarmSchedulerTesting.reset();
+        await resetSubagentRegistryForTests();
       }
     },
   );
 
-  it("starts the next abort fixture without previously registered child runs", () => {
-    expect(getSubagentRunByChildSessionKey("agent:main:subagent:owned-by-other-turn")).toBeNull();
+  it("starts the next abort fixture without previously registered child runs", async () => {
+    expect(
+      await getSubagentRunByChildSessionKey("agent:main:subagent:owned-by-other-turn"),
+    ).toBeNull();
   });
 }

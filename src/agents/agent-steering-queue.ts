@@ -1,13 +1,14 @@
-/** Leases and formats completed subagent results for injection into requester turns. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type { PreparedAnnounceResult } from "./subagents/announce/subagent-announce-result.js";
+import type { SubagentRunMutation } from "./subagents/registry/subagent-registry-mutation.types.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
 } from "./subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagents/registry/subagent-run-generation.js";
 
 // Steering queue utilities for delivering completed subagent results back into
 // the requester session. Items are leased before injection to avoid duplicate
@@ -22,7 +23,6 @@ const MERGED_AGENT_STEERING_PROMPT_HEADER = [
   "",
 ].join("\n\n");
 
-/** Pending subagent completion selected for requester-session steering. */
 type AgentSteeringQueueItem = {
   runId: string;
   entry: SubagentRunRecord;
@@ -31,10 +31,9 @@ type AgentSteeringQueueItem = {
 
 type PreparedSteeringItem = AgentSteeringQueueItem & {
   result: PreparedAnnounceResult;
-  isCurrent: () => boolean;
+  isCurrent: (entry: SubagentRunRecord | undefined) => boolean;
 };
 
-/** A batch of leased subagent completions plus the prompt to inject upstream. */
 type LeasedAgentSteeringBatch = {
   runIds: string[];
   prompt: string;
@@ -85,9 +84,8 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
   return a.runId.localeCompare(b.runId);
 }
 
-/** List pending completion payloads that should be steered into a requester turn. */
 function listPendingAgentSteeringItemsFromSubagentRuns(params: {
-  runs: Map<string, SubagentRunRecord>;
+  runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
   now?: number;
 }): AgentSteeringQueueItem[] {
@@ -150,34 +148,26 @@ async function selectPromptBoundedItems(
   const sections: string[] = [];
   let promptLength = MERGED_AGENT_STEERING_PROMPT_HEADER.length;
   for (const item of items) {
-    const generation = item.entry.generation;
-    const delivery = item.entry.delivery;
     const result = await readResult(item.entry);
     const prepared: PreparedSteeringItem = {
       ...item,
       result,
-      isCurrent: () =>
-        item.entry.generation === generation &&
-        item.entry.delivery === delivery &&
-        delivery?.payload === item.payload &&
-        result.isCurrent(),
+      isCurrent: (entry) =>
+        entry !== undefined && isSameSubagentRunOwner(entry, item.entry) && result.isCurrent(),
     };
     const section = buildAgentSteeringPromptSection(prepared, selected.length);
     // Account for the exact separator so selection preserves the rendered character cap.
     const nextPromptLength = promptLength + "\n\n".length + section.length;
-    if (nextPromptLength <= MAX_MERGED_STEERING_CHARS) {
-      selected.push(prepared);
-      sections.push(section);
-      promptLength = nextPromptLength;
-      continue;
+    if (nextPromptLength > MAX_MERGED_STEERING_CHARS && selected.length > 0) {
+      break;
     }
-    if (selected.length === 0) {
-      // Deliver an oversized first result whole so the soft batch cap cannot
-      // truncate it or permanently block the queue.
-      selected.push(prepared);
-      sections.push(section);
+    selected.push(prepared);
+    sections.push(section);
+    promptLength = nextPromptLength;
+    // Deliver an oversized first result whole so the soft cap cannot strand it.
+    if (promptLength > MAX_MERGED_STEERING_CHARS) {
+      break;
     }
-    break;
   }
   if (selected.length === 0) {
     return undefined;
@@ -188,128 +178,159 @@ async function selectPromptBoundedItems(
   };
 }
 
-/** Leases pending steering items and returns the prompt to prepend to the requester turn. */
-export async function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
-  runs: Map<string, SubagentRunRecord>;
+/** Prepare result I/O before the registry admits the synchronous lease decision. */
+export async function preparePendingAgentSteeringLease(params: {
+  runs: ReadonlyMap<string, SubagentRunRecord>;
   requesterSessionKey: string;
   leaseId: string;
   now?: number;
   readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>;
-}): Promise<LeasedAgentSteeringBatch | undefined> {
-  const now = params.now ?? Date.now();
+}): Promise<
+  | {
+      runIds: string[];
+      isCurrent: () => boolean;
+      plan: (
+        rows: ReadonlyMap<string, SubagentRunRecord>,
+      ) => SubagentRunMutation<LeasedAgentSteeringBatch> | undefined;
+    }
+  | undefined
+> {
   const selection = await selectPromptBoundedItems(
-    listPendingAgentSteeringItemsFromSubagentRuns({
-      runs: params.runs,
-      requesterSessionKey: params.requesterSessionKey,
-      now,
-    }),
+    listPendingAgentSteeringItemsFromSubagentRuns(params),
     params.readResult,
   );
   if (!selection) {
     return undefined;
   }
   const { items, prompt } = selection;
-  const pending = new Set(
-    listPendingAgentSteeringItemsFromSubagentRuns({ ...params, now }).map((item) => item.entry),
-  );
-  if (
-    items.some(
-      (item) =>
-        params.runs.get(item.runId) !== item.entry || !pending.has(item.entry) || !item.isCurrent(),
-    )
-  ) {
-    throw new Error("A queued child result changed while preparing the requester prompt.");
-  }
-  for (const item of items) {
-    const delivery = item.entry.delivery;
-    if (!delivery) {
-      continue;
-    }
-    delivery.status = "in_progress";
-    delivery.steeringLeaseId = params.leaseId;
-    delivery.steeringLeasedAt = now;
-    delivery.steeringInjectedAt = undefined;
-    delivery.lastDropReason = "waiting_for_requester_turn";
-    item.entry.cleanupHandled = true;
-  }
+  const runIds = items.map((item) => item.runId);
+  const isCurrent = () =>
+    items.every((item) => {
+      const entry = params.runs.get(item.runId);
+      return (
+        entry !== undefined &&
+        item.isCurrent(entry) &&
+        isSystemEventStoreCurrent(
+          params.requesterSessionKey,
+          entry.requesterStorePath,
+          entry.requesterAgentId,
+        )
+      );
+    });
   return {
-    runIds: items.map((item) => item.runId),
-    prompt,
-    isCurrent: () =>
-      items.every(
-        (item) =>
-          params.runs.get(item.runId) === item.entry &&
-          item.isCurrent() &&
-          isSystemEventStoreCurrent(
-            params.requesterSessionKey,
-            item.entry.requesterStorePath,
-            item.entry.requesterAgentId,
-          ) &&
-          item.entry.delivery?.status === "in_progress" &&
-          item.entry.delivery.steeringLeaseId === params.leaseId,
-      ),
+    runIds,
+    isCurrent,
+    plan(rows) {
+      const now = params.now ?? Date.now();
+      const pending = new Set(
+        listPendingAgentSteeringItemsFromSubagentRuns({ ...params, runs: rows, now }).map(
+          (item) => item.runId,
+        ),
+      );
+      if (items.some((item) => !pending.has(item.runId) || !item.isCurrent(rows.get(item.runId)))) {
+        return undefined;
+      }
+      const postimages = new Map<string, SubagentRunRecord>();
+      for (const item of items) {
+        const current = rows.get(item.runId);
+        if (!current?.delivery) {
+          return undefined;
+        }
+        postimages.set(item.runId, {
+          ...current,
+          cleanupHandled: true,
+          delivery: {
+            ...current.delivery,
+            status: "in_progress",
+            steeringLeaseId: params.leaseId,
+            steeringLeasedAt: now,
+            steeringInjectedAt: undefined,
+            lastDropReason: "waiting_for_requester_turn",
+          },
+        });
+      }
+      return {
+        postimages,
+        value: {
+          runIds,
+          prompt,
+          isCurrent: () =>
+            isCurrent() &&
+            items.every((item) => {
+              const delivery = params.runs.get(item.runId)?.delivery;
+              return (
+                delivery?.status === "in_progress" && delivery.steeringLeaseId === params.leaseId
+              );
+            }),
+        },
+      };
+    },
   };
 }
 
-/** Marks leased steering items delivered after successful requester injection. */
-export function ackLeasedAgentSteeringItemsFromSubagentRuns(params: {
-  runs: Map<string, SubagentRunRecord>;
+type AgentSteeringLease = {
+  runs: ReadonlyMap<string, SubagentRunRecord>;
   runIds: readonly string[];
   leaseId: string;
-  now?: number;
-}): number {
-  const now = params.now ?? Date.now();
-  let updated = 0;
-  for (const runId of params.runIds) {
-    const delivery = params.runs.get(runId)?.delivery;
-    if (delivery?.status !== "in_progress" || delivery.steeringLeaseId !== params.leaseId) {
-      continue;
-    }
-    delivery.status = "delivered";
-    delivery.deliveredAt = now;
-    delivery.announcedAt = now;
-    delivery.steeringInjectedAt = now;
-    delivery.lastError = undefined;
-    delivery.suspendedAt = undefined;
-    delivery.suspendedReason = undefined;
-    delivery.payload = undefined;
-    delivery.steeringLeaseId = undefined;
-    delivery.steeringLeasedAt = undefined;
-    updated += 1;
-  }
-  return updated;
-}
+};
 
-/** Releases leased steering items when requester injection fails or is abandoned. */
-export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
-  runs: Map<string, SubagentRunRecord>;
-  runIds: readonly string[];
-  leaseId: string;
-  error?: string;
-}): number {
-  let updated = 0;
+function planAgentSteeringSettlement(
+  params: AgentSteeringLease,
+  update: (delivery: SubagentCompletionDeliveryState) => Partial<SubagentCompletionDeliveryState>,
+): SubagentRunMutation<number> {
+  const postimages = new Map<string, SubagentRunRecord>();
   for (const runId of params.runIds) {
-    const delivery = params.runs.get(runId)?.delivery;
-    if (delivery?.status !== "in_progress" || delivery.steeringLeaseId !== params.leaseId) {
-      continue;
-    }
-    // A failed prompt from an older suspended lease must restore its blocked state.
-    delivery.status = typeof delivery.suspendedAt === "number" ? "suspended" : "pending";
-    delivery.steeringLeaseId = undefined;
-    delivery.steeringLeasedAt = undefined;
-    delivery.steeringInjectedAt = undefined;
-    delivery.lastError = params.error ?? delivery.lastError ?? null;
     const entry = params.runs.get(runId);
-    if (entry && typeof entry.cleanupCompletedAt !== "number") {
-      // Non-finalized runs can be retried by cleanup/delivery after release.
-      entry.cleanupHandled = false;
+    const delivery = entry?.delivery;
+    if (
+      !entry ||
+      delivery?.status !== "in_progress" ||
+      delivery.steeringLeaseId !== params.leaseId
+    ) {
+      continue;
     }
-    updated += 1;
+    postimages.set(runId, {
+      ...entry,
+      cleanupHandled: typeof entry.cleanupCompletedAt === "number" ? entry.cleanupHandled : false,
+      delivery: {
+        ...delivery,
+        steeringLeaseId: undefined,
+        steeringLeasedAt: undefined,
+        ...update(delivery),
+      },
+    });
   }
-  return updated;
+  return { value: postimages.size, postimages };
 }
 
-/** Prepends a steering prompt to an existing user prompt when pending results exist. */
+/** Acknowledge only the lease that actually supplied this requester prompt. */
+export function planAgentSteeringAcknowledgment(
+  params: AgentSteeringLease & { now?: number },
+): SubagentRunMutation<number> {
+  const now = params.now ?? Date.now();
+  return planAgentSteeringSettlement(params, () => ({
+    status: "delivered",
+    deliveredAt: now,
+    announcedAt: now,
+    steeringInjectedAt: now,
+    lastError: undefined,
+    suspendedAt: undefined,
+    suspendedReason: undefined,
+    payload: undefined,
+  }));
+}
+
+/** Return an abandoned lease to its prior delivery obligation. */
+export function planAgentSteeringRelease(
+  params: AgentSteeringLease & { error?: string },
+): SubagentRunMutation<number> {
+  return planAgentSteeringSettlement(params, (delivery) => ({
+    status: typeof delivery.suspendedAt === "number" ? "suspended" : "pending",
+    steeringInjectedAt: undefined,
+    lastError: params.error ?? delivery.lastError ?? null,
+  }));
+}
+
 export function prependAgentSteeringPrompt(params: {
   steeringPrompt: string;
   prompt: string;

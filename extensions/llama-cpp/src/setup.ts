@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -30,12 +32,18 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
+import {
+  ensureLlamaServerInstalled,
+  UnsupportedLlamaServerHostError,
+} from "./llama-server-install.js";
 import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
+  resolveLlamaCppModelDownloadSize,
   type ManagedLlamaServer,
 } from "./managed-server.js";
+import { resolveLlamaCppMediaModels } from "./media-config.js";
 import { recommendLlamaCppModel, resolveLlamaCppModelCandidates } from "./model-catalog.js";
 
 const BYTES_PER_GB = 1_000_000_000;
@@ -49,6 +57,11 @@ type LlamaCppChatCandidate = {
 type LlamaCppSetupPlan =
   | { kind: "chat"; candidate: LlamaCppChatCandidate; cachedPath?: string }
   | { kind: "embedding-only" };
+
+type LlamaCppSetupContext = Pick<ProviderAuthContext, "config" | "signal"> & {
+  prompter: Pick<ProviderAuthContext["prompter"], "confirm" | "note" | "progress">;
+  embeddingOnly?: boolean;
+};
 
 function formatDownloadProgress(
   label: string,
@@ -69,29 +82,30 @@ function describeEmbeddingDownload(isDefault: boolean): string {
     : "your configured local embedding model";
 }
 
-function readPrimaryModel(config: ProviderAppGuidedSetupContext["config"]): string | undefined {
-  const model = config.agents?.defaults?.model;
-  return typeof model === "string" ? model : model?.primary;
-}
-
-function configuredCandidates(
+async function configuredCandidates(
   config: ProviderAppGuidedSetupContext["config"],
-  scope: "detection" | "setup",
-): LlamaCppChatCandidate[] {
-  const existing = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const managedExisting = existing?.localService ? existing : undefined;
-  const provider = buildLlamaCppProviderConfig({
-    existing: managedExisting,
-    // Detection reports persisted inventory; interactive setup may still offer the default.
-    ...(managedExisting && scope === "detection" ? { modelInventory: managedExisting.models } : {}),
+): Promise<LlamaCppChatCandidate[]> {
+  const provider = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!provider?.localService) {
+    return [];
+  }
+  const mediaModels = resolveLlamaCppMediaModels(provider);
+  const candidates = provider.models
+    .filter((model) => model.id !== mediaModels?.ocr && model.id !== mediaModels?.vision)
+    .map((model) => ({ model, provider }));
+  if (candidates.length < 2) {
+    return candidates;
+  }
+  const { resolveDefaultModelForAgent } = await import("openclaw/plugin-sdk/agent-runtime");
+  const primary = resolveDefaultModelForAgent({
+    cfg: config,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
-  const primary = readPrimaryModel(config);
-  const primaryId = primary?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
-    ? primary.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
-    : undefined;
-  return provider.models
-    .map((model) => ({ model, provider }))
-    .toSorted((a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId));
+  const primaryId = primary.provider === LLAMA_CPP_PROVIDER_ID ? primary.model : undefined;
+  return candidates.toSorted(
+    (a, b) => Number(b.model.id === primaryId) - Number(a.model.id === primaryId),
+  );
 }
 
 async function isFile(filePath: string): Promise<boolean> {
@@ -158,7 +172,7 @@ function buildSetupResult(params: {
             managed: params.managed,
             modelInventory:
               params.plan === "embedding-only"
-                ? []
+                ? (existing?.models ?? [])
                 : params.model
                   ? [
                       params.model,
@@ -189,7 +203,7 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   ) {
     return null;
   }
-  for (const candidate of configuredCandidates(ctx.config, "detection")) {
+  for (const candidate of await configuredCandidates(ctx.config)) {
     if (await resolveCachedCandidate(candidate, ctx.signal)) {
       return {
         modelRef: `${LLAMA_CPP_PROVIDER_ID}/${candidate.model.id}`,
@@ -250,7 +264,7 @@ function resolveEmbeddingSetup(config: ProviderAuthContext["config"], cacheDir: 
 }
 
 async function resolveSetupPlan(
-  ctx: ProviderAuthContext,
+  ctx: LlamaCppSetupContext,
   candidates: LlamaCppChatCandidate[],
   embeddingModelIsDefault: boolean,
   localMemoryIntent: boolean,
@@ -258,6 +272,9 @@ async function resolveSetupPlan(
   asset: LlamaServerAsset,
   runtimeNote?: string,
 ): Promise<LlamaCppSetupPlan | undefined> {
+  if (ctx.embeddingOnly) {
+    return await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+  }
   let candidate = candidates[0];
   const configuredPath = candidate
     ? await resolveCachedCandidate(candidate, ctx.signal)
@@ -275,8 +292,37 @@ async function resolveSetupPlan(
     return { kind: "chat", candidate, cachedPath: configuredPath };
   }
 
-  const provider = candidate?.provider ?? buildLlamaCppProviderConfig();
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  const provider = existing?.localService ? existing : buildLlamaCppProviderConfig();
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
+  if (candidate) {
+    const source = resolveLlamaCppModelSource(candidate.model);
+    let size: number | undefined;
+    try {
+      if (path.isAbsolute(source) || !/^[a-z][a-z\d+.-]*:/iu.test(source)) {
+        const cachedPath = await ensureLlamaCppModel({
+          source,
+          cacheDir,
+          download: false,
+          signal: ctx.signal,
+        });
+        return { kind: "chat", candidate, cachedPath };
+      }
+      size = await resolveLlamaCppModelDownloadSize(source, cacheDir, ctx.signal);
+    } catch (error) {
+      ctx.signal?.throwIfAborted();
+      await ctx.prompter.note(
+        `Cannot use configured model ${candidate.model.name}: ${error instanceof Error ? error.message : String(error)} Check params.modelPath and retry llama.cpp setup.`,
+        "Setup skipped",
+      );
+      return undefined;
+    }
+    const consent = await ctx.prompter.confirm({
+      message: `${runtimeNote ? `${runtimeNote}\n` : ""}Download ${candidate.model.name} (${size ? `${(size / BYTES_PER_GB).toFixed(1)} GB` : "size unknown"}), ${describeEmbeddingDownload(embeddingModelIsDefault)}, and the verified ${asset.backend.toUpperCase()} runtime on Gateway host ${os.hostname()}, then use this model?`,
+      initialValue: false,
+    });
+    return consent ? { kind: "chat", candidate } : undefined;
+  }
   const cachedModels = new Map<string, string>();
   // A cancelled activation may leave a complete download without configured inventory.
   // Credit only verified artifacts, before charging disk space for a retry.
@@ -336,22 +382,14 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (localMemoryIntent && existing && (!existing.localService || existing.models.length > 0)) {
-    await ctx.prompter.note(
-      "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
-      "Setup skipped",
-    );
-    return undefined;
-  }
-
-  if (localMemoryIntent) {
+  const embeddingPlan = await resolveEmbeddingOnlyPlan(ctx, candidates, localMemoryIntent);
+  if (embeddingPlan) {
     const consent = await ctx.prompter.confirm({
       message: `${runtimeNote ? `${runtimeNote} ` : ""}Install a verified ${asset.backend.toUpperCase()} llama.cpp server on Gateway host ${os.hostname()} and download only ${describeEmbeddingDownload(embeddingModelIsDefault)}? Your chat model will stay unchanged.`,
       initialValue: false,
     });
     if (consent) {
-      return { kind: "embedding-only" };
+      return embeddingPlan;
     }
   }
 
@@ -359,9 +397,27 @@ async function resolveSetupPlan(
   return undefined;
 }
 
-export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
+async function resolveEmbeddingOnlyPlan(
+  ctx: LlamaCppSetupContext,
+  candidates: LlamaCppChatCandidate[],
+  localMemoryIntent: boolean,
+): Promise<LlamaCppSetupPlan | undefined> {
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (localMemoryIntent && existing && (!existing.localService || candidates.length > 0)) {
+    await ctx.prompter.note(
+      "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
+      "Setup skipped",
+    );
+    return undefined;
+  }
+
+  return localMemoryIntent ? { kind: "embedding-only" } : undefined;
+}
+
+export async function runLlamaCppSetup(ctx: LlamaCppSetupContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const managedExisting = existing?.localService ? existing : undefined;
+  const mediaModels = resolveLlamaCppMediaModels(managedExisting);
   const cacheDir = resolveLlamaCppModelCacheDir(managedExisting);
   const embeddingSetup = resolveEmbeddingSetup(ctx.config, cacheDir);
   if (embeddingSetup.conflict) {
@@ -385,7 +441,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     asset = selectLlamaServerAsset(hardware.platform, hardware.arch, { kind: "cpu" });
     runtimeNote = `${error instanceof Error ? error.message : String(error)} This recommendation uses CPU execution.`;
   }
-  const candidates = configuredCandidates(ctx.config, "setup");
+  const candidates = await configuredCandidates(ctx.config);
   const plan = await resolveSetupPlan(
     ctx,
     candidates,
@@ -399,8 +455,18 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     return { profiles: [] };
   }
 
-  const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
+  const progress = ctx.prompter.progress(
+    `${ctx.embeddingOnly && runtimeNote ? `${runtimeNote}\n` : ""}Preparing managed llama.cpp server…`,
+  );
   try {
+    // Decide install/reuse before fetching GGUFs, preserving validating self-built
+    // servers on older macOS. prepareManagedLlamaServer revalidates the installed
+    // server after the model downloads; completed installations are not memoized.
+    await ensureLlamaServerInstalled({
+      asset,
+      signal: ctx.signal,
+      onProgress: (status) => progress.update(formatDownloadProgress("llama.cpp runtime", status)),
+    });
     let chatModel: ManagedLlamaChatModel;
     if (plan.kind === "chat") {
       const chatModelPath =
@@ -425,7 +491,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
         maxTokens: plan.candidate.model.maxTokens,
       };
     } else {
-      chatModel = { mode: "remove" };
+      chatModel = { mode: mediaModels ? "preserve" : "remove" };
     }
     const embeddingModelLabel = embeddingModel.isDefault
       ? "EmbeddingGemma"
@@ -439,9 +505,15 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     });
     const managed = await prepareManagedLlamaServer({
       chatModel,
-      configuredChatModelIds:
-        plan.kind === "chat" ? plan.candidate.provider.models.map((model) => model.id) : [],
-      embeddingModelIsDefault: embeddingModel.isDefault,
+      configuredChatModelIds: mediaModels
+        ? managedExisting?.models.map((model) => model.id)
+        : plan.kind === "chat"
+          ? plan.candidate.provider.models.map((model) => model.id)
+          : [],
+      // Keep media's one-model residency when later setup replaces its router.
+      ...(mediaModels
+        ? { mediaModels: [], modelsMax: 1, localService: managedExisting?.localService }
+        : {}),
       embeddingModelPath,
       asset,
       isolated: true,
@@ -467,8 +539,46 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     progress.stop("llama.cpp setup failed");
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
+      error instanceof UnsupportedLlamaServerHostError
+        ? `Managed llama.cpp setup is unavailable on this host. ${detail}`
+        : `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
       { cause: error },
     );
   }
+}
+
+export async function configureLlamaCppNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+) {
+  if (ctx.opts.llamaCppEmbeddingOnly !== true) {
+    throw new Error(
+      "Managed llama.cpp non-interactive setup requires --llama-cpp-embedding-only to consent to downloading the embedding model and verified server runtime.",
+    );
+  }
+  const result = await runLlamaCppSetup({
+    config: ctx.config,
+    embeddingOnly: true,
+    prompter: {
+      async confirm() {
+        throw new Error("Non-interactive embedding-only setup cannot prompt.");
+      },
+      async note(message) {
+        throw new Error(message);
+      },
+      progress(label) {
+        ctx.runtime.log(label);
+        return { update: ctx.runtime.log, stop: ctx.runtime.log };
+      },
+    },
+  });
+  if (!result.configPatch) {
+    throw new Error(
+      'Set memory.search.provider to "local" (globally or for an enabled agent), then retry embedding-only setup.',
+    );
+  }
+  const config = mergeDeep(ctx.config, result.configPatch, {
+    undefinedValues: "replace",
+  });
+  // SAFETY: both inputs are typed config values; replace preserves auth patch deletion markers.
+  return config as ProviderAuthMethodNonInteractiveContext["config"];
 }

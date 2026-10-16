@@ -43,10 +43,7 @@ describe("registered configure dispatch", { concurrent: false }, () => {
 
   it.each(routes)("%s omits sections for the full chooser", async (route) => {
     await parse(route);
-    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { command: "configure" },
-      defaultRuntime,
-    );
+    expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith({}, defaultRuntime);
     expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
@@ -54,7 +51,7 @@ describe("registered configure dispatch", { concurrent: false }, () => {
   it.each(routes)("%s preserves repeated, trimmed section values", async (route) => {
     await parse(route, ["--section", " channels ", "--section", "health", "--section", "channels"]);
     expect(mocks.runWizard).toHaveBeenCalledExactlyOnceWith(
-      { command: "configure", sections: ["channels", "health", "channels"] },
+      { sections: ["channels", "health", "channels"] },
       defaultRuntime,
     );
     expect(mocks.runWizard.mock.calls[0]?.[1]).toBe(defaultRuntime);

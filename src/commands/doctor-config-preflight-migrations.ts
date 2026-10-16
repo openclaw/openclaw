@@ -1,5 +1,4 @@
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -19,10 +18,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import {
-  assertPreflightConfigUnchanged,
-  type ConfigPreflightSnapshotRead,
-} from "./config-preflight-snapshot.js";
+import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
 import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
 
@@ -30,6 +26,7 @@ import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration
 export async function prepareDoctorMigrationPlugins(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  retainedPluginIds?: readonly string[];
   measure?: ConfigSnapshotReadMeasure;
   snapshotRead: ConfigPreflightSnapshotRead;
   readRefreshedSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
@@ -37,16 +34,17 @@ export async function prepareDoctorMigrationPlugins(params: {
     pending: readonly DeferredPluginMigration[],
     inspection?: PluginMigrationInspection,
   ) => Promise<void>;
-}): Promise<ConfigPreflightSnapshotRead> {
+}): Promise<{ snapshotRead: ConfigPreflightSnapshotRead; warnings: string[] }> {
   const convergence = await runDoctorPluginConvergence(params);
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
   await params.onDeferredPlugins(
     convergence.deferredPlugins ?? [],
     convergence.migrationInspection,
   );
-  const refreshed = await params.readRefreshedSnapshot();
-  assertPreflightConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
-  return refreshed;
+  return {
+    snapshotRead: await params.readRefreshedSnapshot(),
+    warnings: convergence.warnings ?? [],
+  };
 }
 
 export async function assertDoctorPreflightMigrationsComplete(params: {
@@ -103,13 +101,5 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       }
     }
     throw error;
-  }
-}
-
-export function noteStateMigrationResult(result: MigrationMessages): void {
-  for (const key of ["changes", "notices", "warnings"] as const) {
-    if (result[key]?.length) {
-      note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
-    }
   }
 }

@@ -464,7 +464,7 @@ describe("stageSandboxMedia SCP", () => {
       const runScp = vi
         .spyOn(processExec, "runCommandWithTimeout")
         .mockResolvedValue({ ...SUCCESS, code: 1, stderr });
-      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      const log = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       expect((await stageSandboxMedia(params)).staged.size).toBe(0);
 
@@ -510,7 +510,7 @@ describe("stageSandboxMedia SCP", () => {
               stderr: "synthetic transfer failure",
             };
           });
-        const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+        const log = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         if (cancel) {
           await expect.soft(stageSandboxMedia(params)).rejects.toBe(reason);

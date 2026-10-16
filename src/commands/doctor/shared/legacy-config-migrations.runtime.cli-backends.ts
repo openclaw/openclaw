@@ -1,16 +1,11 @@
 // Doctor-only migration for the retired CLI backend adapter config DSL.
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 
 const CLI_BACKENDS_PLUGIN_GUIDE = "https://docs.openclaw.ai/plugins/cli-backend-plugins";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "agents.defaults.cliBackends-plugin-registration",
-    describe: "Remove CLI backend adapter config now owned by plugins",
     legacyRules: [
       {
         path: ["agents", "defaults", "cliBackends"],
@@ -29,5 +24,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS: LegacyConfigMigratio
         `Removed agents.defaults.cliBackends; CLI backend adapters now register through plugins (${CLI_BACKENDS_PLUGIN_GUIDE}).`,
       );
     },
-  }),
+  },
 ];

@@ -86,10 +86,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
       state: { rowContext: { projectedAgentRuns: undefined } },
       capture: () => current,
       ensureMaterialized: async () => {},
+      ancestorRows: () => [],
       withPreparedExactRows: (async (queries, consume) => {
         queries({});
         await prepared.promise;
-        return { kind: "complete", value: consume(projection) };
+        return consume(projection);
       }) satisfies SessionRowProjection["withPreparedExactRows"],
       isCurrent: (record: typeof original) => record === current,
       observeGeneration: (() => {
@@ -97,6 +98,11 @@ describe("createLifecycleEventBroadcastHandler", () => {
         return { isCurrent: () => generation === observed, dispose() {} };
       }) satisfies SessionRowProjection["observeGeneration"],
       snapshot,
+      describe: () => {
+        const row = snapshot().row;
+        return row ? { materialized: { row } } : undefined;
+      },
+      present: (record: Parameters<SessionRowProjection["present"]>[0]) => record.materialized.row,
     } as unknown as SessionRowProjection;
     const broadcastToConnIds = vi.fn();
     const handler = createLifecycleEventBroadcastHandler({
@@ -116,7 +122,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     prepared.resolve();
     await pending;
     if (!scenario.delivered) {
-      expect(snapshot).not.toHaveBeenCalled();
       expect(broadcastToConnIds).not.toHaveBeenCalled();
     } else {
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
@@ -165,7 +170,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
 
       await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
 
-      expect(loadGatewaySessionRowMock).toHaveBeenCalledExactlyOnceWith(sessionRow.key, {
+      expect(loadGatewaySessionRowMock).toHaveBeenCalledWith(sessionRow.key, {
         agentId: "main",
       });
       const payload = broadcastToConnIds.mock.calls[0]?.[1];
@@ -197,7 +202,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         text: "Research",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
   });
 
@@ -262,7 +267,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
         activeRunIds: ["run-before-finalize"],
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {

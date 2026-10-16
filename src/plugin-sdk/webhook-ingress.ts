@@ -77,21 +77,20 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
   const host = getBoundLegacyPluginSdkResourceHost();
-  if (host) {
-    return createGatewayAuthRateLimiter(config, {
-      scheduler: host.scheduler,
-      id: `auth/sdk:${randomUUID()}`,
-    });
+  const scheduler = host?.scheduler ?? new GatewayScheduler();
+  const limiter = createGatewayAuthRateLimiter(config, {
+    scheduler,
+    id: host ? `auth/sdk:${randomUUID()}` : "auth:standalone",
+  });
+  if (!host) {
+    const dispose = limiter.dispose.bind(limiter);
+    limiter.dispose = () => {
+      // Only synchronous pruning uses this standalone owner. Dispose settles the
+      // request-owned penalty waits before closing it; no asynchronous jobs remain.
+      dispose();
+      void scheduler.stop();
+    };
   }
-  const scheduler = new GatewayScheduler();
-  const limiter = createGatewayAuthRateLimiter(config, { scheduler, id: "auth:standalone" });
-  const dispose = limiter.dispose.bind(limiter);
-  limiter.dispose = () => {
-    // Only synchronous pruning uses this standalone owner. Dispose settles the
-    // request-owned penalty waits before closing it; no asynchronous jobs remain.
-    dispose();
-    void scheduler.stop();
-  };
   return limiter;
 }
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";

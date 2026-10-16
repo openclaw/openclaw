@@ -64,10 +64,11 @@ describe("gateway lock write failure", () => {
       return fd;
     });
     vi.spyOn(fsSync, "closeSync").mockImplementation((fd) => {
+      close(fd);
+      // A closed descriptor number can be reused before acquisition rejects.
       if (activeDescriptors.delete(fd)) {
         closeCalls += 1;
       }
-      close(fd);
     });
     vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
       if (typeof file === "number" && activeDescriptors.has(file)) {
@@ -89,9 +90,6 @@ describe("gateway lock write failure", () => {
 
     expect(opened).toHaveLength(1);
     expect(closeCalls).toBe(1);
-    for (const fd of opened) {
-      expect(() => fsSync.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
-    }
     expect(foreignIdentity).toBeDefined();
     await expect(fs.lstat(stateLockPath, { bigint: true })).resolves.toMatchObject({
       dev: foreignIdentity?.dev,

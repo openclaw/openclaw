@@ -22,7 +22,6 @@ function mockProcessWrite(
 }
 
 describe("QA Lab Matrix CLI registration", () => {
-  const originalDisableForceExit = process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT;
   const originalExitCode = process.exitCode;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let stderrSpy: ReturnType<typeof vi.spyOn>;
@@ -40,42 +39,12 @@ describe("QA Lab Matrix CLI registration", () => {
 
   afterEach(() => {
     process.exitCode = originalExitCode;
-    if (originalDisableForceExit === undefined) {
-      delete process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT;
-    } else {
-      process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT = originalDisableForceExit;
-    }
     exitSpy.mockRestore();
     stderrSpy.mockRestore();
     stdoutSpy.mockRestore();
   });
 
-  it("exposes only QA Lab selector flags", () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    const matrix = qa.commands.find((command) => command.name() === "matrix");
-    const optionNames = matrix?.options.map((option) => option.long) ?? [];
-
-    for (const optionName of [
-      "--repo-root",
-      "--output-dir",
-      "--provider-mode",
-      "--model",
-      "--alt-model",
-      "--scenario",
-      "--fast",
-      "--fail-fast",
-      "--sut-account",
-    ]) {
-      expect(optionNames).toContain(optionName);
-    }
-    for (const optionName of ["--profile", "--shard", "--credential-source", "--credential-role"]) {
-      expect(optionNames).not.toContain(optionName);
-    }
-  });
-
   it("delegates command options to the Matrix runtime", async () => {
-    process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT = "1";
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
 
@@ -99,49 +68,40 @@ describe("QA Lab Matrix CLI registration", () => {
     );
   });
 
-  it("exits successfully after Matrix artifacts are written", async () => {
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockResolvedValue(undefined);
-
-    await expect(qa.parseAsync(["node", "openclaw", "matrix"])).rejects.toThrow("process.exit(0)");
-
-    expect(exitSpy).toHaveBeenCalledWith(0);
-  });
-
-  it("prints a failed run and exits after its artifacts are written", async () => {
+  it("prints a failed run and returns after its artifacts are written", async () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
     runLiveTransportQaSuiteCommand.mockRejectedValue(
       new Error("Matrix QA failed.\nreport: /tmp/report.md"),
     );
 
-    await expect(qa.parseAsync(["node", "openclaw", "matrix"])).rejects.toThrow("process.exit(1)");
+    await qa.parseAsync(["node", "openclaw", "matrix"]);
 
     expect(stderrSpy).toHaveBeenCalledWith("Matrix QA failed.\nreport: /tmp/report.md\n");
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
-  it("preserves a failed suite exit code after the runtime returns", async () => {
+  it("keeps the command pending until the suite owner completes", async () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockImplementation(async () => {
-      process.exitCode = 1;
+    const entered = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    runLiveTransportQaSuiteCommand.mockImplementation(() => {
+      entered.resolve();
+      return completed.promise;
     });
-
-    await expect(qa.parseAsync(["node", "openclaw", "matrix"])).rejects.toThrow("process.exit(1)");
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("allows direct test harnesses to disable the forced exit", async () => {
-    process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT = "1";
-    const qa = new Command();
-    matrixQaCliRegistration.register(qa);
-    runLiveTransportQaSuiteCommand.mockRejectedValue(new Error("scenario failed"));
-
-    await expect(qa.parseAsync(["node", "openclaw", "matrix"])).rejects.toThrow("scenario failed");
-
+    let returned = false;
+    const command = qa.parseAsync(["node", "openclaw", "matrix"]).then(() => {
+      returned = true;
+    });
+    await entered.promise;
+    expect(returned).toBe(false);
+    process.exitCode = 1;
+    completed.resolve();
+    await command;
+    expect(returned).toBe(true);
+    expect(process.exitCode).toBe(1);
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });

@@ -9,13 +9,13 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   createRetainedUpdateRecovery,
   storeRetainedUpdateRecovery,
 } from "./update-retained-recovery.test-support.js";
 import { createUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
+import { updateRunLedgerSchema } from "./update-run-write.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -42,12 +42,8 @@ function source() {
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(pathname);
   try {
-    // Legitimate v15/no-Workshop shape also covered by the state-owner migration tests.
+    // Exercise older version markers on a current-layout fixture; this is not a v15 migration proof.
     legacy.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
   } finally {
@@ -104,7 +100,7 @@ it.each(["future", "metadata", "trigger"])(
         raw.exec("UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'");
       } else {
         raw.exec(
-          "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON config_machine_state BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
+          "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON update_runs BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
         );
       }
     } finally {
@@ -150,16 +146,7 @@ it("does not recreate canonical state displaced immediately before the tracked w
 
 function probeExistingWriter(f: ReturnType<typeof source>, busyTimeoutMs?: number) {
   return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {
-    schemaSql: ["schema_meta", "config_machine_state", "update_runs"]
-      .map((table) => {
-        const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
-        const marker = ") STRICT;";
-        return OPENCLAW_STATE_SCHEMA_SQL.slice(
-          start,
-          OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start) + marker.length,
-        );
-      })
-      .join("\n"),
+    schemaSql: updateRunLedgerSchema,
     operationLabel: "retained-test-owner",
     busyTimeoutMs,
   });

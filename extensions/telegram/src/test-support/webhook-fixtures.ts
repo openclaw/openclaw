@@ -121,9 +121,34 @@ export function expectWebhookBotScopesAborted(createTelegramBotSpy: unknown): vo
 }
 
 export const telegramWebhookListenerCases = [
-  { name: "implicit", legacyWebhook: undefined, endpoint: { port: 8787, host: "127.0.0.1" } },
-  { name: "explicit", legacyWebhook: { port: 9000 }, endpoint: { port: 9000, host: "127.0.0.1" } },
-  { name: "disabled", legacyWebhook: false, endpoint: undefined },
+  {
+    name: "omitted",
+    legacyWebhook: undefined,
+    endpoint: undefined,
+    publicUrl: "https://callback.example.test/hook",
+    advertisedUrl: "https://callback.example.test/hook",
+  },
+  {
+    name: "omitted with public origin fallback",
+    legacyWebhook: undefined,
+    endpoint: undefined,
+    publicUrl: "",
+    advertisedUrl: "https://gateway.example.test/hook",
+  },
+  {
+    name: "explicit",
+    legacyWebhook: { port: 9000 },
+    endpoint: { port: 9000, host: "127.0.0.1" },
+    publicUrl: "https://callback.example.test/hook",
+    advertisedUrl: "https://callback.example.test/hook",
+  },
+  {
+    name: "disabled",
+    legacyWebhook: false,
+    endpoint: undefined,
+    publicUrl: "https://callback.example.test/hook",
+    advertisedUrl: "https://callback.example.test/hook",
+  },
 ] as const;
 
 export const telegramReservedGatewayPaths = [

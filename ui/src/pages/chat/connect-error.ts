@@ -37,21 +37,19 @@ function formatPairingRequiredError(error: ErrorWithMessageAndDetails): string {
     return message;
   }
 
-  const approvedRoles = pairing?.approvedRoles?.join(", ") ?? "none";
-  const requestedRole = pairing?.requestedRole ?? "none";
-  const approvedScopes = pairing?.approvedScopes?.join(", ") ?? "none";
-  const requestedScopes = pairing?.requestedScopes?.join(", ") ?? "none";
   switch (pairing?.reason) {
     case "scope-upgrade":
-      if (pairing.approvedScopes || pairing.requestedScopes) {
-        return `device scope upgrade requires approval (approved: ${approvedScopes}; requested: ${requestedScopes})`;
+    case "role-upgrade": {
+      const kind = pairing.reason === "scope-upgrade" ? "scope" : "role";
+      const approved = kind === "scope" ? pairing.approvedScopes : pairing.approvedRoles;
+      const requested = kind === "scope" ? pairing.requestedScopes : pairing.requestedRole;
+      if (!approved && !requested) {
+        return formatConnectPairingRequiredMessage(error.details);
       }
-      return formatConnectPairingRequiredMessage(error.details);
-    case "role-upgrade":
-      if (pairing.approvedRoles || pairing.requestedRole) {
-        return `device role upgrade requires approval (approved: ${approvedRoles}; requested: ${requestedRole})`;
-      }
-      return formatConnectPairingRequiredMessage(error.details);
+      const approvedText = approved?.join(", ") ?? "none";
+      const requestedText = Array.isArray(requested) ? requested.join(", ") : (requested ?? "none");
+      return `device ${kind} upgrade requires approval (approved: ${approvedText}; requested: ${requestedText})`;
+    }
     case "metadata-upgrade":
       return "device reconnect details changed and require approval";
     default:
@@ -83,14 +81,9 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(message);
-  if (
-    normalized === "fetch failed" ||
-    normalized === "failed to fetch" ||
-    normalized === "connect failed"
-  ) {
-    return "gateway connect failed";
-  }
-  return message;
+  return ["fetch failed", "failed to fetch", "connect failed"].includes(normalized)
+    ? "gateway connect failed"
+    : message;
 }
 
 export function formatConnectError(error: unknown): string {

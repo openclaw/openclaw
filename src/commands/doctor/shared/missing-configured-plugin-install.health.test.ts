@@ -3,154 +3,103 @@ import "./missing-configured-plugin-install.suite.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { channelPluginEntry } from "./missing-configured-plugin-install.test-helpers.js";
 
 const { mocks, testEnv, tempDirs, setupPluginInstallSuite } =
   await import("./missing-configured-plugin-install.suite.test-support.js");
+const {
+  configuredPluginInstallIssueToHealthFinding,
+  configuredPluginInstallIssueToRepairEffect,
+  detectConfiguredPluginInstallHealthIssues,
+} = await import("./missing-configured-plugin-install.js");
 
 describe("configured plugin install health findings", () => {
   setupPluginInstallSuite();
 
-  it("maps a missing beta-channel plugin to a structured finding and dry-run effect offline", async () => {
-    mocks.resolveNpmSpecMetadata.mockImplementation(() => {
-      throw new Error("Health detection must not query the npm registry.");
-    });
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "matrix",
-        pluginId: "matrix",
-        meta: { label: "Matrix" },
-        install: {
-          npmSpec: "@openclaw/plugin-matrix",
-          expectedIntegrity: "sha512-test",
-        },
-        trustedSourceLinkedOfficialInstall: true,
-      },
-    ]);
+  it.each([false, true])(
+    "reports install health without mutation (deferred=%s)",
+    async (deferred) => {
+      const pluginId = deferred ? "discord" : "matrix";
+      const npmSpec = deferred ? "@openclaw/discord" : "@openclaw/plugin-matrix";
+      const installPath = path.resolve("/missing/discord");
+      mocks.resolveNpmSpecMetadata.mockImplementation(() => {
+        throw new Error("Health detection must not query the npm registry.");
+      });
+      if (deferred) {
+        mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+          discord: { source: "npm", spec: npmSpec, installPath },
+        });
+      }
+      mocks.listChannelPluginCatalogEntries.mockReturnValue([
+        deferred
+          ? channelPluginEntry({ id: pluginId, label: "Discord", npmSpec })
+          : {
+              id: pluginId,
+              pluginId,
+              meta: { label: "Matrix" },
+              install: { npmSpec, expectedIntegrity: "sha512-test" },
+              trustedSourceLinkedOfficialInstall: true,
+            },
+      ]);
+      const [issue] = await detectConfiguredPluginInstallHealthIssues({
+        cfg: deferred
+          ? {
+              plugins: { entries: { discord: { enabled: true } } },
+              channels: { discord: { enabled: true } },
+            }
+          : {
+              update: { channel: "beta" },
+              channels: { matrix: { enabled: true, homeserver: "https://matrix.example.org" } },
+            },
+        env: deferred
+          ? {
+              ...testEnv,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+            }
+          : testEnv,
+      });
 
-    const {
-      configuredPluginInstallIssueToHealthFinding,
-      configuredPluginInstallIssueToRepairEffect,
-      detectConfiguredPluginInstallHealthIssues,
-    } = await import("./missing-configured-plugin-install.js");
-    const [issue] = await detectConfiguredPluginInstallHealthIssues({
-      cfg: {
-        update: { channel: "beta" },
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
-      env: testEnv,
-    });
-
-    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
-    expect(issue).toEqual({
-      kind: "missing-install-record",
-      pluginId: "matrix",
-      installSpec: "@openclaw/plugin-matrix",
-    });
-    expect(
-      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
-    ).toMatchObject({
-      checkId: "core/doctor/configured-plugin-installs",
-      severity: "warning",
-      target: "matrix",
-      fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix.",
-    });
-    expect(
-      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
-    ).toEqual({
-      kind: "package",
-      action: "would-install-configured-plugin",
-      target: "matrix",
-      dryRunSafe: false,
-    });
-  });
-
-  it("maps package-update deferrals to structured findings without installing packages", async () => {
-    const missingDiscordPath = path.resolve("/missing/discord");
-    const records = {
-      discord: {
-        source: "npm",
-        spec: "@openclaw/discord",
-        installPath: missingDiscordPath,
-      },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "discord",
-        pluginId: "discord",
-        meta: { label: "Discord" },
-        install: {
-          npmSpec: "@openclaw/discord",
-        },
-      },
-    ]);
-
-    const {
-      configuredPluginInstallIssueToHealthFinding,
-      configuredPluginInstallIssueToRepairEffect,
-      detectConfiguredPluginInstallHealthIssues,
-    } = await import("./missing-configured-plugin-install.js");
-    const [issue] = await detectConfiguredPluginInstallHealthIssues({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-        channels: {
-          discord: { enabled: true },
-        },
-      },
-      env: {
-        ...testEnv,
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-      },
-    });
-
-    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(issue).toEqual({
-      kind: "deferred-package-manager-repair",
-      pluginId: "discord",
-      installPath: missingDiscordPath,
-    });
-    expect(
-      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
-    ).toMatchObject({
-      checkId: "core/doctor/configured-plugin-installs",
-      severity: "warning",
-      path: missingDiscordPath,
-      target: "discord",
-    });
-    expect(
-      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
-    ).toEqual({
-      kind: "package",
-      action: "would-defer-configured-plugin-install-repair",
-      target: "discord",
-      dryRunSafe: true,
-    });
-  });
+      expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
+      expect(
+        mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease,
+      ).not.toHaveBeenCalled();
+      expect(issue).toEqual(
+        deferred
+          ? { kind: "deferred-package-manager-repair", pluginId, installPath }
+          : { kind: "missing-install-record", pluginId, installSpec: npmSpec },
+      );
+      const finding = configuredPluginInstallIssueToHealthFinding(
+        expectDefined(issue, "health issue"),
+      );
+      expect(finding).toMatchObject({
+        checkId: "core/doctor/configured-plugin-installs",
+        severity: "warning",
+        target: pluginId,
+        ...(deferred
+          ? { path: installPath }
+          : { fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix." }),
+      });
+      expect(
+        configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+      ).toEqual({
+        kind: "package",
+        action: deferred
+          ? "would-defer-configured-plugin-install-repair"
+          : "would-install-configured-plugin",
+        target: pluginId,
+        dryRunSafe: deferred,
+      });
+    },
+  );
 
   it.each([
     {
       name: "resolved selector takes precedence",
       source: "clawhub",
       spec: "clawhub:demo@latest",
-      resolvedSpec: "clawhub:demo@1.2.3",
-      installSpec: "clawhub:demo@1.2.3",
-      fixHint:
-        "Run `openclaw plugins install clawhub:demo@1.2.3 --force` to reinstall the configured plugin package.",
-    },
-    {
-      name: "resolved selector without original spec",
-      source: "clawhub",
       resolvedSpec: "clawhub:demo@1.2.3",
       installSpec: "clawhub:demo@1.2.3",
       fixHint:
@@ -184,18 +133,9 @@ describe("configured plugin install health findings", () => {
       },
     });
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "demo",
-        pluginId: "demo",
-        meta: { label: "Demo" },
-        install: { npmSpec: "@example/catalog-demo" },
-      },
+      channelPluginEntry({ id: "demo", label: "Demo", npmSpec: "@example/catalog-demo" }),
     ]);
 
-    const {
-      detectConfiguredPluginInstallHealthIssues,
-      configuredPluginInstallIssueToHealthFinding,
-    } = await import("./missing-configured-plugin-install.js");
     const issues = await detectConfiguredPluginInstallHealthIssues({
       cfg: {
         plugins: { entries: { demo: { enabled: true } } },

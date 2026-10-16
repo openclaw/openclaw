@@ -1,4 +1,5 @@
 export const anthropicServerSideFallbackCases = [
+  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
   { id: "claude-fable-5", name: "Claude Fable 5" },
   { id: "claude-opus-5", name: "Claude Opus 5" },
   {

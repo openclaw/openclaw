@@ -6,8 +6,14 @@ import { createStatusScanResultFixture } from "./status.test-support.ts";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  scanStatusJsonFast: vi.fn(),
   writeRuntimeJson: vi.fn(),
   resolveStatusJsonOutput: vi.fn(async (input) => ({ built: true, input })),
+}));
+
+// mock-isolation: exercise JSON policy without reading config, probing the Gateway, or loading plugins.
+vi.mock("./status.scan.fast-json.js", () => ({
+  scanStatusJsonFast: mocks.scanStatusJsonFast,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -53,7 +59,7 @@ describe("runStatusJsonCommand", () => {
       gatewayProbeAuthWarning: undefined,
       secretDiagnostics: [],
     });
-    const scanStatusJsonFast = vi.fn(async () => scan);
+    mocks.scanStatusJsonFast.mockResolvedValue(scan);
 
     await runStatusJsonCommand({
       opts: {
@@ -64,13 +70,9 @@ describe("runStatusJsonCommand", () => {
         all: true,
       },
       runtime,
-      scanStatusJsonFast,
-      includeSecurityAudit: true,
-      includePluginCompatibility: true,
-      suppressHealthErrors: true,
     });
 
-    expect(scanStatusJsonFast).toHaveBeenCalledWith(
+    expect(mocks.scanStatusJsonFast).toHaveBeenCalledWith(
       { timeoutMs: 1234, gatewayProbeDeadlineMs: 1234, all: true },
       runtime,
     );
@@ -107,16 +109,13 @@ describe("runStatusJsonCommand", () => {
 
   it("rejects --agent when usage is not requested", async () => {
     const runtime = createTestRuntime();
-    const scanStatusJsonFast = vi.fn();
 
     await expect(
       runStatusJsonCommand({
         opts: { ...createStatusGatewayProbeBudget(), agent: "beta" },
         runtime,
-        scanStatusJsonFast,
-        includeSecurityAudit: false,
       }),
     ).rejects.toThrow("--agent is only valid with --usage");
-    expect(scanStatusJsonFast).not.toHaveBeenCalled();
+    expect(mocks.scanStatusJsonFast).not.toHaveBeenCalled();
   });
 });

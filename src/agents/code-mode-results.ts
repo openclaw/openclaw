@@ -5,6 +5,7 @@ import {
   type CodeModeValueRetention,
 } from "./code-mode-json.js";
 import { createCodeModeResultReference } from "./code-mode-result-preview.js";
+import { disposeCodeModeSessionStore } from "./code-mode-session-store.js";
 import type { CodeModeConfig } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
@@ -24,6 +25,7 @@ const MAX_RESULTS = 64;
 
 export function disposeCodeModeResults(owner: ToolSearchCatalogRef): void {
   stores.get(owner)?.close();
+  disposeCodeModeSessionStore(owner);
 }
 
 export type CodeModeResultsAccess = ReturnType<typeof createCodeModeResultsAccess>;

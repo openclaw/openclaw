@@ -32,6 +32,8 @@ const context: Context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
 
+const proxyOptions = { authToken: "token", proxyUrl: "https://proxy.example" };
+
 function responseFromText(text: string): Response {
   return new Response(
     new ReadableStream({
@@ -147,45 +149,6 @@ describe("streamProxy", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reconstructs a text signature from text_start before streamed deltas", async () => {
-    const contentSignature = JSON.stringify({
-      v: 1,
-      id: "item-commentary",
-      phase: "commentary",
-    });
-    const proxyEvents = [
-      { type: "text_start", contentIndex: 0, contentSignature },
-      { type: "text_delta", contentIndex: 0, delta: "Working..." },
-      { type: "text_end", contentIndex: 0 },
-      { type: "done", reason: "stop", usage },
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        responseFromText(proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
-      ),
-    );
-
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => event.type)).toEqual([
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
-    await expect(stream.result()).resolves.toMatchObject({
-      content: [{ type: "text", text: "Working...", textSignature: contentSignature }],
-    });
-  });
-
   it("accepts data lines without a space after the colon", async () => {
     // The SSE spec makes the space optional; proxies emitting `data:{...}`
     // must not have their events silently dropped.
@@ -210,10 +173,7 @@ describe("streamProxy", () => {
       vi.fn(async () => responseFromText(body)),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
     const events = [];
     for await (const event of stream) {
       events.push(event);
@@ -226,7 +186,7 @@ describe("streamProxy", () => {
       "done",
     ]);
     await expect(stream.result()).resolves.toMatchObject({
-      content: [{ type: "text", text: "Working..." }],
+      content: [{ type: "text", text: "Working...", textSignature: "sig" }],
     });
   });
 
@@ -246,10 +206,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
     const argumentSnapshots: Array<Record<string, unknown>> = [];
     let terminalArguments: Record<string, unknown> | undefined;
     for await (const event of stream) {
@@ -287,10 +244,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "toolUse",
@@ -353,8 +307,7 @@ describe("streamProxy", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
+      ...proxyOptions,
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
     }).result();
@@ -387,8 +340,7 @@ describe("streamProxy", () => {
     );
 
     const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
+      ...proxyOptions,
       timeoutMs: 5,
     });
     await vi.advanceTimersByTimeAsync(5);
@@ -416,10 +368,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
 
     expect(await resultWithinMs(stream)).toMatchObject({
       stopReason: "error",
@@ -443,10 +392,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
 
     expect(await resultWithinMs(stream)).toMatchObject({
       stopReason: "error",
@@ -470,10 +416,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
 
     expect(await resultWithinMs(stream)).toMatchObject({
       stopReason: "error",
@@ -519,10 +462,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
 
     await vi.advanceTimersByTimeAsync(119_000);
     expect(cancel).not.toHaveBeenCalled();
@@ -581,8 +521,7 @@ describe("streamProxy", () => {
     );
 
     const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
+      ...proxyOptions,
       timeoutMs: 5,
     });
 
@@ -605,70 +544,16 @@ describe("streamProxy", () => {
     });
   });
 
-  it("returns an error result when the SSE read idles", async () => {
-    vi.useFakeTimers();
-    const cancel = vi.fn(async () => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            body: {
-              getReader: () =>
-                ({
-                  read: vi.fn(
-                    async () => await new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
-                  ),
-                  cancel,
-                  releaseLock: vi.fn(),
-                }) as unknown as ReadableStreamDefaultReader<Uint8Array>,
-            },
-          }) as Response,
-      ),
-    );
-
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
-    await vi.advanceTimersByTimeAsync(120_000);
-
-    expect(await settledResult(stream)).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Proxy SSE stream stalled: no data received for 120000ms",
-    });
-    expect(cancel).toHaveBeenCalledWith(expect.any(Error));
-  });
-
   it("honors a longer configured SSE read idle timeout", async () => {
     vi.useFakeTimers();
-    const cancel = vi.fn(async () => undefined);
+    const cancel = vi.fn(() => undefined);
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            body: {
-              getReader: () =>
-                ({
-                  read: vi.fn(
-                    async () => await new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
-                  ),
-                  cancel,
-                  releaseLock: vi.fn(),
-                }) as unknown as ReadableStreamDefaultReader<Uint8Array>,
-            },
-          }) as Response,
-      ),
+      vi.fn(async () => pendingReaderResponse({ chunks: [], onCancel: cancel })),
     );
 
     const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
+      ...proxyOptions,
       timeoutMs: 180_000,
     });
     await vi.advanceTimersByTimeAsync(120_000);
@@ -702,10 +587,7 @@ describe("streamProxy", () => {
       ),
     );
 
-    await streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    }).result();
+    await streamProxy(model, context, proxyOptions).result();
 
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
@@ -723,12 +605,9 @@ describe("streamProxy", () => {
       ),
     );
 
-    await expect(
-      streamProxy(model, context, {
-        authToken: "token",
-        proxyUrl: "https://proxy.example",
-      }).result(),
-    ).resolves.toMatchObject({ stopReason: "stop" });
+    await expect(streamProxy(model, context, proxyOptions).result()).resolves.toMatchObject({
+      stopReason: "stop",
+    });
     expect(cancel).not.toHaveBeenCalled();
   });
 
@@ -738,10 +617,7 @@ describe("streamProxy", () => {
       vi.fn(async () => responseFromText(`data: ${JSON.stringify({ type: "start" })}`)),
     );
 
-    const stream = streamProxy(model, context, {
-      authToken: "token",
-      proxyUrl: "https://proxy.example",
-    });
+    const stream = streamProxy(model, context, proxyOptions);
     const events = [];
     for await (const event of stream) {
       events.push(event);

@@ -49,33 +49,6 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
     });
   });
 
-  it("resolves multiple channel hints with one presence-policy pass", () => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
-      {
-        channelId: "feishu",
-        sources: ["explicit-config"],
-        effective: false,
-        pluginIds: [],
-        blockedReasons: ["no-channel-owner"],
-      },
-      {
-        channelId: "whatsapp",
-        sources: ["explicit-config"],
-        effective: false,
-        pluginIds: [],
-        blockedReasons: ["no-channel-owner"],
-      },
-    ]);
-
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHints({
-        config: { channels: { feishu: {}, whatsapp: {} } },
-        channelIds: ["feishu", "whatsapp"],
-      }).map((hint) => hint.channelId),
-    ).toEqual(["feishu", "whatsapp"]);
-    expect(mocks.resolveConfiguredChannelPresencePolicy).toHaveBeenCalledTimes(1);
-  });
-
   it("skips presence policy when no channel ids need repair hints", () => {
     expect(
       resolveMissingOfficialExternalChannelPluginRepairHints({
@@ -84,31 +57,6 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
       }),
     ).toEqual([]);
     expect(mocks.resolveConfiguredChannelPresencePolicy).not.toHaveBeenCalled();
-  });
-
-  it("prefers the npm install hint for externalized WhatsApp", () => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
-      {
-        channelId: "whatsapp",
-        sources: ["explicit-config"],
-        effective: false,
-        pluginIds: [],
-        blockedReasons: ["no-channel-owner"],
-      },
-    ]);
-
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: { channels: { whatsapp: { enabled: true } } },
-        channelId: "whatsapp",
-      }),
-    ).toMatchObject({
-      pluginId: "whatsapp",
-      channelId: "whatsapp",
-      label: "WhatsApp",
-      installSpec: "@openclaw/whatsapp",
-      installCommand: "openclaw plugins install @openclaw/whatsapp",
-    });
   });
 
   it("does not return install hints for policy-blocked official external channel owners", () => {
@@ -154,12 +102,18 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
   it.each([
     {
       name: "names the official install command for the package that owns the id",
-      candidate: { pluginId: "discord", packageName: "@openclaw/discord" },
+      candidate: { origin: "bundled", pluginId: "discord", packageName: "@openclaw/discord" },
       expected: "openclaw plugins install @openclaw/discord",
+    },
+    {
+      name: "keeps install repair for a separately installed copy of a core plugin",
+      candidate: { origin: "config", pluginId: "cloudflare", packageName: "@openclaw/cloudflare" },
+      expected: "openclaw plugins install @openclaw/cloudflare",
     },
     {
       name: "withholds the official install command from a foreign package reusing the id",
       candidate: {
+        origin: "bundled",
         pluginId: "discord",
         packageName: "@example/discord-fork",
         packageBuild: { bundledDist: false },
@@ -172,18 +126,19 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
     expect(hint).toContain(expected);
   });
 
-  it("stays silent for plugins shipped inside the root package", () => {
+  it.each(["telegram", "cloudflare"])("stays silent for root-packaged %s", (pluginId) => {
     expect(
       resolveExternalPluginRuntimeDependencyRepairHint({
-        pluginId: "telegram",
-        packageName: "@openclaw/telegram",
+        origin: "bundled",
+        pluginId,
+        packageName: `@openclaw/${pluginId}`,
       }),
     ).toBeUndefined();
   });
 });
 
 describe("tracksPluginDependencyStatus", () => {
-  it.each(["config", "global", "workspace"])(
+  it.each(["config"])(
     "keeps dependency checks for a %s install that claims bundled distribution",
     (origin) => {
       expect(

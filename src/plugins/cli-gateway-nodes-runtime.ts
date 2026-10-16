@@ -1,4 +1,3 @@
-/** Provides plugin CLI node APIs by forwarding calls to the Gateway. */
 import { randomUUID } from "node:crypto";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -14,29 +13,6 @@ import type { PluginRuntime } from "./runtime/types.js";
 // live Gateway/TLS graph behind the first node RPC so one-shot help stays inert.
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
-/** Adds Gateway timer grace for plugin CLI node invoke calls. */
-function resolvePluginCliNodeInvokeGatewayTimeoutMs(
-  timeoutMs: number | undefined,
-): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? addTimerTimeoutGraceMs(timeoutMs)
-    : undefined;
-}
-
-function canPluginCliRuntimeRequestScopes(): boolean {
-  const scope = getPluginRuntimeGatewayRequestScope();
-  return Boolean(
-    scope?.pluginId &&
-    (scope.pluginOrigin === "bundled" || scope.pluginTrustedOfficialInstall === true),
-  );
-}
-
-function resolvePluginCliRuntimeNodeInvokeScopes(scopes: string[] | undefined) {
-  const normalizedScopes = normalizeOperatorScopeList(scopes);
-  return normalizedScopes && canPluginCliRuntimeRequestScopes() ? normalizedScopes : undefined;
-}
-
-/** Creates the `runtime.nodes` implementation exposed to CLI plugin code. */
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
   return {
     async list(params) {
@@ -63,7 +39,13 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
     },
     async invoke(params) {
       const { callGateway } = await gatewayCallModuleLoader.load();
-      const scopes = resolvePluginCliRuntimeNodeInvokeScopes(params.scopes);
+      const normalizedScopes = normalizeOperatorScopeList(params.scopes);
+      const scope = normalizedScopes ? getPluginRuntimeGatewayRequestScope() : undefined;
+      const scopes =
+        scope?.pluginId &&
+        (scope.pluginOrigin === "bundled" || scope.pluginTrustedOfficialInstall === true)
+          ? normalizedScopes
+          : undefined;
       return await callGateway({
         method: "node.invoke",
         params: {
@@ -74,7 +56,12 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
           idempotencyKey: params.idempotencyKey || randomUUID(),
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         },
-        timeoutMs: resolvePluginCliNodeInvokeGatewayTimeoutMs(params.timeoutMs),
+        timeoutMs:
+          typeof params.timeoutMs === "number" &&
+          Number.isFinite(params.timeoutMs) &&
+          params.timeoutMs > 0
+            ? addTimerTimeoutGraceMs(params.timeoutMs)
+            : undefined,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         ...(scopes ? { scopes } : {}),

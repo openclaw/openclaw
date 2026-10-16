@@ -18,7 +18,6 @@ function writeOpenWebUiWorkspace() {
     path.join(workspace, "IDENTITY.md"),
     "# Identity\n\n- Name: OpenClaw\n- Purpose: Open WebUI Docker compatibility smoke test assistant.\n",
   );
-  fs.rmSync(path.join(workspace, ".openclaw", "workspace-state.json"), { force: true });
   fs.rmSync(path.join(workspace, "openclaw-workspace-state.json"), { force: true });
   fs.rmSync(path.join(workspace, "BOOTSTRAP.md"), { force: true });
 }

@@ -10,7 +10,7 @@ import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
-  isOpenAiCuratedMarketplace,
+  isOpenAiCuratedMarketplaceName,
   marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
@@ -35,8 +35,6 @@ import {
   type CodexPluginSource,
   type CodexSkillSource,
 } from "./source-files.js";
-
-export type { CodexPluginSource } from "./source-files.js";
 
 type CodexArchiveSource = {
   id: string;
@@ -80,26 +78,12 @@ type InstalledCuratedPlugin = {
   remote: boolean;
 };
 
-type PluginReadResult =
-  | {
-      ok: true;
-      detail: v2.PluginDetail;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 export function defaultCodexHome(): string {
   const configuredHome = process.env.CODEX_HOME;
   // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
   return resolveHomePath(
     configuredHome !== undefined && configuredHome.length > 0 ? configuredHome : "~/.codex",
   );
-}
-
-function personalAgentsSkillsDir(): string {
-  return path.join(resolveUserHomeDir(), ".agents", "skills");
 }
 
 async function discoverInstalledCuratedPlugins(
@@ -183,7 +167,7 @@ function discoverInstalledCuratedPluginSources(
 ): InstalledCuratedPlugin[] {
   const installedByName = new Map<string, InstalledCuratedPlugin>();
   for (const marketplace of response.marketplaces) {
-    if (!isOpenAiCuratedMarketplace(marketplace)) {
+    if (!isOpenAiCuratedMarketplaceName(marketplace.name)) {
       continue;
     }
     // Remote catalog entries carry no local path; the API-key curated variant
@@ -213,9 +197,7 @@ function discoverInstalledCuratedPluginSources(
           enabled: summary.enabled,
         },
         marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
-        ...(remote
-          ? { readPluginName: summary.remotePluginId?.trim() || undefined }
-          : { readPluginName: pluginName }),
+        readPluginName: remote ? summary.remotePluginId?.trim() || undefined : pluginName,
         remote,
       });
     }
@@ -242,23 +224,31 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const detail = await readPluginDetail(
-      params.requestOptions,
-      marketplace,
-      plugin,
-      readPluginName,
-    );
-    if (!detail.ok) {
+    let detail: v2.PluginDetail;
+    try {
+      if (!readPluginName) {
+        throw new Error(
+          `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
+        );
+      }
+      detail = (
+        await params.requestOptions.request<v2.PluginReadResponse>({
+          method: "plugin/read",
+          requestParams: pluginReadParams(marketplace, readPluginName),
+        })
+      ).plugin;
+    } catch (error) {
+      const message = coerceErrorMessage(error);
       evaluated.push({
         ...plugin,
         migratable: false,
-        migrationBlock: { code: "plugin_read_unavailable", error: detail.error },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${detail.error}`,
+        migrationBlock: { code: "plugin_read_unavailable", error: message },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${message}`,
       });
       continue;
     }
 
-    if (detail.detail.apps.length === 0) {
+    if (detail.apps.length === 0) {
       evaluated.push({
         ...plugin,
         migratable: true,
@@ -266,7 +256,7 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const apps = detail.detail.apps
+    const apps = detail.apps
       .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
@@ -329,26 +319,13 @@ async function withPluginMigrationEligibility(params: {
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app] as const));
   for (const { plugin, apps: declaredApps } of pending) {
-    const apps = declaredApps
-      .map((app) =>
-        sourcePluginAppFactWithInventory(
-          app,
-          appInfoById.get(app.id),
-          installedAppsById.get(app.id),
-        ),
-      )
-      .toSorted((left, right) => left.id.localeCompare(right.id));
-    const blockCode = migrationBlockCodeForApps(apps);
-    if (!blockCode) {
-      evaluated.push({ ...plugin, apps, migratable: true });
-      continue;
-    }
-    evaluated.push({
-      ...plugin,
-      migratable: false,
-      migrationBlock: { code: blockCode, apps },
-      message: appInventoryBlockMessage(plugin, apps, blockCode),
-    });
+    const apps = declaredApps.map((app) =>
+      sourcePluginAppFactWithInventory(app, appInfoById.get(app.id), installedAppsById.get(app.id)),
+    );
+    const block = appInventoryMigrationBlock(plugin, apps);
+    evaluated.push(
+      block ? { ...plugin, migratable: false, ...block } : { ...plugin, apps, migratable: true },
+    );
   }
 
   return evaluated;
@@ -369,29 +346,6 @@ async function readSourceCodexAccount(
       return "non_chatgpt";
     default:
       return "missing";
-  }
-}
-
-async function readPluginDetail(
-  options: SourceAppServerRequestOptions,
-  marketplace: CodexPluginMarketplaceRef,
-  plugin: CodexPluginSource,
-  readPluginName: string | undefined,
-): Promise<PluginReadResult> {
-  if (!readPluginName) {
-    return {
-      ok: false,
-      error: `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
-    };
-  }
-  try {
-    const response = await options.request<v2.PluginReadResponse>({
-      method: "plugin/read",
-      requestParams: pluginReadParams(marketplace, readPluginName),
-    });
-    return { ok: true, detail: response.plugin };
-  } catch (error) {
-    return { ok: false, error: coerceErrorMessage(error) };
   }
 }
 
@@ -425,62 +379,44 @@ function sourcePluginAppFactWithInventory(
   if (!installedApp) {
     return app;
   }
-  if (!info) {
-    return installedApp.enabled
-      ? { ...app, isAccessible: false, isEnabled: true }
-      : { ...app, isEnabled: false };
-  }
-  if (!installedApp.enabled) {
-    return { ...app, isAccessible: true, isEnabled: false };
-  }
-  return {
-    ...app,
+  const fact: SourcePluginRuntimeAppFact = { ...app };
+  if (info) {
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: installedApp.callable,
-    isEnabled: installedApp.enabled,
-    ...(!installedApp.callable ? { isCallable: false as const } : {}),
-  };
+    fact.isAccessible = !installedApp.enabled || installedApp.callable;
+  } else if (installedApp.enabled) {
+    fact.isAccessible = false;
+  }
+  fact.isEnabled = installedApp.enabled;
+  if (info && installedApp.enabled && !installedApp.callable) {
+    fact.isCallable = false;
+  }
+  return fact;
 }
 
-function migrationBlockCodeForApps(
-  apps: readonly SourcePluginRuntimeAppFact[],
-): CodexPluginMigrationBlockCode | undefined {
-  if (apps.some((app) => app.isAccessible === false)) {
-    return "app_inaccessible";
-  }
-  if (apps.some((app) => app.isEnabled === false)) {
-    return "app_disabled";
-  }
-  if (apps.some((app) => app.isAccessible === undefined || app.isEnabled === undefined)) {
-    return "app_missing";
-  }
-  return undefined;
-}
-
-function appInventoryBlockMessage(
+function appInventoryMigrationBlock(
   plugin: CodexPluginSource,
-  apps: readonly SourcePluginRuntimeAppFact[],
-  code: CodexPluginMigrationBlockCode,
-): string {
-  const status =
-    code === "app_inaccessible"
-      ? apps.some((app) => app.isCallable === false)
-        ? "not callable"
-        : "inaccessible"
-      : code === "app_disabled"
-        ? "disabled"
-        : "missing";
-  const blocking =
-    apps.find((app) =>
-      code === "app_inaccessible"
-        ? app.isAccessible === false
-        : code === "app_disabled"
-          ? app.isEnabled === false
-          : app.isAccessible === undefined || app.isEnabled === undefined,
-    ) ?? apps[0];
-  const appLabel = blocking ? ` app "${blocking.name}"` : " an owned app";
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${status}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
+  apps: SourcePluginRuntimeAppFact[],
+): Pick<CodexPluginSource, "migrationBlock" | "message"> | undefined {
+  const inaccessible = apps.find((app) => app.isAccessible === false);
+  const disabled = apps.find((app) => app.isEnabled === false);
+  const missing = apps.find((app) => app.isAccessible === undefined || app.isEnabled === undefined);
+  const blocking = inaccessible ?? disabled ?? missing;
+  if (!blocking) {
+    return undefined;
+  }
+  const code = inaccessible ? "app_inaccessible" : disabled ? "app_disabled" : "app_missing";
+  const status = inaccessible
+    ? apps.some((app) => app.isCallable === false)
+      ? "not callable"
+      : "inaccessible"
+    : disabled
+      ? "disabled"
+      : "missing";
+  return {
+    migrationBlock: { code, apps },
+    message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns app "${blocking.name}" but the source app inventory reports it is ${status}; authenticate or enable the app in Codex before migrating it to OpenClaw.`,
+  };
 }
 
 export function codexPluginMigrationSubscriptionWarning(): string {
@@ -516,7 +452,7 @@ export async function discoverCodexSource(
 ): Promise<CodexSource> {
   const codexHome = resolveHomePath(options.input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
-  const agentsSkillsDir = personalAgentsSkillsDir();
+  const agentsSkillsDir = path.join(resolveUserHomeDir(), ".agents", "skills");
   const configPath = path.join(codexHome, "config.toml");
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");

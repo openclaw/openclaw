@@ -9,10 +9,10 @@ import {
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 
-type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord>;
+type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
 
 function openThreadBindingStore(): TelegramThreadBindingStore {
-  return getTelegramRuntime().state.openKeyedStore<TelegramThreadBindingRecord>({
+  return getTelegramRuntime().state.openKeyedStoreV2<TelegramThreadBindingRecord>({
     namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
     maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   });
@@ -21,18 +21,15 @@ function openThreadBindingStore(): TelegramThreadBindingStore {
 export async function loadBindingsFromStore(
   accountId: string,
 ): Promise<TelegramThreadBindingRecord[]> {
+  let operation = "open";
   let store: TelegramThreadBindingStore;
-  try {
-    store = openThreadBindingStore();
-  } catch (err) {
-    logVerbose(`telegram thread bindings store open failed (${accountId}): ${String(err)}`);
-    return [];
-  }
   let entries: Array<{ key: string; value: TelegramThreadBindingRecord }>;
   try {
+    store = openThreadBindingStore();
+    operation = "read";
     entries = await store.entries();
   } catch (err) {
-    logVerbose(`telegram thread bindings store read failed (${accountId}): ${String(err)}`);
+    logVerbose(`telegram thread bindings store ${operation} failed (${accountId}): ${String(err)}`);
     return [];
   }
   const bindings: TelegramThreadBindingRecord[] = [];
@@ -92,7 +89,7 @@ export async function persistBindingMutation(params: {
   return false;
 }
 
-/** Native compatibility for the published synchronous SDK, retained until its next major. */
+/** Native compatibility for the published synchronous SDK, retained during stable deprecation. */
 export function updateStoredBindingSync(params: {
   binding: TelegramThreadBindingRecord;
   persist: boolean;

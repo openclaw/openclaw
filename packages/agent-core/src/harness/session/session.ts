@@ -1,4 +1,6 @@
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripCompactionReplayCheckpoint } from "../../../../ai/src/transports/provider-compaction-checkpoint.js";
+import { getOpenClawSystemUpdateKind } from "../../operator-messages.js";
 import type { AgentMessage } from "../../types.js";
 import {
   createBranchSummaryMessage,
@@ -9,6 +11,11 @@ import type { SessionContext, SessionTreeEntry } from "../types.js";
 import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isExcludedCustomMessage(entry: Extract<SessionTreeEntry, { type: "custom_message" }>) {
+  // Existing failure receipts predate the generic context exclusion marker.
+  return entry.excludeFromContext === true || entry.customType === "run-failed-before-reply";
+}
 
 /** The same semantic cut is used before payload acquisition and when building messages. */
 function resolveSessionContextWindow(
@@ -36,6 +43,9 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
+      if (isExcludedCustomMessage(entry)) {
+        return undefined;
+      }
       return createCustomMessage(
         entry.customType,
         entry.content,
@@ -57,6 +67,16 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
 ): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
   const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
+  // A rebuilt prefix retires prompt overrides; retained turns still own their runtime facts.
+  const operatorBoundaryIndex = Math.max(
+    boundaryIndex,
+    pathEntries.findLastIndex(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === "openclaw.system-prompt" &&
+        asOptionalRecord(entry.data)?.restart === true,
+    ),
+  );
   const boundary = pathEntries[boundaryIndex];
   const resetKept =
     boundary?.type === "reset"
@@ -75,12 +95,16 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
     ) {
       continue;
     }
+    if (index < operatorBoundaryIndex && getOpenClawSystemUpdateKind(entry) === "prompt-update") {
+      continue;
+    }
     const hasMessage =
       entry.type === "message" ||
       entry.type === "custom_message" ||
       entry.type === "branch_summary";
     if (
       !hasMessage ||
+      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
       (!resetKept?.has(entry) &&
         entry.type === "message" &&
         "excludeFromContext" in entry.message &&

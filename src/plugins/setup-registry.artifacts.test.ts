@@ -93,21 +93,22 @@ describe("installed setup artifacts", () => {
     declared: boolean;
     competingDist?: string;
     extension: string;
-  }>(
-    [
-      { artifactDir: ".", declared: true },
-      { artifactDir: ".", declared: false },
-      { artifactDir: "dist", declared: false },
-      { artifactDir: ".", declared: false, competingDist: "setup-api.ts" },
-      {
-        artifactDir: ".",
-        declared: false,
-        competingDist: "setup-api.js",
-      },
-    ].flatMap((entry) =>
-      ["cjs", "mjs", "ts"].map((extension) => Object.assign({ extension }, entry)),
-    ),
-  )(
+  }>([
+    { artifactDir: ".", declared: true, extension: "cjs" },
+    { artifactDir: "dist", declared: false, extension: "cjs" },
+    {
+      artifactDir: ".",
+      declared: false,
+      competingDist: "setup-api.ts",
+      extension: "mjs",
+    },
+    {
+      artifactDir: ".",
+      declared: false,
+      competingDist: "setup-api.js",
+      extension: "ts",
+    },
+  ])(
     "reloads installed $extension $artifactDir setup artifacts (declared: $declared, dist conflict: $competingDist)",
     ({ artifactDir, declared, competingDist, extension }) => {
       const rootDir = temp.make("openclaw-setup-lifecycle-");

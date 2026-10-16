@@ -106,49 +106,34 @@ internal fun ChatBrowserCard(
           onClick = onClose,
         )
       }
-      when {
-        !connected || page == null -> {
-          Text(
-            nativeString("Browser offline. Reconnect to continue in this tab."),
-            modifier = Modifier.padding(12.dp),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
+      val notice =
+        when {
+          !connected || page == null -> nativeString("Browser offline. Reconnect to continue in this tab.")
+          !canControl -> nativeString("Browser control is unavailable with your current Gateway permissions.")
+          !page.browserFocusAvailable -> nativeString("Browser view unavailable. Update your Gateway and use its bundled Control UI.")
+          else -> null
         }
-
-        !canControl -> {
-          Text(
-            nativeString("Browser control is unavailable with your current Gateway permissions."),
-            modifier = Modifier.padding(12.dp),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
-
-        !page.browserFocusAvailable -> {
-          Text(
-            nativeString("Browser view unavailable. Update your Gateway and use its bundled Control UI."),
-            modifier = Modifier.padding(12.dp),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
-
-        url != null -> {
-          key(page, url) {
-            val expandedHeight = (availableHeight * 0.6f).coerceIn(0.dp, 420.dp)
-            val previewHeight = (availableHeight * 0.3f).coerceIn(0.dp, 180.dp)
-            Box(Modifier.fillMaxWidth().height(if (expanded) expandedHeight else previewHeight)) {
-              ControlUiWebView(
-                page = page,
-                url = url,
-                modifier = Modifier.matchParentSize(),
-                interactive = expanded,
-                onExternalLink = { uriHandler.openUri(it) },
-              )
-              if (!expanded) {
-                Box(Modifier.matchParentSize().clickable(onClickLabel = nativeString("Control browser")) { expanded = true })
-              }
+      if (notice != null) {
+        Text(
+          notice,
+          modifier = Modifier.padding(12.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      } else if (page != null && url != null) {
+        key(page, url) {
+          val expandedHeight = (availableHeight * 0.6f).coerceIn(0.dp, 420.dp)
+          val previewHeight = (availableHeight * 0.3f).coerceIn(0.dp, 180.dp)
+          Box(Modifier.fillMaxWidth().height(if (expanded) expandedHeight else previewHeight)) {
+            ControlUiWebView(
+              page = page,
+              url = url,
+              modifier = Modifier.matchParentSize(),
+              interactive = expanded,
+              onExternalLink = { uriHandler.openUri(it) },
+            )
+            if (!expanded) {
+              Box(Modifier.matchParentSize().clickable(onClickLabel = nativeString("Control browser")) { expanded = true })
             }
           }
         }

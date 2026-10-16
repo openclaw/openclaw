@@ -95,31 +95,6 @@ describe("matrix reaction actions", () => {
     expect(getAccountData).toHaveBeenCalledWith("im.ponies.user_emotes");
   });
 
-  it("caps sorted custom-emote results at 100 and accepts a missing personal pack", async () => {
-    const images = Object.fromEntries(
-      Array.from({ length: 105 }, (_, index) => {
-        const shortcode = `emoji_${String(index).padStart(3, "0")}`;
-        return [shortcode, { url: `mxc://example.org/${shortcode}` }];
-      }),
-    );
-    const client = {
-      doRequest: vi.fn(async () => [
-        { type: "im.ponies.room_emotes", state_key: "", content: { images } },
-      ]),
-      getAccountData: vi.fn(async () => undefined),
-      stop: vi.fn(),
-    } as unknown as MatrixClient;
-
-    const emojis = await listMatrixEmojis("!room:example.org", { client, limit: 500 });
-
-    expect(emojis).toHaveLength(100);
-    expect(emojis[0]?.name).toBe("emoji_000");
-    expect(emojis.at(-1)?.name).toBe("emoji_099");
-    await expect(listMatrixEmojis("!room:example.org", { client, limit: 2 })).resolves.toHaveLength(
-      2,
-    );
-  });
-
   it("fails visibly when the room-state response is malformed", async () => {
     const client = {
       doRequest: vi.fn(async () => ({ state: [] })),
@@ -164,8 +139,8 @@ describe("matrix reaction actions", () => {
     ]);
   });
 
-  it("removes only current-user reactions matching emoji filter", async () => {
-    const { client, redactEvent } = createReactionsClient({
+  it("removes only matching current-user reactions, including later pages", async () => {
+    const { client, doRequest, redactEvent } = createReactionsClient({
       chunk: [
         { event_id: "$1", sender: "@me:example.org", key: "👍" },
         { event_id: "$2", sender: "@me:example.org", key: "👎" },
@@ -173,6 +148,7 @@ describe("matrix reaction actions", () => {
       ],
       userId: "@me:example.org",
     });
+    doRequest.mockResolvedValueOnce({ chunk: [], next_batch: "older-reactions" });
 
     const result = await removeMatrixReactions("!room:example.org", "$msg", {
       client,
@@ -182,48 +158,12 @@ describe("matrix reaction actions", () => {
     expect(result).toEqual({ removed: 1 });
     expect(redactEvent).toHaveBeenCalledTimes(1);
     expect(redactEvent).toHaveBeenCalledWith("!room:example.org", "$1");
-  });
-
-  it("removes current-user reactions found after the first relations page", async () => {
-    const { client, doRequest, redactEvent } = createReactionsClient({
-      chunk: [],
-      userId: "@me:example.org",
-    });
-    doRequest
-      .mockResolvedValueOnce({
-        chunk: [
-          {
-            event_id: "$other",
-            sender: "@other:example.org",
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-            },
-          },
-        ],
-        next_batch: "older-reactions",
-      })
-      .mockResolvedValueOnce({
-        chunk: [
-          {
-            event_id: "$mine",
-            sender: "@me:example.org",
-            content: {
-              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-            },
-          },
-        ],
-      });
-
-    await expect(
-      removeMatrixReactions("!room:example.org", "$msg", { client, emoji: "👍" }),
-    ).resolves.toEqual({ removed: 1 });
     expect(doRequest).toHaveBeenNthCalledWith(
       2,
       "GET",
       "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
       { dir: "b", limit: 200, from: "older-reactions" },
     );
-    expect(redactEvent).toHaveBeenCalledWith("!room:example.org", "$mine");
   });
 
   it("continues listing across empty relation pages", async () => {
@@ -275,20 +215,6 @@ describe("matrix reaction actions", () => {
 
     expect(result).toEqual({ removed: 0 });
     expect(redactEvent).not.toHaveBeenCalled();
-  });
-
-  it("returns an empty list when the relations response is malformed", async () => {
-    const doRequest = vi.fn(async () => ({ chunk: null }));
-    const client = {
-      doRequest,
-      getUserId: vi.fn(async () => "@me:example.org"),
-      redactEvent: vi.fn(async () => undefined),
-      stop: vi.fn(),
-    } as unknown as MatrixClient;
-
-    const result = await listMatrixReactions("!room:example.org", "$msg", { client });
-
-    expect(result).toStrictEqual([]);
   });
 
   it("rejects blank message ids before querying Matrix relations", async () => {

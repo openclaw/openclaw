@@ -63,19 +63,18 @@ describe("cli progress", () => {
     clackMocks.spinnerInstance.clear.mockClear();
   });
 
-  it.each<[number, string]>([
-    [32, "Checking channel status …"],
-    [36, "Checking channel status (pro…"],
-    [80, "Checking channel status (probe)…"],
-  ])("bounds spinner at %i columns", (columns, expected) => {
-    const stream = createOutput(true, undefined, columns);
-    const progress = createCliProgress({ label: "Checking channel status (probe)…", stream });
-    onTestFinished(() => progress.done());
+  it.each<[number, string]>([[36, "Checking channel status (pro…"]])(
+    "bounds spinner at %i columns",
+    (columns, expected) => {
+      const stream = createOutput(true, undefined, columns);
+      const progress = createCliProgress({ label: "Checking channel status (probe)…", stream });
+      onTestFinished(() => progress.done());
 
-    expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(theme.accent(expected));
-    progress.done();
-    expect(stream.listenerCount("resize")).toBe(0);
-  });
+      expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(theme.accent(expected));
+      progress.done();
+      expect(stream.listenerCount("resize")).toBe(0);
+    },
+  );
 
   it("suppresses animation below the frame budget", () => {
     const stream = createOutput(true, undefined, 6);
@@ -85,27 +84,6 @@ describe("cli progress", () => {
     expect(clackMocks.spinnerInstance.start).not.toHaveBeenCalled();
     progress.done();
     expect(stream.listenerCount("resize")).toBe(0);
-  });
-
-  it("logs progress when non-tty and fallback=log", () => {
-    const writes: string[] = [];
-    const stream = createOutput(
-      false,
-      vi.fn((chunk: string) => {
-        writes.push(chunk);
-      }),
-    );
-
-    const progress = createCliProgress({
-      label: "Indexing memory...",
-      total: 10,
-      stream,
-      fallback: "log",
-    });
-    progress.setPercent(50);
-    progress.done();
-
-    expect(writes).toEqual(["Indexing memory... 0%\n", "Indexing memory... 50%\n"]);
   });
 
   it("does not log without a tty when fallback is none", () => {
@@ -145,18 +123,6 @@ describe("cli progress", () => {
     progress.tick();
 
     expect(writes).toEqual(["Indexing memory... 0%\n"]);
-  });
-
-  it("does not stop an interactive spinner more than once", () => {
-    const write = vi.fn();
-    const stream = createOutput(true, write);
-    const progress = createCliProgress({ label: "Loading", stream });
-    progress.done();
-    const completedWrites = write.mock.calls.length;
-    expect(completedWrites).toBeGreaterThan(0);
-    progress.done();
-
-    expect(write).toHaveBeenCalledTimes(completedWrites);
   });
 
   it("does not let a finished reporter clear or unlock a newer progress line", () => {

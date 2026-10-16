@@ -4,8 +4,8 @@ import type { CronJob } from "../api/types.ts";
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
-  buildUpdateInboxEntry,
   sidebarInboxTabCounts,
+  type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 
@@ -145,14 +145,13 @@ describe("sidebar Inbox projection", () => {
       scopes: ["operator.read"],
       state: { phase: "available" },
     });
-    const update = buildUpdateInboxEntry({
-      canDismiss: true,
-      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
-      forced: true,
+    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
+      type: "update",
+      category: "system",
+      dismissal: null,
       requiresAction: true,
       severity: "warning",
-      visible: true,
-    });
+    };
     const entries = buildSidebarInboxEntries({
       approvals: [
         {
@@ -187,14 +186,13 @@ describe("sidebar Inbox projection", () => {
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
-    const update = buildUpdateInboxEntry({
-      canDismiss: false,
-      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
-      forced: false,
+    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
+      type: "update",
+      category: "system",
+      dismissal: null,
       requiresAction: false,
       severity: "warning",
-      visible: true,
-    });
+    };
     const entries = buildSidebarInboxEntries({
       approvals: [],
       attention: [],

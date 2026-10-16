@@ -56,7 +56,7 @@ async function dispatchCreate(params: { repoRoot: string; scopes: string[]; work
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main", default: true, workspace: params.workspace }] },
+        agents: { entries: { main: { workspace: params.workspace } } },
       }),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
@@ -102,7 +102,15 @@ describe("worktrees.create authorization", () => {
     expect(write.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      }),
     );
 
     const admin = await dispatchCreate({

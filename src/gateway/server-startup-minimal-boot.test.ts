@@ -5,7 +5,14 @@
 // ui-e2e suite that boots a minimal test gateway.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import { writeGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,12 +38,13 @@ afterEach(() => {
 });
 
 describe("gateway minimal boot smoke", () => {
-  it("suppresses ambient channel triggers when the server option is omitted", async () => {
+  it("suppresses ambient channel triggers and awaits subagent recovery", async ({ signal }) => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-bootstrap-ambient-default",
       layout: "home",
       env: {
+        OPENCLAW_GATEWAY_RESTART_TRACE: "0",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_CHANNELS: "1",
@@ -56,9 +64,38 @@ describe("gateway minimal boot smoke", () => {
     state.applyEnv();
 
     try {
-      const { prepareGatewayServerBootstrap } = await import("./server-startup-bootstrap.js");
+      await expect(
+        writeGatewayRestartHandoff({
+          env: state.env,
+          reason: "gateway.restart",
+          restartKind: "full-process",
+          supervisorMode: "launchd",
+        }),
+      ).resolves.toMatchObject({ source: "operator-restart", supervisorMode: "launchd" });
+      const [{ prepareGatewayServerBootstrap }, subagents, pluginContext] = await Promise.all([
+        import("./server-startup-bootstrap.js"),
+        import("../agents/subagents/registry/subagent-registry.js"),
+        import("../plugins/runtime/load-context.js"),
+      ]);
+      const enteredRecovery = createDeferred();
+      const releaseRecovery = createDeferred();
+      let recoveryComplete = false;
+      const init = vi.spyOn(subagents, "initSubagentRegistry").mockImplementation(() => {
+        enteredRecovery.resolve();
+        return releaseRecovery.promise.then(() => {
+          recoveryComplete = true;
+        });
+      });
+      const publishPluginContext = pluginContext.setPluginRuntimeLoadContext;
+      const publish = vi
+        .spyOn(pluginContext, "setPluginRuntimeLoadContext")
+        .mockImplementation((...args) => {
+          expect(recoveryComplete).toBe(true);
+          return publishPluginContext(...args);
+        });
       const log = createSubsystemLogger("gateway/bootstrap-test");
-      const bootstrap = await prepareGatewayServerBootstrap({
+      const sql = observeHostDataSql();
+      const pendingBootstrap = prepareGatewayServerBootstrap({
         port,
         opts: {
           auth: { mode: "token", token },
@@ -72,13 +109,35 @@ describe("gateway minimal boot smoke", () => {
           await import("./server-worker-environment-startup.js"),
         formatRuntimeGatewayAuthTokenWarning: () => "unused",
       });
-
-      expect(bootstrap.ambientEnvTriggers).toBe("suppress");
-      vi.stubEnv(
-        "OPENCLAW_CONFIG_PATH",
-        `/tmp/openclaw-bootstrap-missing-${process.pid}-${Date.now()}.json`,
-      );
-      expect(readLoggingConfig()).toMatchObject({ level: "debug" });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            enteredRecovery.promise,
+            pendingBootstrap,
+            "Gateway bootstrap did not prepare subagent recovery",
+          ),
+          signal,
+        );
+        expect(publish).not.toHaveBeenCalled();
+        releaseRecovery.resolve();
+        const bootstrap = await withinTest(pendingBootstrap, signal);
+        expect(publish).toHaveBeenCalled();
+        expect(bootstrap.ambientEnvTriggers).toBe("suppress");
+        expect(
+          sql.queries.filter((query) => /\bfrom\s+"?gateway_restart_handoff\b/iu.test(query)),
+        ).toEqual([]);
+        vi.stubEnv(
+          "OPENCLAW_CONFIG_PATH",
+          `/tmp/openclaw-bootstrap-missing-${process.pid}-${Date.now()}.json`,
+        );
+        expect(readLoggingConfig()).toMatchObject({ level: "debug" });
+      } finally {
+        releaseRecovery.resolve();
+        await pendingBootstrap.catch(() => {});
+        sql.restore();
+        init.mockRestore();
+        publish.mockRestore();
+      }
     } finally {
       await state.cleanup();
     }

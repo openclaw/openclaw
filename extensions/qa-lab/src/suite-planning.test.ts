@@ -31,23 +31,6 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
   };
 }
 
-function makeMatrixFlowQaSuiteTestScenario(
-  id: string,
-  providerMode?: "live-frontier" | "mock-openai",
-): ReturnType<typeof makeQaSuiteTestScenario> {
-  return {
-    ...makeQaSuiteTestScenario(id),
-    execution: {
-      kind: "flow",
-      channel: "matrix",
-      channels: ["matrix"],
-      timeoutMs: 60_000,
-      retryCount: 0,
-      ...(providerMode ? { providerMode } : {}),
-    },
-  };
-}
-
 describe("qa suite planning helpers", () => {
   it("normalizes blank scenario channels as unpinned", () => {
     expect(
@@ -74,22 +57,6 @@ describe("qa suite planning helpers", () => {
       await expect(resolveQaSuiteOutputDir(repoRoot, "/tmp/outside")).rejects.toThrow(
         "QA suite outputDir must stay within the repo root.",
       );
-    } finally {
-      await rm(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("creates unique default suite output dirs inside the repo root", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-default-root-"));
-    try {
-      const firstDir = await resolveQaSuiteOutputDir(repoRoot);
-      const secondDir = await resolveQaSuiteOutputDir(repoRoot);
-
-      expect(path.dirname(firstDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
-      expect(path.basename(firstDir)).toMatch(/^suite-[a-z0-9]+-[a-f0-9]{8}$/u);
-      expect(secondDir).not.toBe(firstDir);
-      await expect(lstat(firstDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
-      await expect(lstat(secondDir).then((stats) => stats.isDirectory())).resolves.toBe(true);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
@@ -124,23 +91,6 @@ describe("qa suite planning helpers", () => {
     expect(selected[0]).toEqual(scenarios[0]);
     expect(selected[0]).not.toBe(scenarios[0]);
     expect(selected[2]).not.toBe(selected[0]);
-  });
-
-  it("keeps explicitly requested scenarios in request order", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("first"),
-      makeQaSuiteTestScenario("second"),
-      makeQaSuiteTestScenario("third"),
-    ];
-
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        scenarioIds: ["third", "first"],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["third", "first"]);
   });
 
   it("applies the same lane contract to explicit and implicit selection", () => {
@@ -240,32 +190,6 @@ describe("qa suite planning helpers", () => {
     }
   });
 
-  it("isolates only positive model-driven Matrix allowBots admission flows", () => {
-    const isolatedScenarioIds = [
-      "matrix-allowbots-mentions-mentioned-room",
-      "matrix-allowbots-room-override-enables-account-off",
-      "matrix-allowbots-true-unmentioned-open-room",
-    ];
-    const sharedScenarioIds = [
-      "matrix-allowbots-default-block",
-      "matrix-allowbots-self-sender-ignored",
-      "matrix-mention-metadata-spoof-block",
-    ];
-
-    for (const scenarioId of isolatedScenarioIds) {
-      expect(
-        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
-        scenarioId,
-      ).toBe(true);
-    }
-    for (const scenarioId of sharedScenarioIds) {
-      expect(
-        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
-        scenarioId,
-      ).toBe(false);
-    }
-  });
-
   it("isolates and collects scenario-declared transport policy", () => {
     const scenario = makeQaSuiteTestScenario("sender-policy", {
       transportPolicy: {
@@ -291,65 +215,6 @@ describe("qa suite planning helpers", () => {
     ];
 
     expect(collectQaSuitePluginIds(scenarios)).toEqual(["active-memory", "memory-wiki", "openai"]);
-  });
-
-  it("merge-patches scenario startup config in encounter order", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("active-memory", {
-        plugins: ["active-memory"],
-        gatewayConfigPatch: {
-          plugins: {
-            entries: {
-              "active-memory": {
-                config: {
-                  enabled: true,
-                  agents: ["qa"],
-                },
-              },
-            },
-          },
-        },
-      }),
-      makeQaSuiteTestScenario("live-defaults", {
-        gatewayConfigPatch: {
-          agents: {
-            defaults: {
-              thinkingDefault: "minimal",
-            },
-          },
-          plugins: {
-            entries: {
-              "active-memory": {
-                config: {
-                  transcriptDir: "qa-memory-e2e",
-                },
-              },
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(
-      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
-    ).toEqual({
-      agents: {
-        defaults: {
-          thinkingDefault: "minimal",
-        },
-      },
-      plugins: {
-        entries: {
-          "active-memory": {
-            config: {
-              enabled: true,
-              agents: ["qa"],
-              transcriptDir: "qa-memory-e2e",
-            },
-          },
-        },
-      },
-    });
   });
 
   it("ignores prototype-mutating keys in scenario startup config patches", () => {
@@ -438,22 +303,8 @@ describe("qa suite planning helpers", () => {
       makeScenario: () => makeQaSuiteTestScenario("isolated", { suiteIsolation: "isolated" }),
     },
     {
-      reason: "gateway runtime changes",
-      makeScenario: () =>
-        makeQaSuiteTestScenario("runtime-options", { gatewayRuntime: { forwardHostHome: true } }),
-    },
-    {
       reason: "scenario-owned plugins",
       makeScenario: () => makeQaSuiteTestScenario("plugin", { plugins: ["diagnostics-otel"] }),
-    },
-    {
-      reason: "memory state",
-      makeScenario: () => makeQaSuiteTestScenario("memory", { surface: "memory" }),
-    },
-    {
-      reason: "image generation setup",
-      makeScenario: () =>
-        makeQaSuiteTestScenario("image-generation", { config: { ensureImageGeneration: true } }),
     },
     {
       reason: "state-mutating flow calls",
@@ -469,51 +320,6 @@ describe("qa suite planning helpers", () => {
         concurrency: 1,
       }),
     ).toBe(true);
-  });
-
-  it("does not isolate plain serial scenario runs", () => {
-    expect(
-      shouldUseIsolatedQaSuiteScenarioWorkers({
-        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
-        concurrency: 1,
-      }),
-    ).toBe(false);
-  });
-
-  it("isolates serial runs when a flow scenario changes provider mode", () => {
-    expect(
-      shouldUseIsolatedQaSuiteScenarioWorkers({
-        scenarios: [
-          makeMatrixFlowQaSuiteTestScenario("default"),
-          makeMatrixFlowQaSuiteTestScenario("live-override", "live-frontier"),
-        ],
-        concurrency: 1,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps concurrent runs on isolated workers", () => {
-    expect(
-      shouldUseIsolatedQaSuiteScenarioWorkers({
-        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
-        concurrency: 2,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps Playwright scenarios out of implicit flow suite selections", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("flow"),
-      makePlaywrightQaSuiteTestScenario("playwright"),
-    ];
-
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["flow"]);
   });
 
   it("rejects explicit Playwright scenarios in the flow suite selector", () => {

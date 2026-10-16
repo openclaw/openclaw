@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import { telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import { TELEGRAM_TEST_TIMINGS, createBotHandlerWithOptions } from "./bot.media.test-utils.js";
@@ -33,14 +33,24 @@ function resolveScheduledTimerForDelay(
   return flushTimer;
 }
 
+type CreateBuffersSpy = MockInstance<
+  typeof import("./bot-handlers.inbound-buffer.js").createTelegramInboundBuffers
+>;
+
 async function flushScheduledTimerForDelay(
   setTimeoutSpy: ReturnType<typeof vi.spyOn>,
   clearTimeoutSpy: ReturnType<typeof vi.spyOn>,
   delayMs: number,
+  createBuffers: CreateBuffersSpy,
 ) {
   const flushTimer = resolveScheduledTimerForDelay(setTimeoutSpy, clearTimeoutSpy, delayMs);
   expect(flushTimer).toBeTypeOf("function");
   await flushTimer?.();
+  const buffers = createBuffers.mock.results[0];
+  if (buffers?.type !== "return") {
+    throw new Error("Expected the bot's inbound buffers");
+  }
+  await buffers.value.inboundDebouncer.drain();
 }
 
 type ScheduledTimer = {
@@ -72,6 +82,24 @@ function resolveActiveScheduledTimersForDelay(
   );
 }
 
+// Fragment batches flush on the gap timer or a monotonic deadline anchored at the
+// first fragment. Held timers model an in-gap arrival only if that clock is held
+// too; otherwise slow admission reschedules the append with an unheld delay.
+function holdTelegramFragmentTimers() {
+  vi.useFakeTimers({ toFake: ["performance"] });
+  const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+  return {
+    setTimeoutSpy,
+    clearTimeoutSpy,
+    restore: () => {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    },
+  };
+}
+
 describe("telegram text fragments", () => {
   afterEach(() => {
     vi.clearAllTimers();
@@ -101,6 +129,8 @@ describe("telegram text fragments", () => {
   it(
     "buffers slash-prefixed near-limit text with its selected reply quote",
     async () => {
+      const bufferRuntime = await import("./bot-handlers.inbound-buffer.js");
+      const createBuffers = vi.spyOn(bufferRuntime, "createTelegramInboundBuffers");
       const prefix = "/not_a_command ";
       const { handler, replySpy } = await createBotHandlerWithOptions({});
       const quote = "FRAGMENT_REPLY_QUOTE";
@@ -110,8 +140,7 @@ describe("telegram text fragments", () => {
         suffix: ` ${quote}`,
       });
       const part2 = "B".repeat(50);
-      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const { setTimeoutSpy, clearTimeoutSpy, restore } = holdTelegramFragmentTimers();
 
       try {
         await handler({
@@ -139,16 +168,17 @@ describe("telegram text fragments", () => {
           setTimeoutSpy,
           clearTimeoutSpy,
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+          createBuffers,
         );
 
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+        expect(replySpy).toHaveBeenCalledTimes(1);
         const payload = replySpy.mock.calls.at(0)?.[0] as { Body?: string; RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
         expect(payload.Body).toContain(`[1. Ada id:10]\n"${quote}"`);
       } finally {
-        setTimeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
+        restore();
+        createBuffers.mockRestore();
       }
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
@@ -179,6 +209,8 @@ describe("telegram text fragments", () => {
   it(
     "keeps per-DM pairing store authorization when flushing text fragments",
     async () => {
+      const bufferRuntime = await import("./bot-handlers.inbound-buffer.js");
+      const createBuffers = vi.spyOn(bufferRuntime, "createTelegramInboundBuffers");
       const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
       telegramBotDepsForTest.getRuntimeConfig = (() => ({
         messages: { inbound: { debounceMs: 0 } },
@@ -200,8 +232,14 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      // A loaded runner can spend the whole 5x-gap batch window admitting the
+      // second fragment; held flushes must not depend on host monotonic time.
+      const hostNow = performance.now.bind(performance);
+      let hostDelayMs = 0;
+      const hostClock = vi
+        .spyOn(performance, "now")
+        .mockImplementation(() => hostNow() + hostDelayMs);
+      const { setTimeoutSpy, clearTimeoutSpy, restore } = holdTelegramFragmentTimers();
       const part1 = "A".repeat(4050);
       const part2 = "B".repeat(50);
 
@@ -218,6 +256,7 @@ describe("telegram text fragments", () => {
           getFile: async () => ({}),
         });
 
+        hostDelayMs = 5 * TELEGRAM_TEST_TIMINGS.textFragmentGapMs;
         await handler({
           message: {
             chat: { id: 42, type: "private" },
@@ -234,15 +273,17 @@ describe("telegram text fragments", () => {
           setTimeoutSpy,
           clearTimeoutSpy,
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+          createBuffers,
         );
 
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+        expect(replySpy).toHaveBeenCalledTimes(1);
         expect(readAllowFromStore).toHaveBeenCalledWith("telegram", process.env, "default");
         expect(upsertPairingRequest).not.toHaveBeenCalled();
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
-        setTimeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
+        restore();
+        hostClock.mockRestore();
+        createBuffers.mockRestore();
         telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
         readAllowFromStore.mockReset();
         readAllowFromStore.mockResolvedValue([]);
@@ -274,8 +315,7 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const { setTimeoutSpy, clearTimeoutSpy, restore } = holdTelegramFragmentTimers();
 
       try {
         await handler({
@@ -340,8 +380,7 @@ describe("telegram text fragments", () => {
         )) {
           clearTimeout(timer.handle);
         }
-        setTimeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
+        restore();
         createBuffers.mockRestore();
         telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
       }

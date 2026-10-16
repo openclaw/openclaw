@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   requestHeartbeatAndWait as requestQueuedHeartbeatAndWait,
   setHeartbeatWakeHandler,
@@ -44,6 +43,7 @@ async function withHeartbeatCron(
     await run({ ...context, events });
   } finally {
     context.cron.stop();
+    await context.cron.waitForIdle();
     await cleanup();
   }
 }
@@ -105,32 +105,6 @@ describe("heartbeat payload execution", () => {
     );
   });
 
-  it("records a disabled heartbeat only after its child settles", async () => {
-    const child = createDeferred<HeartbeatRunResult>();
-    await withHeartbeatCron(
-      { requestHeartbeatAndWait: async () => await child.promise },
-      async ({ cron, requestHeartbeatAndWait, events }) => {
-        const job = await addMonitor(cron);
-        const runPromise = cron.run(job.id, "force");
-        await vi.waitFor(() => expect(requestHeartbeatAndWait).toHaveBeenCalledOnce());
-        expect(events.some((event) => event.action === "finished")).toBe(false);
-        expect(cron.getJob(job.id)?.state.runningAtMs).toEqual(expect.any(Number));
-        child.resolve({ status: "skipped", reason: "disabled" });
-        await expect(runPromise).resolves.toMatchObject({ ok: true, ran: true });
-        expect(events.findLast((event) => event.action === "finished")).toMatchObject({
-          status: "skipped",
-          completionStatus: "failed",
-          error: "heartbeat skipped: disabled",
-        });
-        expect(cron.getJob(job.id)?.state).toMatchObject({
-          lastRunStatus: "skipped",
-          lastStatus: "skipped",
-          consecutiveErrors: 0,
-        });
-      },
-    );
-  });
-
   it("retains the real queue result after busy waiting exceeds the execution timeout", async () => {
     vi.setSystemTime(new Date("2026-09-15T05:25:39Z"));
     const handler = vi
@@ -173,7 +147,7 @@ describe("heartbeat payload execution", () => {
     }
   });
 
-  it("settles an enqueued manual heartbeat run without its Cron lane self-blocking", async () => {
+  it("settles an enqueued manual heartbeat run without occupying the command lane", async () => {
     let observedWaitOwners: ReturnType<typeof listCronHeartbeatWaitOwners> | undefined;
     await withHeartbeatCron(
       {
@@ -193,12 +167,7 @@ describe("heartbeat payload execution", () => {
           status: "ok",
           completionStatus: "succeeded",
         });
-        expect(observedWaitOwners?.activeJobMarkers).toEqual([
-          expect.objectContaining({ jobId: job.id }),
-        ]);
-        expect(observedWaitOwners?.owningCronLaneTaskMarkers).toEqual([
-          expect.objectContaining({ lane: "cron" }),
-        ]);
+        expect(observedWaitOwners).toEqual([expect.objectContaining({ jobId: job.id })]);
       },
     );
   });

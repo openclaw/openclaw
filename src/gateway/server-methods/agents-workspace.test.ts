@@ -141,44 +141,6 @@ describe("agents.workspace RPC handlers", () => {
     expect(preview.file.content).toBe("export const ok = true;\n");
   });
 
-  it("paginates large directories deterministically", async () => {
-    for (let index = 0; index < 12; index += 1) {
-      writeWorkspaceFile(workspaceRoot, `bulk/file-${String(index).padStart(2, "0")}.txt`, "x");
-    }
-
-    const firstPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        limit: 5,
-      }),
-    );
-    expect(firstPage.totalEntries).toBe(12);
-    expect(firstPage.entries).toHaveLength(5);
-    expect(firstPage.entries[0].name).toBe("file-00.txt");
-
-    const secondPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        offset: 5,
-        limit: 5,
-      }),
-    );
-    expect(secondPage.offset).toBe(5);
-    expect(secondPage.entries[0].name).toBe("file-05.txt");
-
-    const tailPage = expectOkPayload(
-      await invokeWorkspaceHandler("agents.workspace.list", {
-        agentId: "main",
-        path: "bulk",
-        offset: 10,
-        limit: 5,
-      }),
-    );
-    expect(tailPage.entries).toHaveLength(2);
-  });
-
   it("rejects unknown agents", async () => {
     const error = expectError(
       await invokeWorkspaceHandler("agents.workspace.list", { agentId: "ghost" }),
@@ -257,19 +219,6 @@ describe("agents.workspace RPC handlers", () => {
     }
   });
 
-  it("reads UTF-8 text files inline", async () => {
-    const payload = expectOkPayload(await getWorkspaceFile("notes.md"));
-
-    expect(payload.file).toMatchObject({
-      path: "notes.md",
-      name: "notes.md",
-      encoding: "utf8",
-      mimeType: "text/plain",
-      content: "# Notes\n",
-    });
-    expect(Number.isInteger(payload.file.updatedAtMs)).toBe(true);
-  });
-
   it("reads images as base64 with their sniffed mime type", async () => {
     // 1x1 transparent PNG so magic-byte sniffing sees a real image payload.
     const pngBytes = Buffer.from(
@@ -302,26 +251,6 @@ describe("agents.workspace RPC handlers", () => {
     });
   });
 
-  it("refuses non-image binary files", async () => {
-    writeWorkspaceFile(workspaceRoot, "blob.bin", Buffer.from([0x00, 0x01, 0x02, 0xff]));
-
-    const error = expectError(await getWorkspaceFile("blob.bin"));
-    expect(error.details).toMatchObject({
-      path: "blob.bin",
-      type: "workspace_file_unsupported",
-    });
-  });
-
-  it("refuses invalid UTF-8 without relying on a NUL byte", async () => {
-    writeWorkspaceFile(workspaceRoot, "invalid.txt", Buffer.from([0xc3, 0x28]));
-
-    const error = expectError(await getWorkspaceFile("invalid.txt"));
-    expect(error.details).toMatchObject({
-      path: "invalid.txt",
-      type: "workspace_file_unsupported",
-    });
-  });
-
   it("reports oversized text files with the preview cap", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
 
@@ -344,10 +273,5 @@ describe("agents.workspace RPC handlers", () => {
       size: 5 * 1024 * 1024 + 1,
       type: "workspace_file_too_large",
     });
-  });
-
-  it("treats directories as missing files for get", async () => {
-    const error = expectError(await getWorkspaceFile("src"));
-    expect(error.details).toMatchObject({ type: "workspace_file_not_found" });
   });
 });

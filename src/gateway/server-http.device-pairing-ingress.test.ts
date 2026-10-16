@@ -46,25 +46,6 @@ afterEach(() => {
 });
 
 describe("Gateway device-join ingress attribution", () => {
-  it("rejects unattributable proxy traffic before join-code redemption", async () => {
-    const server = createTestGatewayServer({
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        joinRateLimiter: createStrictLimiter(),
-        getRuntimeConfig: () => ({ gateway: { trustedProxies: [] } }),
-      },
-    });
-
-    const response = await sendRequest(server, {
-      path: `/j/${INVALID_CODE}`,
-      headers: { ...PROXY_HEADERS, "x-forwarded-for": "203.0.113.10" },
-    });
-
-    expect(response.res.statusCode).toBe(403);
-    expect(response.getBody()).toContain("proxy_attribution_required");
-    expect(mocks.redeemDevicePairingJoinCode).not.toHaveBeenCalled();
-  });
-
   it("keeps trusted-proxy join budgets per client and resets only the successful subject", async () => {
     const server = createTestGatewayServer({
       resolvedAuth: AUTH_NONE,

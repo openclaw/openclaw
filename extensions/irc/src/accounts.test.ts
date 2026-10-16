@@ -160,7 +160,7 @@ describe("resolveIrcAccount", () => {
     },
   );
 
-  it.each<[string, string, string, string, boolean, string, boolean?]>([
+  it.each<[string, string, string, string, boolean, string]>([
     ["password", "default", "plain", "env", true, "env"],
     ["password", "default", "plain", "", true, "file"],
     ["password", "work", "plain", "env", true, "file"],
@@ -171,7 +171,7 @@ describe("resolveIrcAccount", () => {
     ["nickserv", "work", "", "env", true, "file"],
   ])(
     "preserves %s precedence for %s (plaintext=%s, env=%s, file=%s => %s)",
-    (credential, accountId, plaintext, env, file, expected, enabled) => {
+    (credential, accountId, plaintext, env, file, expected) => {
       vi.stubEnv(credential === "password" ? "IRC_PASSWORD" : "IRC_NICKSERV_PASSWORD", env);
 
       const credentialConfig = {
@@ -188,7 +188,7 @@ describe("resolveIrcAccount", () => {
                   nick: "openclaw",
                   ...(credential === "password"
                     ? credentialConfig
-                    : { nickserv: { ...credentialConfig, ...(enabled === false && { enabled }) } }),
+                    : { nickserv: credentialConfig }),
                 },
               },
             },

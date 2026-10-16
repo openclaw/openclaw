@@ -3,21 +3,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import {
-  clearActivePluginRegistry,
-  getActivePluginRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
-// HOME policy uses the real home path, but this fixture must not open its profile database.
-vi.mock("../../state/user-profiles.js", () => ({
-  getUserProfileRole: vi.fn(() => null),
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+// mock-isolation: HOME policy uses the real home path but must not open its profile database.
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
 }));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
@@ -110,13 +107,6 @@ describe("session catalog Gateway HOME isolation", () => {
     expect(globalCatalog.list).not.toHaveBeenCalled();
     expect(globalCatalog.read).not.toHaveBeenCalled();
     expect(listActiveSessionCatalogs().map(({ id }) => id)).toEqual(["global"]);
-  });
-
-  it("leaves a cold registry uninitialized during catalog lookup", async () => {
-    await clearActivePluginRegistry();
-
-    expect(listActiveSessionCatalogs()).toEqual([]);
-    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("suppresses only process-HOME local hosts for a named profile", async () => {

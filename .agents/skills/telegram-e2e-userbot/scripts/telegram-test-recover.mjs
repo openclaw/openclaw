@@ -7,14 +7,21 @@ import { fileURLToPath } from "node:url";
 import { resumeQaLease } from "./qa-credential-lease.mjs";
 import { runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
 import { runTelegramCli, withTelegramRun } from "./telegram-run-scope.mjs";
+import { createTelegramRuntimeEnvironment, telegramPythonArgs } from "./telegram-runtime.mjs";
 
 const [directory, command, ...args] = process.argv.slice(2);
-if (!directory || !["status", "cleanup-group", "release"].includes(command)) {
+if (!directory || !["status", "cleanup", "release"].includes(command)) {
   throw new Error(
-    "Usage: telegram-test-recover.mjs <retained-lease-directory> <status|cleanup-group|release> [driver arguments]",
+    "Usage: telegram-test-recover.mjs <retained-lease-directory> <status|cleanup|release> [driver arguments]",
   );
 }
-const leaseDir = path.resolve(directory);
+const requestedDir = path.resolve(directory);
+// Canonicalize the parent once so /private/var and /var spell the same temporary
+// root; the lease directory itself stays unresolved and must not be a symlink.
+const leaseDir = path.join(
+  fs.realpathSync(path.dirname(requestedDir)),
+  path.basename(requestedDir),
+);
 const stateRoot = path.join(leaseDir, "state");
 const receipt = path.join(leaseDir, "lease.json");
 
@@ -32,7 +39,7 @@ function requireOwnedPath(file, directory, privateMode = true) {
 
 function validateRetainedLayout() {
   if (
-    path.dirname(leaseDir) !== path.resolve(os.tmpdir()) ||
+    path.dirname(leaseDir) !== fs.realpathSync(os.tmpdir()) ||
     !path.basename(leaseDir).startsWith("openclaw-tg-test-credential-")
   ) {
     throw new Error(
@@ -44,11 +51,21 @@ function validateRetainedLayout() {
   if (!fs.existsSync(stateRoot) && !fs.lstatSync(stateRoot, { throwIfNoEntry: false })) return;
   requireOwnedPath(stateRoot, true);
   requireOwnedPath(path.join(stateRoot, "user-driver"), true);
+  const runtimeRoot = path.join(stateRoot, "runtime");
+  if (fs.lstatSync(runtimeRoot, { throwIfNoEntry: false })) {
+    requireOwnedPath(runtimeRoot, true);
+  }
   const layout = [
-    [stateRoot, new Set(["credentials.local.json", "user-driver"])],
+    [stateRoot, new Set(["credentials.local.json", "user-driver", "runtime"])],
     [
       path.join(stateRoot, "user-driver"),
-      new Set(["config.local.json", "owned-test-group.json", "db", "files"]),
+      new Set([
+        "config.local.json",
+        "owned-test-group.json",
+        "owned-test-forum.json",
+        "db",
+        "files",
+      ]),
     ],
   ];
   for (const [directory, allowed] of layout) {
@@ -63,8 +80,9 @@ function validateRetainedLayout() {
     for (const name of fs.readdirSync(directory)) {
       const file = path.join(directory, name);
       const stat = fs.lstatSync(file);
-      // Private enclosing roots protect ordinary archive directory modes.
-      requireOwnedPath(file, stat.isDirectory(), !stat.isDirectory());
+      // The private roots checked above are the confidentiality boundary. TDLib
+      // and uv create databases, downloads, and caches with ordinary modes.
+      requireOwnedPath(file, stat.isDirectory(), false);
       if (stat.isDirectory()) pending.push(file);
     }
   }
@@ -103,30 +121,41 @@ runTelegramCli(async (signal) => {
         fs.readFileSync(path.join(stateRoot, "credentials.local.json"), "utf8"),
       );
       const driver = path.join(path.dirname(fileURLToPath(import.meta.url)), "user-driver.py");
-      const result = await runCommand("uv", ["run", driver, command, "--json", ...args], {
-        cwd: process.cwd(),
-        env: {
-          ...sanitizeChildEnvironment(),
-          TELEGRAM_E2E_STATE_DIR: stateRoot,
-          TELEGRAM_USER_DRIVER_STATE_DIR: path.join(stateRoot, "user-driver"),
-          TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,
-          TELEGRAM_USER_DRIVER_SUT_USERNAME: credential.sutUsername,
-        },
-        timeoutMs: 60_000,
-      });
-      scope.assertActive();
-      if (result.status !== 0 || result.timedOut)
-        throw new Error(result.stderr || "Retained Telegram state recovery failed.");
-      const evidence = JSON.parse(result.stdout);
-      if (evidence.ok !== true)
-        throw new Error("Retained Telegram state recovery was not confirmed.");
-      if (command === "cleanup-group") {
-        validateRetainedLayout();
-        fs.rmSync(stateRoot, { recursive: true, force: true });
-        await lease.release();
-        removeReleasedReceipt();
-      }
-      return { ...evidence, leaseReleased: command === "cleanup-group" };
+      const runtimeEnv = createTelegramRuntimeEnvironment(stateRoot);
+      const runDriver = async (driverCommand) => {
+        const result = await runCommand(
+          "uv",
+          telegramPythonArgs(runtimeEnv, driver, driverCommand, "--json", ...args),
+          {
+            cwd: process.cwd(),
+            env: {
+              ...sanitizeChildEnvironment(),
+              ...runtimeEnv,
+              TELEGRAM_E2E_STATE_DIR: stateRoot,
+              TELEGRAM_USER_DRIVER_STATE_DIR: path.join(stateRoot, "user-driver"),
+              TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,
+              TELEGRAM_USER_DRIVER_SUT_USERNAME: credential.sutUsername,
+            },
+            timeoutMs: 60_000,
+          },
+        );
+        scope.assertActive();
+        if (result.status !== 0 || result.timedOut)
+          throw new Error(result.stderr || "Retained Telegram state recovery failed.");
+        const evidence = JSON.parse(result.stdout);
+        if (evidence.ok !== true)
+          throw new Error("Retained Telegram state recovery was not confirmed.");
+        return evidence;
+      };
+      if (command === "status") return { ...(await runDriver("status")), leaseReleased: false };
+      // Each driver cleanup is a no-op when its fixture was never recorded.
+      const forum = await runDriver("cleanup-forum");
+      const group = await runDriver("cleanup-group");
+      validateRetainedLayout();
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+      await lease.release();
+      removeReleasedReceipt();
+      return { ok: true, forum, group, leaseReleased: true };
     },
     {
       signal,

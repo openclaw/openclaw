@@ -5,7 +5,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -15,6 +17,11 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -28,7 +35,10 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { observeCronContinuationLifetime } from "./agent.cron-continuation-lifetime.test-support.js";
-import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
+import {
+  observeAgentSubagentCleanup,
+  withPluginSubagentTestState,
+} from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
   cronContinuationGatewayClient,
@@ -285,22 +295,28 @@ export function registerCompactionSessionSettlementCase() {
 export function registerYieldedRequesterSettlementCase(
   mockSpawnedChildSessionEntry: (sessionKey: string, root: string) => void,
 ) {
-  it("keeps one native run when a completed child wakes its requester before the yielded lifecycle ends", async () => {
+  it("keeps one native run when a completed child wakes its requester before the yielded lifecycle ends", async ({
+    signal,
+  }) => {
     await withPluginSubagentTestState(
       "openclaw-gateway-yield-settlement-race-",
       async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "agent:main:subagent:settlement-orchestrator";
         const workerSessionKey = "agent:main:subagent:settlement-worker";
         const previousRunId = "orchestrator-yielding";
         const nextRunId = "orchestrator-settle-continuation";
+        using cleanup = observeAgentSubagentCleanup({ runId: nextRunId, childSessionKey });
         const workerRunId = "settled-worker";
-        const result = "The completed worker result has been checked.";
+        const result = `${"Checked worker detail. ".repeat(200)}The completed worker result has been checked.`;
+        const { terminalReply } = prepareAgentRunTerminalReply({ rawText: result });
         const completion = createDeferred<AgentWaitResult>();
         const previousWait = createDeferred<AgentWaitResult>();
         const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
-        let continuedAtDispatch: ReturnType<typeof getSubagentRunByChildSessionKey> | undefined;
+        let continuedAtDispatch:
+          | Awaited<ReturnType<typeof getSubagentRunByChildSessionKey>>
+          | undefined;
         const executionWork = new AsyncWorkScope();
         const context = makeContext();
         context.trackExecution = (run) => executionWork.track(run);
@@ -357,6 +373,8 @@ export function registerYieldedRequesterSettlementCase(
         await registerSubagentRun({
           runId: previousRunId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: { sessionId: "spawned-child-session" },
           requesterSessionKey,
           requesterAgentId: "main",
           requesterDisplayKey: requesterSessionKey,
@@ -364,9 +382,11 @@ export function registerYieldedRequesterSettlementCase(
           cleanup: "keep",
           expectsCompletionMessage: true,
         });
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: workerRunId,
           childSessionKey: workerSessionKey,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "settled-worker-session" },
           requesterSessionKey: childSessionKey,
           requesterAgentId: "main",
           requesterTurnRunId: previousRunId,
@@ -385,29 +405,55 @@ export function registerYieldedRequesterSettlementCase(
           cleanupCompletedAt: Date.now(),
         });
         mockSpawnedChildSessionEntry(childSessionKey, root);
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: childSessionKey, storePath: mocks.userTurnStorePath },
+          { sessionId: "spawned-child-session", updatedAt: Date.now() },
+        );
         mocks.agentCommand.mockImplementation(async () => {
-          continuedAtDispatch = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
+          continuedAtDispatch = structuredClone(
+            await getSubagentRunByChildSessionKey(childSessionKey),
+          );
+          await appendTranscriptMessage(
+            {
+              agentId: "main",
+              sessionKey: childSessionKey,
+              sessionId: "spawned-child-session",
+              storePath: mocks.userTurnStorePath!,
+            },
+            {
+              message: {
+                role: "assistant",
+                display: true,
+                content: result,
+                stopReason: "stop",
+                __openclaw: { runId: nextRunId },
+              },
+            },
+          );
           completion.resolve({
             status: "ok",
             startedAt: Date.now(),
             endedAt: Date.now(),
-            terminalReply: { disposition: "visible", text: result },
+            terminalReply,
           });
-          return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+          return {
+            payloads: [{ text: result }],
+            meta: { durationMs: 1, terminalReply },
+          };
         });
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey)?.execution, {
+        expectRecordFields((await getSubagentRunByChildSessionKey(childSessionKey))?.execution, {
           status: "running",
           endedAt: undefined,
         });
         expect(
-          markRequesterTurnYielded({
+          await markRequesterTurnYielded({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,
           }),
         ).toBe(1);
         expect(
-          settleRequesterAfterSessionSpawns({
+          await settleRequesterAfterSessionSpawns({
             requesterSessionKey: childSessionKey,
             requesterAgentId: "main",
             requesterTurnRunId: previousRunId,
@@ -433,11 +479,10 @@ export function registerYieldedRequesterSettlementCase(
           requesterSessionKey,
           pauseReason: undefined,
         });
-        await waitForAssertion(() => {
-          expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
-            runId: nextRunId,
-            cleanupCompletedAt: expect.any(Number),
-          });
+        await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
+        expectRecordFields(await getSubagentRunByChildSessionKey(childSessionKey), {
+          runId: nextRunId,
+          cleanupCompletedAt: expect.any(Number),
         });
         const { emitAgentEvent } = await vi.importActual<
           typeof import("../../infra/agent-events.js")
@@ -449,7 +494,7 @@ export function registerYieldedRequesterSettlementCase(
           data: { phase: "end", endedAt: Date.now(), yielded: true },
         });
         await Promise.resolve();
-        expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+        expectRecordFields(await getSubagentRunByChildSessionKey(childSessionKey), {
           runId: nextRunId,
           cleanupCompletedAt: expect.any(Number),
         });
@@ -461,9 +506,16 @@ export function registerYieldedRequesterSettlementCase(
           expect.objectContaining({
             childRunId: nextRunId,
             requesterSessionKey,
-            roundOneReply: result,
+            terminalReply,
           }),
         );
+        const completed = expectDefined(
+          await getSubagentRunByChildSessionKey(childSessionKey),
+          "completed orchestrator",
+        );
+        const prepared = await readSubagentRunAnnounceResult(completed);
+        expect(prepared.text).toBe(result);
+        expect(prepared.isCurrent()).toBe(true);
       },
     );
   });

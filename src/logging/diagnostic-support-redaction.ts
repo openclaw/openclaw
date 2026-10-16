@@ -8,9 +8,9 @@ import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { parseRedactPatternSource, replaceRedactPattern } from "./redact-pattern-runtime.js";
+import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
-import { redactSensitiveText, redactText } from "./redact.js";
+import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
@@ -26,9 +26,10 @@ const SENSITIVE_COMMAND_ARG_RE =
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
-const vendorTokenPatterns = VENDOR_TOKEN_REDACT_PATTERNS.map(
-  (pattern) => new RegExp(...parseRedactPatternSource(pattern)),
-);
+// Reuse canonical matcher fast paths; AWS keeps its support-specific full mask below.
+const vendorTokenPatterns = resolveRedactOptions({
+  patterns: VENDOR_TOKEN_REDACT_PATTERNS,
+}).patterns.filter((pattern) => pattern !== AWS_SECRET_ACCESS_KEY_MATCHER);
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -153,42 +154,28 @@ function isWindowsAbsolutePath(value: string): boolean {
   return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(value);
 }
 
-function normalizePathPrefix(value: string): string {
-  return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
-}
-
-function addPathPrefix(
-  prefixes: Map<string, PathRedactionPrefix>,
-  prefix: string,
-  label: string,
-  caseInsensitive: boolean,
-): void {
-  if (!prefixes.has(prefix)) {
-    prefixes.set(prefix, { prefix, label, caseInsensitive });
-  }
-}
-
-function addPathPrefixVariants(
-  prefixes: Map<string, PathRedactionPrefix>,
-  value: string | undefined,
-  label: string,
-): void {
-  if (!value) {
-    return;
-  }
-  const normalized = normalizePathPrefix(value);
-  const caseInsensitive = isWindowsAbsolutePath(normalized);
-  addPathPrefix(prefixes, normalized, label, caseInsensitive);
-  if (isWindowsAbsolutePath(normalized)) {
-    addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label, caseInsensitive);
-  }
-}
-
 function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionPrefix[] {
   const prefixes = new Map<string, PathRedactionPrefix>();
-  addPathPrefixVariants(prefixes, options.stateDir, "$OPENCLAW_STATE_DIR");
-  addPathPrefixVariants(prefixes, options.env.HOME, "~");
-  addPathPrefixVariants(prefixes, options.env.USERPROFILE, "~");
+  for (const [value, label] of [
+    [options.stateDir, "$OPENCLAW_STATE_DIR"],
+    [options.env.HOME, "~"],
+    [options.env.USERPROFILE, "~"],
+  ] as const) {
+    if (!value) {
+      continue;
+    }
+    const normalized = isWindowsAbsolutePath(value)
+      ? path.win32.resolve(value)
+      : path.resolve(value);
+    const caseInsensitive = isWindowsAbsolutePath(normalized);
+    for (const prefix of caseInsensitive
+      ? [normalized, normalized.replaceAll("\\", "/")]
+      : [normalized]) {
+      if (!prefixes.has(prefix)) {
+        prefixes.set(prefix, { prefix, label, caseInsensitive });
+      }
+    }
+  }
   return [...prefixes.values()].toSorted((a, b) => b.prefix.length - a.prefix.length);
 }
 
@@ -260,7 +247,7 @@ export function redactPathForSupport(
       }
     }
   }
-  return redactSensitiveTextForSupport(candidates[0] ?? file);
+  return redactSensitiveText(candidates[0] ?? file, { mode: "tools" });
 }
 
 // Win32 namespace markers ("\\?\" extended-length, "\\.\" device) can precede a known
@@ -310,58 +297,35 @@ export function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactCommonCredentialTextForSupport(value);
-  redacted = redactSensitiveTextForSupport(redacted);
-  redacted = redactUrlSecretsForSupport(redacted);
-  redacted = redactServiceIdentifiersForSupport(redacted);
-  redacted = redactContactIdentifiersForSupport(redacted);
-  return redactLongIdentifiersForSupport(redacted);
-}
-
-function redactSensitiveTextForSupport(value: string): string {
-  return redactSensitiveText(value, { mode: "tools" });
-}
-
-function redactCommonCredentialTextForSupport(value: string): string {
   const redacted = value
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
     .replace(JWT_RE, "<redacted-jwt>");
   // Whole vendor tokens precede bare keys; field masking must not consume the full support mask.
-  return replaceRedactPattern(
+  const credentialsRedacted = replaceRedactPattern(
     redactText(redacted, vendorTokenPatterns, { fullContext: true }),
     AWS_SECRET_ACCESS_KEY_MATCHER,
     () => "<redacted-aws-secret-key>",
   );
-}
-
-function redactUrlSecretsForSupport(value: string): string {
-  return value
-    .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
-      password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
-    )
-    .replace(URL_PARAM_RE, (match, prefix: string, key: string) =>
-      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=<redacted>` : match,
-    );
-}
-
-function redactContactIdentifiersForSupport(value: string): string {
-  return value.replace(EMAIL_RE, "<redacted-email>").replace(HANDLE_RE, "$1<redacted-handle>");
-}
-
-function redactServiceIdentifiersForSupport(value: string): string {
-  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
-  return value
-    .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
-    .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
-      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
-    );
-}
-
-function redactLongIdentifiersForSupport(value: string): string {
-  return value.replace(LONG_DECIMAL_ID_RE, "<redacted-id>");
+  return (
+    redactSensitiveText(credentialsRedacted, { mode: "tools" })
+      .replace(URL_USERINFO_RE, (_match, scheme: string, _username: string, password?: string) =>
+        password ? `${scheme}<redacted>:<redacted>@` : `${scheme}<redacted>@`,
+      )
+      .replace(URL_PARAM_RE, (match, prefix: string, key: string) =>
+        isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=<redacted>` : match,
+      )
+      .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
+      .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
+      // Saved support artifacts can pass through redaction again; preserve our exact path marker.
+      .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+        eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+      )
+      .replace(EMAIL_RE, "<redacted-email>")
+      .replace(HANDLE_RE, "$1<redacted-handle>")
+      .replace(LONG_DECIMAL_ID_RE, "<redacted-id>")
+  );
 }
 
 export function redactSupportString(
@@ -393,17 +357,12 @@ export function redactSupportDiagnosticLine(
       .find((line) => line.trim()) ?? "",
   );
   const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
-  // Quoted paths have a known end. An unquoted path may contain spaces, so
-  // retain the diagnostic prefix and redact the rest rather than guess.
-  const paths = redacted
-    .replace(
-      /(["'`])(?:\$OPENCLAW_STATE_DIR|~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)[^"'`]*\1/gu,
-      "[redacted-path]",
-    )
-    .replace(
-      /(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
-      "[redacted-path]",
-    );
+  // Paths may contain spaces and quotes; neither can safely mark the end of private text.
+  // Retain the diagnostic prefix and redact the rest rather than guess.
+  const paths = redacted.replace(
+    /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+    "[redacted-path]",
+  );
   const commandRedacted = paths.replace(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
@@ -435,8 +394,18 @@ const PUBLIC_ERROR_CODES = new Set([
   "EUNSUPPORTEDPROTOCOL",
   "EBADENGINE",
   "EINTEGRITY",
+  "CERT_HAS_EXPIRED",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
   "ERR_MODULE_NOT_FOUND",
   "ERR_PACKAGE_PATH_NOT_EXPORTED",
+  "ERR_SQLITE_ERROR",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+  "SQLITE_READONLY",
+  "SQLITE_IOERR",
+  "SQLITE_FULL",
 ]);
 
 /** Error-code syntax alone cannot distinguish private identifiers from known errors. */
@@ -472,6 +441,38 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  const gatewayStatus =
+    /^Gateway readiness was not verified; service status: (running|stopped|unknown)(?=[;.])/u.exec(
+      line,
+    )?.[1];
+  if (gatewayStatus) {
+    // Startup phases and profile arguments can contain private text. Publish only
+    // the closed service status and canonical read-only recovery advice.
+    return `Gateway readiness was not verified; service status: ${gatewayStatus}. Check openclaw gateway status --deep.`;
+  }
+  if (
+    /^Package recovery (?:anchor|control|journal|helper|rollback-journal) "[A-Za-z0-9_.-]{1,64}" unsafe: mode=[0-7]{4} nlink=\d{1,8} uid=\d{1,8}; expected owner-only mode(?: nlink=1)?\.(?: Run openclaw doctor --fix\.)?$/u.test(
+      line,
+    )
+  ) {
+    return line;
+  }
+  // Package drift reports carry only a bounded relative entry and closed field names,
+  // never contents, hash values, absolute installation paths, or arbitrary error prose.
+  const packageEntry =
+    /^Package rollback entry "([A-Za-z0-9_@.+/-]{1,90})": fields=((?:added|removed|dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256)(?:,(?:dev:ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs|target|sha256))*)$/u.exec(
+      line,
+    );
+  const packagePath = packageEntry?.[1];
+  if (
+    packagePath &&
+    !packagePath.startsWith("/") &&
+    packagePath
+      .split("/")
+      .every((part) => part !== ".." && (!part.includes("@") || part === "@openclaw"))
+  ) {
+    return line;
+  }
   if (line === "Invalid configuration field" || line === "Configuration could not be read.") {
     return line;
   }
@@ -503,6 +504,17 @@ export function redactPublicSupportDiagnosticLine(
   if (maintenance) {
     return maintenance[0];
   }
+  const requirement = /^Required: openclaw@(\S+) (.*); detected: Node (\S+) at /u.exec(line);
+  if (requirement) {
+    const [, target = "", required = "", detected = ""] = requirement;
+    const engine = /^(?:Node [0-9.<>=|^~* +]+|a working Node runtime)$/u.test(required)
+      ? required
+      : "[redacted-requirement]";
+    return truncateUtf16Safe(
+      `Target package: openclaw@${redactPublicSupportVersion(target)}; Required runtime: ${engine}; Running Node: ${redactPublicSupportVersion(detected)}`,
+      200,
+    );
+  }
   const runtime =
     /^Target package: openclaw@(\S+); Minimum Node engine: (\S+); Running Node: (\S+)$/u.exec(line);
   if (runtime) {
@@ -523,12 +535,12 @@ export function redactPublicSupportDiagnosticLine(
     .split(/[\r\n\u2028\u2029]/u)
     .map((entry) => redactSupportDiagnosticLine(entry, context))
     .join("\n");
-  const codes = (lines.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+  const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
   const causes = (
     lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot hash mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   // Candidate admission's existing text protocol carries only these fixed validation lines.

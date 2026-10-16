@@ -42,8 +42,10 @@ describe("postJson", () => {
     vi.clearAllMocks();
   });
 
-  it("parses JSON payload on successful response", async () => {
+  it("forwards the abort signal and parses JSON on success", async () => {
+    const controller = new AbortController();
     remoteHttpMock.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
       return await params.onResponse(jsonResponse({ data: [{ embedding: [1, 2] }] }));
     });
 
@@ -51,28 +53,12 @@ describe("postJson", () => {
       url: "https://memory.example/v1/post",
       headers: { Authorization: "Bearer test" },
       body: { input: ["x"] },
+      signal: controller.signal,
       errorPrefix: "post failed",
       parse: (payload) => payload,
     });
 
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
-  });
-
-  it("forwards abort signals to the remote HTTP request", async () => {
-    const controller = new AbortController();
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      expect(params.signal).toBe(controller.signal);
-      return await params.onResponse(jsonResponse({ ok: true }));
-    });
-
-    await postJson({
-      url: "https://memory.example/v1/post",
-      headers: {},
-      body: {},
-      signal: controller.signal,
-      errorPrefix: "post failed",
-      parse: (payload) => payload,
-    });
   });
 
   it.each([200, 429])("aborts response body reads for HTTP %s", async (status) => {

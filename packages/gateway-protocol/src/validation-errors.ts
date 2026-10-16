@@ -1,4 +1,5 @@
 import type { TypeBoxValidationError } from "@openclaw/normalization-core/json-schema";
+import { hasNonEmptyString, readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = TypeBoxValidationError;
@@ -47,15 +48,7 @@ export function checkProtocolJson(data: unknown, maxDepth: number): ValidationEr
 }
 
 function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-  }
-  return undefined;
+  return Array.isArray(value) ? value.find(hasNonEmptyString) : readNonBlankString(value);
 }
 
 /** Convert validator errors into compact operator-facing failure text. */
@@ -98,9 +91,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const message =
       keyword === "then" || (keyword === "if" && failingKeyword === "then")
         ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
+        : (readNonBlankString(err?.message) ?? "validation error");
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }

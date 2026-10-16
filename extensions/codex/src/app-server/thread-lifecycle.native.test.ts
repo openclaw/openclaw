@@ -10,7 +10,7 @@ import { isJsonObject } from "./protocol.js";
 import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
   createAppServerOptions,
   createParams,
@@ -146,6 +146,7 @@ describe("native Codex cold thread recovery", () => {
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),
+        disableTools: false,
         agentId: "main",
         agentDir,
         modelId: "gpt-5.6-luna",

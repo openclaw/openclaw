@@ -1,5 +1,6 @@
 // Migrate Hermes tests cover model.apply plugin behavior.
 import path from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolvePreferredOpenClawTmpDir,
@@ -104,16 +105,14 @@ describe("Hermes migration model apply", () => {
             fallbacks: ["openai/gpt-5.4"],
           },
         },
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             model: {
               primary: "anthropic/claude-sonnet-4.6",
               fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     let writtenConfig: OpenClawConfig | undefined;
@@ -135,7 +134,7 @@ describe("Hermes migration model apply", () => {
     );
 
     expect(result.items).toEqual([defaultModelItem("migrated")]);
-    expect(writtenConfig?.agents?.list?.[0]?.model).toEqual({
+    expect(writtenConfig?.agents?.entries?.main?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
     });
@@ -178,7 +177,7 @@ describe("Hermes migration model apply", () => {
         agents: {
           defaults: { workspace: workspaceDir, model: "shared/model" },
           entries: {
-            main: { default: true, model: "main/model" },
+            main: { model: "main/model" },
             research: { workspace: workspaceDir, model },
           },
         },

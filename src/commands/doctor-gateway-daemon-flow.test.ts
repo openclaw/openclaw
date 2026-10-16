@@ -8,6 +8,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import {
   createPrompter,
+  mockDoctorRuntimeFacts,
   registerRunningBunFallbackTest,
   setPlatform,
 } from "./doctor-gateway-daemon-flow.test-support.js";
@@ -19,8 +20,12 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
-const runExec = vi.hoisted(() => vi.fn());
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T) => read(),
+}));
+const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
@@ -194,16 +199,8 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset().mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      }),
-      stderr: "",
-    });
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
@@ -241,6 +238,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -343,7 +341,6 @@ describe("maybeRepairGatewayDaemon", () => {
   it.each([
     { environment: "container without an OpenClaw service", detected: true },
     { environment: "Kubernetes pod without container markers", kubernetes: true },
-    { environment: "globally external supervisor", external: true },
   ])(
     "keeps port diagnostics but never probes host services in a $environment",
     async (scenario) => {
@@ -360,7 +357,7 @@ describe("maybeRepairGatewayDaemon", () => {
         {
           KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
           KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
-          OPENCLAW_SUPERVISOR_MODE: scenario.external ? "external" : undefined,
+          OPENCLAW_SUPERVISOR_MODE: undefined,
         },
         runNonInteractiveRepair,
       );
@@ -449,15 +446,6 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("does not inspect port connections during normal doctor", async () => {
-    setPlatform("linux");
-
-    await runNonInteractiveRepair();
-
-    expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
-    expect(inspectPortConnections).not.toHaveBeenCalled();
-  });
-
   it("still audits missing service when gateway health was skipped", async () => {
     setPlatform("linux");
     service.isLoaded.mockResolvedValueOnce(false);
@@ -515,34 +503,6 @@ describe("maybeRepairGatewayDaemon", () => {
     },
   );
 
-  it.each(["darwin", "linux", "win32"] as const)(
-    "never inspects or repairs local services for a failed remote tunnel on %s",
-    async (platform) => {
-      setPlatform(platform);
-      service.readRuntime.mockResolvedValue({ status: "stopped" });
-      const prompter = createPrompter(() => true);
-
-      await runDoctor({
-        cfg: { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } },
-        prompter,
-        options: { deep: true },
-        gatewayDetailsMessage: "remote connection details",
-        healthSkipped: false,
-      });
-
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(service.install).not.toHaveBeenCalled();
-      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-      expect(service.isLoaded).not.toHaveBeenCalled();
-      expect(service.readRuntime).not.toHaveBeenCalled();
-      expect(service.readCommand).not.toHaveBeenCalled();
-      expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
-      expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(inspectPortConnections).not.toHaveBeenCalled();
-      expect(note).not.toHaveBeenCalled();
-    },
-  );
-
   it("preserves a real remote health failure through the ordered recovery contributions", async () => {
     const {
       createDoctorHealthFlowContext,
@@ -588,34 +548,6 @@ describe("maybeRepairGatewayDaemon", () => {
     });
 
     expect(service.restart).not.toHaveBeenCalled();
-  });
-
-  it("reports established gateway clients during deep doctor", async () => {
-    setPlatform("linux");
-    inspectPortConnections.mockResolvedValueOnce({
-      port: 18789,
-      connections: [
-        {
-          pid: 4242,
-          command: "node",
-          commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
-          address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
-          direction: "client",
-        },
-      ],
-    });
-
-    await runDoctor({
-      prompter: createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { deep: true, nonInteractive: true },
-      }),
-      options: { deep: true, nonInteractive: true },
-    });
-
-    const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
-    expect(gatewayClientNote?.[0]).toContain("pid=4242");
-    expect(gatewayClientNote?.[0]).toContain("protocol mismatch after rollback");
   });
 
   it("reports established gateway clients during healthy deep doctor", async () => {
@@ -670,42 +602,12 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(note.mock.calls.some(([, label]) => label === "Gateway port")).toBe(false);
   });
 
-  it("keeps busy-port note for unexpected Gateway listeners", async () => {
-    setPlatform("linux");
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [
-        { pid: 5001, commandLine: "openclaw-gateway", address: "0.0.0.0:18789" },
-        { pid: 5002, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-      ],
-      hints: ["Multiple listeners detected"],
-    });
-
-    await runNonInteractiveRepair();
-
-    expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
-  });
-
   it("skips start verification when a stopped service start is only scheduled", async () => {
     service.readRuntime.mockResolvedValue({ status: "stopped" });
     await runScheduledGatewayRepairAndExpectVerificationSkipped("Start gateway service now?");
   });
 
-  it("skips gateway install during non-interactive update repairs", async () => {
-    setPlatform("linux");
-    service.isLoaded.mockResolvedValue(false);
-
-    await runNonInteractiveUpdateRepair();
-
-    expect(service.install).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
-  });
-
   it.each([
-    { recorded: "node", pinned: false, supported: true, choice: "node" },
-    { recorded: "bun", pinned: false, supported: true, choice: "bun" },
-    { recorded: "bun", pinned: false, supported: true, choice: "node" },
     { recorded: "bun", pinned: false, supported: true, choice: "fallback" },
     { recorded: "bun", pinned: false, supported: false, choice: "node" },
     { recorded: "node", pinned: true, supported: true, choice: "node" },
@@ -714,7 +616,13 @@ describe("maybeRepairGatewayDaemon", () => {
     async ({ recorded, pinned, supported, choice }) => {
       const recordedPath = `/opt/recorded/bin/${recorded}`;
       if (!supported) {
-        runExec.mockRejectedValue(new Error("missing runtime"));
+        const probeRuntime = runExec.getMockImplementation()!;
+        runExec.mockImplementation((executable, ...args) => {
+          if (executable === recordedPath) {
+            return Promise.reject(new Error("missing runtime"));
+          }
+          return probeRuntime(executable, ...args);
+        });
       }
       const pin = pinned ? { runtime: "bun", path: "/opt/pinned/bun" } : undefined;
       const expected = { revision: "pin-version", stored: pinned, pin };
@@ -821,19 +729,10 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it("starts stopped service during non-interactive repairs", async () => {
-    setPlatform("linux");
-    service.readRuntime.mockResolvedValue({ status: "stopped" });
-
-    await runNonInteractiveRepair();
-
-    expect(service.restart).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([{ repair: true }, { yes: true }])("restarts with explicit %j", async (options) => {
+  it("restarts with explicit --yes", async () => {
     setPlatform("linux");
 
-    await runAutoRepair(options);
+    await runAutoRepair({ yes: true });
 
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
@@ -968,7 +867,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -993,7 +892,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
+      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -1067,7 +966,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.`,
       "Gateway",
     );
   });

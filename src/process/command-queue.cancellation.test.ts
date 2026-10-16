@@ -9,9 +9,9 @@ import {
   setCommandLaneConcurrency,
 } from "./command-queue.js";
 import {
-  createLaneQueue,
   dequeueLaneQueue,
   enqueueLaneQueue,
+  getLaneState,
   peekLaneQueue,
   type QueueEntry,
   removeLaneQueueEntry,
@@ -69,7 +69,7 @@ function measureCancellationWork(count: number) {
     proxies.set(proxy, proxy);
     return proxy;
   }
-  const queue = observe(createLaneQueue());
+  const queue = observe(getLaneState(`cancellation-work:${count}`).queue);
   const entries = Array.from({ length: count }, (_, index) => observe(makeEntry(index)));
   for (const entry of entries) {
     enqueueLaneQueue(queue, entry);
@@ -86,11 +86,66 @@ function measureCancellationWork(count: number) {
   return cancellationOperations;
 }
 
-describe("queued command cancellation", () => {
+describe("queued command scheduling and cancellation", () => {
   beforeEach(resetCommandQueueStateForTest);
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     resetCommandQueueStateForTest();
+  });
+
+  it("admits aging work in FIFO order while foreground arrivals continue", async () => {
+    vi.useFakeTimers();
+    const lane = "main";
+    setCommandLaneConcurrency(lane, 0);
+    const starts: Array<[string, number]> = [];
+    const pending: Promise<unknown>[] = [];
+    for (const priority of ["background", "normal"] as const) {
+      for (let index = 0; index < 2; index += 1) {
+        pending.push(
+          enqueueCommandInLane(
+            lane,
+            async () => {
+              starts.push([`${priority}-${index}`, performance.now()]);
+            },
+            { priority },
+          ),
+        );
+      }
+    }
+    const foregroundDone = createDeferred();
+    const foreground = (index: number) => {
+      pending.push(
+        enqueueCommandInLane(
+          lane,
+          async () => {
+            starts.push(["foreground", performance.now()]);
+            vi.advanceTimersByTime(1_000);
+            // Wall-clock corrections must not extend priority's head start.
+            vi.setSystemTime(Date.now() - 2_000);
+            if (index < 39) {
+              foreground(index + 1);
+            } else {
+              foregroundDone.resolve();
+            }
+          },
+          { priority: "foreground" },
+        ),
+      );
+    };
+    foreground(0);
+    setCommandLaneConcurrency(lane, 1);
+    await foregroundDone.promise;
+    await Promise.all(pending);
+
+    expect(starts[0]).toEqual(["foreground", 0]);
+    expect(starts.filter(([kind]) => kind !== "foreground")).toEqual([
+      ["normal-0", 15_000],
+      ["normal-1", 15_000],
+      ["background-0", 30_000],
+      ["background-1", 30_000],
+    ]);
+    expect(starts.at(-1)).toEqual(["foreground", 39_000]);
   });
 
   it("preserves priority and FIFO after cancelling heads, middle entries and tails", async () => {
@@ -197,44 +252,59 @@ describe("queued command cancellation", () => {
     await expect(active).resolves.toBe("active finished");
   });
 
-  it.each(["dequeue", "cancel"] as const)(
-    "releases entry references before reentrant %s cleanup",
-    (removal) => {
-      const queue = createLaneQueue();
-      const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
-      for (const entry of entries) {
-        enqueueLaneQueue(queue, entry);
-      }
-      const removed = entries[removal === "dequeue" ? 0 : 1]!;
-      const refill = makeEntry(3);
-      const release = vi.fn(() => {
-        expect(removed.queued).toBeUndefined();
-        expect(removed.releaseQueuedAbort).toBeUndefined();
-        for (const entry of entries) {
-          expect(Object.values(removed)).not.toContain(entry);
-        }
-        expect(queue.length).toBe(2);
-        expect(removeLaneQueueEntry(queue, removed)).toBe(false);
-        enqueueLaneQueue(queue, refill);
+  it("clears selected session work while unrelated queued work keeps its order", async () => {
+    const lane = "session:selective-clear";
+    setCommandLaneConcurrency(lane, 0);
+    const started: string[] = [];
+    const enqueue = (sessionId: string) =>
+      enqueueCommandInLane(lane, async () => started.push(sessionId), {
+        sessionTarget: { sessionId },
       });
-      removed.releaseQueuedAbort = release;
-      if (removal === "dequeue") {
-        expect(dequeueLaneQueue(queue)).toBe(removed);
-      } else {
-        expect(removeLaneQueueEntry(queue, removed)).toBe(true);
+    const before = enqueue("before");
+    const selected = enqueue("selected");
+    const after = enqueue("after");
+    const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
+
+    expect(clearCommandLane(lane, (target) => target?.sessionId === "selected")).toBe(1);
+    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(2);
+    setCommandLaneConcurrency(lane, 1);
+
+    await rejection;
+    await Promise.all([before, after]);
+    expect(started).toEqual(["before", "after"]);
+  });
+
+  it("releases entry references before reentrant cancellation cleanup", () => {
+    const queue = getLaneState("reentrant-cancellation").queue;
+    const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
+    for (const entry of entries) {
+      enqueueLaneQueue(queue, entry);
+    }
+    const removed = entries[1]!;
+    const refill = makeEntry(3);
+    const release = vi.fn(() => {
+      expect(removed.queued).toBeUndefined();
+      expect(removed.releaseQueuedAbort).toBeUndefined();
+      for (const entry of entries) {
+        expect(Object.values(removed)).not.toContain(entry);
       }
-      expect(release).toHaveBeenCalledOnce();
-      const survivors = entries.filter((entry) => entry !== removed);
-      expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
-        ...survivors,
-        refill,
-      ]);
-      expect(dequeueLaneQueue(queue)).toBeUndefined();
-      enqueueLaneQueue(queue, makeEntry(4));
-      expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
-      expect(queue.length).toBe(0);
-    },
-  );
+      expect(queue.length).toBe(2);
+      expect(removeLaneQueueEntry(queue, removed)).toBe(false);
+      enqueueLaneQueue(queue, refill);
+    });
+    removed.releaseQueuedAbort = release;
+    expect(removeLaneQueueEntry(queue, removed)).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+    const survivors = entries.filter((entry) => entry !== removed);
+    expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
+      ...survivors,
+      refill,
+    ]);
+    expect(dequeueLaneQueue(queue)).toBeUndefined();
+    enqueueLaneQueue(queue, makeEntry(4));
+    expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
+    expect(queue.length).toBe(0);
+  });
 
   it("keeps total cancellation work linear as a backlog doubles", () => {
     const smaller = measureCancellationWork(128);

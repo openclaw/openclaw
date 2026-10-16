@@ -1,4 +1,3 @@
-// Web Readability plugin module implements web content extractor behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,

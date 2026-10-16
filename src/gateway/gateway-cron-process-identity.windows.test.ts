@@ -5,7 +5,9 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { isRecord } from "../utils.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 describe.skipIf(process.platform !== "win32")("Windows cron process identity", () => {
@@ -16,6 +18,7 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
       let instance: OpenClawTestInstance | undefined;
       let jobId: string | undefined;
       let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      const finished = createDeferred<Record<string, unknown>>();
       return runQaGatewayTestFixture(
         context,
         async ({ signal, verifyCleanup }) => {
@@ -38,6 +41,16 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
             requestTimeoutMs: 30_000,
             signal,
             verifyCleanup,
+            onEvent: (event) => {
+              if (
+                event.event === "cron" &&
+                isRecord(event.payload) &&
+                event.payload.jobId === jobId &&
+                event.payload.action === "finished"
+              ) {
+                finished.resolve(event.payload);
+              }
+            },
           });
           signal.throwIfAborted();
           const job = await client.request<{ id: string }>(
@@ -56,25 +69,8 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           jobId = job.id;
           signal.throwIfAborted();
 
-          let terminal: Record<string, unknown> | undefined;
-          const deadline = Date.now() + 30_000;
-          while (Date.now() < deadline) {
-            signal.throwIfAborted();
-            const history = await client.request<{ entries: Array<Record<string, unknown>> }>(
-              "cron.runs",
-              { id: job.id, limit: 1 },
-              { signal },
-            );
-            signal.throwIfAborted();
-            terminal = history.entries[0];
-            if (terminal && terminal.status !== "running") {
-              break;
-            }
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 250);
-            });
-            signal.throwIfAborted();
-          }
+          // History is recorded before receipt finalization; the finished event follows its commit.
+          const terminal = await withinTest(finished.promise, signal);
 
           signal.throwIfAborted();
           const database = new DatabaseSync(

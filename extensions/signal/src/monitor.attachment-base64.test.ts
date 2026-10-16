@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
 
 const signalRpcRequestMock = vi.hoisted(() => vi.fn());
@@ -62,32 +62,21 @@ function requireCapturedFetchAttachment(): SignalEventHandlerDeps["fetchAttachme
   return capturedFetchAttachment;
 }
 
-describe("Signal attachment fetch", () => {
-  beforeEach(() => {
-    capturedFetchAttachment = undefined;
-    signalRpcRequestMock.mockReset();
-    saveMediaBufferMock.mockReset().mockResolvedValue({
-      path: "/tmp/signal-attachment.png",
-      contentType: "image/png",
-    });
+it("rejects malformed base64 attachment data", async () => {
+  signalRpcRequestMock.mockResolvedValue({
+    data: "iVBORw0KGgoAAAANSUhE%%%UgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2Nk+M/wHwAF/gL+M6Q10QAAAABJRU5ErkJggg==",
   });
 
-  it("rejects malformed base64 attachment data", async () => {
-    signalRpcRequestMock.mockResolvedValue({
-      data: "iVBORw0KGgoAAAANSUhE%%%UgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2Nk+M/wHwAF/gL+M6Q10QAAAABJRU5ErkJggg==",
-    });
+  await monitorSignalProvider({ config, autoStart: false });
+  const fetchAttachment = requireCapturedFetchAttachment();
 
-    await monitorSignalProvider({ config, autoStart: false });
-    const fetchAttachment = requireCapturedFetchAttachment();
-
-    await expect(
-      fetchAttachment({
-        baseUrl: "http://127.0.0.1:8080",
-        attachment: { id: "attachment-123", contentType: "image/png" },
-        sender: "+15550001111",
-        maxBytes: 8 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("Signal attachment attachment-123 returned malformed base64 data");
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
-  });
+  await expect(
+    fetchAttachment({
+      baseUrl: "http://127.0.0.1:8080",
+      attachment: { id: "attachment-123", contentType: "image/png" },
+      sender: "+15550001111",
+      maxBytes: 8 * 1024 * 1024,
+    }),
+  ).rejects.toThrow("Signal attachment attachment-123 returned malformed base64 data");
+  expect(saveMediaBufferMock).not.toHaveBeenCalled();
 });

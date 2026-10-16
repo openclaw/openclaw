@@ -4,6 +4,7 @@ import {
   formatRuntimeCacheHitPercent,
 } from "./agentic-parity-cache-usage.js";
 import type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
+import { pushQaReportListSection } from "./report.js";
 import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import { formatRuntimeSpeedComparison, formatRuntimeWallClockMs } from "./runtime-parity-timing.js";
 
@@ -70,11 +71,7 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     );
   }
   if (report.failures.length > 0) {
-    lines.push("## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-    lines.push("");
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
   }
   lines.push("## Scenario Comparison", "");
   for (const scenario of report.scenarios) {
@@ -115,10 +112,6 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     }
     lines.push("");
   }
-  lines.push("## Notes", "");
-  for (const note of report.notes) {
-    lines.push(`- ${note}`);
-  }
-  lines.push("");
+  pushQaReportListSection(lines, "Notes", report.notes);
   return lines.join("\n");
 }

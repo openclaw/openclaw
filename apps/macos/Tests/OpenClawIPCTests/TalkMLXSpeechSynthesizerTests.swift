@@ -6,7 +6,7 @@ import Testing
 @testable import OpenClaw
 
 #if arch(arm64)
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct TalkMLXSpeechSynthesizerTests {
     @Test @MainActor
     func `shutdown reaps a TERM-resistant helper before returning`() async throws {
@@ -17,6 +17,7 @@ struct TalkMLXSpeechSynthesizerTests {
         let helper = directory.appendingPathComponent("openclaw-mlx-tts-test-helper")
         let pidFile = directory.appendingPathComponent("helper.pid")
         let readyFrame = directory.appendingPathComponent("ready.frame")
+        let requestByte = directory.appendingPathComponent("request.byte")
         defer { TestProcessSupport.killLeakedProcesses(in: [pidFile]) }
         try MLXTTSFrameCodec.encode(MLXTTSEvent.ready).write(to: readyFrame)
         try Data("""
@@ -24,6 +25,7 @@ struct TalkMLXSpeechSynthesizerTests {
         trap '' TERM
         printf '%s\\n' "$$" > "$OPENCLAW_MLX_TTS_PID_FILE"
         /bin/cat "$OPENCLAW_MLX_TTS_READY_FILE"
+        /bin/dd bs=1 count=1 of="$OPENCLAW_MLX_TTS_REQUEST_FILE" 2>/dev/null
         exec /bin/sleep 30
         """.utf8).write(to: helper)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
@@ -32,6 +34,7 @@ struct TalkMLXSpeechSynthesizerTests {
             "OPENCLAW_MLX_TTS_BIN": helper.path,
             "OPENCLAW_MLX_TTS_PID_FILE": pidFile.path,
             "OPENCLAW_MLX_TTS_READY_FILE": readyFrame.path,
+            "OPENCLAW_MLX_TTS_REQUEST_FILE": requestByte.path,
         ]) {
             let synthesizer = TalkMLXSpeechSynthesizer.shared
             await synthesizer.shutdown()
@@ -39,18 +42,24 @@ struct TalkMLXSpeechSynthesizerTests {
                 try await self.collectSynthesis(synthesizer, text: "hold transport open")
             }
             let pid = try await TestProcessSupport.waitForPID(in: pidFile)
+            // A spawned PID precedes transport publication; receiving a request proves ownership.
+            try await TestWait.state("MLX helper synthesis request") {
+                (try? Data(contentsOf: requestByte).count) == 1
+            }
 
             await synthesizer.shutdown()
-            let helperWasReaped = await TestProcessSupport.waitUntilGone(
-                pid,
-                timeout: .milliseconds(100))
+            let reapDeadline = ContinuousClock.now.advanced(by: .milliseconds(100))
+            while ContinuousClock.now < reapDeadline, !TestProcessSupport.processIsGone(pid) {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            let helperWasReaped = TestProcessSupport.processIsGone(pid)
             if !helperWasReaped {
                 _ = kill(pid, SIGKILL)
             }
             synthesis.cancel()
             _ = try? await synthesis.value
 
-            #expect(await TestProcessSupport.waitUntilGone(pid))
+            #expect(try await TestProcessSupport.waitUntilGone(pid))
             #expect(helperWasReaped)
         }
     }
@@ -125,6 +134,8 @@ struct TalkMLXSpeechSynthesizerTests {
 
         _ = try await self.collectSynthesis(synthesizer, text: "replacement")
         _ = try? await staleConsumption.value
+        // The stall timeout abandons its read; it must not keep running against the retired helper.
+        try await TestWait.state("abandoned stale read") { await stale.activeEventReads == 0 }
         _ = try await self.collectSynthesis(synthesizer, text: "reuse replacement")
 
         #expect(await factory.callCount == 2)
@@ -272,10 +283,10 @@ struct TalkMLXSpeechSynthesizerTests {
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {}
         let replacement = try replacementResult.get()
         do {
-            try await AsyncTimeout.withTimeout(
-                seconds: 4,
-                onTimeout: { TestMLXTransportError.cancelGraceTimedOut },
-                operation: { try await transport.waitForClose() })
+            try await transport.waitForClose()
+        } catch is CancellationError {
+            await synthesizer.shutdown()
+            throw CancellationError()
         } catch {
             Issue.record("replacement cancellation grace did not close the helper: \(error)")
             await synthesizer.shutdown()
@@ -718,7 +729,6 @@ struct TalkMLXSpeechSynthesizerTests {
 }
 
 private enum TestMLXTransportError: Error {
-    case cancelGraceTimedOut
     case closed
 }
 
@@ -745,6 +755,8 @@ private actor TestMLXTransport: MLXTTSTransport {
     let mode: Mode
     private(set) var sent: [MLXTTSRequest] = []
     private(set) var closeCount = 0
+    private(set) var activeEventReads = 0
+    private let closedSignal = AsyncTestSignal()
     private var events: [MLXTTSEvent] = [.ready]
     private var closed = false
     private var pendingEventRead = false
@@ -829,11 +841,15 @@ private actor TestMLXTransport: MLXTTSTransport {
     }
 
     func nextEvent() async throws -> MLXTTSEvent {
+        self.activeEventReads += 1
+        defer { self.activeEventReads -= 1 }
         if self.events.isEmpty {
             self.pendingEventRead = true
         }
         while self.events.isEmpty {
-            if self.closed {
+            // Like the process transport's stream read, a cancelled read stops waiting.
+            // Stall timeouts cancel and abandon reads; spinning here outlives the test.
+            if self.closed || Task.isCancelled {
                 throw TestMLXTransportError.closed
             }
             await Task.yield()
@@ -843,6 +859,7 @@ private actor TestMLXTransport: MLXTTSTransport {
 
     func close() {
         self.closeCount += 1
+        self.closedSignal.notify()
         if self.holdsFirstCancelSend {
             self.closed = true
             return
@@ -875,10 +892,9 @@ private actor TestMLXTransport: MLXTTSTransport {
         self.cancelSendReleased = true
     }
 
-    func waitForClose() async throws {
-        while self.closeCount == 0 {
-            try Task.checkCancellation()
-            await Task.yield()
+    func waitForClose(sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await self.closedSignal.wait("replacement helper closure", sourceLocation: sourceLocation) {
+            self.closeCount > 0
         }
     }
 

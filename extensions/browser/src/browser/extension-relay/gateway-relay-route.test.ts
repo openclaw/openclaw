@@ -49,7 +49,7 @@ vi.mock("../config.js", async (importOriginal) => ({
 const configState = vi.hoisted(() => ({ allowLegacyAuth: true }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => ({
+  readRuntimeConfig: () => ({
     browser: { extensionRelay: { allowLegacyAuth: configState.allowLegacyAuth } },
   }),
 }));
@@ -256,49 +256,6 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
   });
 
-  it("authenticates before lazy-starting browser control on a fresh gateway", async () => {
-    const original = stateWithExtensionProfile();
-    const state = {
-      ...original,
-      profiles: new Map([
-        ["work", { profile: { name: "work", driver: "extension", cdpPort: 19444 } }],
-        ...original.profiles,
-      ]),
-      resolved: {
-        ...original.resolved,
-        defaultProfile: "chrome",
-        profiles: { work: { driver: "extension" }, ...original.resolved.profiles },
-      },
-    };
-    getBrowserControlStateMock.mockReturnValue(null);
-    startBrowserControlServiceFromConfigMock.mockResolvedValue(state);
-    resolveProfileMock.mockImplementation(
-      (_resolved, name: string) => state.profiles.get(name)?.profile,
-    );
-    const bridge = { id: "fresh-bridge" };
-    ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
-    const ws = await mockSuccessfulUpgrade();
-
-    const { socket } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension"),
-      socket,
-      Buffer.alloc(0),
-    );
-
-    expect(handled).toBe(true);
-    expect(readExtensionRelayTokenMock).toHaveBeenCalled();
-    expect(() => ws.emit("error", new Error("Invalid WebSocket frame"))).not.toThrow();
-    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
-    expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledWith(
-      state,
-      expect.objectContaining({ name: "work", cdpPort: 19444 }),
-    );
-    await expect
-      .poll(() => attachExtensionWebSocketMock.mock.calls)
-      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
-  });
-
   it("does not lazy-start or attach v2 before the in-band client proof succeeds", async () => {
     getPluginRuntimeGatewayRequestScopeMock.mockReturnValue({
       client: { clientIp: "203.0.113.20" },
@@ -421,26 +378,6 @@ describe("handleGatewayExtensionUpgrade", () => {
       expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
     },
   );
-
-  it("attaches the socket to the bridge on a valid token", async () => {
-    getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
-    primeProfile();
-    const bridge = { id: "bridge" };
-    ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
-    // Real handleUpgrade would need a live socket; stub it to fire the callback.
-    await mockSuccessfulUpgrade();
-    const { socket } = fakeSocket();
-    const handled = await handleGatewayExtensionUpgrade(
-      relayReq("/browser/extension"),
-      socket,
-      Buffer.alloc(0),
-    );
-    expect(handled).toBe(true);
-    expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
-    await expect
-      .poll(() => attachExtensionWebSocketMock.mock.calls)
-      .toContainEqual([bridge, expect.objectContaining({ readyState: 1 })]);
-  });
 
   it("authenticates against the live relay secret when Browser state is stale", async () => {
     readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);

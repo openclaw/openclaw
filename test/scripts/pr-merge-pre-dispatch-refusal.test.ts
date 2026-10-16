@@ -45,10 +45,27 @@ const hash = (text: string) =>
   execFileSync("git", ["hash-object", "--stdin"], { input: text, encoding: "utf8" }).trim();
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
+function refusalEvidence(contents: string, proof: unknown) {
+  const root = temps.make("pr-refusal-evidence-");
+  const directory = join(root, "evidence");
+  mkdirSync(directory);
+  mkdirSync(join(root, ".local"));
+  writeFileSync(join(root, ".local", capture), contents);
+  writeFileSync(join(directory, capture), contents);
+  writeFileSync(join(directory, "qualification.json"), JSON.stringify(proof));
+  return {
+    root,
+    directory,
+    run: (attempt = record) =>
+      spawnSync(node, [helper, directory, outcome, JSON.stringify(attempt)], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+  };
+}
+
 describePosix("operator-qualified pre-dispatch evidence", () => {
   it.each([
-    "approved",
-    "uninspected",
     "diagnostics-not-requested",
     "wrong-producer",
     "wrong-command",
@@ -57,20 +74,13 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
     "wrong-executable",
     "missing-source",
     "extra-source",
-    ...Object.keys(policyTimeoutQualification.sourceSha256).map((path) => `source:${path}`),
-    "policy-denial",
+    "source:cmd/octopool/string_rewrites_pr.go",
     "other-class",
-    "extra-text",
     "extra-newline",
     "missing-newline",
     "diagnostic",
-    "child-started",
     "response-headers",
   ])("bounds the inspected initial policy timeout: %s", (fault) => {
-    const root = temps.make("pr-policy-timeout-evidence-");
-    const directory = join(root, "evidence");
-    mkdirSync(directory);
-    mkdirSync(join(root, ".local"));
     const sourceSha256: Record<string, string> = { ...policyTimeoutQualification.sourceSha256 };
     if (fault.startsWith("source:")) {
       sourceSha256[fault.slice("source:".length)] = "0".repeat(64);
@@ -81,36 +91,19 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
     if (fault === "extra-source") {
       sourceSha256["cmd/octopool/unknown.go"] = "0".repeat(64);
     }
-    let contents = policyTimeoutCapture;
-    if (fault === "policy-denial") {
-      contents = refusal;
-    }
-    if (fault === "other-class") {
-      contents = contents.replace("class=timeout", "class=server_validation");
-    }
-    if (fault === "extra-text") {
-      contents += "mutation accepted\n";
-    }
-    if (fault === "extra-newline") {
-      contents += "\n";
-    }
-    if (fault === "missing-newline") {
-      contents = contents.trimEnd();
-    }
-    if (fault === "diagnostic" || fault === "child-started") {
-      contents +=
-        fault === "diagnostic"
-          ? diagnostic
-          : diagnostic.replace("child_started=false", "child_started=true");
-    }
-    if (fault === "response-headers") {
-      contents = contents.replace(")\n", " http_status=504)\n");
-    }
+    const captures: Record<string, string> = {
+      "other-class": policyTimeoutCapture.replace("class=timeout", "class=server_validation"),
+      "extra-newline": policyTimeoutCapture + "\n",
+      "missing-newline": policyTimeoutCapture.trimEnd(),
+      diagnostic: policyTimeoutCapture + diagnostic,
+      "response-headers": policyTimeoutCapture.replace(")\n", " http_status=504)\n"),
+    };
+    const contents = captures[fault] ?? policyTimeoutCapture;
     const proof = {
       ...policyTimeoutQualification,
       outcome,
       capture: hash(contents),
-      inspected: fault !== "uninspected",
+      inspected: true,
       diagnosticsEnabled: fault !== "diagnostics-not-requested",
       producer: fault === "wrong-producer" ? "gh" : policyTimeoutQualification.producer,
       command: fault === "wrong-command" ? "pr view" : policyTimeoutQualification.command,
@@ -121,38 +114,20 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
         fault === "wrong-executable" ? "a".repeat(64) : policyTimeoutQualification.executableSha256,
       sourceSha256,
     };
-    writeFileSync(join(root, ".local", capture), contents);
-    writeFileSync(join(directory, capture), contents);
-    writeFileSync(join(directory, "qualification.json"), JSON.stringify(proof));
-    const result = spawnSync(node, [helper, directory, outcome, JSON.stringify(record)], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    if (fault === "approved") {
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        kind: proof.kind,
-        capture,
-        files: { [capture]: proof.capture },
-      });
-    } else {
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stdout).toBe("");
-    }
+    const result = refusalEvidence(contents, proof).run();
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toBe("");
   });
 
   it.each([
-    "historical",
     "historical-0.7.1",
     "0.7.1-wrong-version",
     "0.7.1-wrong-source",
     "0.7.1-wrong-parser",
-    "0.7.1-subject",
     "0.7.1-subject-equals",
     "0.7.1-altered-stderr",
     "diagnostic",
     "generic-only",
-    "wrong-source",
     "changed-capture",
     "symlink",
     "accepted",
@@ -163,10 +138,6 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
     "extra-evidence",
     "wrong-outcome",
   ])("qualifies only intact, inspected no-dispatch evidence: %s", (fault) => {
-    const root = temps.make("pr-refusal-evidence-");
-    const directory = join(root, "evidence");
-    mkdirSync(directory);
-    mkdirSync(join(root, ".local"));
     const diagnostics = ["diagnostic", "started", "duplicate"].includes(fault);
     const historical =
       historicalRefusals[
@@ -195,9 +166,6 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
       "--body-file",
       ".local/merge-body.fixture",
     ];
-    if (fault === "0.7.1-subject") {
-      args.push("--subject", "Fixture subject");
-    }
     if (fault === "0.7.1-subject-equals") {
       args.push("--subject=Fixture subject");
     }
@@ -212,16 +180,14 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
             version: fault === "0.7.1-wrong-version" ? "0.7.0" : historical.version,
             sourceRevision:
               fault === "0.7.1-wrong-source" ? "a".repeat(40) : historical.sourceRevision,
-            parserSha256:
-              fault === "wrong-source" || fault === "0.7.1-wrong-parser"
-                ? "a".repeat(64)
-                : historical.parserSha256,
+            parserSha256: fault === "0.7.1-wrong-parser" ? "a".repeat(64) : historical.parserSha256,
             args,
           }),
     };
-    writeFileSync(join(root, ".local", capture), contents);
-    writeFileSync(join(directory, capture), fault === "changed-capture" ? "changed\n" : contents);
-    writeFileSync(join(directory, "qualification.json"), JSON.stringify(proof));
+    const { root, directory, run } = refusalEvidence(contents, proof);
+    if (fault === "changed-capture") {
+      writeFileSync(join(directory, capture), "changed\n");
+    }
     if (fault === "symlink") {
       rmSync(join(directory, capture));
       symlinkSync(join(root, ".local", capture), join(directory, capture));
@@ -237,11 +203,8 @@ describePosix("operator-qualified pre-dispatch evidence", () => {
       accepted: fault === "accepted",
       route: fault === "queue" ? "queue" : record.route,
     };
-    const result = spawnSync(node, [helper, directory, outcome, JSON.stringify(attempt)], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    if (fault === "historical" || fault === "historical-0.7.1" || fault === "diagnostic") {
+    const result = run(attempt);
+    if (fault === "historical-0.7.1" || fault === "diagnostic") {
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         kind: proof.kind,

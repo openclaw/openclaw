@@ -39,8 +39,6 @@ export async function minimaxTTS(params: {
   speed?: number;
   vol?: number;
   pitch?: number;
-  format?: string;
-  sampleRate?: number;
   timeoutMs: number;
 }): Promise<Buffer> {
   const {
@@ -52,8 +50,6 @@ export async function minimaxTTS(params: {
     speed = 1,
     vol = 1,
     pitch = 0,
-    format = "mp3",
-    sampleRate = 32000,
     timeoutMs,
   } = params;
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
@@ -88,8 +84,8 @@ export async function minimaxTTS(params: {
             pitch: Math.trunc(pitch),
           },
           audio_setting: {
-            format,
-            sample_rate: sampleRate,
+            format: "mp3",
+            sample_rate: 32000,
           },
         }),
         signal: controller.signal,

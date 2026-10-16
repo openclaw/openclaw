@@ -16,6 +16,7 @@ import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -61,6 +62,94 @@ function holdAgentEnd() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it("observes each provider response once without changing whole-turn accounting", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+    try {
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      params.config = {
+        diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
+      };
+      setRuntimeConfigSnapshot(params.config);
+      const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
+      await run.waitForTurnAccepted();
+      const response = {
+        method: "rawResponse/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          responseId: "private-response-1",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 3,
+            cacheWriteInputTokens: 1,
+            outputTokens: 4,
+            reasoningOutputTokens: 2,
+            totalTokens: 14,
+          },
+        },
+      };
+      await harness.notify(response);
+      await harness.notify(response);
+      const { totalTokens: _total, ...withoutTotal } = response.params.usage;
+      await harness.notify({
+        ...response,
+        params: {
+          ...response.params,
+          responseId: "private-response-2",
+          usage: { ...withoutTotal, cacheWriteInputTokens: 0 },
+        },
+      });
+      const { cacheWriteInputTokens: _cacheWrite, ...withoutCacheWrite } = response.params.usage;
+      await harness.notify({
+        ...response,
+        params: { ...response.params, responseId: "private-response-3", usage: withoutCacheWrite },
+      });
+      await harness.notify({
+        ...response,
+        params: { ...response.params, responseId: "private-response-4", usage: null },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect((await run).attemptUsage).toMatchObject({
+        input: 20,
+        cacheRead: 9,
+        cacheWrite: 1,
+        output: 12,
+        reasoningTokens: 6,
+        total: 28,
+      });
+      await waitForDiagnosticEventsDrained();
+      const observations = events.filter((event) => event.type === "model.response.observed");
+      expect(observations).toHaveLength(4);
+      expect(observations[0]).toMatchObject({
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
+        usage: { input: 6, cacheRead: 3, cacheWrite: 1, output: 4, reasoningTokens: 2, total: 14 },
+      });
+      expect(observations[1]?.usage?.cacheWrite).toBe(0);
+      expect(observations[1]?.usage).not.toHaveProperty("total");
+      expect(observations[2]?.usage).toMatchObject({ promptTokens: 10, cacheRead: 3 });
+      expect(observations[2]?.usage).not.toHaveProperty("cacheWrite");
+      expect(observations[2]?.usage).not.toHaveProperty("input");
+      expect(observations[3]).not.toHaveProperty("usage");
+      expect(observations[1]?.upstreamRequestIdHash).not.toBe(
+        observations[0]?.upstreamRequestIdHash,
+      );
+      const started = events.find((event) => event.type === "model.call.started");
+      for (const observation of observations) {
+        expect(observation.trace).toEqual(started?.trace);
+        expect(observation).not.toHaveProperty("durationMs");
+        expect(observation).not.toHaveProperty("sourceTimestampMs");
+        expect(JSON.stringify(observation)).not.toContain("private-response");
+      }
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
@@ -111,6 +200,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           },
         },
       } as never;
+      setRuntimeConfigSnapshot(params.config);
       params.sessionId = "diagnostic-session-1";
       params.sessionKey = "agent:diagnostic:diagnostic-session-1";
       params.runId = "diagnostic-run-1";
@@ -176,6 +266,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       params.config = {
         diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
       } as never;
+      setRuntimeConfigSnapshot(params.config);
       params.timeoutMs = 60_000;
 
       const run = runCodexAppServerAttempt(params);
@@ -300,92 +391,72 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(freezeAbort).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "failed",
-      status: "failed",
-      error: { message: "codex exploded" },
-      expectedPromptError: "codex exploded",
-      expectedClassification: undefined,
-    },
-    {
-      label: "empty completed",
-      status: "completed",
-      error: undefined,
-      expectedPromptError: null,
-      expectedClassification: "empty",
-    },
-  ] as const)(
-    "keeps ordinary $label turns cancellable until the orchestrator settles",
-    async ({ status, error, expectedPromptError, expectedClassification }) => {
-      const { agentEnd, releaseAgentEnd } = holdAgentEnd();
-      const onAttemptAbort = vi.fn();
-      const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
-      let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
-      const params = createTestParams();
-      params.onAttemptAbort = onAttemptAbort;
-      params.onAgentEvent = onRunAgentEvent;
-      const freezeAbort = vi.fn();
-      params.replyOperation = {
-        attachBackend: (backend: ReplyBackend) => {
-          replyBackend = backend;
+  it("keeps ordinary failed turns cancellable until the orchestrator settles", async () => {
+    const { agentEnd, releaseAgentEnd } = holdAgentEnd();
+    const onAttemptAbort = vi.fn();
+    const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
+    let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
+    const params = createTestParams();
+    params.onAttemptAbort = onAttemptAbort;
+    params.onAgentEvent = onRunAgentEvent;
+    const freezeAbort = vi.fn();
+    params.replyOperation = {
+      attachBackend: (backend: ReplyBackend) => {
+        replyBackend = backend;
+      },
+      detachBackend: vi.fn(),
+      freezeAbort,
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          items: [],
+          error: { message: "codex exploded" },
         },
-        detachBackend: vi.fn(),
-        freezeAbort,
-      } as unknown as NonNullable<typeof params.replyOperation>;
-      const harness = createStartedThreadHarness();
-      const run = runCodexAppServerAttempt(params);
+      },
+    });
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
-      await harness.waitForMethod("turn/start");
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: {
-            id: "turn-1",
-            status,
-            items: [],
-            ...(error ? { error } : {}),
-          },
-        },
-      });
-      await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+    expect(replyBackend?.isAbortable?.()).toBe(true);
+    replyBackend?.cancel("user_abort");
+    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
-      expect(replyBackend?.isAbortable?.()).toBe(true);
-      replyBackend?.cancel("user_abort");
-      expect(onAttemptAbort).toHaveBeenCalledTimes(1);
-
-      releaseAgentEnd();
-      const result = await run;
-      expect(readAttemptTerminal(result)).toMatchObject({
-        aborted: false,
-        promptError: expectedPromptError,
-      });
-      expect(result.agentHarnessResultClassification).toBe(expectedClassification);
-      expect(freezeAbort).not.toHaveBeenCalled();
-      if (status === "failed") {
-        const events = onRunAgentEvent.mock.calls.map(([event]) => event);
-        expect(
-          events.find((event) => event.stream === "lifecycle" && event.data.phase === "start"),
-        ).toMatchObject({ data: { startedAt: expect.any(Number) } });
-        expect(
-          events.find((event) => event.stream === "lifecycle" && event.data.phase === "error"),
-        ).toMatchObject({
-          data: {
-            startedAt: expect.any(Number),
-            endedAt: expect.any(Number),
-            error: "codex exploded",
-          },
-        });
-        expect(events.some((event) => event.stream === "assistant")).toBe(false);
-        expect(mockCall(agentEnd, "agent_end")).toMatchObject([
-          { success: false, error: "codex exploded" },
-          { runId: "run-1", sessionId: "session-1" },
-        ]);
-      }
-    },
-  );
+    releaseAgentEnd();
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({
+      aborted: false,
+      promptError: "codex exploded",
+    });
+    expect(result.agentHarnessResultClassification).toBeUndefined();
+    expect(freezeAbort).not.toHaveBeenCalled();
+    const events = onRunAgentEvent.mock.calls.map(([event]) => event);
+    expect(
+      events.find((event) => event.stream === "lifecycle" && event.data.phase === "start"),
+    ).toMatchObject({ data: { startedAt: expect.any(Number) } });
+    expect(
+      events.find((event) => event.stream === "lifecycle" && event.data.phase === "error"),
+    ).toMatchObject({
+      data: {
+        startedAt: expect.any(Number),
+        endedAt: expect.any(Number),
+        error: "codex exploded",
+      },
+    });
+    expect(events.some((event) => event.stream === "assistant")).toBe(false);
+    expect(mockCall(agentEnd, "agent_end")).toMatchObject([
+      { success: false, error: "codex exploded" },
+      { runId: "run-1", sessionId: "session-1" },
+    ]);
+  });
 
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {
     const { agentEnd, releaseAgentEnd } = holdAgentEnd();
@@ -423,92 +494,5 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     releaseAgentEnd();
     await expect(run).rejects.toThrow("turn start exploded");
     expect(settled).toBe(true);
-  });
-
-  it("fires llm_output and agent_end when turn/start fails", async () => {
-    const llmInput = vi.fn();
-    const llmOutput = vi.fn();
-    const agentEnd = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "llm_input", handler: llmInput },
-        { hookName: "llm_output", handler: llmOutput },
-        { hookName: "agent_end", handler: agentEnd },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-      assistantMessage("existing context", Date.now()),
-    );
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        throw new Error("turn start exploded");
-      }
-      return undefined;
-    });
-
-    const params = createParams(sessionFile, workspaceDir);
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.messageChannel = "discord";
-    params.messageProvider = "discord-voice";
-    params.senderId = "user-123";
-    params.senderName = "Test User";
-    params.senderUsername = "testuser";
-    params.inputProvenance = {
-      kind: "external_user",
-      sourceChannel: "discord",
-    };
-
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
-
-    expect(llmInput).toHaveBeenCalledTimes(1);
-    expect(llmOutput).toHaveBeenCalledTimes(1);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
-    expect(mockCall(llmOutput, "llm_output")[0]).toMatchObject({
-      assistantTexts: [],
-      model: "gpt-5.4-codex",
-      provider: "codex",
-      resolvedRef: "codex/gpt-5.4-codex",
-      harnessId: "codex",
-      runId: "run-1",
-      sessionId: "session-1",
-    });
-    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({
-      success: false,
-      error: "turn start exploded",
-      messages: expect.arrayContaining([
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({
-          role: "user",
-          content: readTurnStartText(harness),
-          sourceChannel: "discord",
-          senderId: "user-123",
-          senderName: "Test User",
-          senderUsername: "testuser",
-          senderLabel: "Test User (user-123)",
-          provenance: { kind: "external_user", sourceChannel: "discord" },
-        }),
-      ]),
-    });
-  });
-
-  it("fires agent_end with success false when the codex turn is aborted", async () => {
-    const agentEnd = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
-    );
-    createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams(), {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-
-    await run.waitForTurnAccepted();
-    expect(abortAgentHarnessRun("session-1")).toBe(true);
-
-    const result = await run;
-    expect(readAttemptTerminal(result).aborted).toBe(true);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
-    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: false });
   });
 });

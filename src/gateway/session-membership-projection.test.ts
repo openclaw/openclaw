@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMembershipFacts } from "../config/sessions/session-membership-facts.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
@@ -11,7 +16,12 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   ) => consume(targets.map(() => ({ readMembershipFacts: readFacts }))),
 }));
 
-afterEach(() => readFacts.mockReset());
+afterEach(() => {
+  readFacts.mockReset();
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
+const directories = useAutoCleanupTempDirTracker(afterEach);
 
 const target = {
   agentId: "main",
@@ -38,38 +48,143 @@ const snapshot = (
   ],
 });
 
-it("coalesces viewer preparation and never reinstates membership revoked during a worker read", async () => {
-  const deferred = createDeferredCore<SessionMembershipFacts>();
-  readFacts
-    .mockReturnValueOnce(deferred.promise)
-    .mockResolvedValueOnce(snapshot(target.identity, []));
-  const projection = createSessionMembershipProjection();
-  projection.updateTargets([target]);
-  try {
-    const viewers = Array.from({ length: 50 }, () => projection.prepare());
-    projection.invalidate({
-      storePath: target.storePath,
-      sessionKey,
-      facts: { kind: "member", sessionId: "shared-session", identityId: "alice", present: false },
+it.each([false, true])(
+  "publishes after a delayed reader on Linux without statx only for the admitted file (replaced=%s)",
+  async (replaced) => {
+    // Evaluate the real identity owner's process-stable Linux policy on every test host.
+    vi.resetModules();
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await import("../infra/sqlite-worker-identity.js");
+    } finally {
+      platform.mockRestore();
+    }
+    const { registerOpenClawAgentDatabaseIdentity, readOpenClawAgentDatabaseIdentity } =
+      await import("../state/openclaw-agent-db-identity.js");
+    const { readSessionMembershipFactsInDatabase } =
+      await import("../config/sessions/session-membership-facts.js");
+    const directory = directories.make("membership-no-statx-");
+    const filename = path.join(directory, "agent.sqlite");
+    using admitted = new DatabaseSync(filename);
+    admitted.exec("CREATE TABLE payload(value TEXT)");
+    const stat = fs.statSync;
+    let metadataRevision = 0n;
+    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      if (!args[1]?.bigint || String(args[0]) !== filename) {
+        return stat(...args);
+      }
+      const file =
+        args[1].throwIfNoEntry === false
+          ? stat(args[0], { bigint: true, throwIfNoEntry: false })
+          : stat(args[0], { bigint: true });
+      if (file) {
+        file.ctimeNs += metadataRevision;
+        file.birthtimeNs = file.ctimeNs;
+      }
+      return file;
     });
-    expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-    deferred.resolve(snapshot(target.identity, ["alice"]));
-    await Promise.all(viewers);
-    expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-    expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
-    expect(readFacts).toHaveBeenCalledTimes(2);
-    expect(projection.ready(target.filename, sessionKey)).toBe(true);
-    projection.invalidate({
-      storePath: target.filename,
-      sessionKey,
-      facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
+    syncBuiltinESMExports();
+    registerOpenClawAgentDatabaseIdentity(admitted);
+    const original = readOpenClawAgentDatabaseIdentity({ db: admitted });
+    const before = fs.statSync(filename, { bigint: true });
+    const pendingRead = createDeferredCore();
+    readFacts.mockImplementationOnce(async () => {
+      await pendingRead.promise;
+      using reader = new DatabaseSync(filename, { readOnly: true });
+      registerOpenClawAgentDatabaseIdentity(reader);
+      return readSessionMembershipFactsInDatabase({ agentId: "main", db: reader }, []);
     });
-    expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
-    expect(projection.needsPreparation).toBe(false);
-  } finally {
-    projection.dispose();
-  }
-});
+    const projection = createSessionMembershipProjection({
+      env: { OPENCLAW_STATE_DIR: directory },
+    });
+    projection.updateTargets([{ ...target, ...original, storePath: filename, filename }]);
+    const prepared = projection.prepare();
+    try {
+      // Hold the reader across the write/link retirement window that reclamation can open.
+      admitted.exec("INSERT INTO payload VALUES ('retained')");
+      admitted.close();
+      const link = path.join(directory, "retained.sqlite");
+      fs.linkSync(filename, link);
+      if (replaced) {
+        fs.unlinkSync(filename);
+        using replacement = new DatabaseSync(filename);
+        replacement.exec("CREATE TABLE payload(value TEXT)");
+      }
+      fs.unlinkSync(link);
+      metadataRevision = 1_000_000_000n;
+      const after = fs.statSync(filename, { bigint: true });
+      expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
+      expect(after.dev).toBe(before.dev);
+      expect(after.ino === before.ino).toBe(!replaced);
+      pendingRead.resolve();
+      if (replaced) {
+        await expect(prepared).rejects.toThrow(
+          "Session membership store changed before publication",
+        );
+      } else {
+        await prepared;
+        expect(projection.ready(filename, sessionKey)).toBe(true);
+        expect(projection.membership(filename, sessionKey)).toEqual([]);
+      }
+    } finally {
+      pendingRead.resolve();
+      projection.dispose();
+      await Promise.allSettled([prepared]);
+      vi.resetModules();
+    }
+  },
+);
+
+it.each(["member revocation", "owner reassignment"] as const)(
+  "coalesces viewer preparation without replaying stale membership after %s",
+  async (change) => {
+    const deferred = createDeferredCore<SessionMembershipFacts>();
+    readFacts.mockReturnValueOnce(deferred.promise);
+    if (change === "member revocation") {
+      readFacts.mockResolvedValueOnce(snapshot(target.identity, []));
+    }
+    const projection = createSessionMembershipProjection();
+    projection.updateTargets([target]);
+    try {
+      const viewers = Array.from({ length: 50 }, () => projection.prepare());
+      projection.invalidate({
+        storePath: change === "member revocation" ? target.storePath : target.filename,
+        sessionKey,
+        facts:
+          change === "member revocation"
+            ? { kind: "member", sessionId: "shared-session", identityId: "alice", present: false }
+            : {
+                kind: "owner",
+                sessionId: "shared-session",
+                lifecycleRevision: null,
+                owner: { actor: { type: "human", id: "bob" } },
+              },
+      });
+      if (change === "member revocation") {
+        expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
+      }
+      deferred.resolve(snapshot(target.identity, ["alice"]));
+      await Promise.all(viewers);
+      expect(projection.membership(target.storePath, sessionKey)).toEqual(
+        change === "member revocation" ? [] : ["alice"],
+      );
+      expect(readFacts).toHaveBeenCalledTimes(change === "member revocation" ? 2 : 1);
+      if (change === "member revocation") {
+        expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
+        expect(projection.ready(target.filename, sessionKey)).toBe(true);
+        projection.invalidate({
+          storePath: target.filename,
+          sessionKey,
+          facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
+        });
+        expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
+      }
+      expect(projection.needsPreparation).toBe(false);
+    } finally {
+      projection.dispose();
+    }
+  },
+);
 
 it.each(["replace", "remove", "dispose"] as const)(
   "rejects an in-flight snapshot after store %s",
@@ -223,30 +338,3 @@ it.each(["key", "store"] as const)(
     }
   },
 );
-
-it("does not turn an owner reassignment into a membership snapshot invalidation", async () => {
-  const pending = createDeferredCore<SessionMembershipFacts>();
-  readFacts.mockReturnValueOnce(pending.promise);
-  const projection = createSessionMembershipProjection();
-  projection.updateTargets([target]);
-  try {
-    const preparing = projection.prepare();
-    projection.invalidate({
-      storePath: target.filename,
-      sessionKey,
-      facts: {
-        kind: "owner",
-        sessionId: "shared-session",
-        lifecycleRevision: null,
-        owner: { actor: { type: "human", id: "bob" } },
-      },
-    });
-    pending.resolve(snapshot(target.identity, ["alice"]));
-    await preparing;
-    expect(projection.membership(target.storePath, sessionKey)).toEqual(["alice"]);
-    expect(projection.needsPreparation).toBe(false);
-    expect(readFacts).toHaveBeenCalledOnce();
-  } finally {
-    projection.dispose();
-  }
-});

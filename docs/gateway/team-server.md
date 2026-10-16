@@ -59,7 +59,7 @@ activation and verification. See [Keep operations recoverable](/gateway/team-ser
 A Gateway is one trust boundary. Roles and session ownership support
 collaboration; they do not isolate hostile users from each other. Keep untrusted
 code in sandboxes or remote workers. Use separate Gateways, OS users, or hosts
-for mutually untrusted teams. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+for mutually untrusted teams. See [Security trust model](/gateway/security/trust-model).
 
 ## 1. Install under one service account
 
@@ -253,6 +253,45 @@ For a release Gateway, keeping the observer default and assigning only a few
 release operators is useful. Role assignments are local to each Gateway;
 admission to the collaboration server does not grant release authority.
 
+### Invite guests
+
+To admit individual people outside the team for a limited time, use the
+[Visitor Access plugin](/plugins/reference/visitor-access), available from a
+source checkout. It manages one dedicated Access allow policy, adds each
+invited email or verified GitHub account to it, and ends Gateway access when
+the grant expires (14 days by default) or is revoked.
+
+Visitor Access requires `gateway.roles.default` to be a restricted guest role:
+
+```json5 validate=false
+// Inside gateway.roles
+default: "guest",
+definitions: {
+  guest: {
+    sessions: { others: "view" },
+    agents: ["assistant"],
+    scopes: ["operator.sessions.write"],
+    sandbox: "required",
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  },
+},
+```
+
+Everyone who resolves to the default role needs a current visitor grant. Before
+switching the default, assign every staff member an explicit role with
+`users.setRole` or `gateway.roles.assignments.byGithubLogin`. An administrator
+then asks the agent to call `visitor_invite` with a GitHub login or email; the
+guest signs in at the normal Team URL.
+
+Guests can create sandboxed sessions on the listed agents and publish draft
+pull requests from their own sessions through the shared GitHub account. They
+cannot merge through OpenClaw. Before inviting anyone, review the paths a
+required sandbox does not contain, listed under
+[Named operator roles](/gateway/operator-scopes#named-operator-roles), and
+[Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+for publication.
+
 ## 4. Synchronize people with verified GitHub identities
 
 Keep these responsibilities separate:
@@ -329,7 +368,9 @@ write permission to every repository. See
 [GitHub identity for agent tools](/gateway/config-tools/github-identity).
 
 An optional `gateway.controlUi.github.token` serves GitHub lookups and project
-discovery. Keep it in a dedicated SecretRef instead of accidentally selecting a
+discovery. For Enterprise, set `gateway.controlUi.github.host` to the selected
+`gateway.github.host` so the service credential is used only for that host.
+Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 
@@ -351,6 +392,17 @@ WebSocket, and transfer request. Prefer the Access service-token setup in
 A browser working while `openclaw connect` receives HTTP 302 means the machine
 request reached Access, not that node pairing succeeded. Keep machine credentials
 out of browser links and do not bypass Access for the whole Gateway.
+
+Trusted relay plugins can use [principal-bound remote ingress](/plugins/sdk-gateway-ingress)
+for a remote Control UI and MCP calls; [MCP Relay](/plugins/mcp-relay#team-gateways)
+uses it to bring a Team Gateway into ChatGPT and Codex. A Team grant belongs to the verified person
+who approves it in this Gateway's Control UI, never the shared owner or the
+loopback password. The plugin's consent flow should default to **Read + write**
+and offer **Full** within that person's current role. Full gives administrators
+admin access and does not elevate restricted roles. Both UI and RPC must share
+the same live grant; the plugin and relay own expiry and revocation. Ingress
+reconnects are tokenless and issue no reusable device token. This SDK capability
+does not itself install or configure a relay service.
 
 ## 6. Give widgets a separate sandbox origin
 

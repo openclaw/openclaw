@@ -1,9 +1,35 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 
 export class ChatMessageReveal {
   private highlight: { element: HTMLElement; timer: number } | null = null;
 
-  reveal(
+  complete(
+    root: ParentNode | null,
+    state: Pick<TranscriptOffsetState, "scrollCommand">,
+    virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+    messageRowKeysById: ReadonlyMap<string, string>,
+    rowIndexesByKey: ReadonlyMap<string, number>,
+  ): void {
+    const command = state.scrollCommand;
+    if (command?.target !== "message") {
+      return;
+    }
+    if (this.reveal(root, command, virtualizer)) {
+      state.scrollCommand = { behavior: command.behavior, target: "index" };
+      return;
+    }
+    // Expanding folded work can move the target beyond the initially mounted rows.
+    const rowKey = messageRowKeysById.get(command.messageId);
+    const rowIndex = rowKey ? rowIndexesByKey.get(rowKey) : undefined;
+    if (rowIndex !== undefined) {
+      // Native scroll and row mounts continue the reveal. Requesting another
+      // render here can starve the offset notification that changes the range.
+      virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    }
+  }
+
+  private reveal(
     root: ParentNode | null,
     { messageId, behavior }: { messageId: string; behavior: ScrollBehavior },
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,

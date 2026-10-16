@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import {
   buildTerminalEnv,
   createTerminalLaunchPolicy,
@@ -30,7 +31,7 @@ describe("createTerminalLaunchPolicy", () => {
 
     const configured = createTerminalLaunchPolicy({
       gateway: { terminal: { enabled: true } },
-      agents: { list: [{ id: "locked", sandbox: { mode: "all" } }] },
+      agents: { entries: { locked: { sandbox: { mode: "all" } } } },
     });
     expect(configured.resolve("ghost")).toEqual({
       ok: false,
@@ -92,7 +93,7 @@ describe("createTerminalLaunchPolicy", () => {
     const workspace = tempDirs.make("term-policy-agent-");
     const baseConfig: OpenClawConfig = {
       gateway: { terminal: { enabled: true } },
-      agents: { defaults: { workspace }, list: [{ id: "ops" }] },
+      agents: { defaults: { workspace }, entries: { ops: {} } },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
     policy.prepareConfig(
@@ -100,7 +101,7 @@ describe("createTerminalLaunchPolicy", () => {
         ...baseConfig,
         agents: {
           defaults: { workspace },
-          list: [{ id: "ops", sandbox: { mode: "all" } }],
+          entries: { ops: { sandbox: { mode: "all" } } },
         },
       },
       { restartPending: true },
@@ -116,7 +117,7 @@ describe("createTerminalLaunchPolicy", () => {
 
   it("keeps restart and commit restrictions isolated across agents", () => {
     const baseConfig: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
@@ -124,7 +125,7 @@ describe("createTerminalLaunchPolicy", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "alpha", sandbox: { mode: "all" } }, { id: "beta" }],
+          entries: { alpha: { sandbox: { mode: "all" } }, beta: {} },
         },
       },
       { restartPending: true },
@@ -133,7 +134,7 @@ describe("createTerminalLaunchPolicy", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "alpha" }, { id: "beta", sandbox: { mode: "all" } }],
+          entries: { alpha: {}, beta: { sandbox: { mode: "all" } } },
         },
       },
       { restartPending: false },
@@ -499,7 +500,48 @@ describe("buildTerminalEnv", () => {
     expect(env.PATH).toBe("/usr/bin");
     expect(env.FOO).toBe("bar");
     expect(env.TERM).toBe("xterm-256color");
+    expect(env.COLORTERM).toBe("truecolor");
     expect(env.OPENCLAW_TERMINAL).toBe("1");
+  });
+
+  it.each(["truecolor", "24bit", ""])("preserves explicit COLORTERM=%j", (colorterm) => {
+    expect(buildTerminalEnv({ COLORTERM: colorterm }).COLORTERM).toBe(colorterm);
+  });
+
+  it.each(["COLORTERM", "ColorTerm", "colorterm"])(
+    "preserves explicit Windows %s through catalog merging",
+    (key) => {
+      for (const value of ["truecolor", "24bit", "ansi", ""]) {
+        const baseEnv = { [key]: value };
+        const env = buildTerminalEnv(baseEnv, "win32");
+        const merged = mergeProcessEnv([env], "win32");
+        expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe(value);
+        expect(env[key]).toBe(value);
+        expect(baseEnv).toEqual({ [key]: value });
+      }
+    },
+  );
+
+  it("keeps platform key semantics and catalog override precedence", () => {
+    expect(buildTerminalEnv({}, "win32").COLORTERM).toBe("truecolor");
+    expect(buildTerminalEnv({ colorterm: "ansi" }, "linux")).toMatchObject({
+      COLORTERM: "truecolor",
+      colorterm: "ansi",
+    });
+    const env = buildTerminalEnv({ ColorTerm: "24bit", colorterm: "ansi" }, "win32");
+    expect(resolveEnvironmentValue(env, "COLORTERM", "win32")).toBe("24bit");
+    const merged = mergeProcessEnv([env, { colorterm: "" }], "win32");
+    expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe("");
+  });
+
+  it("preserves color controls without mutating the base env", () => {
+    const baseEnv = { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined };
+    expect(buildTerminalEnv(baseEnv)).toMatchObject({
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+      COLORTERM: "truecolor",
+    });
+    expect(baseEnv).toEqual({ FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined });
   });
 
   it("preserves an existing TERM", () => {

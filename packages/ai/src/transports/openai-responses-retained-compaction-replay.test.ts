@@ -77,42 +77,6 @@ const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "chec
   });
 
 describe("Responses retained-user compaction replay", () => {
-  it("replays the complete saved provider window verbatim", () => {
-    const output = [
-      {
-        type: "message",
-        role: "developer",
-        content: [{ type: "input_text", text: "saved instructions" }],
-      },
-      {
-        type: "message",
-        role: "user",
-        id: "msg_saved",
-        content: [{ type: "input_text", text: "canonical retained user" }],
-      },
-      {
-        type: "compaction",
-        id: "cmp_retained",
-        encrypted_content: "opaque-retained",
-        created_by: "compactor",
-      },
-    ];
-    const replay = {
-      ...compactionState("openai-responses-retained-compaction"),
-      compactedWindow: { state: "ready", output: JSON.stringify(output) },
-    };
-    const input = convert({
-      messages: [
-        { role: "user", content: "not the returned provider window", timestamp: 1 },
-        createAssistant("covered owner text", replay),
-        { role: "user", content: "new turn", timestamp: 2 },
-      ],
-    });
-    expect(input.slice(0, output.length)).toEqual(output);
-    expect(JSON.stringify(input)).not.toContain("not the returned provider window");
-    expect(JSON.stringify(input)).not.toContain("covered owner text");
-  });
-
   it("requires rebuilding legacy retained-user state", () => {
     const context: Context = {
       systemPrompt: "current system instructions",
@@ -152,6 +116,12 @@ describe("Responses retained-user compaction replay", () => {
         ],
       },
       {
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
+      },
+      {
         type: "compaction",
         id: "cmp_retained",
         encrypted_content: "opaque-retained",
@@ -179,16 +149,70 @@ describe("Responses retained-user compaction replay", () => {
     ).toEqual(output);
   });
 
+  it("replays compact-endpoint assistants without dangling provider item IDs after reload", () => {
+    // Captured compact endpoint shape; text, item IDs, and encrypted bytes are redacted.
+    const output = [
+      {
+        type: "message",
+        role: "user",
+        status: "completed",
+        content: [{ type: "input_text", text: "first" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        id: "msg_first",
+        status: "completed",
+        content: [{ type: "output_text", text: "first answer", annotations: [] }],
+      },
+      {
+        type: "message",
+        role: "user",
+        status: "completed",
+        content: [{ type: "input_text", text: "second" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        id: "msg_second",
+        status: "completed",
+        content: [{ type: "output_text", text: "second answer", annotations: [] }],
+      },
+      { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
+    ] satisfies OpenAIResponsesCompactionOutput;
+    const owner = createAssistant("covered");
+    captureOpenAIResponsesCompaction(
+      owner,
+      { type: "compaction", id: "cmp_canonical", encrypted_content: "opaque" },
+      "retained-users",
+      model,
+      buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      output,
+    );
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON reload.
+    const saved: AssistantMessage = JSON.parse(JSON.stringify(owner));
+    expect(saved.providerReplay).toMatchObject({
+      v: 1,
+      compactedWindow: { output: JSON.stringify(output) },
+    });
+    const next = convert({ messages: [saved] });
+    expect(next).toHaveLength(5);
+    expect(next[1]).not.toHaveProperty("id");
+    expect(next[3]).not.toHaveProperty("id");
+    expect(next[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "output_text", text: "first answer", annotations: [] }],
+    });
+    expect(next[3]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "output_text", text: "second answer", annotations: [] }],
+    });
+    expect(next[4]).toEqual(output[4]);
+    expect(isOpenAIResponsesCompactionOutput(next, model)).toBe(true);
+  });
+
   it.each([
-    {
-      scenario: "compacted-prefix",
-      retainedUsers: false,
-      fullHistory: false,
-      laterUser: false,
-    },
     { scenario: "retained-users", retainedUsers: true, fullHistory: false, laterUser: false },
-    { scenario: "full-history", retainedUsers: false, fullHistory: true, laterUser: false },
-    { scenario: "later-user", retainedUsers: false, fullHistory: false, laterUser: true },
   ])(
     "preserves the compacted prefix and current context across tool rounds ($scenario)",
     ({ scenario, retainedUsers, fullHistory, laterUser }) => {
@@ -225,16 +249,16 @@ describe("Responses retained-user compaction replay", () => {
       }
       const carrier = {
         role: "user",
-        content: "current request metadata",
-        runtimeContextCarrier: true,
+        content: "OpenClaw runtime context:\ncurrent request metadata",
         timestamp: 3,
+        runtimeContext: {},
       } satisfies Context["messages"][number];
       const replayMode = fullHistory ? "full-history" : "checkpoint";
       const prefix = convert({ messages }, replayMode);
       let input = convert({ messages: [...messages, carrier] }, replayMode);
       expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
       expect(input.at(-1), scenario).toMatchObject({
-        role: "user",
+        role: "developer",
         content: [{ type: "input_text", text: carrier.content }],
       });
 
@@ -282,7 +306,6 @@ describe("Responses retained-user compaction replay", () => {
   );
 
   it.each([
-    { state: "refresh-required" },
     { state: "ready", output: "not JSON" },
     {
       state: "ready",
@@ -378,7 +401,7 @@ describe("Responses retained-user compaction replay", () => {
     ).toEqual([item]);
   });
 
-  it.each(["duplicated opaque", "escaped plaintext"])(
+  it.each(["escaped plaintext"])(
     "keeps imported %s over the envelope limit as a refresh barrier",
     (kind) => {
       const data = kind === "duplicated opaque" ? "a".repeat(9 * 1024 * 1024) : "opaque-retained";

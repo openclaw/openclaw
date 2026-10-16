@@ -6,20 +6,18 @@ import { buildFeishuConversationId, parseFeishuConversationId } from "./conversa
 import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 
-function resolveFeishuRequesterConversation(params: {
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-  requesterSessionKey?: string;
-}): {
+function resolveFeishuRequesterConversation(
+  manager: NonNullable<ReturnType<typeof getFeishuThreadBindingManager>>,
+  params: {
+    to?: string;
+    threadId?: string | number;
+    requesterSessionKey?: string;
+  },
+): {
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const manager = getFeishuThreadBindingManager(params.accountId);
-  if (!manager) {
-    return null;
-  }
   const rawTo = params.to?.trim();
   const withoutProviderPrefix = rawTo ? stripFeishuProviderPrefix(rawTo) : "";
   const normalizedTarget = rawTo ? normalizeFeishuTarget(rawTo) : null;
@@ -118,30 +116,22 @@ function resolveFeishuDeliveryOrigin(params: {
 } {
   const deliveryTo = params.deliveryTo?.trim();
   const deliveryThreadId = params.deliveryThreadId?.trim();
-  if (deliveryTo) {
-    return {
-      channel: "feishu",
-      accountId: params.accountId,
-      to: deliveryTo,
-      ...(deliveryThreadId ? { threadId: deliveryThreadId } : {}),
-    };
-  }
-  const parsed = parseFeishuConversationId({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (parsed?.topicId) {
-    return {
-      channel: "feishu",
-      accountId: params.accountId,
-      to: `chat:${params.parentConversationId?.trim() || parsed.chatId}`,
-      threadId: parsed.topicId,
-    };
-  }
+  const parsed = deliveryTo
+    ? null
+    : parseFeishuConversationId({
+        conversationId: params.conversationId,
+        parentConversationId: params.parentConversationId,
+      });
+  const threadId = deliveryTo ? deliveryThreadId : parsed?.topicId;
   return {
     channel: "feishu",
     accountId: params.accountId,
-    to: `user:${params.conversationId}`,
+    to:
+      deliveryTo ||
+      (parsed?.topicId
+        ? `chat:${params.parentConversationId?.trim() || parsed.chatId}`
+        : `user:${params.conversationId}`),
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -163,8 +153,7 @@ function resolveMatchingChildBinding(params: {
     return null;
   }
 
-  const requesterConversation = resolveFeishuRequesterConversation({
-    accountId: manager.accountId,
+  const requesterConversation = resolveFeishuRequesterConversation(manager, {
     to: params.requesterOrigin?.to,
     threadId: params.requesterOrigin?.threadId,
     requesterSessionKey: params.requesterSessionKey,
@@ -202,20 +191,7 @@ type FeishuSubagentEndedEvent = {
   targetSessionKey: string;
 };
 
-type FeishuSubagentDeliveryTargetResult =
-  | {
-      origin: {
-        channel: "feishu";
-        accountId?: string;
-        to?: string;
-        threadId?: string | number;
-      };
-    }
-  | undefined;
-
-export function handleFeishuSubagentDeliveryTarget(
-  event: FeishuSubagentDeliveryTargetEvent,
-): FeishuSubagentDeliveryTargetResult {
+export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDeliveryTargetEvent) {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }
@@ -228,10 +204,7 @@ export function handleFeishuSubagentDeliveryTarget(
     accountId: event.requesterOrigin?.accountId,
     childSessionKey: event.childSessionKey,
     requesterSessionKey: event.requesterSessionKey,
-    requesterOrigin: {
-      to: event.requesterOrigin?.to,
-      threadId: event.requesterOrigin?.threadId,
-    },
+    requesterOrigin: event.requesterOrigin,
   });
   if (!binding) {
     return undefined;

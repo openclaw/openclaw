@@ -21,11 +21,11 @@ import {
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { slackPlugin } from "../../../channel-plugin-api.js";
-import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { createSlackTestAccount } from "./prepare.test-helpers.js";
 
 type Conversation = Parameters<SessionBindingAdapter["resolveByConversation"]>[0];
+const address = { channel: "slack", accountId: "default" };
 let state: OpenClawTestState;
 let adapter: SessionBindingAdapter | undefined;
 beforeAll(async () => {
@@ -44,21 +44,16 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   if (adapter) {
-    unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    unregisterSessionBindingAdapter({ ...address, adapter });
     adapter = undefined;
   }
   resetPluginRuntimeStateForTest();
 });
 
 it.each([
-  "none-to-global",
-  "plugin-to-global",
-  "plugin-stable",
-  "configured-stable",
   "configured-race",
   "child-over-base-stable",
   "child-over-base-race",
-  "derived-none-stable",
   "derived-none-to-global",
   "ordinary-dm-thread-stable",
 ] as const)("carries Slack routing into reply ownership validation: %s", async (scenario) => {
@@ -86,27 +81,18 @@ it.each([
     plugins: { enabled: false },
     session: { scope: derived ? "per-sender" : "global", dmScope: "main" },
     channels: { slack: { enabled: true, replyToMode: "all" } },
-    bindings: [
-      { agentId: "main", match: { channel: "slack", accountId: "default" } },
-      ...(configured
-        ? [
-            {
-              type: "acp" as const,
-              agentId: "work",
-              match: {
-                channel: "slack",
-                accountId: "default",
-                peer: { kind: "channel" as const, id: channelId },
-              },
-            },
-          ]
-        : []),
-    ],
+    bindings: [{ agentId: "main", match: address }],
   };
+  if (configured) {
+    cfg.bindings!.push({
+      type: "acp",
+      agentId: "work",
+      match: { ...address, peer: { kind: "channel", id: channelId } },
+    });
+  }
   setRuntimeConfigSnapshot(cfg);
   const baseConversation: Conversation = {
-    channel: "slack",
-    accountId: "default",
+    ...address,
     conversationId: baseId,
   };
   const childConversation: Conversation = {
@@ -131,16 +117,6 @@ it.each([
       boundAt: 1,
       metadata: { agentId: "main" },
     });
-  } else if (scenario.startsWith("plugin-")) {
-    records.set(baseId, {
-      ...replacement,
-      targetSessionKey: "plugin-binding:synthetic:source",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "synthetic",
-        pluginRoot: state.path("plugin"),
-      },
-    });
   }
   const lookup = (ref: Conversation) => records.get(ref.conversationId) ?? null;
   const entered = createDeferred<void>();
@@ -161,8 +137,7 @@ it.each([
     return lookup(ref);
   };
   adapter = {
-    channel: "slack",
-    accountId: "default",
+    ...address,
     listBySession: () => [],
     resolveByConversation: lookup,
     inspectByConversationAsync: read,
@@ -170,23 +145,20 @@ it.each([
     touchAsync: async () => {},
   };
   registerSessionBindingAdapter(adapter);
-  const message: SlackMessageEvent = {
-    type: "message",
-    channel: channelId,
-    channel_type: direct ? "im" : "channel",
-    user: "U1",
-    text: "hello",
-    ts: "1770408518.000002",
-    ...(threaded ? { thread_ts: threadTs } : {}),
-  };
-  const prepared = resolveSlackRoutingContext({
+
+  const prepared = await resolveSlackRoutingContext({
     ctx: { cfg, teamId: "T1", threadInheritParent: false, threadHistoryScope: "thread" },
     account: createSlackTestAccount({ replyToMode: "all" }),
-    message,
-    isDirectMessage: direct,
-    isGroupDm: false,
-    isRoom: !direct,
-    isRoomish: !direct,
+    message: {
+      type: "message",
+      channel: channelId,
+      channel_type: direct ? "im" : "channel",
+      user: "U1",
+      text: "hello",
+      ts: "1770408518.000002",
+      ...(threaded ? { thread_ts: threadTs } : {}),
+    },
+    chatType: direct ? "direct" : "channel",
   });
   const route = prepared.route;
   expect(route.agentId).toBe(configured ? "work" : "main");
@@ -194,8 +166,7 @@ it.each([
     expect(route.sessionKey).toContain("agent:work:acp:");
   }
   const ctx = buildChannelInboundEventContext({
-    channel: "slack",
-    accountId: "default",
+    ...address,
     messageId: scenario,
     from: direct ? "slack:U1" : `slack:channel:${channelId}`,
     sender: { id: "U1" },

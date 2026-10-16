@@ -12,8 +12,6 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
 import {
-  hasIntentionalSilentAgentPayload,
-  hasVisibleAgentPayload,
   isMeaningfulTranscriptMessage,
   isTerminalSilentAssistantMessage,
 } from "./message-visibility.js";
@@ -295,7 +293,7 @@ describe("queued delivery evidence", () => {
     ).toBe(false);
   });
 
-  it("credits an ambiguous single-payload send only when requested", () => {
+  it("does not credit an ambiguous single-payload send as delivered", () => {
     const result = {
       payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
       deliveryStatus: {
@@ -303,31 +301,11 @@ describe("queued delivery evidence", () => {
         payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
       },
     };
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, { includeSuppressedOutcomes: false }),
-    ).toEqual([]);
-    expect(
-      collectAutomaticDeliveredMediaUrls(result, {
-        includeAmbiguousSinglePayloadFailure: true,
-        includeSuppressedOutcomes: false,
-      }),
-    ).toEqual(["/tmp/proof.png"]);
+    expect(collectAutomaticDeliveredMediaUrls(result)).toEqual([]);
   });
 });
 
 describe("agent reply visibility", () => {
-  it("distinguishes visible replies from intentional silent payloads", () => {
-    const result = { payloads: [{ text: "NO_REPLY" }] };
-    expect(hasVisibleAgentPayload(result)).toBe(true);
-    expect(hasVisibleAgentPayload(result, { includeSilentReplyPayloads: false })).toBe(false);
-    expect(hasIntentionalSilentAgentPayload(result)).toBe(true);
-    expect(
-      hasIntentionalSilentAgentPayload({
-        payloads: [{ text: "NO_REPLY", mediaUrls: ["/tmp/proof.png"] }],
-      }),
-    ).toBe(false);
-  });
-
   it("classifies terminal silent transcript messages and meaningful tails", () => {
     expect(
       isTerminalSilentAssistantMessage({

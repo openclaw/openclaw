@@ -16,7 +16,7 @@ import mattermostEntry from "../../extensions/mattermost/index.js";
 import * as bootstrapRegistry from "../../src/channels/plugins/bootstrap-registry.js";
 import { importBundledChannelContractSourceArtifact } from "../../src/channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { getDeliveryQueueEntryStatus } from "../../src/infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../../src/infra/delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "../../src/infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../src/infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../src/infra/outbound/delivery-queue-media-staging.js";

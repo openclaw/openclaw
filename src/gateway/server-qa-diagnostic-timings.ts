@@ -4,7 +4,10 @@ const MIN_QA_DIAGNOSTIC_ABORT_MS = 30_000;
 export function resolveQaDiagnosticHeartbeatTimings(
   env: NodeJS.ProcessEnv,
 ): { stuckSessionWarnMs: number; stuckSessionAbortMs: number } | undefined {
-  if (!env.OPENCLAW_QA_PARENT_PID) {
+  if (
+    env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1" ||
+    env.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() !== "stdin"
+  ) {
     return undefined;
   }
   const raw = env[QA_DIAGNOSTIC_ABORT_MS_ENV]?.trim();

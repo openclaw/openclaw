@@ -3,7 +3,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
 const {
@@ -60,17 +60,6 @@ describe("litellm image generation provider", () => {
     postMultipartRequestMock.mockReset();
   });
 
-  it("defaults to the loopback proxy and allows private network for localhost", async () => {
-    postJsonRequestMock.mockImplementation(pngResponse);
-
-    await generate();
-
-    expect(mockObjectArg(postJsonRequestMock)).toMatchObject({
-      url: "http://localhost:4000/images/generations",
-      allowPrivateNetwork: true,
-    });
-  });
-
   it("forwards count and size overrides on generation requests", async () => {
     postJsonRequestMock.mockImplementation(pngResponse);
 
@@ -82,6 +71,7 @@ describe("litellm image generation provider", () => {
     });
 
     expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/generations");
+    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
     expect(mockObjectArg(postJsonRequestMock).body).toEqual({
       model: "dall-e-3",
       prompt: "two landscape variants",
@@ -128,22 +118,30 @@ describe("litellm image generation provider", () => {
 
     const form = mockObjectArg(postMultipartRequestMock).body as FormData;
     // Sending both part names is an error.
-    expect(form.getAll("image[]")).toHaveLength(2);
     expect(form.getAll("image")).toHaveLength(0);
-  });
-
-  it("throws a clear error when the API key is missing", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
-
-    await expect(generate()).rejects.toThrow("LiteLLM API key missing");
+    const images = form.getAll("image[]");
+    expect(
+      await Promise.all(
+        images.map(async (image) => {
+          assert(image instanceof Blob);
+          return { bytes: Buffer.from(await image.arrayBuffer()), mimeType: image.type };
+        }),
+      ),
+    ).toEqual([
+      { bytes: Buffer.from("first"), mimeType: "image/png" },
+      { bytes: Buffer.from("second"), mimeType: "image/jpeg" },
+    ]);
   });
 
   it("auto-allows private network for loopback-style baseUrls", async () => {
     const cases = [
       "http://127.255.255.254:4000",
       "http://[::1]:4000",
+      "http://[0:0:0:0:0:0:0:1]:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
+      "https://LOCALHOST:4000",
+      "http://proxy.localhost:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);
@@ -159,6 +157,7 @@ describe("litellm image generation provider", () => {
       "http://192.168.5.10:4000",
       "http://printer.local:4000",
       "http://127.evil.com:4000",
+      "http://[::ffff:127.0.0.1]:4000",
     ] as const;
     for (const baseUrl of cases) {
       await generateAt(baseUrl);

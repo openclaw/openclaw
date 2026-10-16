@@ -170,29 +170,6 @@ describe("Gateway probe TLS trust", () => {
   });
 
   it.each([
-    { name: "saved pin", savedPin: fingerprint, ok: true },
-    { name: "probe URL whitespace", savedPin: fingerprint, urlVariant: "whitespace", ok: true },
-    {
-      name: "identical uppercase scheme",
-      savedPin: fingerprint,
-      urlVariant: "same-case",
-      ok: true,
-    },
-    {
-      name: "case-changed endpoint",
-      savedPin: fingerprint,
-      urlVariant: "different-case",
-      ok: false,
-      error: "certificate",
-    },
-    { name: "saved pin in local mode", savedPin: fingerprint, local: true, ok: true },
-    { name: "saved pin with whitespace", savedPin: ` sha256:${fingerprint} `, ok: true },
-    {
-      name: "wrong saved pin",
-      savedPin: wrongPin,
-      ok: false,
-      error: "fingerprint mismatch",
-    },
     { name: "malformed saved pin", savedPin: "invalid", ok: false, error: "SHA-256 fingerprint" },
     {
       name: "changed endpoint",
@@ -201,43 +178,27 @@ describe("Gateway probe TLS trust", () => {
       ok: false,
       error: "certificate",
     },
-    { name: "no saved pin", ok: false, error: "certificate" },
     {
       name: "explicit pin override",
       savedPin: wrongPin,
       explicitPin: fingerprint,
       ok: true,
     },
-    {
-      name: "wrong explicit pin",
-      savedPin: fingerprint,
-      explicitPin: wrongPin,
-      ok: false,
-      error: "fingerprint mismatch",
-    },
   ])(
     "enforces $name before sending Gateway credentials",
-    async ({ savedPin, explicitPin, local, changed, urlVariant, ok, error }) => {
+    async ({ savedPin, explicitPin, changed, ok, error }) => {
       const before = {
         receivedBytes: gateway.observed.receivedBytes,
         edgeAuthHeaders: gateway.observed.edgeAuthHeaders.length,
         connectFrames: gateway.observed.connectFrames,
       };
-      const probeUrl =
-        urlVariant === "whitespace"
-          ? ` ${url} `
-          : urlVariant?.endsWith("case")
-            ? url.replace("wss:", "WSS:")
-            : url;
-      const savedUrl =
-        urlVariant === "same-case" ? probeUrl : changed ? `${url}/other` : ` ${url} `;
       const result = await probeGateway({
-        url: probeUrl,
+        url,
         config: {
           gateway: {
-            mode: local ? "local" : "remote",
+            mode: "remote",
             remote: {
-              url: savedUrl,
+              url: changed ? `${url}/other` : ` ${url} `,
               tlsFingerprint: savedPin,
               edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
             },

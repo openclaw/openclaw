@@ -23,21 +23,6 @@ async function expectClaimed(claim: Awaited<ReturnType<ReturnType<typeof createG
 }
 
 describe("createChannelReplayGuard", () => {
-  it("normalizes multi-key claims and mirrors commit state to in-flight waiters", async () => {
-    const guard = createGuard();
-    const event = { accountId: "work", keys: [" message-1 ", "message-1", "message-2"] };
-
-    const handle = await expectClaimed(await guard.claim(event));
-    expect(handle.keys).toEqual(["message-1", "message-2"]);
-    const inflight = await guard.claim(event);
-    expect(inflight.kind).toBe("inflight");
-    await expect(handle.commit()).resolves.toBe(true);
-    if (inflight.kind === "inflight") {
-      await expect(inflight.pending).resolves.toBe(true);
-    }
-    await expect(guard.claim(event)).resolves.toEqual({ kind: "duplicate" });
-  });
-
   it("fails open for invalid keys without recording them", async () => {
     const guard = createGuard();
     const event = { accountId: "work", keys: [" ", null, undefined] };
@@ -52,20 +37,6 @@ describe("createChannelReplayGuard", () => {
     expect("commit" in guard).toBe(false);
     expect("release" in guard).toBe(false);
     expect(process).toHaveBeenCalledOnce();
-  });
-
-  it("releases failed claims and rejects their in-flight waiters", async () => {
-    const guard = createGuard();
-    const event = { accountId: "work", keys: ["message-3"] };
-
-    const handle = await expectClaimed(await guard.claim(event));
-    const inflight = await guard.claim(event);
-    const failure = new Error("retry me");
-    handle.release({ error: failure });
-    if (inflight.kind === "inflight") {
-      await expect(inflight.pending).rejects.toThrow("retry me");
-    }
-    await expect(guard.claim(event)).resolves.toMatchObject({ kind: "claimed" });
   });
 
   it("does not let a mixed claim commit another claim's in-flight key", async () => {

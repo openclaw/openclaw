@@ -1,14 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core";
 import { patchSettings, type UiSettings } from "../../app/settings.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import { updateSidebarSessionLayout } from "./sidebar-layout-persistence.ts";
-import { openSlot, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
+import { openSlot, type SidebarLayout } from "./sidebar-layout.ts";
 
 const MIGRATION_MARKER_KEY = "openclaw.chat.sidePanel.legacyDockVisibility.v1";
-
-const LEGACY_DOCKS = [
-  { storageKey: "openclaw.browser.panel.v1", slot: "browser" },
-  { storageKey: "openclaw.desktopPanel", slot: "desktop" },
-] as const satisfies ReadonlyArray<{ storageKey: string; slot: SidebarSlotId }>;
 
 function legacyDockWasOpen(storage: Storage, storageKey: string): boolean {
   try {
@@ -39,14 +35,6 @@ function migrationIsComplete(storage: Storage): boolean {
   }
 }
 
-function defaultStorage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Move the shipped global Browser/Desktop visibility into the current session
  * once. A marker prevents that global preference from opening unrelated future
@@ -60,7 +48,7 @@ export function migrateLegacyDockVisibility(params: {
   storage?: Storage | null;
 }): UiSettings {
   const sessionKey = params.sessionKey.trim();
-  const storage = params.storage === undefined ? defaultStorage() : params.storage;
+  const storage = params.storage === undefined ? getSafeLocalStorage() : params.storage;
   if (!sessionKey || !storage || migrationIsComplete(storage)) {
     return params.settings;
   }
@@ -68,14 +56,13 @@ export function migrateLegacyDockVisibility(params: {
     markMigrationComplete(storage);
     return params.settings;
   }
-  const available = new Set<SidebarSlotId>([
-    ...(params.browserAvailable ? (["browser"] as const) : []),
-    ...(params.desktopAvailable ? (["desktop"] as const) : []),
-  ]);
   let layout: SidebarLayout = { columns: [] };
-  for (const legacy of LEGACY_DOCKS) {
-    if (available.has(legacy.slot) && legacyDockWasOpen(storage, legacy.storageKey)) {
-      layout = openSlot(layout, legacy.slot);
+  for (const [storageKey, slot, available] of [
+    ["openclaw.browser.panel.v1", "browser", params.browserAvailable],
+    ["openclaw.desktopPanel", "desktop", params.desktopAvailable],
+  ] as const) {
+    if (available && legacyDockWasOpen(storage, storageKey)) {
+      layout = openSlot(layout, slot);
     }
   }
   const settings =

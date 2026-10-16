@@ -43,7 +43,7 @@ function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
   );
   return {
     workspace,
-    cfg: { agents: { list: [{ id: "main", workspace }] } },
+    cfg: { agents: { entries: { main: { workspace } } } },
   };
 }
 
@@ -96,70 +96,50 @@ describe("local agent avatar files", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("retains the admitted inode when the path is replaced during the read", () => {
-    const { workspace } = createWorkspace();
-    const avatarPath = path.join(workspace, "avatar.png");
-    const replacement = path.join(workspace, "replacement.png");
-    fs.writeFileSync(avatarPath, "original");
-    fs.writeFileSync(replacement, "replacement");
-    const readSync = fs.readSync;
-    const read = vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
-      fs.renameSync(replacement, avatarPath);
-      return Reflect.apply(readSync, fs, args);
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    const result = readLocalAgentAvatarSnapshot({
-      workspaceDir: workspace,
-      source: "avatar.png",
-      readBody: true,
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      file: { body: Uint8Array.from(Buffer.from("original")) },
-    });
-    expect(read).toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("bounds growth after admission and closes the pinned descriptor", () => {
-    const { workspace } = createWorkspace();
-    const avatarPath = path.join(workspace, "avatar.png");
-    fs.writeFileSync(avatarPath, "avatar");
-    const readSync = fs.readSync;
-    let readFd: number | undefined;
-    vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
-      readFd = args[0];
-      fs.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
-      return Reflect.apply(readSync, fs, args);
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    expect(
-      readLocalAgentAvatarSnapshot({
+  it.each(["replacement", "growth", "failure"] as const)(
+    "keeps reads pinned and closes the descriptor after %s",
+    (change) => {
+      const { workspace } = createWorkspace();
+      const avatarPath = path.join(workspace, "avatar.png");
+      const replacement = path.join(workspace, "replacement.png");
+      fs.writeFileSync(avatarPath, "original");
+      fs.writeFileSync(replacement, "replacement");
+      const readSync = fs.readSync;
+      let readFd: number | undefined;
+      const read = vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
+        readFd = args[0];
+        if (change === "failure") {
+          throw new Error("read failed");
+        }
+        if (change === "replacement") {
+          fs.renameSync(replacement, avatarPath);
+        } else {
+          fs.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+        }
+        return Reflect.apply(readSync, fs, args);
+      });
+      const close = vi.spyOn(fs, "closeSync");
+      const result = readLocalAgentAvatarSnapshot({
         workspaceDir: workspace,
         source: "avatar.png",
         readBody: true,
-      }),
-    ).toEqual({ ok: false, reason: "unreadable" });
-    expect(readFd).toBeTypeOf("number");
-    expect(close.mock.calls.filter(([fd]) => fd === readFd)).toHaveLength(1);
-  });
-
-  it("closes the descriptor after a failed read", () => {
-    const { workspace } = createWorkspace();
-    fs.writeFileSync(path.join(workspace, "avatar.png"), "avatar");
-    vi.spyOn(fs, "readSync").mockImplementationOnce(() => {
-      throw new Error("read failed");
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    expect(
-      readLocalAgentAvatarSnapshot({
-        workspaceDir: workspace,
-        source: "avatar.png",
-        readBody: true,
-      }),
-    ).toEqual({ ok: false, reason: "unreadable" });
-    expect(close).toHaveBeenCalledOnce();
-  });
+      });
+      if (change === "replacement") {
+        expect(result).toMatchObject({
+          ok: true,
+          file: { body: Uint8Array.from(Buffer.from("original")) },
+        });
+      } else {
+        expect(result).toEqual({ ok: false, reason: "unreadable" });
+      }
+      expect(read).toHaveBeenCalled();
+      expect(readFd).toBeTypeOf("number");
+      expect(close.mock.calls.filter(([fd]) => fd === readFd)).toHaveLength(1);
+      if (change !== "growth") {
+        expect(close).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("rejects symlink escapes, hardlinks, oversized files, and unsupported extensions", () => {
     const { workspace } = createWorkspace();
@@ -213,7 +193,7 @@ describe("local agent avatar files", () => {
       await pending;
     }
     // Reinstalling the pending image must evict the oldest of the eight retained 2 MiB images.
-    expect(await prepare(sources[1]!)).not.toBe(oldest);
+    expect(Object.is(await prepare(sources[1]!), oldest)).toBe(false);
   });
 
   it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements, and removal", async () => {
@@ -223,15 +203,20 @@ describe("local agent avatar files", () => {
     const unchangedMtime = new Date("2024-01-01T00:00:00Z");
     fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
     const originalStat = fs.statSync(avatarPath);
+    const originalIdentity = fs.statSync(avatarPath, { bigint: true });
     const originalFstatSync = fs.fstatSync;
-    // Control the ctime tick without depending on the filesystem's timestamp resolution.
-    let ctimeMs = originalStat.ctimeMs;
+    // fs-safe derives numeric metadata from the pinned descriptor's bigint observation.
+    let ctimeMs = unchangedMtime.getTime();
     vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
-      const stat = originalFstatSync(fd, options);
-      if (stat.dev === originalStat.dev && stat.ino === originalStat.ino) {
-        stat.ctimeMs = ctimeMs;
+      if (options?.bigint) {
+        const stat = originalFstatSync(fd, { bigint: true });
+        if (stat.dev === originalIdentity.dev && stat.ino === originalIdentity.ino) {
+          stat.ctimeNs = BigInt(ctimeMs) * 1_000_000n;
+          stat.ctimeMs = BigInt(ctimeMs);
+        }
+        return stat;
       }
-      return stat;
+      return originalFstatSync(fd, options);
     });
     const params = { cfg, agentId: "main", source: "avatar.png", readBody: true };
     const [first, duplicate] = await Promise.all([
@@ -251,8 +236,8 @@ describe("local agent avatar files", () => {
         body: Buffer.from("modified"),
         stat: {
           ctimeMs,
-          dev: originalStat.dev,
-          ino: originalStat.ino,
+          dev: String(originalStat.dev),
+          ino: String(originalStat.ino),
           mtimeMs: originalStat.mtimeMs,
           size: originalStat.size,
         },

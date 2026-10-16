@@ -80,6 +80,10 @@ that same queue. Messages missed while disconnected cannot be recovered, and
 pending DMs from an earlier connection are discarded because IRC nicknames can
 change owners.
 
+A dropped network path can leave the socket open with nothing arriving. When the
+server has sent nothing for two minutes, OpenClaw sends it a `PING`; after four
+minutes of silence it closes the connection and reconnects.
+
 ## Outbound text
 
 IRC sends Markdown as plain text, preserving code contents and link destinations.
@@ -240,7 +244,7 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 Notes:
 
 - `toolsBySender` keys should use explicit prefixes (`channel:`, `id:`, `e164:`, `username:`, `name:`). For IRC use `id:` with the sender identity value: `id:alice` or `id:alice!~alice@203.0.113.7` for stronger matching.
-- Legacy unprefixed keys are still accepted, matched as `id:` only, and emit a deprecation warning.
+- Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).

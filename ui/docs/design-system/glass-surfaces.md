@@ -42,7 +42,7 @@ Popovers and floating overlays reduce blur slightly:
 backdrop-filter: blur(
   8px
 ); /* components.css action menu, cron-quick-create.css modal backdrop, workboard.css modal backdrop */
-backdrop-filter: blur(10px); /* skill-workshop.css revision dialog, dreams.css media lightbox */
+backdrop-filter: blur(10px); /* dreams.css media lightbox */
 backdrop-filter: blur(14px); /* components.css markdown preview dialog backdrop */
 ```
 
@@ -52,7 +52,7 @@ backdrop-filter: blur(14px); /* components.css markdown preview dialog backdrop 
 
 > **Do not** add `background: var(--bg)` or any fully-opaque fill to a surface that appears above other content.
 
-Use the `@supports` fallback pattern below instead. Browsers that lack `backdrop-filter` fall back gracefully to the semi-opaque base without breaking layout.
+Use the `@supports` fallback pattern below instead. Browsers that lack `backdrop-filter` use the semi-opaque base without breaking layout.
 
 ### `@supports` Fallback Pattern
 

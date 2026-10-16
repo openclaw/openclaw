@@ -4,6 +4,7 @@ export { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 
 export type { ChannelGroupPolicy } from "../config/group-policy.js";
 export type { SessionScope } from "../config/sessions/types.js";
+export type { SessionResetMode } from "../config/sessions/reset.js";
 export type {
   AccessGroupsConfig,
   AuthConfig,
@@ -54,6 +55,9 @@ export type {
   TelegramTopicConfig,
   TtsAutoMode,
   TtsConfig,
+  TtsMode,
   TtsModelOverrideConfig,
+  TtsPersonaConfig,
+  TtsPersonaFallbackPolicy,
   TtsProvider,
 } from "../config/types.js";

@@ -240,7 +240,7 @@ describe("Gateway worker-turn selected transcript preparation", () => {
         }
         if (outcome) {
           expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
         }
         expect(destroyCalls).toBe(0);
       } catch (error) {

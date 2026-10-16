@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   cacheAndRetainChatAudioBlob,
-  canDecodeChatAudioWaveform,
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   computeChatAudioWaveformPeaks,
   retainCachedChatAudioBlob,
@@ -12,24 +11,24 @@ import {
 describe("chat audio waveform", () => {
   it("caps waveform decoding by byte size and duration", () => {
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: 300,
       }),
     ).toBe(true);
-    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
+    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
       false,
     );
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: 301,
       }),
     ).toBe(false);
     expect(shouldFetchChatAudioWaveform({})).toBe(false);
-    expect(canDecodeChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
+    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
     expect(
-      canDecodeChatAudioWaveform({
+      shouldFetchChatAudioWaveform({
         sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
         durationSeconds: Number.NaN,
       }),

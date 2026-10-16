@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi, type MockInstance } fro
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -86,6 +87,7 @@ async function withCleanupFixture(
       channels: { discord: { threadBindings: { enabled: true } } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const close = vi.fn<AcpRuntime["close"]>(async () => {});
     const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(async (input) => ({
       agentId: input.agentId,

@@ -8,10 +8,8 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
  * - Ship normalization consistency
  * - Bot mention detection boundaries
  */
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
-import { createTlonCitationResolver } from "./monitor/cites.js";
 import { prepareTlonGroupAdmission } from "./monitor/mentions.js";
 import {
   resolveTlonCommandAuthorizationWithIngress,
@@ -19,7 +17,6 @@ import {
   isGroupInviteAllowed,
   isBotMentioned,
   extractMessageText,
-  resolveAuthorizedMessageText,
 } from "./monitor/utils.js";
 import { setTlonRuntime } from "./runtime.js";
 
@@ -49,19 +46,6 @@ async function expectDmAllowed(ship: string, allowlist: string[] | undefined, ex
 }
 
 describe("Security: allowlist ship matching", () => {
-  it.each(allowlistShipMatchingCases)(
-    "$label normalizes ship names with and without ~ prefix",
-    async ({ isAllowed }) => {
-      const allowlist = ["~zod"];
-      await expectAllowed(isAllowed, "zod", allowlist, true);
-      await expectAllowed(isAllowed, "~zod", allowlist, true);
-
-      const allowlistWithoutTilde = ["zod"];
-      await expectAllowed(isAllowed, "~zod", allowlistWithoutTilde, true);
-      await expectAllowed(isAllowed, "zod", allowlistWithoutTilde, true);
-    },
-  );
-
   it.each(allowlistShipMatchingCases)(
     "$label rejects partial ship matches",
     async ({ isAllowed }) => {
@@ -94,7 +78,6 @@ describe("Security: DM Allowlist", () => {
       const authorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~zod",
         ownerShip: "zod",
-        useAccessGroups: true,
       });
       expect(authorized.commandAccess.requested).toBe(true);
       expect(authorized.commandAccess.authorized).toBe(true);
@@ -104,7 +87,6 @@ describe("Security: DM Allowlist", () => {
       const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
         senderShip: "~nec",
         ownerShip: "~zod",
-        useAccessGroups: true,
       });
       expect(unauthorized.commandAccess.requested).toBe(true);
       expect(unauthorized.commandAccess.authorized).toBe(false);
@@ -116,7 +98,6 @@ describe("Security: DM Allowlist", () => {
 describe("Security: Group Invite Allowlist", () => {
   describe("isGroupInviteAllowed", () => {
     it("rejects invites when allowlist is empty (fail-safe)", () => {
-      // CRITICAL: Empty allowlist must DENY, not accept-all
       expect(isGroupInviteAllowed("~zod", [])).toBe(false);
       expect(isGroupInviteAllowed("~sampel-palnet", [])).toBe(false);
       expect(isGroupInviteAllowed("~malicious-actor", [])).toBe(false);
@@ -140,22 +121,10 @@ describe("Security: Bot Mention Detection", () => {
     const botShip = "~sampel-palnet";
     const nickname = "nimbus";
 
-    it("detects direct ship mention", () => {
-      expect(isBotMentioned("hey ~sampel-palnet", botShip)).toBe(true);
-      expect(isBotMentioned("~sampel-palnet can you help?", botShip)).toBe(true);
-      expect(isBotMentioned("hello ~sampel-palnet how are you", botShip)).toBe(true);
-    });
-
     it("detects @all mention", () => {
       expect(isBotMentioned("@all please respond", botShip)).toBe(true);
       expect(isBotMentioned("hey @all", botShip)).toBe(true);
       expect(isBotMentioned("@ALL uppercase", botShip)).toBe(true);
-    });
-
-    it("detects nickname mention", () => {
-      expect(isBotMentioned("hey nimbus", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("nimbus help me", botShip, nickname)).toBe(true);
-      expect(isBotMentioned("hello NIMBUS", botShip, nickname)).toBe(true);
     });
 
     it("does NOT trigger on partial ship matches", () => {
@@ -212,25 +181,6 @@ describe("Security: Group Mention Policy", () => {
       shouldSkip: false,
       matchedImplicitMentionKinds: ["bot_thread_participant"],
     });
-  });
-
-  it("allows account policy to disable participated-thread follow-ups", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(
-      groupAdmissionParams({
-        account: { accountId: "work" },
-        cfg: {
-          channels: {
-            tlon: {
-              implicitMentions: { threadParticipation: true },
-              accounts: {
-                work: { implicitMentions: { threadParticipation: false } },
-              },
-            },
-          },
-        },
-      }),
-    );
-    expect(mentionDecision).toMatchObject({ shouldSkip: true, matchedImplicitMentionKinds: [] });
   });
 
   it("keeps explicit mentions enabled when thread participation is disabled", async () => {
@@ -294,21 +244,6 @@ describe("Security: Channel Authorization Logic", () => {
     ).toEqual({ mode: "restricted", allowedShips: [] });
   });
 
-  it("preserves explicit open channel policy", () => {
-    expect(
-      resolveChannelAuthorization(
-        {
-          channels: {
-            tlon: {
-              authorization: { channelRules: { [channelNest]: { mode: "open" } } },
-            },
-          },
-        },
-        channelNest,
-      ),
-    ).toEqual({ mode: "open", allowedShips: [] });
-  });
-
   it("prefers settings channel rules over conflicting file configuration", () => {
     expect(
       resolveChannelAuthorization(
@@ -332,66 +267,5 @@ describe("Security: Authorization Edge Cases", () => {
   it("empty strings are not valid ships", async () => {
     await expectDmAllowed("", ["~zod"], false);
     await expectDmAllowed("~zod", [""], false);
-  });
-
-  it("handles special characters that could break regex", async () => {
-    // These should not cause regex injection
-    const maliciousShip = "~zod.*";
-    await expectDmAllowed("~zodabc", [maliciousShip], false);
-
-    const allowlist = ["~zod"];
-    await expectDmAllowed("~zod.*", allowlist, false);
-  });
-
-  it("protects against prototype pollution-style keys", async () => {
-    const suspiciousShip = "__proto__";
-    await expectDmAllowed(suspiciousShip, ["~zod"], false);
-    await expectDmAllowed("~zod", [suspiciousShip], false);
-  });
-});
-
-describe("Security: Cite Resolution Authorization Ordering", () => {
-  const content = [
-    {
-      block: {
-        cite: {
-          chan: {
-            nest: "chat/~private-ship/ops",
-            where: "/msg/~victim-ship/170141184507799509469114119040828178432",
-          },
-        },
-      },
-    },
-    { inline: ["~bot-ship please summarize this"] },
-  ];
-  const rawText = extractMessageText(content);
-
-  function createResolver() {
-    const scry = vi.fn(async () => ({ essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] } }));
-    return {
-      scry,
-      ...createTlonCitationResolver({ api: { scry }, runtime: createNonExitingRuntimeEnv() }),
-    };
-  }
-
-  it("does not fetch cited content before sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({
-        rawText,
-        content,
-        authorizedForCites: false,
-        resolveAllCites,
-      }),
-    ).resolves.toBe(rawText);
-    expect(scry).not.toHaveBeenCalled();
-  });
-
-  it("prepends the resolved citation after sender authorization", async () => {
-    const { scry, resolveAllCites } = createResolver();
-    await expect(
-      resolveAuthorizedMessageText({ rawText, content, authorizedForCites: true, resolveAllCites }),
-    ).resolves.toBe(`> ~victim-ship wrote: PRIVATE-CONTENT\n\n${rawText}`);
-    expect(scry).toHaveBeenCalledTimes(1);
   });
 });

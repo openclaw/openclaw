@@ -3,10 +3,12 @@ import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subage
 import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../agents/subagents/completion/subagent-completion-delivery.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { saveSubagentRegistryChangesToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
-  readSubagentRun,
-  saveSubagentRegistryChangesToSqlite,
-} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";
@@ -34,6 +36,7 @@ const writers = [
 ];
 
 async function seedContinuation() {
+  setRuntimeConfigSnapshot({});
   await upsertSessionEntryCore(base, { sessionId: "run-123", updatedAt: 1 });
   await upsertSessionEntryCore(exact, {
     sessionId: "run-123",
@@ -65,7 +68,10 @@ function createCorrelatedRun() {
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 
 it.each(writers)("retains the alias while a $name enqueue owns admission", async ({ enqueue }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -226,7 +232,6 @@ it("refuses correlated announcement publication when its source retires during s
       requesterAgentId: "main",
       requesterIsSubagent: false,
       triggerMessage: "generated lighthouse",
-      steerMessage: "generated lighthouse",
       expectsCompletionMessage: true,
       directIdempotencyKey: "correlated-source-authority",
       sourceRunId: run.runId,

@@ -8,15 +8,16 @@ export type PlaintextAssignment = {
   value: string;
 };
 
-export function findSecretStoreRedactedValueFindings(params: {
+export async function findSecretStoreRedactedValueFindings(params: {
   database: OpenClawStateDatabaseOptions;
   excludeNames?: ReadonlySet<string>;
 }) {
-  return listSecretStoreEntries({
+  const entries = await listSecretStoreEntries({
     scope: { kind: "team" },
     redactedOnly: true,
     database: params.database,
-  }).flatMap((entry) => {
+  });
+  return entries.flatMap((entry) => {
     if (params.excludeNames?.has(entry.name)) {
       return [];
     }
@@ -33,17 +34,19 @@ export function findSecretStoreRedactedValueFindings(params: {
   });
 }
 
-export function findSecretStorePlaintextResidueFindings(params: {
+export async function findSecretStorePlaintextResidueFindings(params: {
   assignments: PlaintextAssignment[];
   database: OpenClawStateDatabaseOptions;
-}): Array<{
-  code: "STORE_PLAINTEXT_RESIDUE";
-  severity: "warn";
-  file: string;
-  jsonPath: string;
-  message: string;
-}> {
-  const entries = listSecretStoreEntries({
+}): Promise<
+  Array<{
+    code: "STORE_PLAINTEXT_RESIDUE";
+    severity: "warn";
+    file: string;
+    jsonPath: string;
+    message: string;
+  }>
+> {
+  const entries = await listSecretStoreEntries({
     scope: { kind: "team" },
     database: params.database,
   });
@@ -52,7 +55,7 @@ export function findSecretStorePlaintextResidueFindings(params: {
   }
   const namesByValue = new Map<string, string[]>();
   for (const entry of entries) {
-    const result = readSecretStoreValue({
+    const result = await readSecretStoreValue({
       scope: { kind: "team" },
       name: entry.name,
       database: params.database,

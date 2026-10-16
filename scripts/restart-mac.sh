@@ -11,7 +11,6 @@ APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/OpenClaw"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -305,11 +304,8 @@ print_managed_openclaw_supervisor_label() {
   executable="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*program = / { print $2; exit }' <<<"${job}")"
   local properties=""
   properties="$(/usr/bin/awk -F ' = ' '/^[[:space:]]*properties = / { print $2; exit }' <<<"${job}")"
-  local is_managed_executable=0
-  if [[ "${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}" ]]; then
-    is_managed_executable=1
-  fi
-  if [[ "${is_managed_executable}" -eq 1 && " ${properties} " == *" keepalive "* ]]; then
+  if [[ ("${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}") &&
+    " ${properties} " == *" keepalive "* ]]; then
     printf '%s\n' "${label}"
   fi
 }
@@ -411,10 +407,6 @@ run_step "package app" env \
   "${ROOT_DIR}/scripts/package-mac-app.sh"
 run_step "verify packaged app" /usr/bin/codesign --verify --deep --strict "${STAGED_APP_BUNDLE}"
 
-install_staged_app() {
-  replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
-}
-
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" ]]; then
     canonicalize_app_bundle
@@ -491,7 +483,7 @@ else
   fi
 fi
 
-run_step "install packaged app" install_staged_app
+run_step "install packaged app" replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
 choose_app_bundle
 OPEN_ARGS=(-n "${APP_BUNDLE}")
 if [[ "$ATTACH_ONLY" -eq 1 || "$BACKGROUND_ONLY" -eq 1 ]]; then

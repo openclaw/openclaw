@@ -13,7 +13,6 @@ import {
 } from "./device-authz.test-helpers.js";
 import {
   connectOk,
-  connectReq,
   installGatewayTestHooks,
   rpcReq,
   startConnectedServerWithClient,
@@ -33,7 +32,6 @@ const FULL_SCOPES = [
 ];
 const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const BROWSER_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
-const WRONG_BROWSER_ORIGIN = "chrome-extension://bcdefghijklmnopabcdefghijklmnopa";
 const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_IDS.CONTROL_UI,
   version: "test",
@@ -238,21 +236,41 @@ describe("live device scope upgrade", () => {
     expect((hello as { auth?: { scopes?: string[] } }).auth?.scopes).toContain("operator.admin");
   });
 
-  test("rejects a scope-upgrade connection from a mismatched browser origin", async () => {
-    const limited = await openLimitedBrowserDevice("live-scope-upgrade-wrong-browser-origin");
-    limited.ws.close();
-    const wrongOrigin = await openWs({ origin: WRONG_BROWSER_ORIGIN });
-    const response = await connectReq(wrongOrigin, {
+  test("explains approval that preserves a previously narrowed token without granting admin", async () => {
+    const limited = await issueOperatorToken({
+      name: "live-scope-upgrade-preserved-token",
+      approvedScopes: FULL_SCOPES,
+      tokenScopes: ["operator.read"],
+    });
+    const ws = await openWs();
+    await connectOk(ws, {
       skipDefaultAuth: true,
-      deviceToken: limited.deviceToken,
+      deviceToken: limited.token,
       deviceIdentityPath: limited.identityPath,
       scopes: ["operator.read"],
-      caps: BROWSER_CAPS,
-      client: BROWSER_CLIENT,
     });
-    expect(response.ok).toBe(false);
-    expect(response.error?.code).toBe("NOT_PAIRED");
-    expect(response.error?.message).toContain("dedicated paired device identity");
+    const registration = await rpcReq<{ requestId: string }>(ws, "device.scopes.requestUpgrade", {
+      scopes: FULL_SCOPES,
+    });
+    expect(registration.ok).toBe(true);
+    const requestId = registration.payload?.requestId;
+    const wait = rpcReq(ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
+    expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+
+    const result = await wait;
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("previously narrowed"),
+      },
+    });
+    expect(result.error?.message).toContain("openclaw dashboard");
+    expect(result.error).not.toMatchObject({ retryable: true });
+    expect(result.payload).toBeUndefined();
+    expect(
+      (await devicePairing.getPairedDevice(limited.deviceId))?.tokens?.operator?.scopes,
+    ).toEqual(["operator.read"]);
   });
 
   test("coalesces concurrent waits for the same device request", async () => {

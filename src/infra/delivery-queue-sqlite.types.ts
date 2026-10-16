@@ -13,10 +13,10 @@ export function parseDeliveryQueueCompletionRetention(
   if (value === "permanent") {
     return value;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const retention = asNullableRecord(value);
+  if (!retention) {
     return undefined;
   }
-  const retention = value as Record<string, unknown>;
   const idPrefix = typeof retention.idPrefix === "string" ? retention.idPrefix : "";
   const maxAgeMs = asPositiveSafeInteger(retention.maxAgeMs);
   const maxEntries = asPositiveSafeInteger(retention.maxEntries);
@@ -104,6 +104,14 @@ export type DeliveryQueueEntryState = {
   platformSendStartedAt?: number;
   recoveryState?: string;
 };
+
+export function resolveDeliveryQueueAttemptCount(
+  entry: Pick<DeliveryQueueEntryState, "attemptCount" | "retryCount">,
+): number {
+  const count = entry.attemptCount;
+  const persisted = typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : 0;
+  return Math.max(persisted, entry.retryCount);
+}
 
 /** Additional work needs a live claim; settling an observed outcome only needs exact ownership. */
 export function hasLiveDeliveryQueueClaim(

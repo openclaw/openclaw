@@ -99,11 +99,9 @@ internal class ChatRichBlockCoordinator<T>(
     }
     return ChatRenderCancellation {
       active?.callbacks?.remove(id)
-      val iterator = queued.iterator()
-      while (iterator.hasNext()) {
-        val item = iterator.next().value
+      queued.entries.removeAll { (_, item) ->
         item.callbacks.remove(id)
-        if (item.callbacks.isEmpty()) iterator.remove()
+        item.callbacks.isEmpty()
       }
     }
   }

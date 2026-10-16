@@ -1,5 +1,6 @@
 import AVFAudio
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
@@ -34,9 +35,15 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
+    private var chatTraceDisplayOptions: OpenClawChatDisplayOptions {
+        guard self.showsAssistantTrace else { return [] }
+        return self.viewModel?.currentSessionReasoningVisible == true ? .assistantTrace : .toolActivity
+    }
+
     private var viewModel: OpenClawChatViewModel? {
         self.appModel.chatPresentation.viewModel
     }
@@ -143,10 +150,12 @@ struct ChatProTab: View {
                 drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
+                displayOptions: self.chatTraceDisplayOptions,
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
                 assistantAvatarTint: OpenClawBrand.accent,
+                // Narrow layouts drop the avatar column, as the web chat does at phone widths.
+                showsAssistantAvatars: self.horizontalSizeClass != .compact,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
                 isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
@@ -170,6 +179,10 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .environment(
+                    \.openClawEmbeddedBrowserUnavailableReason,
+                    self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
+                        "This widget needs browser access. Use native chat or open Gateway settings.")
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
@@ -512,7 +525,7 @@ struct ChatProTab: View {
     }
 
     private func performPendingChatAction() {
-        guard let pendingChatAction = self.pendingChatAction else { return }
+        guard let pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
         case .exportTranscript:
@@ -552,7 +565,7 @@ struct ChatProTab: View {
 
     private var gatewayDisplayState: GatewayDisplayState {
         Self.presentationGatewayState(
-            current: GatewayStatusBuilder.build(appModel: self.appModel),
+            current: GatewayStatusBuilder.buildChat(appModel: self.appModel),
             isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
             capturedOwnerID: self.appModel.chatPresentation.ownerID,
             currentOwnerID: self.appModel.chatViewModelOwnerID)
@@ -663,7 +676,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentID: String {
-        self.normalized(self.appModel.chatAgentId) ?? "main"
+        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
     }
 
     private var currentActiveAgent: AgentSummary? {
@@ -686,7 +699,7 @@ struct ChatProTab: View {
     }
 
     private var currentAgentDisplayName: String {
-        self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
+        self.currentActiveAgent?.name?.trimmedNonEmpty ?? self.appModel.chatAgentName
     }
 
     private var agentDisplayName: String {
@@ -718,10 +731,4 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }

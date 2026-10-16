@@ -3,8 +3,8 @@
  * migration hooks without loading runtime streaming or AWS discovery code.
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { migrateAmazonBedrockLegacyConfig } from "./config-api.js";
-import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 
 export default definePluginEntry({
   id: "amazon-bedrock",
@@ -15,7 +15,7 @@ export default definePluginEntry({
       id: "amazon-bedrock",
       label: "Amazon Bedrock",
       auth: [],
-      resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+      resolveConfigApiKey: ({ env }) => resolveAwsSdkEnvVarName(env),
     });
     api.registerConfigMigration((config) => migrateAmazonBedrockLegacyConfig(config));
   },

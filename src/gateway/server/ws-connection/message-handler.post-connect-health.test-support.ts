@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   onInternalDiagnosticEvent,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
@@ -31,9 +31,6 @@ export const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
-export const NODE_PAIR_REMOVE_PARAMS = {
-  nodeId: "device-1",
-} as const satisfies Record<string, unknown>;
 export const BACKEND_CONNECT_PARAMS = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
@@ -48,10 +45,10 @@ export const BACKEND_CONNECT_PARAMS = {
 } as const satisfies Record<string, unknown>;
 
 export function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -62,10 +59,6 @@ export function captureSecurityEvents(): {
 
 export function createCloseMock() {
   return vi.fn<CloseGatewayConnection>();
-}
-
-export function createBackendClient() {
-  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
 }
 
 export function waitForFast(assertion: () => void | Promise<void>) {
@@ -93,6 +86,72 @@ export async function createTestAgentRuntimeIdentityLease() {
 
 export function createSetCloseCauseMock() {
   return vi.fn<SetCloseCause>();
+}
+
+export function connectTrustedProxyUser(
+  loadConfigMock: Pick<Mock, "mockImplementation">,
+  connId: string,
+  clientOverrides: Record<string, unknown> = {},
+  scopes: string[] = [],
+  handoffAuthenticatedReceive?: () => void,
+) {
+  loadConfigMock.mockImplementation(() => ({
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        identityScopes: { "alice@example.com": scopes },
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+        },
+      },
+      trustedProxies: ["10.0.0.1"],
+      controlUi: {
+        allowedOrigins: ["http://127.0.0.1:19001"],
+      },
+    },
+  }));
+  const harness = attachGatewayHarness({
+    connId,
+    handoffAuthenticatedReceive,
+    connectNonce: `nonce-${connId}`,
+    requestHost: "gateway.example.com:18789",
+    requestOrigin: "http://127.0.0.1:19001",
+    remoteAddr: "10.0.0.1",
+    resolvedAuth: {
+      mode: "trusted-proxy",
+      allowTailscale: false,
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+      },
+    },
+    headers: {
+      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-user": "alice@example.com",
+      "x-forwarded-proto": "https",
+    },
+    ingressAttribution: {
+      kind: "trusted-proxy",
+      clientIp: "203.0.113.10",
+      rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
+    },
+  });
+  harness.sendConnect(`connect-${connId}`, {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: {
+      id: "openclaw-control-ui",
+      version: "dev",
+      platform: "test",
+      mode: "ui",
+      ...clientOverrides,
+    },
+    role: "operator",
+    scopes,
+    caps: [],
+  });
+  return harness;
 }
 
 export function localUserIngressFor(client: unknown) {
@@ -203,7 +262,7 @@ export async function withGatewayTestState(
   options: Parameters<typeof withOpenClawTestState>[0],
   run: () => Promise<void>,
 ) {
-  await withOpenClawTestState(options, async () => {
+  await withOpenClawTestState({ ...options, prepareProfileCatalog: true }, async () => {
     try {
       await run();
     } finally {
@@ -219,6 +278,7 @@ export function attachGatewayHarness(options: {
   deferSocketSend?: boolean;
   socket?: WebSocket;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
+  publishPresence?: () => void;
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
@@ -236,6 +296,7 @@ export function attachGatewayHarness(options: {
   handoffAuthenticatedReceive?: () => void;
 }) {
   const connectionWork = new GatewayConnectionWork();
+  const logGateway = createLogger();
   const logWsControl = createLogger();
   const attachment = createGatewayAttachmentCompletion(
     options.connId,
@@ -253,8 +314,10 @@ export function attachGatewayHarness(options: {
     connectionWork.beginClose();
     await connectionWork.drain();
   });
+  const frames: unknown[] = [];
   let finishSocketSend: ((error?: Error) => void) | undefined;
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+    frames.push(JSON.parse(_payload));
     if (options.deferSocketSend) {
       finishSocketSend = (error) => cb?.(error);
       return;
@@ -275,7 +338,10 @@ export function attachGatewayHarness(options: {
         return socket;
       }),
     } as unknown as WebSocket);
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+  const send = vi.fn((frame: unknown) => {
+    frames.push(frame);
+    return { kind: "sent" } as const;
+  });
   let client: unknown = options.client ?? null;
   let registeredProfileId: string | undefined;
   const refreshedProfileIds: Array<string | undefined> = [];
@@ -362,7 +428,7 @@ export function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        publishPresence: vi.fn(),
+        publishPresence: options.publishPresence ?? vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
@@ -378,7 +444,7 @@ export function attachGatewayHarness(options: {
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createLogger() as never,
+    logGateway: logGateway as never,
     logHealth: createLogger() as never,
     logWsControl: logWsControl as never,
   });
@@ -392,12 +458,14 @@ export function attachGatewayHarness(options: {
     onMessage(Buffer.from(data));
   };
   return {
+    frames,
     whenAttached: attachment.promise,
     runWhenIdle: () => connectionWork.runWhenIdle(() => {}),
     advanceHandshakePhase,
     clearHandshakeTimer,
     finishSocketSend: (error?: Error) => finishSocketSend?.(error),
     handoffAuthenticatedReceive,
+    logGateway,
     logWsControl,
     refreshConnectedUserProfile,
     refreshedProfileIds,

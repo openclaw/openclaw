@@ -1,4 +1,3 @@
-// Profiles Vitest main or runner processes and writes CPU/heap artifacts.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,9 +16,6 @@ function readOutputDirValue(argv: string[], index: number): string {
   return value;
 }
 
-/**
- * Parses Vitest profiler mode, output directory, and forwarded Vitest args.
- */
 export function parseArgs(argv: string[]) {
   let mode = "";
   let outputDir = process.env.OPENCLAW_VITEST_PROFILE_DIR?.trim() || "";
@@ -57,9 +53,6 @@ export function parseArgs(argv: string[]) {
 }
 
 type VitestProfileOptions = Pick<ReturnType<typeof parseArgs>, "mode" | "outputDir">;
-/**
- * Resolves or creates the directory used for profiler artifacts.
- */
 export function resolveVitestProfileDir({ mode, outputDir }: VitestProfileOptions) {
   if (outputDir && outputDir.trim()) {
     return path.resolve(outputDir);
@@ -68,9 +61,6 @@ export function resolveVitestProfileDir({ mode, outputDir }: VitestProfileOption
   return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-vitest-${mode}-profile-`));
 }
 
-/**
- * Builds the profiler command for either Vitest main or worker-runner profiling.
- */
 export function buildVitestProfileCommandWithArgs({
   mode,
   outputDir,

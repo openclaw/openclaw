@@ -128,7 +128,6 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
-  chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
@@ -271,7 +270,6 @@ export function makeChatHost(
     resourceBasePath: "",
     hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
-    chatAvatarSource: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
     sessionsLoading: false,
@@ -303,6 +301,8 @@ export function makeChatHost(
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
         chatSendShortcut: next.chatSendShortcut,
+        chatBubbleSessionKeys: next.chatBubbleSessionKeys,
+        chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
       });
     }),
     ...hostOverrides,

@@ -9,21 +9,13 @@ async function resolveRequestedRealPath(
   requestedPath: string,
   allowMissing: boolean,
 ): Promise<string | null> {
-  try {
-    return await fs.realpath(requestedPath);
-  } catch (error) {
-    if (!allowMissing || !isNotFoundPathError(error)) {
-      return null;
-    }
-  }
-
-  let ancestor = path.dirname(requestedPath);
+  let ancestor = requestedPath;
   for (;;) {
     try {
       const ancestorRealPath = await fs.realpath(ancestor);
       return path.resolve(ancestorRealPath, path.relative(ancestor, requestedPath));
     } catch (error) {
-      if (!isNotFoundPathError(error)) {
+      if (!allowMissing || !isNotFoundPathError(error)) {
         return null;
       }
     }

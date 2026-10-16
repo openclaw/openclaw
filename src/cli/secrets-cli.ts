@@ -36,8 +36,6 @@ type SecretsApplyOptions = {
   json?: boolean;
 };
 
-const fsModuleLoader = createLazyImportLoader(() => import("node:fs"));
-const clackPromptsLoader = createLazyImportLoader(() => import("@clack/prompts"));
 const secretsApplyLoader = createLazyImportLoader(() => import("../secrets/apply.js"));
 
 class SecretsPlanFileNotFoundError extends Error {}
@@ -57,7 +55,7 @@ function serializePlanFile(plan: SecretsApplyPlan, pathname: string): string {
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
   const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
-    fsModuleLoader.load(),
+    import("node:fs"),
     import("../infra/boundary-file-read.js"),
     import("../secrets/plan.js"),
   ]);
@@ -128,7 +126,6 @@ export function registerSecretsCli(program: Command): void {
             formatGatewayCommandFailure({
               action: "reload secrets",
               error: err,
-              inspectCommand: "openclaw gateway status --deep",
             }),
           ),
         );
@@ -239,7 +236,7 @@ export function registerSecretsCli(program: Command): void {
             allowExecInPreflight: Boolean(opts.allowExec),
           });
           if (opts.planOut) {
-            const { writeFileSync } = await fsModuleLoader.load();
+            const { writeFileSync } = await import("node:fs");
             writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
           }
 
@@ -272,7 +269,7 @@ export function registerSecretsCli(program: Command): void {
           }
 
           if (!shouldApply && !opts.json) {
-            const { confirm } = await clackPromptsLoader.load();
+            const { confirm } = await import("@clack/prompts");
             const approved = await confirm({
               message: "Apply this plan now?",
               initialValue: true,
@@ -284,7 +281,7 @@ export function registerSecretsCli(program: Command): void {
           if (shouldApply) {
             // Interactive apply needs the same one-way migration warning as --apply.
             if (!opts.yes && !opts.json) {
-              const { confirm } = await clackPromptsLoader.load();
+              const { confirm } = await import("@clack/prompts");
               const confirmed = await confirm({
                 message:
                   "This migration is one-way for migrated plaintext values. Continue with apply?",

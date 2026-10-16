@@ -1,3 +1,15 @@
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
+export type WorkboardDatabasePortApi<Database, Input> = {
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -240,6 +252,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -294,6 +308,8 @@ export type WorkboardAutomation = {
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -306,21 +322,12 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  automationJobId?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
@@ -391,3 +398,20 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

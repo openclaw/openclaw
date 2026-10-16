@@ -5,7 +5,7 @@ import { isGatewayTransportError } from "./transport-error.js";
 
 // Reuse the call owner fixture without growing its oversized test file or duplicating mocks.
 export function registerGatewayCallDeadlineTests(
-  setup: (mode: "silent" | "hello") => {
+  setup: () => {
     call: typeof CallGateway;
     formatError: typeof formatGatewayTransportErrorJson;
     setRequest: (request: () => Promise<unknown>) => void;
@@ -14,10 +14,10 @@ export function registerGatewayCallDeadlineTests(
     hello: () => void;
   },
 ): void {
-  it.each(["silent", "hello", "delayed-hello"] as const)(
+  it.each(["silent", "delayed-hello"] as const)(
     "preserves the original deadline, cleanup, and timeout details (%s)",
     async (mode) => {
-      const harness = setup(mode === "delayed-hello" ? "silent" : mode);
+      const harness = setup();
       const request = vi.fn(() => createDeferred<unknown>().promise);
       harness.setRequest(request);
       const teardown = createDeferred();

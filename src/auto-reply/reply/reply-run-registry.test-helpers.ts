@@ -33,5 +33,7 @@ export async function queueCurrentReplyRunMessage(
 export async function queueReplyMessageInjectionTarget(
   ...args: Parameters<typeof beginReplyMessageInjectionTarget>
 ) {
-  return await beginReplyMessageInjectionTarget(...args).outcome;
+  return await (
+    await beginReplyMessageInjectionTarget(...args)
+  ).outcome;
 }

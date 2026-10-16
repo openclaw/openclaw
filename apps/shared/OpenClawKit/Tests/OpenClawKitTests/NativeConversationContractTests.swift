@@ -12,6 +12,9 @@ struct NativeConversationContractTests {
                 .presentation(.init(visible: true, active: false)),
                 #"{"type":"presentation","payload":{"visible":true,"active":false}}"#),
             (.focusComposer, #"{"type":"focus-composer","payload":{}}"#),
+            (
+                .openSessionActions(.init(agentId: "research", sessionKey: "agent:research:thread")),
+                #"{"type":"open-session-actions","payload":{"agentId":"research","sessionKey":"agent:research:thread"}}"#),
         ]
         for (action, fixture) in cases {
             let command = NativeConversationCommand(documentId: "document-1", requestId: "request-1", action: action)
@@ -34,6 +37,9 @@ struct NativeConversationContractTests {
         #"{"type":"route-changed","agentId":"main","sessionKey":"agent:main:fork","reason":"fork"}"#,
         #"{"type":"open-dashboard","path":"/settings/providers","search":"?provider=fixture"}"#,
         #"{"type":"command-result","requestId":"request-1","ok":false,"error":"stale-document"}"#,
+        #"{"type":"session-facts","revision":1,"sessions":null}"#,
+        #"{"type":"session-facts","revision":2,"sessions":[]}"#,
+        #"{"type":"session-facts","revision":3,"sessions":[{"agentId":"main","sessionKey":"agent:main:other","hasComposerDraft":true,"outboxAttentionCount":2}]}"#,
     ])
     func `web messages round trip as document-bound flat objects`(_ fixture: String) throws {
         var expected = try Self.object(fixture)
@@ -91,6 +97,38 @@ struct NativeConversationContractTests {
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(NativeConversationCommand.self, from: Data(fixture.utf8))
         }
+    }
+
+    @Test func `sidebar snapshots enforce bounded exact session identities and safe counts`() throws {
+        let row: [String: Any] = [
+            "agentId": "main", "sessionKey": "agent:main:other", "hasComposerDraft": true, "outboxAttentionCount": 2,
+        ]
+        let valid: [String: Any] = ["revision": 1, "sessions": [row]]
+        func decode(_ fields: [String: Any]) throws -> NativeConversationSessionFacts {
+            try JSONDecoder().decode(
+                NativeConversationSessionFacts.self, from: JSONSerialization.data(withJSONObject: fields))
+        }
+        #expect(try decode(valid).sessions?.first?.outboxAttentionCount == 2)
+        for revision in [0, -1, 9_007_199_254_740_992] {
+            var invalid = valid
+            invalid["revision"] = revision
+            #expect(throws: DecodingError.self) { try decode(invalid) }
+        }
+        for (key, value) in [
+            ("agentId", "" as Any), ("sessionKey", String(repeating: "🦞", count: 1025)),
+            ("outboxAttentionCount", -1), ("outboxAttentionCount", 9_007_199_254_740_992),
+            ("hasComposerDraft", "yes"),
+        ] {
+            var invalidRow = row
+            invalidRow[key] = value
+            #expect(throws: DecodingError.self) { try decode(["revision": 1, "sessions": [invalidRow]]) }
+        }
+        #expect(throws: DecodingError.self) { try decode(["revision": 1, "sessions": [row, row]]) }
+        let rows = (0..<65).map { index in
+            row.merging(["sessionKey": "agent:main:\(index)"]) { _, new in new }
+        }
+        #expect(throws: DecodingError.self) { try decode(["revision": 1, "sessions": rows]) }
+        #expect(try decode(["revision": 1, "sessions": Array(rows.prefix(64))]).sessions?.count == 64)
     }
 
     private static func object(_ json: String) throws -> [String: Any] {

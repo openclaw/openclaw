@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawChatUI
+import OpenClawKit
 
 struct CommandSessionSection: Identifiable {
     enum ID: Hashable {
@@ -19,7 +20,7 @@ enum CommandSessionGrouping {
         from entries: [OpenClawChatSessionEntry],
         knownGroups: [String] = []) -> [CommandSessionSection]
     {
-        let pinned = self.sortedByActivity(entries.filter { $0.pinned == true })
+        let pinned = entries.filter { $0.pinned == true }.sorted(by: self.activityComesBefore)
         let unpinned = entries.filter { $0.pinned != true }
         // Stored-but-empty groups still render as sections so they remain
         // visible move targets after their last member leaves.
@@ -35,15 +36,15 @@ enum CommandSessionGrouping {
         }
 
         for category in categoryNames {
-            let categoryEntries = unpinned.filter { self.normalizedCategory($0.category) == category }
+            let categoryEntries = unpinned.filter { $0.category?.trimmedNonEmpty == category }
             sections.append(CommandSessionSection(
                 id: .category(category),
                 title: category,
-                entries: self.sortedByActivity(categoryEntries),
+                entries: categoryEntries.sorted(by: self.activityComesBefore),
                 showsHeader: true))
         }
 
-        let ungrouped = self.sortedByActivity(unpinned.filter { self.normalizedCategory($0.category) == nil })
+        let ungrouped = unpinned.filter { $0.category?.trimmedNonEmpty == nil }.sorted(by: self.activityComesBefore)
         if !ungrouped.isEmpty {
             sections.append(CommandSessionSection(
                 id: .ungrouped,
@@ -60,9 +61,7 @@ enum CommandSessionGrouping {
             if (lhs.pinned == true) != (rhs.pinned == true) {
                 return lhs.pinned == true
             }
-            let left = self.activityTimestamp(lhs)
-            let right = self.activityTimestamp(rhs)
-            return left == right ? lhs.key < rhs.key : left > right
+            return self.activityComesBefore(lhs, rhs)
         }
     }
 
@@ -71,24 +70,23 @@ enum CommandSessionGrouping {
     /// Center contract), otherwise natural pinned/activity order wins.
     static func previewSelection(
         _ entries: [OpenClawChatSessionEntry],
-        currentKey: String,
-        limit: Int = 3) -> [OpenClawChatSessionEntry]
+        currentKey: String) -> [OpenClawChatSessionEntry]
     {
         let ordered = self.previewOrder(entries)
-        let capped = Array(ordered.prefix(limit))
+        let capped = Array(ordered.prefix(3))
         guard !currentKey.isEmpty,
               !capped.contains(where: { $0.key == currentKey }),
               let current = ordered.first(where: { $0.key == currentKey })
         else { return capped }
-        return [current] + capped.prefix(max(0, limit - 1))
+        return [current] + capped.prefix(2)
     }
 
     static func categories(
         from entries: [OpenClawChatSessionEntry],
         knownGroups: [String] = []) -> [String]
     {
-        Set(entries.compactMap { self.normalizedCategory($0.category) })
-            .union(knownGroups.compactMap(self.normalizedCategory))
+        Set(entries.compactMap { $0.category?.trimmedNonEmpty })
+            .union(knownGroups.compactMap(\.trimmedNonEmpty))
             .sorted(by: self.categoryComesBefore)
     }
 
@@ -99,31 +97,20 @@ enum CommandSessionGrouping {
         of group: String,
         in lists: [[OpenClawChatSessionEntry]]) -> [OpenClawChatSessionEntry]
     {
-        guard let target = self.normalizedCategory(group) else { return [] }
+        guard let target = group.trimmedNonEmpty else { return [] }
         var seen = Set<String>()
         return lists.flatMap(\.self).filter { entry in
-            self.normalizedCategory(entry.category) == target && seen.insert(entry.key).inserted
+            entry.category?.trimmedNonEmpty == target && seen.insert(entry.key).inserted
         }
     }
 
-    static func activityTimestamp(_ entry: OpenClawChatSessionEntry) -> Double {
-        entry.lastActivityAt ?? entry.updatedAt ?? 0
-    }
-
-    private static func sortedByActivity(
-        _ entries: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+    private static func activityComesBefore(
+        _ lhs: OpenClawChatSessionEntry,
+        _ rhs: OpenClawChatSessionEntry) -> Bool
     {
-        entries.sorted { lhs, rhs in
-            let left = self.activityTimestamp(lhs)
-            let right = self.activityTimestamp(rhs)
-            return left == right ? lhs.key < rhs.key : left > right
-        }
-    }
-
-    private static func normalizedCategory(_ category: String?) -> String? {
-        guard let category else { return nil }
-        let trimmed = category.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        let left = lhs.lastActivityAt ?? lhs.updatedAt ?? 0
+        let right = rhs.lastActivityAt ?? rhs.updatedAt ?? 0
+        return left == right ? lhs.key < rhs.key : left > right
     }
 
     private static func categoryComesBefore(_ lhs: String, _ rhs: String) -> Bool {

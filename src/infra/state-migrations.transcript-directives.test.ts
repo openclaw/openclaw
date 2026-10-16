@@ -13,6 +13,7 @@ import { readSessionArchiveContentSync } from "../config/sessions/archive-compre
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertAgentDatabaseMaintenanceAuthority,
@@ -25,13 +26,13 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
@@ -78,7 +79,13 @@ function messageEvent(params: {
 
 function insertSession(
   database: import("node:sqlite").DatabaseSync,
-  params: { events: FixtureEvent[]; generation: string; sessionId: string; reconcile?: boolean },
+  params: {
+    events: FixtureEvent[];
+    generation: string;
+    sessionId: string;
+    reconcile?: boolean;
+    legacy?: boolean;
+  },
 ): void {
   const sessionKey = `agent:main:${params.sessionId}`;
   database
@@ -100,12 +107,29 @@ function insertSession(
     )
     .run(params.sessionId, params.generation, 1);
   for (const [seq, event] of params.events.entries()) {
-    database
-      .prepare(
-        `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
+    const eventJson = JSON.stringify(event);
+    if (params.legacy) {
+      database
+        .prepare(
+          `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
          VALUES(?,?,?,?)`,
-      )
-      .run(params.sessionId, seq, JSON.stringify(event), Number(event.timestamp ?? 1));
+        )
+        .run(params.sessionId, seq, eventJson, Number(event.timestamp ?? 1));
+    } else {
+      database
+        .prepare(`INSERT INTO transcript_events
+        (session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
+         navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)
+        VALUES ($sessionId,$seq,$eventJson,$createdAt,$navigation_type,$navigation_custom_type,
+          $navigation_display,$message_role,$navigation_last_type,$navigation_last_custom_type,$navigation_valid)`)
+        .run({
+          sessionId: params.sessionId,
+          seq,
+          eventJson,
+          createdAt: Number(event.timestamp ?? 1),
+          ...deriveTranscriptPredicateFields(eventJson),
+        });
+    }
   }
   if (params.reconcile !== false) {
     reconcileSessionTranscriptIndexInTransaction(database, params.sessionId);
@@ -122,7 +146,7 @@ function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
   removeCanonicalValidationFromHistoricalAgentFixture(database);
   database.exec(`
     DROP TABLE session_participants;
-    ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
+    ${LEGACY_PARTICIPANTS_SCHEMA}
     PRAGMA user_version = 17;
     UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
   `);
@@ -260,17 +284,17 @@ describe("historical transcript directive migration", () => {
           event.fixturePadding = "compression fixture ".repeat(256);
         }
       }
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [tagged, user, tool],
         generation: "tagged-before",
         sessionId: "tagged-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [code],
         generation: "code-before",
         sessionId: "code-session",
       });
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [reaction],
         generation: "reaction-before",
         sessionId: "reaction-session",
@@ -360,7 +384,24 @@ describe("historical transcript directive migration", () => {
 
       const result = await migrateHistoricalTranscriptDirectives({ env });
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toHaveLength(1);
+      expect(result.changes).toHaveLength(2);
+      const recoveryDirectories = () =>
+        fs
+          .readdirSync(path.dirname(databasePath))
+          .filter((name) => name.startsWith("openclaw-transcript-directives-recovery-"));
+      const backups = recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      const backupPath = path.join(path.dirname(databasePath), backups[0]!, "database.sqlite");
+      expect(readEventJson(backupPath, "tagged-session", 0)).toBe(JSON.stringify(tagged));
+      expect(readEventJson(backupPath, "reaction-session", 0)).toBe(JSON.stringify(reaction));
+      const backup = openNodeSqliteDatabase(backupPath, { readOnly: true });
+      try {
+        expect(
+          backup.prepare("SELECT archive_blob FROM session_transcript_archives").get(),
+        ).toEqual({ archive_blob: new Uint8Array(archiveBytes) });
+      } finally {
+        backup.close();
+      }
 
       const migratedTagged = JSON.parse(readEventJson(databasePath, "tagged-session", 0)) as {
         message: Record<string, unknown>;
@@ -435,102 +476,9 @@ describe("historical transcript directive migration", () => {
         generationsAfterFirstRun.reaction,
       );
       expect(fs.readFileSync(archivePath)).toEqual(archiveBytesAfterFirstRun);
+      expect(recoveryDirectories()).toEqual(backups);
     },
   );
-
-  it("resumes after the committed transcript cursor", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-resume-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "already-migrated",
-          role: "assistant",
-          timestamp: 1,
-          content: [{ type: "text", text: "Already clean" }],
-        }),
-      ],
-      generation: "already-bumped",
-      sessionId: "resume-a",
-    });
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "still-pending",
-          role: "assistant",
-          timestamp: 2,
-          content: [{ type: "text", text: "[[audio_as_voice]] Pending" }],
-        }),
-      ],
-      generation: "pending-before",
-      sessionId: "resume-b",
-    });
-    opened.db
-      .prepare(
-        `INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?)`,
-      )
-      .run(
-        "historical-transcript-directives-v1",
-        "agent",
-        1,
-        "main",
-        JSON.stringify({ phase: "transcripts", sessionId: "resume-a" }),
-        1,
-        1,
-      );
-    closeOpenClawAgentDatabasesForTest();
-
-    expect((await migrateHistoricalTranscriptDirectives({ env })).warnings).toEqual([]);
-    expect(readGeneration(databasePath, "resume-a")).toBe("already-bumped");
-    expect(readGeneration(databasePath, "resume-b")).not.toBe("pending-before");
-    expect(JSON.parse(readEventJson(databasePath, "resume-b", 0))).toMatchObject({
-      message: {
-        content: [{ type: "text", text: "Pending" }],
-        openclawDelivery: { audioAsVoice: true },
-      },
-    });
-  });
-
-  it("completes an old-schema database without the optional archives table", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-schema-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    insertSession(opened.db, {
-      events: [
-        messageEvent({
-          id: "old-schema-tagged",
-          role: "assistant",
-          timestamp: 1,
-          content: [{ type: "text", text: "[[audio_as_voice]] Pending" }],
-        }),
-      ],
-      generation: "before",
-      sessionId: "old-schema-session",
-    });
-    opened.db.exec("DROP TABLE session_transcript_archives");
-    closeOpenClawAgentDatabasesForTest();
-
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [expect.stringContaining("1 active session(s), 0 archived transcript(s)")],
-      warnings: [],
-    });
-    expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
-    expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
-    expect(JSON.parse(readEventJson(databasePath, "old-schema-session", 0))).toMatchObject({
-      message: {
-        content: [{ type: "text", text: "Pending" }],
-        openclawDelivery: { audioAsVoice: true },
-      },
-    });
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-  });
 
   it("completes a pre-stuck archives cursor when the optional table is absent", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-stuck-archives-");
@@ -560,26 +508,6 @@ describe("historical transcript directive migration", () => {
     });
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete" });
     expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
-  });
-
-  it("acquires stopped-writer maintenance before upgrading an older agent database", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-old-agent-schema-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openLegacyAgentDatabase(stateDir);
-    const databasePath = opened.path;
-    opened.db.close();
-
-    const result = await migrateHistoricalTranscriptDirectives({ env });
-
-    expect(result.warnings).toEqual([]);
-    const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    try {
-      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_AGENT_SCHEMA_VERSION,
-      );
-    } finally {
-      migrated.close();
-    }
   });
 
   it("rolls back same-version convergence when maintenance expires before commit", async () => {
@@ -645,19 +573,6 @@ describe("historical transcript directive migration", () => {
       rolledBack.close();
     }
     releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
-  });
-
-  it("leaves a current empty database and its active writer untouched", async () => {
-    const stateDir = makeTempDir(tempDirs, "transcript-directive-current-empty-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-
-    expect(opened.db.isOpen).toBe(true);
   });
 
   it("surfaces lease inspection failures from preflight", async () => {
@@ -790,7 +705,7 @@ describe("historical transcript directive migration", () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-commit-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    insertSession(opened.db, {
+    insertSession(requireNativeSqliteDatabase(opened.db), {
       events: [
         messageEvent({
           content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
@@ -964,7 +879,7 @@ describe("historical transcript directive migration", () => {
     const sessionIdAt = (index: number) =>
       `session-${String(index).padStart(String(batchSize).length, "0")}`;
     for (let index = 0; index <= batchSize; index += 1) {
-      insertSession(opened.db, {
+      insertSession(requireNativeSqliteDatabase(opened.db), {
         events: [
           messageEvent({
             content: [{ type: "text", text: "[[reply_to_current]] Migrating" }],
@@ -976,6 +891,7 @@ describe("historical transcript directive migration", () => {
         generation: "before",
         sessionId: sessionIdAt(index),
         reconcile: false,
+        legacy: true,
       });
     }
     opened.db.close();

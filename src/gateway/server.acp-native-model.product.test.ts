@@ -6,6 +6,8 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
+import { parseLogLine } from "../logging/parse-log-line.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -346,11 +348,13 @@ module.exports = {
       });
       expect(requests.at(-1)?.model).toBe(override.modelId);
 
+      const nativeFailureRequestCount = requests.length;
       rejectNativeRequest = true;
       expect(await send(sessionKey, "/btw Explain the failure.", "native-failure")).toMatchObject({
-        text: expect.stringContaining("The selected native model is unavailable."),
+        text: expect.stringContaining("Couldn't answer that side question."),
         isError: true,
       });
+      expect(requests.length).toBeGreaterThan(nativeFailureRequestCount);
       expect(requests.at(-1)?.model).toBe(override.modelId);
       const requestCount = requests.length;
       expect(
@@ -372,19 +376,36 @@ module.exports = {
         modelOverride: missingAuth.modelId,
         modelOverrideSource: "user",
       }));
-      const missingAuthReply = await send(
-        sessionKey,
-        "/btw Use the native model without credentials.",
-        "native-missing-auth",
-      );
-      expect(missingAuthReply).toMatchObject({
-        text: expect.stringContaining(
-          `No API key found for provider "${MISSING_AUTH_PROVIDER_ID}"`,
-        ),
-        isError: true,
-      });
-      expect(missingAuthReply?.text).toContain("openclaw models auth paste-api-key");
+      const missingAuthLogFile = state.path("native-missing-auth.log");
+      setLoggerOverride({ file: missingAuthLogFile, level: "warn", consoleLevel: "silent" });
+      try {
+        const missingAuthReply = await send(
+          sessionKey,
+          "/btw Use the native model without credentials.",
+          "native-missing-auth",
+        );
+        expect(missingAuthReply).toMatchObject({
+          text: expect.stringContaining("Couldn't answer that side question."),
+          isError: true,
+        });
+        expect(missingAuthReply?.text).toContain("openclaw logs --follow");
+      } finally {
+        setLoggerOverride(null);
+        await flushLogger();
+      }
       expect(requests).toHaveLength(requestCount);
+      const missingAuthLogs = (await fs.readFile(missingAuthLogFile, "utf8"))
+        .split("\n")
+        .map(parseLogLine);
+      expect(missingAuthLogs).toContainEqual(
+        expect.objectContaining({
+          subsystem: "auto-reply/commands-btw",
+          level: "warn",
+          message: expect.stringContaining(
+            `Side question failed: No API key found for provider "${MISSING_AUTH_PROVIDER_ID}".`,
+          ),
+        }),
+      );
       expect(
         await send(sessionKey, "Continue after the missing native auth.", "acp-after-missing-auth"),
       ).toEqual({ text: acpAnswers.get("main") });

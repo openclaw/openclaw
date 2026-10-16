@@ -10,6 +10,44 @@ import {
 import type { SessionListOptions, SessionListSnapshot } from "./session-capability.ts";
 
 describe("session list replacement options", () => {
+  it("keeps deliberate dock-inclusive queries separate from the ordinary roster", async () => {
+    const ordinary: GatewaySessionRow = { key: "agent:main:ordinary", kind: "direct" };
+    const dock: GatewaySessionRow = { key: "agent:main:board-agent", kind: "direct", isDock: true };
+    const request = vi.fn(async (_method: string, params?: unknown) =>
+      sessionsResult(
+        asOptionalRecord(params)?.excludeDock === false ? [ordinary, dock] : [ordinary],
+        1,
+      ),
+    );
+    const { gateway } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+    const query = { agentId: "main", excludeDock: false };
+    const updates = vi.fn<(snapshot: SessionListSnapshot) => void>();
+    const stop = sessions.subscribeList(query, updates);
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ excludeDock: true }),
+      );
+      await sessions.refreshList(query);
+      expect(request).toHaveBeenLastCalledWith("sessions.list", expect.objectContaining(query));
+      expect(sessions.state.result?.sessions).toEqual([ordinary]);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
+      expect(updates.mock.lastCall?.[0].result?.sessions).toEqual([ordinary, dock]);
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ excludeDock: true }),
+      );
+      expect(sessions.state.result?.sessions).toEqual([ordinary]);
+      expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
+    } finally {
+      stop();
+      sessions.dispose();
+    }
+  });
+
   it.each(["unfiltered", "excludeSubagents", "excludeCron", "excludeSystem"] as const)(
     "keeps list and subscription membership scoped for %s",
     async (flag) => {
@@ -21,16 +59,14 @@ describe("session list replacement options", () => {
         updatedAt: 1,
       };
       const excluded: GatewaySessionRow = {
+        ...ordinary,
         key:
           flag === "excludeSubagents"
             ? "agent:main:subagent:worker"
             : flag === "excludeCron"
               ? "agent:main:cron:scheduled"
               : "agent:main:system:maintenance",
-        agentId: "main",
         sessionId: "excluded-session",
-        kind: "direct",
-        updatedAt: 1,
       };
       let primaryRows = [ordinary, excluded];
       let issued = 0;

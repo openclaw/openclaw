@@ -7,8 +7,8 @@ import {
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +31,8 @@ async function createQaAuthState(prefix = "openclaw-qa-auth-store-") {
 
 describe("QA auth profile store", () => {
   afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     await tempDirs.cleanup();
   });
@@ -44,7 +44,7 @@ describe("QA auth profile store", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: hostStateDir },
     });
     const hostDatabasePath = hostDatabase.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const legacyHostDatabase = new DatabaseSync(hostDatabasePath);
     legacyHostDatabase.exec(`
       PRAGMA user_version = 6;
@@ -65,8 +65,8 @@ describe("QA auth profile store", () => {
       stateDir: qaStateDir,
     });
 
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     const preservedHostDatabase = new DatabaseSync(hostDatabasePath, { readOnly: true });
     expect(preservedHostDatabase.prepare("PRAGMA user_version").get()).toEqual({
       user_version: 6,
@@ -79,7 +79,7 @@ describe("QA auth profile store", () => {
     preservedHostDatabase.close();
     vi.stubEnv("OPENCLAW_STATE_DIR", qaStateDir);
     const qaAgentDir = path.join(qaStateDir, "agents", "main", "agent");
-    expect(readQaAuthProfiles(qaAgentDir).profiles).toMatchObject({
+    expect((await readQaAuthProfiles(qaAgentDir)).profiles).toMatchObject({
       "qa-mock-openai": { provider: "openai" },
     });
   });
@@ -119,7 +119,7 @@ describe("QA auth profile store", () => {
       for (const [index, stateDir] of qaRoots.entries()) {
         const provider = index === 0 ? "openai" : "anthropic";
         const profileId = `qa-mock-${provider}`;
-        const store = readQaAuthProfiles(path.join(stateDir, "agents", "qa", "agent"));
+        const store = await readQaAuthProfiles(path.join(stateDir, "agents", "qa", "agent"));
         expect(Object.keys(store.profiles)).toEqual([profileId]);
         expect(configs[index]?.auth).toEqual({
           profiles: {
@@ -167,29 +167,6 @@ describe("QA auth profile store", () => {
       expect(await fs.readFile(databasePath)).toEqual(before);
     },
   );
-
-  it("writes new auth profiles to SQLite without creating legacy JSON", async () => {
-    const { agentDir, agentId, stateDir } = await createQaAuthState();
-
-    await writeQaAuthProfiles({
-      agentId,
-      profiles: {
-        "qa-mock-openai": {
-          type: "api_key",
-          provider: "openai",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
-      stateDir,
-    });
-
-    expect(readQaAuthProfiles(agentDir).profiles["qa-mock-openai"]).toMatchObject({
-      provider: "openai",
-    });
-    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
 
   it("refuses to bypass a pending legacy auth source", async () => {
     const { agentDir, agentId, stateDir } = await createQaAuthState();
@@ -251,11 +228,14 @@ describe("QA auth profile store", () => {
       stateDir,
     });
 
-    expect(readQaAuthProfiles(agentDir).profiles).toMatchObject({
+    expect((await readQaAuthProfiles(agentDir)).profiles).toMatchObject({
       existing: { type: "api_key", provider: "openai" },
       tokenProfile: { type: "token", provider: "github" },
       oauthProfile: { type: "oauth", provider: "chatgpt" },
       "qa-mock-anthropic": { type: "api_key", provider: "anthropic" },
+    });
+    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 
@@ -285,7 +265,7 @@ describe("QA auth profile store", () => {
       stateDir,
     });
 
-    expect(Object.keys(readQaAuthProfiles(agentDir).profiles)).toEqual(["current"]);
+    expect(Object.keys((await readQaAuthProfiles(agentDir)).profiles)).toEqual(["current"]);
     const replaced = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
       inheritedAuthDir: agentDir,
     });

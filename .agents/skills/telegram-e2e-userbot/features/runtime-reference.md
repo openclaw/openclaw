@@ -105,8 +105,10 @@ A scenario send can select an existing forum topic:
 ```
 
 A scenario send can also carry a photo (`photo`, absolute path; `text` becomes
-the optional caption) or reply to the newest message this scenario sent
-(`replyToPrevious: true`), for reply-context and caption-command proof:
+the optional caption), a media album (`photos`, 2–10 absolute paths sent in one
+`sendMessageAlbum` call; `text` captions the first item), or reply to the newest
+message this scenario sent (`replyToPrevious: true`, the last album member after
+an album), for reply-context and caption-command proof:
 
 ```json
 {
@@ -118,6 +120,19 @@ the optional caption) or reply to the newest message this scenario sent
 ```
 
 Create the run-owned topic under the held lease and use its actual returned id.
+For a Test Server forum without a prepared fixture, pass `--create-forum` with
+`--scenario` instead of `--chat`: the runner creates a forum and topic, sends
+every scenario message there, deletes the forum before releasing the lease, and
+records `testForum` setup and cleanup in `summary.json`.
+If creation returns no chat ID, cleanup searches the leased account's server
+chats for the exact run-owned title, verifies creator ownership, and deletes the
+match with a group-state read-back. An inconclusive search or deletion retains an
+`uncertain-creation` record with the title, creation timestamp, and tester user
+ID in the summary. Cleanup failure retains the lease state for recovery; do not
+treat an absent ID or an empty search as proof that creation never happened.
+A successful deletion awaiting a fresh read-back is saved separately as
+`deletion-pending-verification`, including its deletion receipt. Retrying cleanup
+only verifies that recorded deletion; it does not delete the group again.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message
@@ -127,6 +142,10 @@ A send confirmation failure stops later scenario actions in both the recorder
 and Node runner. The uncertain send is never retried. Passive Telegram recording
 continues to the original deadline, preserving late updates and the failed
 action in the evidence; the run exits unsuccessfully even if a reply arrives.
+The recorder publishes its failure receipt atomically inside the runner-owned
+scenario barrier directory. The Node runner reads that receipt before admitting
+later actions and when collecting the final result; it does not require native
+directory watching or access to shared temporary-directory ancestor metadata.
 
 Keep one TDLib client per restored state directory. Run custom TDLib inspection
 before the recorder starts or after it exits, under the same live lease. Bot API
@@ -171,7 +190,12 @@ Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
 The built lane starts both the provider and Gateway from that checkout's
 `dist/entry.js`; `--source-gateway` selects the development launcher for both.
 A leased run must not rebuild a dirty source checkout while waiting for provider
-readiness.
+readiness. Gateway startup gets 45 s built and 300 s from source; on a heavily
+loaded host, raise it with `--gateway-ready-timeout-ms` instead of retrying the
+lease.
+
+Recorder readiness gets 30 s; on a heavily loaded host, raise it with
+`--recorder-ready-timeout-ms`.
 
 The named tool-progress shell fixture emits command-style `exec` arguments.
 Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
@@ -238,19 +262,26 @@ The routine runner supplies all state through one Convex lease. Use low-level
 commands only inside runner-owned credential state:
 
 ```bash
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" doctor --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" status --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" chats --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" send --text '/status@{sut}'
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" transcript --limit 20
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" probe \
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" doctor --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" status --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" chats --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" send --text '/status@{sut}'
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" transcript --limit 20
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" probe \
   --text '@{sut} Reply exactly: USER-E2E-{run}' --expect USER-E2E-
 ```
 
 The leased credential supplies the group id, SUT token and identity, tester id,
 TDLib configuration, and authorized session. Credential state lives in a
-private runner directory. The shared cache at
-`~/.cache/openclaw/telegram-e2e-userbot/tdlib` contains only the TDLib binary.
+private runner directory. The restored credential's `driverEnv` confines HOME,
+temporary files, UV/Python caches, and TDLib downloads to its `runtime/` subtree.
+Pass that environment to manual commands too. The maintained UV invocation runs
+the standard-library driver with an existing Python 3.12+ interpreter; it does
+not create an inline-script virtual environment or download Python. That avoids
+the virtual-environment launcher's `realpath` access to shared temporary
+ancestors under filesystem confinement. Keep the confinement policy intact.
+Prepare TDLib before leasing and select that read-only binary with
+`TELEGRAM_USER_DRIVER_TDLIB_PATH` when using a confined live runner.
 
 `TELEGRAM_USER_DRIVER_TDLIB_PATH` selects a deliberate custom TDLib build.
 `login --qr` is an owner-repair action for a session that cannot be restored; it
@@ -258,8 +289,20 @@ is not a routine maintainer step.
 
 ## Retained-run recovery
 
+When `--output` is supplied, the scenario writes `readiness.json` beside it even
+when readiness fails before Gateway startup. It retains the phase, exit code,
+timeout, duration, output byte counts, and fixed diagnostic categories. It never
+exports raw readiness stdout/stderr, identities, environment values, or paths.
+The doctor includes the same structural diagnostic in its failure. Keep the
+proof directory outside runner scratch.
+
 Failed fixture cleanup can leave a private lease directory with `lease.json`
-and credential state. Preserve that directory and the failure evidence. The
+and credential/runtime state. Process groups and pipes must be joined before
+release; adapters returning a teardown receipt must return `verified: true`.
+After SIGKILL, a group that still answers probes is waiting on a kernel call and
+gets up to 300 seconds; a group that only answers `EPERM` fails cleanup after 2 seconds.
+A false or missing verification in a returned receipt retains the consumer,
+lease, scratch, and recovery state. Preserve that directory and the failure evidence. The
 receipt contains a secret broker handle: exclude it from proof exports and
 public output. Its presence alone does not establish live authority.
 
@@ -272,8 +315,8 @@ node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-recover.mjs" \
   "$TELEGRAM_RETAINED_LEASE_DIR" status
 ```
 
-`status` leaves the lease held. `cleanup-group` removes a confirmed run-owned
-group and credential state before releasing it. `release` handles a retained
+`status` leaves the lease held. `cleanup` removes confirmed run-owned forums,
+groups, and credential state before releasing it. `release` handles a retained
 broker receipt only after credential state is gone. A rejected revalidation is
 a real authority stop; never use the saved session directly after it.
 
@@ -349,7 +392,7 @@ not the model.
 - TDLib replays cached updates after connect; judge only events after the run's sent action.
 - The driver pins `@prebuilt-tdlib` `0.1008067.0`, which reports TDLib `1.8.67`.
 - TDLib 1.8.6 and later take the existing base64 database key in `setTdlibParameters`; re-encoding changes the key.
-- OpenClaw does not expose grammY's Test Server option, so the loopback proxy inserts `/test` after the bot token.
+- Credential readiness calls `https://api.telegram.org/bot<TOKEN>/test/<method>` directly; the standalone doctor never starts a local adapter. The full SUT still uses the loopback adapter because OpenClaw does not expose grammY's Test Server option. That adapter also owns scenario hold/reject controls; Gateway health checks and the mock provider still need local HTTP access. Do not bypass host egress policy to run them.
 - Broker calls time out after 15 seconds. A failed heartbeat fences the runner before later actions and stops an active probe.
 - Chunked broker payloads are authenticated per chunk and bounded to 64 MiB and 4096 chunks before JSON parsing.
 - Scope gateway logs with `logging.file`; the default `/tmp/openclaw/<date>.log` mixes concurrent runs.

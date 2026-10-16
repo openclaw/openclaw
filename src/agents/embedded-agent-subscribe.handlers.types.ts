@@ -17,12 +17,14 @@ import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
@@ -94,6 +96,9 @@ export type StreamBlockState = {
   pendingTagFragment?: string;
 };
 
+/** A response-ending answer and the message index its reply payload belongs to. */
+export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
+
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
@@ -102,21 +107,19 @@ export type EmbeddedAgentSubscribeState = {
     messageEnd: number;
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
+    keptAnswer?: CompletedAssistantAnswer;
+    sourceReplyDeliveryState?: ReplyDeliveryState;
   }>;
-  toolMetas: Array<{
-    toolName?: string;
-    toolCallId?: string;
-    parentToolCallId?: string;
-    activity?: AgentItemEventData;
-    meta?: string;
-    replaySafe?: boolean;
-    isError?: boolean;
-    terminate?: boolean;
-    asyncStarted?: boolean;
-    asyncTaskRunId?: string;
-    asyncTaskId?: string;
-    codeModeSuspended?: boolean;
-  }>;
+  /** Latest response-ending answer to the current input. */
+  inputAnswer?: CompletedAssistantAnswer;
+  /** That answer while the latest assistant message added no reply of its own: the turn's reply. */
+  keptAnswer?: CompletedAssistantAnswer;
+  toolMetas: Array<
+    EmbeddedRunAttemptResult["toolMetas"][number] & {
+      parentToolCallId?: string;
+      activity?: AgentItemEventData;
+    }
+  >;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -124,16 +127,7 @@ export type EmbeddedAgentSubscribeState = {
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
   >;
-  liveEditDiffStateById: Map<
-    string,
-    {
-      added: number;
-      removed: number;
-      emittedAdded: number;
-      emittedRemoved: number;
-      lastCheckedAtMs: number;
-    }
-  >;
+  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -206,9 +200,6 @@ export type EmbeddedAgentSubscribeState = {
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
-  compactionRetryResolve?: () => void;
-  compactionRetryReject?: (reason?: unknown) => void;
-  compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
@@ -231,6 +222,10 @@ export type EmbeddedAgentSubscribeState = {
   messageToolOnlySourceReplyDelivered: boolean;
   sourceReplyDelivered?: true;
   sourceReplyDeliveryState?: ReplyDeliveryState;
+  /** Whether the current provider turn's finished tools were only complete source progress. */
+  turnToolsOnlySourceProgress?: boolean;
+  /** The same fact for the latest provider turn that finished any tool. */
+  lastToolTurnOnlySourceProgress?: boolean;
   successfulCronAdds: number;
   pendingToolMediaUrls: string[];
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
@@ -291,6 +286,7 @@ export type EmbeddedAgentSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  getPartialReplySourceText: () => string;
   resetPartialReplyDirectives: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;
@@ -331,82 +327,6 @@ export type EmbeddedAgentSubscribeContext = {
   clearDeferredBlockReplies: () => void;
 };
 
-/**
- * Minimal context type for tool execution handlers. Allows
- * tests provide only the fields they exercise
- * without needing the full `EmbeddedAgentSubscribeContext`.
- */
-type ToolHandlerParams = Pick<
-  SubscribeEmbeddedAgentSessionParams,
-  | "runId"
-  | "onBlockReplyFlush"
-  | "onAgentEvent"
-  | "onToolStreamBoundary"
-  | "onExecutionPhase"
-  | "onHeartbeatToolResponse"
-  | "onAgentToolResult"
-  | "observeToolTerminal"
-  | "onToolResult"
-  | "config"
-  | "messageChannel"
-  | "sessionKey"
-  | "currentChannelId"
-  | "currentMessagingTarget"
-  | "currentAccountId"
-  | "currentThreadId"
-  | "currentMessageId"
-  | "replyToMode"
-  | "hasRepliedRef"
-  | "sessionId"
-  | "agentId"
-  | "coreBuiltinToolNames"
-  | "replaySafeToolNames"
-  | "codeModeExecToolNames"
-  | "sideEffectToolOwners"
-  | "toolResultFormat"
-  | "toolProgressDetail"
-  | "sourceReplyDeliveryMode"
-  | "onDeliveredMessageToolOnlySourceReply"
->;
-
-type ToolHandlerState = Pick<
-  EmbeddedAgentSubscribeState,
-  | "toolMetaById"
-  | "toolMetas"
-  | "acceptedSessionSpawns"
-  | "toolSummaryById"
-  | "execLiveUpdateStateById"
-  | "liveEditDiffStateById"
-  | "itemActiveIds"
-  | "itemStartedCount"
-  | "itemCompletedCount"
-  | "lastToolError"
-  | "latestMcpAppChannelView"
-  | "latestMcpConnectAction"
-  | "pendingToolMediaUrls"
-  | "pendingToolMediaAttachments"
-  | "pendingToolMediaTrustByUrl"
-  | "toolAutoDeliveryMediaUrls"
-  | "pendingToolAudioAsVoice"
-  | "deterministicApprovalPromptPending"
-  | "hadDeterministicSideEffect"
-  | "replayState"
-  | "messagingToolSentTexts"
-  | "messagingToolSentTextsNormalized"
-  | "currentSourceMessagingToolSentTextsNormalized"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSourceReplyPayloads"
-  | "messageToolOnlySourceReplyDelivered"
-  | "sourceReplyDelivered"
-  | "sourceReplyDeliveryState"
-  | "messagingToolSentTargets"
-  | "heartbeatToolResponse"
-  | "successfulCronAdds"
-  | "deterministicApprovalPromptSent"
-  | "toolExecutionSinceLastBlockReply"
-  | "assistantMessageIndex"
->;
-
 export type ToolHandlerContext = Pick<
   EmbeddedAgentSubscribeContext,
   | "log"
@@ -420,7 +340,7 @@ export type ToolHandlerContext = Pick<
   | "emitToolOutput"
   | "trimMessagingToolSent"
 > & {
-  params: ToolHandlerParams;
-  state: ToolHandlerState;
+  params: Omit<SubscribeEmbeddedAgentSessionParams, "session">;
+  state: EmbeddedAgentSubscribeState;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };

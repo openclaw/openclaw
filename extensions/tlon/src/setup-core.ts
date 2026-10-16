@@ -18,31 +18,16 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
-import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
+import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const t = createSetupTranslator();
 
 type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
-function isConfigured(account: TlonResolvedAccount): boolean {
-  return Boolean(account.ship && account.url && account.code);
-}
-
-type TlonSetupWizardBaseParams = {
-  resolveConfigured: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-  }) => boolean | Promise<boolean>;
-  resolveStatusLines?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    configured: boolean;
-  }) => string[] | Promise<string[]>;
-  finalize: NonNullable<ChannelSetupWizard["finalize"]>;
-};
-
-export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): ChannelSetupWizard {
+export function createTlonSetupWizardBase(
+  finalize: NonNullable<ChannelSetupWizard["finalize"]>,
+): ChannelSetupWizard {
   return {
     channel: "tlon",
     status: {
@@ -52,9 +37,13 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       unconfiguredHint: t("wizard.channels.statusUrbitMessenger"),
       configuredScore: 1,
       unconfiguredScore: 4,
-      resolveConfigured: ({ cfg, accountId }) => params.resolveConfigured({ cfg, accountId }),
-      resolveStatusLines: ({ cfg, accountId, configured }) =>
-        params.resolveStatusLines?.({ cfg, accountId, configured }) ?? [],
+      resolveConfigured: ({ cfg, accountId }) => resolveTlonSetupConfigured(cfg, accountId),
+      resolveStatusLines: async ({ cfg, accountId }) => {
+        const configured = await resolveTlonSetupConfigured(cfg, accountId);
+        const label =
+          accountId && accountId !== DEFAULT_ACCOUNT_ID ? `Tlon (${accountId})` : "Tlon";
+        return [`${label}: ${configured ? "configured" : "needs setup"}`];
+      },
     },
     introNote: {
       title: t("wizard.tlon.setupTitle"),
@@ -122,32 +111,21 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
           }),
       },
     ],
-    finalize: params.finalize,
+    finalize,
   };
 }
 
-export async function resolveTlonSetupConfigured(
+async function resolveTlonSetupConfigured(
   cfg: OpenClawConfig,
   accountId?: string,
 ): Promise<boolean> {
   if (accountId) {
-    return isConfigured(resolveTlonAccount(cfg, accountId));
+    return resolveTlonAccount(cfg, accountId).configured;
   }
   const accountIds = listTlonAccountIds(cfg);
   return accountIds.length > 0
-    ? accountIds.some((resolvedAccountId) =>
-        isConfigured(resolveTlonAccount(cfg, resolvedAccountId)),
-      )
-    : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
-}
-
-export async function resolveTlonSetupStatusLines(
-  cfg: OpenClawConfig,
-  accountId?: string,
-): Promise<string[]> {
-  const configured = await resolveTlonSetupConfigured(cfg, accountId);
-  const label = accountId && accountId !== DEFAULT_ACCOUNT_ID ? `Tlon (${accountId})` : "Tlon";
-  return [`${label}: ${configured ? "configured" : "needs setup"}`];
+    ? accountIds.some((resolvedAccountId) => resolveTlonAccount(cfg, resolvedAccountId).configured)
+    : resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID).configured;
 }
 
 export function applyTlonSetupConfig(params: {

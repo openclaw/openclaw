@@ -6,7 +6,6 @@ import { chromium } from "playwright";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createHotReloadExternalBrowser } from "./gateway-config-hot-reload-external-browser.js";
-import { waitForHotReloadFact } from "./gateway-config-hot-reload-fixtures.js";
 
 type BrowserStatus = { profile: string; pid: number | null; cdpUrl: string; cdpPort: number };
 type Tabs = { running: boolean; tabs: Array<{ title: string }> };
@@ -29,16 +28,9 @@ async function unusedPort() {
   return address.port;
 }
 
-async function waitForExit(pid: number) {
-  await waitForHotReloadFact(`Chrome ${pid} exit`, () => {
-    try {
-      process.kill(pid, 0);
-      return undefined;
-    } catch (error) {
-      assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
-      return true;
-    }
-  });
+function assertExited(pid: number) {
+  // /start waits behind the profile transition, whose Chrome cleanup joins child exit.
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `Chrome ${pid} exit`);
 }
 
 export async function proveHotReloadBrowserLaunch({
@@ -153,7 +145,7 @@ export async function proveHotReloadBrowserLaunch({
           await setBrowser({ headless });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(
             current.args.some((arg) => arg.startsWith("--headless")),
             headless,
@@ -173,7 +165,7 @@ export async function proveHotReloadBrowserLaunch({
           await setBrowser({ executablePath: selectedPath });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(current.args[0], executablePath);
           if (selectedPath === launcher) {
             assert.equal(await fs.readFile(launcherMarker, "utf8"), "started");
@@ -192,7 +184,7 @@ export async function proveHotReloadBrowserLaunch({
         const previous = await inspect();
         await setBrowser({ attachOnly: true });
         await assert.rejects(request("/start", "POST", "openclaw"), /attachOnly.*not running/);
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         await setBrowser({ attachOnly: false });
         assert.notEqual((await inspect()).pid, previous.pid);
         await finish(
@@ -207,7 +199,7 @@ export async function proveHotReloadBrowserLaunch({
         await setBrowser({ cdpUrl: `http://127.0.0.1:${port}` });
         const current = await inspect();
         assert.notEqual(current.pid, previous.pid);
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         assert.equal(current.cdpPort, port);
         assert(current.args.includes(`--remote-debugging-port=${port}`));
         await finish(
@@ -234,7 +226,7 @@ export async function proveHotReloadBrowserLaunch({
           assert.notEqual(current.pid, previous.pid);
           assert(!current.args.includes("--no-sandbox"));
         }
-        await waitForExit(previous.pid);
+        assertExited(previous.pid);
         await setBrowser({ noSandbox: true });
         assert((await inspect()).args.includes("--no-sandbox"));
         await finish(
@@ -251,7 +243,7 @@ export async function proveHotReloadBrowserLaunch({
           });
           const current = await inspect();
           assert.notEqual(current.pid, previous.pid);
-          await waitForExit(previous.pid);
+          assertExited(previous.pid);
           assert.equal(current.scale, scale);
           previous = current;
         }

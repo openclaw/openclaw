@@ -1,4 +1,5 @@
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type {
@@ -6,8 +7,6 @@ import type {
   RuntimeEnv,
 } from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-
-type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
 
 type DiscordInboundJob = {
   context: DiscordMessagePreflightContext;
@@ -22,16 +21,11 @@ type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  testing?: DiscordMessageRunQueueTestingHooks;
 };
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => Promise<void>;
-};
-
-export type DiscordMessageRunQueueTestingHooks = {
-  processDiscordMessage?: ProcessDiscordMessage;
 };
 
 type SkippedQueuedMessageCleanup = () => Promise<void>;
@@ -43,17 +37,14 @@ const loadMessageProcessRuntime = createLazyRuntimeModule(
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   lifecycleSignal?: AbortSignal;
-  testing?: DiscordMessageRunQueueTestingHooks;
 }) {
   const abortSignal =
     params.job.context.abortSignal && params.lifecycleSignal
       ? AbortSignal.any([params.job.context.abortSignal, params.lifecycleSignal])
       : (params.job.context.abortSignal ?? params.lifecycleSignal);
   try {
-    const processDiscordMessageImpl =
-      params.testing?.processDiscordMessage ??
-      (await loadMessageProcessRuntime()).processDiscordMessage;
-    await processDiscordMessageImpl({ ...params.job.context, abortSignal });
+    const { processDiscordMessage } = await loadMessageProcessRuntime();
+    await processDiscordMessage({ ...params.job.context, abortSignal });
     if (abortSignal?.aborted) {
       // Cancellation ended ownership before delivery; retain prior retry facts
       // so the durable claim can replay under a replacement lifecycle.
@@ -109,10 +100,7 @@ export function createDiscordMessageRunQueue(
 
   return {
     enqueue(job) {
-      let resolvePending!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        resolvePending = resolve;
-      });
+      const { promise: pending, resolve: resolvePending } = createDeferred();
       pendingTasks.add(pending);
       const settlePending = () => {
         pendingTasks.delete(pending);
@@ -149,7 +137,6 @@ export function createDiscordMessageRunQueue(
           await processDiscordQueuedMessage({
             job,
             lifecycleSignal,
-            testing: params.testing,
           });
         } finally {
           settlePending();

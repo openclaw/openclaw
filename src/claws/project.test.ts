@@ -234,6 +234,46 @@ describe("Claw projects", () => {
     expect(entries).not.toContain("package/not-packed.txt");
   });
 
+  it("preserves license metadata and a package-root LICENSE in the artifact", async () => {
+    const project = tempDirs.make("openclaw-claw-license-");
+    const output = join(tempDirs.make("openclaw-claw-license-output-"), "claw.tgz");
+    const unpacked = tempDirs.make("openclaw-claw-license-unpacked-");
+    await writeRichProject(project);
+    const packagePath = join(project, "package.json");
+    const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as Record<string, unknown>;
+    await writeFile(packagePath, `${JSON.stringify({ ...packageJson, license: "MIT" })}\n`);
+    await writeFile(join(project, "LICENSE"), "License notice for the demo Claw.\n");
+
+    const validated = await validateClawProject(project);
+    const result = await buildClawProject(project, output);
+    await tar.x({ cwd: unpacked, file: output, strict: true });
+
+    expect(validated).toMatchObject({ ok: true });
+    if (validated.ok) {
+      expect(validated.excludedPaths).not.toContain("LICENSE");
+    }
+    expect(result.files).toContain("LICENSE");
+    expect(
+      JSON.parse(await readFile(join(unpacked, "package", "package.json"), "utf8")),
+    ).toMatchObject({ license: "MIT" });
+    expect(await readFile(join(unpacked, "package", "LICENSE"), "utf8")).toBe(
+      "License notice for the demo Claw.\n",
+    );
+  });
+
+  it("rejects an unsafe package-root LICENSE", async () => {
+    const project = tempDirs.make("openclaw-claw-license-link-");
+    const outside = tempDirs.make("openclaw-claw-license-outside-");
+    await writeRichProject(project);
+    await writeFile(join(outside, "LICENSE"), "Outside notice.\n");
+    await symlink(join(outside, "LICENSE"), join(project, "LICENSE"), "file");
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_license_invalid" })],
+    });
+  });
+
   it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
     const project = tempDirs.make("openclaw-claw-custom-profile-");
     const output = join(tempDirs.make("openclaw-claw-custom-profile-output-"), "claw.tgz");

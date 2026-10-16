@@ -179,7 +179,7 @@ describe("setup config provenance", () => {
         );
       } else {
         controls.mode = flow.endsWith("remote") ? "remote" : "local";
-        await runConfigureWizard({ command: "configure", sections: ["gateway"] }, runtime);
+        await runConfigureWizard({ sections: ["gateway"] }, runtime);
       }
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(persisted.gateway?.auth?.token).toBe("${SETUP_PROVENANCE_TOKEN}");

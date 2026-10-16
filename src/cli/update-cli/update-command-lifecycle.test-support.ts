@@ -95,14 +95,22 @@ export function registerPrivateHandoffBindingTests() {
     const createDatabase = handoffDatabase.createManagedHandoffLeaseDatabase;
     const database = vi
       .spyOn(handoffDatabase, "createManagedHandoffLeaseDatabase")
-      .mockImplementation((file, identity) => {
-        binding.assertPath(file);
-        return createDatabase(file, identity);
+      .mockImplementation((...args) => {
+        binding.assertPath(args[0]);
+        return createDatabase(...args);
+      });
+    const prepareDatabase = handoffDatabase.prepareManagedHandoffLeaseDatabase;
+    const preparedDatabase = vi
+      .spyOn(handoffDatabase, "prepareManagedHandoffLeaseDatabase")
+      .mockImplementation((...args) => {
+        binding.assertPath(args[0]);
+        return prepareDatabase(...args);
       });
     try {
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(binding.databasePath);
       await runTest();
     } finally {
+      preparedDatabase.mockRestore();
       database.mockRestore();
       resolveTemp.mockRestore();
       dirs.cleanup();

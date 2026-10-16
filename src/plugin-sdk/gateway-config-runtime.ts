@@ -5,3 +5,4 @@ export {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
 } from "../gateway/server/plugins-http/path-context.js";
+export { hasUnresolvedConfigValue } from "../config/unresolved-config-value.js";

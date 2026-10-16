@@ -147,7 +147,7 @@ paths should use message adapters and durable message helpers from
 When the platform owns recent history, pass the selected entries as
 `message.inboundHistory` and set
 `sessionTranscript: { historyLimit, historyKind: "recent" }`. The host renders that
-configured window without merging canonical transcript rows back into it.
+configured window without merging stored transcript rows back into it.
 Without `"recent"`, existing transcript enrichment and the legacy defensive
 20-entry prompt cap remain unchanged.
 
@@ -271,7 +271,7 @@ The delivery result fields have these meanings:
 | `finalization`           | A promise for delayed native settlement of the same logical payload, such as closing or editing an in-place streaming card. Its resolved fields override the immediate result before terminal observation and `onDelivered`. |
 
 Set the delivery adapter's `observeMessageSent` option to `true` when core
-should emit the canonical plugin and internal `message_sent` events for this
+should emit the standard plugin and internal `message_sent` events for this
 adapter's non-durable sends. Do not return this option from `deliver`, and do
 not emit those events in the plugin too. Durable sends already emit through
 the shared outbound owner and are not duplicated.
@@ -296,6 +296,14 @@ different provider-routed target session. The override affects inbound metadata,
 transcript-context merge, and record-stage diagnostics; it does not change dispatch
 routing or hook correlation. An explicit override must be non-empty and contain no
 surrounding whitespace.
+
+The shared `recordInboundSession` recorder joins its metadata writer before
+returning, so dispatch cannot race creation of the session store. If the agent
+database is still awaiting startup inspection, recording rejects before dispatch
+so the channel transport can retry the inbound message. Other metadata write
+failures still reach `onRecordError` without failing the turn. The promise passed
+to `trackSessionMetaTask` includes asynchronous error reporting; reporting and
+automatic session maintenance remain outside foreground completion.
 
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from

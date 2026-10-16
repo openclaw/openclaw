@@ -7,6 +7,31 @@ import { pluginResponses } from "./plugins-settings-admin.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Plugin settings keyboard dismissal" });
 
 suite.define(() => {
+  it("lets the Settings sidebar clear its search without closing plugin details", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.admin"],
+        methodResponses: pluginResponses(),
+      });
+      const settingsUrl = `${suite.server.baseUrl}settings/plugins/workboard?view=settings`;
+      await page.goto(settingsUrl);
+      await page.locator(".plugin-editor").waitFor();
+      const search = page.locator(".settings-sidebar__search-input");
+      await search.fill("appearance");
+      await search.press("Escape");
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({ path: path.join(suite.artifactDir, "sidebar-escape.png") });
+      }
+      expect(page.url()).toBe(settingsUrl);
+      expect(await search.inputValue()).toBe("");
+      expect(await page.locator(".plugin-editor").isVisible()).toBe(true);
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await search.blur();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
+    });
+  });
+
   it.each(["trigger", "item"])(
     "dismisses the settings menu from its %s before leaving the detail",
     async (focus) => {

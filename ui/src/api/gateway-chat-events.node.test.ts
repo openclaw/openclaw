@@ -175,6 +175,7 @@ describe("GatewayBrowserClient chat delivery", () => {
         client.addEventListener(listener);
         client.start();
         let ws = getLatestWebSocket();
+        ws.emitOpen();
         ws.emitMessage({
           type: "event",
           event: "chat",

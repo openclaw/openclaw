@@ -372,7 +372,14 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         fixture,
         await fixture.tool.execute("http-error", params),
         [request, request],
-        { error: "Request failed with status code 403" },
+        {
+          error: JSON.stringify({
+            message: "Request failed with status code 403",
+            http_status: 403,
+            feishu_code: 9999,
+            feishu_msg: "Denied by Drive",
+          }),
+        },
       );
       expect(fixture.sdkErrors).toHaveBeenCalledTimes(1);
     },

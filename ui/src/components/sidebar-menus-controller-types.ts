@@ -1,13 +1,14 @@
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
-import type { AgentIdentityResult } from "../api/types.ts";
+import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import type { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import type {
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
@@ -18,12 +19,11 @@ import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
-
-type SidebarMenuAgent = Parameters<typeof renderSidebarAgentMenu>[0]["agents"][number];
 
 export interface SidebarMenusControllerHost extends SessionOrganizerControllerHost {
+  readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly querySelector: HTMLElement["querySelector"];
+  readonly querySelectorAll: HTMLElement["querySelectorAll"];
   readonly activeRouteId?: NavigationRouteId;
   readonly basePath: string;
   readonly canPairDevice: boolean;
@@ -39,16 +39,26 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly onRetryConnect?: () => void;
   readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
+  navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
-  readonly preferencesBrowserOnly: boolean;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "sessionsLoading" | "sessionsResult" | "archiveSessionCatalog" | "sessionScopeGeneration"
+      | "context"
+      | "activeSessionLineageRoot"
+      | "activeSessionLineageSelectedRow"
+      | "childSessionRowsByParent"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
+      | "archiveSessionCatalog"
+      | "importSessionCatalog"
+      | "sessionScopeGeneration"
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
+  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;
@@ -75,14 +85,15 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   pluginNavigation(): ControlUiRegistration<ControlUiNavigationItem>[];
   activeChipAgent(): {
     activeId: string;
-    agent: SidebarMenuAgent | undefined;
-    agents: readonly SidebarMenuAgent[];
+    agent: GatewayAgentRow | undefined;
+    agents: readonly GatewayAgentRow[];
     identity: AgentIdentityResult | null;
     identities: ReadonlyMap<string, AgentIdentityResult>;
   };
   agentUnreadCount(agentId: string): number;
   askAgentCapabilities(agentId: string): void;
   getRouteSessionKey(): string;
+  findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
   switchChipAgent(agentId: string): void;

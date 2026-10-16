@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -10,18 +12,49 @@ import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { hasSqliteSessionOwnerColumns } from "./session-accessor.sqlite-owner-projection.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import type {
+  SessionMetadataExpectedEntry,
+  SessionOwnerAssignParams,
+} from "./session-sharing-store.types.js";
+
+function metadataAuthorityEntry(entry: SessionMetadataExpectedEntry): SessionMetadataExpectedEntry {
+  return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    createdActor: entry.createdActor,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+  };
+}
+
+/** Compare authoritative transaction-held fields without treating presentation updates as revocation. */
+export function sessionMetadataExpectedEntryMatches(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  expectedEntry: SessionMetadataExpectedEntry,
+): boolean {
+  const entry = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
+  return (
+    entry !== undefined &&
+    isDeepStrictEqual(metadataAuthorityEntry(entry), metadataAuthorityEntry(expectedEntry))
+  );
+}
 
 export function replaceSessionOwnerInTransaction(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   owner: SessionOwnerAssignment | undefined,
+  postimages?: SessionEntryWritePostimages,
+  expectedSessionId?: string,
 ): boolean {
   if (!hasSqliteSessionOwnerColumns(database.db)) {
     if (!owner?.actor.id) {
@@ -32,10 +65,9 @@ export function replaceSessionOwnerInTransaction(
     }
   }
   let updated: { current_session_id: string; lifecycle_revision: string | null } | undefined;
-  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
-    updated = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
+  const writeGeneration = trackSessionEntryCacheWrite(database, () =>
+    withSqliteDatabaseWriteScope(database.db, [sessionKey], () => {
+      const query = getSessionKysely(database.db)
         .updateTable("session_nodes")
         .set({
           owner_actor_type: owner?.actor.type ?? null,
@@ -53,11 +85,22 @@ export function replaceSessionOwnerInTransaction(
               eb.val("$.lifecycleRevision"),
             ])
             .as("lifecycle_revision"),
-        ]),
-    ).rows[0];
-  });
+        ]);
+      updated = executeSqliteQuerySync(
+        database.db,
+        expectedSessionId === undefined
+          ? query
+          : query.where("current_session_id", "=", expectedSessionId),
+      ).rows[0];
+    }),
+  );
   if (!updated) {
     return false;
+  }
+  const postimage = postimages?.get(sessionKey);
+  if (postimage) {
+    postimage.entry = { ...postimage.entry, owner };
+    postimage.changed = true;
   }
   publishSessionEntryCacheInvalidation(
     database,
@@ -79,12 +122,7 @@ export function replaceSessionOwnerInTransaction(
 
 export function assignSessionOwner(
   scope: SessionAccessScope,
-  params: {
-    owner: SessionActor & { id: string };
-    assignedBy: SessionActor & { id: string };
-    assignedAt?: number;
-    assertCurrent?: () => void;
-  },
+  params: SessionOwnerAssignParams & { assertCurrent?: () => void },
 ): SessionOwnerAssignment | null {
   const resolved = resolveSqliteScope(scope);
   const options = toDatabaseOptions(resolved);
@@ -96,7 +134,30 @@ export function assignSessionOwner(
   const updated = runOpenClawAgentWriteTransaction(
     (database) => {
       params.assertCurrent?.();
-      return replaceSessionOwnerInTransaction(database, resolved.sessionKey, owner);
+      if (
+        params.expectedSessionId !== undefined &&
+        params.expectedEntry &&
+        params.expectedEntry.sessionId !== params.expectedSessionId
+      ) {
+        throw new Error("session changed before owner assignment");
+      }
+      if (
+        params.expectedEntry &&
+        !sessionMetadataExpectedEntryMatches(database, resolved.sessionKey, params.expectedEntry)
+      ) {
+        throw new Error("session ownership changed before owner assignment");
+      }
+      const replaced = replaceSessionOwnerInTransaction(
+        database,
+        resolved.sessionKey,
+        owner,
+        undefined,
+        params.expectedSessionId,
+      );
+      if (!replaced && params.expectedSessionId !== undefined) {
+        throw new Error("session changed before owner assignment");
+      }
+      return replaced;
     },
     options,
     { operationLabel: "sessions.assign-owner" },

@@ -1,6 +1,7 @@
 import os from "node:os";
 import type { NodeHostStatsPayload } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { tryReadDiskSpace } from "../infra/disk-space.js";
+import { readHostFreeMemoryBytes } from "../infra/host-memory.js";
 
 function clampFinite(value: number, maximum = Number.MAX_SAFE_INTEGER): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(maximum, value)) : 0;
@@ -8,7 +9,7 @@ function clampFinite(value: number, maximum = Number.MAX_SAFE_INTEGER): number {
 
 export function sampleNodeHostStats(): NodeHostStatsPayload {
   const memoryTotalBytes = Math.round(clampFinite(os.totalmem()));
-  const memoryFreeBytes = Math.round(clampFinite(os.freemem(), memoryTotalBytes));
+  const memoryFreeBytes = Math.round(clampFinite(readHostFreeMemoryBytes(), memoryTotalBytes));
   const loads = os.loadavg();
   const loadAverage: [number, number, number] = [
     clampFinite(loads[0]!, 100_000),

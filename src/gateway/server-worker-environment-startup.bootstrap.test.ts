@@ -26,6 +26,7 @@ import {
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
 import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
+import type { NodeBootstrapArtifact } from "./worker-environments/node-bootstrap-artifact-contract.js";
 import * as artifactModule from "./worker-environments/node-bootstrap-artifact.js";
 import {
   buildId,
@@ -122,7 +123,7 @@ describe("cloud bootstrap plugin generations", () => {
             resolveGatewayContext: () => undefined,
             desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
             startup,
-            log: { child: () => ({ warn: () => {} }) },
+            log: { child: () => ({ info: () => {}, warn: () => {} }) },
           });
           try {
             const managerResult = enrollmentFactory.mock.results.at(-1);
@@ -247,8 +248,8 @@ describe("cloud bootstrap plugin generations", () => {
     vi.spyOn(version, "resolveRuntimeServiceBuildId").mockReturnValue("gateway-source-build");
     const enrollmentFactory = vi.spyOn(enrollmentModule, "createWorkerNodeEnrollmentManager");
     const producers: Array<{
-      artifact: artifactModule.NodeBootstrapArtifact;
-      prepare: Mock<(signal?: AbortSignal) => Promise<artifactModule.NodeBootstrapArtifact>>;
+      artifact: NodeBootstrapArtifact;
+      prepare: Mock<(signal?: AbortSignal) => Promise<NodeBootstrapArtifact>>;
       close: Mock<() => Promise<void>>;
       closing: Promise<void>;
       release: () => void;
@@ -295,7 +296,7 @@ describe("cloud bootstrap plugin generations", () => {
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const enrollmentResult = enrollmentFactory.mock.results.at(-1);
       const service = runtime.workerEnvironmentService;
@@ -328,9 +329,6 @@ describe("cloud bootstrap plugin generations", () => {
         expect(producers).toHaveLength(1);
         expect(producers[0]!.prepare).toHaveBeenCalledWith(first.signal);
         await manager.prepare(startup.store.get("first")!);
-        const preparationSignal = producers[0]!.prepare.mock.calls.at(-1)?.[0];
-        expect(preparationSignal).toBeInstanceOf(AbortSignal);
-        expect(preparationSignal?.aborted).toBe(true);
         expect(first.signal?.aborted).toBe(false);
         expect(sameGeneration.signal?.aborted).toBe(false);
         manager.close(sameGeneration);

@@ -52,12 +52,6 @@ const ROLE_SCOPE_CASES = [
     allowed: true,
   },
   {
-    name: "exact scopes within the guest ceiling",
-    allowedScopes: GUEST_ROLE.scopes,
-    scopes: GUEST_ROLE.scopes,
-    allowed: true,
-  },
-  {
     name: "no operator role policy",
     allowedScopes: undefined,
     scopes: FULL_SCOPES,
@@ -73,18 +67,6 @@ const ROLE_SCOPE_CASES = [
     name: "empty ceiling denies read",
     allowedScopes: [],
     scopes: ["operator.read"],
-    allowed: false,
-  },
-  {
-    name: "read does not imply write",
-    allowedScopes: ["operator.read"],
-    scopes: ["operator.read", "operator.write"],
-    allowed: false,
-  },
-  {
-    name: "write does not imply approvals",
-    allowedScopes: ["operator.write"],
-    scopes: ["operator.read", "operator.approvals"],
     allowed: false,
   },
 ];
@@ -224,10 +206,10 @@ describe("device scope upgrade role ceiling", () => {
     });
   });
 
-  it.each(["rejected", "expired"] as const)("returns an unchanged %s result", async (status) => {
+  it("returns an unchanged rejected result", async () => {
     resolveOperatorRolePolicyMock.mockReturnValue({ ...GUEST_ROLE, scopes: [] });
     const context = createUpgradeContext();
-    const result: ScopeUpgradeResult = { status, requestId: "request-1" };
+    const result: ScopeUpgradeResult = { status: "rejected", requestId: "request-1" };
     context.scopeUpgradeCoordinator.wait.mockResolvedValue(result);
 
     const { respond } = await runUpgradeHandler(

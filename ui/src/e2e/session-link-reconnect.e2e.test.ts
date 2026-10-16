@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -13,9 +13,6 @@ const sourceKey = "agent:main:main";
 const destinationKey = "agent:main:dashboard:12345678-1111-4222-8333-abcdefabcdef";
 const destinationText = "The linked conversation recovered after reconnect.";
 const destinationPath = "/chat/main/linked-conversation-12345678";
-const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:activity"] } } };
-
-type TestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it.each([false, true])(
@@ -37,12 +34,6 @@ suite.define(() => {
             },
           },
           methodResponses: {
-            "config.get": {
-              config: sidebarConfig,
-              raw: JSON.stringify(sidebarConfig),
-              hash: "session-link-prefs",
-              valid: true,
-            },
             "sessions.resolve": {
               cases: [
                 {
@@ -64,14 +55,25 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
         await link.waitFor({ state: "visible" });
+        // Settle title decoration before deferring the separate navigation lookup.
+        await link
+          .and(page.locator(`[data-session-key="${destinationKey}"]`))
+          .waitFor({ state: "visible" });
+        await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         await page
           .locator('openclaw-app-sidebar a[href="/activity"]')
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
+        const initialTitleResolutions = (
+          await gateway.getRequests("sessions.resolve", resolutionMatch)
+        ).length;
         await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
-        await gateway.waitForRequest("sessions.resolve", { match: resolutionMatch });
+        await gateway.waitForRequest("sessions.resolve", {
+          match: resolutionMatch,
+          after: initialTitleResolutions,
+        });
         expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
           [],
         );
@@ -86,11 +88,7 @@ suite.define(() => {
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         }
         await gateway.resolveDeferred("connect");
-        await page.waitForFunction(
-          () =>
-            document.querySelector<TestApp>("openclaw-app")?.runtime?.context.gateway.snapshot
-              .phase === "connected",
-        );
+        await waitForControlUiGatewayReady(page);
         // A response belonging to the retired socket must not restore the abandoned route.
         await gateway.resolveDeferred("sessions.resolve");
 
@@ -113,7 +111,7 @@ suite.define(() => {
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
         expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+          initialTitleResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });

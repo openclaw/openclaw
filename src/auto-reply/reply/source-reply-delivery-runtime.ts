@@ -65,7 +65,7 @@ export function createSourceReplyDeliveryRuntime(params: {
         continue;
       }
       const offset = params.promptComponentOffset ?? -1;
-      const currentComponent = [...new Set(Object.values(params.promptComponentByMode))].find(
+      const currentComponent = Object.values(params.promptComponentByMode).find(
         (component) => component && prompt.slice(offset, offset + component.length) === component,
       );
       // Replace only the delivery-owned prompt component. Later context additions
@@ -77,7 +77,7 @@ export function createSourceReplyDeliveryRuntime(params: {
     }
     params.onModeResolved?.(mode);
   };
-  const runtime: SourceReplyDeliveryRuntime = {
+  return {
     origin: params.origin,
     get currentMode() {
       return currentMode;
@@ -86,5 +86,4 @@ export function createSourceReplyDeliveryRuntime(params: {
     applyMode: (owner, mode) => applyMode(owner, mode, false),
     applyPreparedMode: (owner, mode) => applyMode(owner, mode, true),
   };
-  return runtime;
 }

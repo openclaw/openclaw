@@ -1,4 +1,3 @@
-// Owns bounded TUI run state, transcript persistence, and serialized history reloads.
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import { getPendingSubmitAcceptedRunId, hasPendingSubmit } from "./tui-submit-state.js";
@@ -99,26 +98,21 @@ export class TuiSessionRunCoordinator {
         runId !== getPendingSubmitAcceptedRunId(this.context.state) &&
         !this.confirmedStreamRunIds.has(runId));
 
-    for (const [runId, observation] of runs) {
-      if (runs.size <= RETAINED_TRACKED_RUNS) {
-        break;
+    for (const expiredOnly of [true, false]) {
+      for (const [runId, observation] of runs) {
+        if (runs.size <= RETAINED_TRACKED_RUNS) {
+          break;
+        }
+        if (
+          (!expiredOnly ||
+            (typeof observation === "number" ? observation : observation.seenAt) < keepUntil) &&
+          canRemove(runId)
+        ) {
+          runs.delete(runId);
+        }
       }
-      if (
-        (typeof observation === "number" ? observation : observation.seenAt) < keepUntil &&
-        canRemove(runId)
-      ) {
-        runs.delete(runId);
-      }
-    }
-    if (runs.size <= MAX_TRACKED_RUNS) {
-      return;
-    }
-    for (const runId of runs.keys()) {
-      if (canRemove(runId)) {
-        runs.delete(runId);
-      }
-      if (runs.size <= RETAINED_TRACKED_RUNS) {
-        break;
+      if (runs.size <= MAX_TRACKED_RUNS) {
+        return;
       }
     }
   }
@@ -316,7 +310,7 @@ export class TuiSessionRunCoordinator {
 
   private async loadHistoryPreservingTerminalErrors(): Promise<TuiHistoryLoadResult> {
     const generation = this.historyReloadGeneration;
-    const result = (await this.context.loadHistory()) ?? { loaded: false };
+    const result = await this.context.loadHistory();
     if (!result.loaded || generation !== this.historyReloadGeneration) {
       return result;
     }

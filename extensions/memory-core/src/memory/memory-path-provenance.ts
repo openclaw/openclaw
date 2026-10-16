@@ -1,4 +1,3 @@
-// Memory Core plugin module classifies indexed workspace paths by provenance owner.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";

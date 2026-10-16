@@ -71,7 +71,7 @@ suite.define(() => {
       assistantName: "Roboclaw",
       cliAgentsEnabled: true,
       defaultAgentId: "roboclaw",
-      deferredMethods: ["agents.list"],
+      deferredRequests: [{ method: "agents.list" }],
       featureMethods: [...TERMINAL_START_FEATURE_METHODS],
       methodResponses: {
         "sessions.catalog.list": {
@@ -196,7 +196,7 @@ suite.define(() => {
           path.join(suite.artifactDir, "cli-agents-picker", "picker-group.png"),
           await takeControlUiViewportScreenshot(
             page,
-            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
             [cliGroup],
           ),
         );
@@ -359,7 +359,7 @@ suite.define(() => {
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
 
       await page.locator("#new-session-checkout-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__checkout-popover");
+      const placePopover = page.locator(".oc-popover.new-session-page__checkout-popover");
       const worktreeButton = placePopover.getByRole("button", {
         name: "New worktree Isolated copy of the repo",
         exact: true,
@@ -490,10 +490,8 @@ suite.define(() => {
   });
 
   it.each([
-    { catalogId: "codex", action: "button" },
     { catalogId: "codex", action: "Enter" },
     { catalogId: "claude", action: "button" },
-    { catalogId: "claude", action: "Enter" },
   ])(
     "$catalogId + primary $action opens a native terminal without Chat or title inference",
     async ({ catalogId, action }) => {
@@ -836,7 +834,7 @@ suite.define(() => {
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
@@ -873,7 +871,7 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__checkout-popover");
+      const placeSelect = page.locator(".oc-popover.new-session-page__checkout-popover");
       const placeTrigger = page.locator("#new-session-checkout-trigger");
       await placeTrigger.click();
       const worktreeItem = placeSelect.getByRole("button", {

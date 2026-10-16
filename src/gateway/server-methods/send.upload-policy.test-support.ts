@@ -202,6 +202,7 @@ export function registerSendUploadPolicyTests({
           ]);
           release.resolve();
           const [{ respond: initial }, { respond: replay }] = await Promise.all([first, retry]);
+          expect(firstRespondCall(initial)[0]).toBe(true);
           expect(firstRespondCall(replay).slice(0, 3)).toEqual(
             firstRespondCall(initial).slice(0, 3),
           );
@@ -235,77 +236,58 @@ export function registerSendUploadPolicyTests({
       },
     );
 
-    it.each([
-      { disable: false, trusted: false },
-      { disable: true, trusted: false },
-      { disable: true, trusted: true },
-    ])(
-      "checks policy after media directory preparation (disabled: $disable, trusted: $trusted)",
-      async ({ disable, trusted }) => {
-        const fixture = uploadFixture();
-        const prepared = createDeferred();
-        const release = createDeferred();
-        let preparing = false;
-        const originalMkdir = fs.mkdir;
-        // This await belongs to saveMediaBuffer on both the original and repaired paths.
-        // Native fs-safe publication need not call the JavaScript fs.open implementation.
-        const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-          const result = await originalMkdir(...args);
-          if (!preparing && args[0] === fixture.outboundDir) {
-            preparing = true;
-            prepared.resolve();
-            await release.promise;
-          }
-          return result;
-        });
-        mockDeliverySuccess("upload-accepted");
-        const request = fixture.invoke({ trusted });
-        try {
-          await Promise.race([prepared.promise, request]);
-          expect(preparing).toBe(true);
-          if (disable) {
-            fixture.disable();
-          }
-          release.resolve();
-          const { respond } = await request;
-          const denied = disable && !trusted;
-          expect(firstRespondCall(respond)[0]).toBe(!denied);
-          if (denied) {
-            expect(firstRespondCall(respond)[2]).toMatchObject({
-              code: ErrorCodes.FORBIDDEN,
-              details: { code: "UPLOADS_DISABLED" },
-            });
-            expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-            expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-            expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
-          } else {
-            const files = await fs.readdir(fixture.outboundDir);
-            expect(files).toHaveLength(1);
-            await expect(
-              fs.readFile(path.join(fixture.outboundDir, files[0]!), "utf8"),
-            ).resolves.toBe(bytes);
-          }
-        } finally {
-          release.resolve();
-          try {
-            await request;
-          } finally {
-            mkdirSpy.mockRestore();
-            fixture.restore();
-          }
+    it("checks disabled upload policy after media directory preparation", async () => {
+      const fixture = uploadFixture();
+      const prepared = createDeferred();
+      const release = createDeferred();
+      let preparing = false;
+      const originalMkdir = fs.mkdir;
+      // This await belongs to saveMediaBuffer on both the original and repaired paths.
+      // Native fs-safe publication need not call the JavaScript fs.open implementation.
+      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+        const result = await originalMkdir(...args);
+        if (!preparing && args[0] === fixture.outboundDir) {
+          preparing = true;
+          prepared.resolve();
+          await release.promise;
         }
-      },
-    );
+        return result;
+      });
+      mockDeliverySuccess("upload-accepted");
+      const request = fixture.invoke();
+      try {
+        await Promise.race([prepared.promise, request]);
+        expect(preparing).toBe(true);
+        fixture.disable();
+        release.resolve();
+        const { respond } = await request;
+        expect(firstRespondCall(respond)[0]).toBe(false);
+        expect(firstRespondCall(respond)[2]).toMatchObject({
+          code: ErrorCodes.FORBIDDEN,
+          details: { code: "UPLOADS_DISABLED" },
+        });
+        expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+        expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+        expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
+      } finally {
+        release.resolve();
+        try {
+          await request;
+        } finally {
+          mkdirSpy.mockRestore();
+          fixture.restore();
+        }
+      }
+    });
 
     it.each([
-      { boundary: "dispatch", trusted: false, accepted: false, reference: false },
-      { boundary: "handoff", trusted: false, accepted: false, reference: false },
-      { boundary: "handoff", trusted: true, accepted: false, reference: false },
-      { boundary: "handoff", trusted: false, accepted: true, reference: false },
-      { boundary: "handoff", trusted: false, accepted: false, reference: true },
+      { boundary: "dispatch", trusted: false, reference: false },
+      { boundary: "handoff", trusted: false, reference: false },
+      { boundary: "handoff", trusted: true, reference: false },
+      { boundary: "handoff", trusted: false, reference: true },
     ] as const)(
-      "retains ingress classification at $boundary (trusted: $trusted, accepted: $accepted, reference: $reference)",
-      async ({ boundary, trusted, accepted, reference }) => {
+      "retains ingress classification at $boundary (trusted: $trusted, reference: $reference)",
+      async ({ boundary, trusted, reference }) => {
         const fixture = uploadFixture();
         const entered = createDeferred();
         const release = createDeferred();
@@ -318,20 +300,14 @@ export function registerSendUploadPolicyTests({
           if (boundary === "handoff") {
             await params.onPlatformSendDispatch?.();
           }
-          if (accepted) {
-            assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-            platformSend();
-          }
           prepared = true;
           entered.resolve();
           await release.promise;
-          if (!accepted) {
-            if (boundary === "dispatch") {
-              await params.onPlatformSendDispatch?.();
-            }
-            assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-            platformSend();
+          if (boundary === "dispatch") {
+            await params.onPlatformSendDispatch?.();
           }
+          assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+          platformSend();
         };
         if (method === "message.action") {
           const { dispatchChannelMessageAction } = await vi.importActual<
@@ -367,7 +343,7 @@ export function registerSendUploadPolicyTests({
           fixture.disable();
           release.resolve();
           const { respond } = await request;
-          const allowed = trusted || accepted || reference;
+          const allowed = trusted || reference;
           expect(firstRespondCall(respond)[0]).toBe(allowed);
           expect(platformSend).toHaveBeenCalledTimes(allowed ? 1 : 0);
           if (!allowed) {

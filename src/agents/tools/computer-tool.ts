@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   ComputerActResult,
   ComputerUseV2ActionName,
@@ -10,6 +12,7 @@ import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contrac
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { readNodePermissionError } from "../node-permission-error.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
@@ -39,6 +42,11 @@ import {
   MAX_WAIT_SECONDS,
 } from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
+import {
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
+import { textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 export { invalidateComputerFrameIfMissing } from "./computer-tool-result.js";
@@ -62,7 +70,7 @@ function prepareComputerArguments(args: unknown): unknown {
 
 export function createComputerTool(options?: {
   config?: OpenClawConfig;
-  modelHasVision?: boolean;
+  computerExecutionId?: string;
   /** Stable run scope used to deduplicate a replayed model tool call on the node. */
   idempotencyScope?: string;
   /** Tracks whether the current screenshot pixels still reach model context. */
@@ -74,7 +82,7 @@ export function createComputerTool(options?: {
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
 }): AnyAgentTool {
-  const executionId = crypto.randomUUID();
+  const executionId = options?.computerExecutionId ?? crypto.randomUUID();
   const hasCleanupOwner = options?.registerRunCleanup !== undefined;
   const availableActions = (actions: readonly ComputerUseV2ActionName[]) =>
     availableComputerActions(actions, hasCleanupOwner);
@@ -96,14 +104,6 @@ export function createComputerTool(options?: {
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
-  const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
-    const next = createComputerToolSchema(actions, targetScope);
-    for (const key of Object.keys(parameterSchema)) {
-      Reflect.deleteProperty(parameterSchema, key);
-    }
-    Object.assign(parameterSchema, next);
-  };
-
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
   // shared target/frame/button state must apply in model order, not completion
@@ -125,15 +125,30 @@ export function createComputerTool(options?: {
     contextEpoch: options?.contextEpoch,
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
-    availableActions,
-    defaultActions: COMPUTER_TOOL_ACTIONS,
     onCapabilitiesChanged: (capabilities) => {
-      replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
+      tool.parameters = createComputerToolSchema(
+        availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+        targetScope,
+      );
       tool.description = buildComputerToolDescription(capabilities, targetScope);
     },
     registerRunCleanup: options?.registerRunCleanup,
     getOperationQueue: () => opQueue,
   });
+  if (options?.computerExecutionId && !hasCleanupOwner) {
+    const context = getInProcessGatewayToolContext();
+    const stop = registerAgentRunDelegatedAuthorityClosedHandler((closed, approvalReason) => {
+      if (!approvalReason && closed.operationalRunInstance.instanceId === executionId) {
+        stop();
+        void runWithGatewayToolCleanupContext(
+          () => session.dispose("run-ended"),
+          () => context,
+        ).catch((error: unknown) =>
+          createSubsystemLogger("agents/computer").warn(formatErrorMessage(error)),
+        );
+      }
+    });
+  }
 
   const captureAndDeliverScreenshot = async (params: {
     noteLines: string[];
@@ -149,29 +164,24 @@ export function createComputerTool(options?: {
       target: params.resolved.target,
       action: params.action,
       referenceWidth,
-      modelHasVision: options?.modelHasVision,
     });
     const previousFrame = session.refreshUnchangedFrame({
       target: params.resolved.target,
       capture,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     if (previousFrame) {
       const text = [
         ...params.noteLines,
         `screen unchanged since previous frame (frameId ${previousFrame.id}); screenshot omitted — keep using this frameId for coordinates`,
       ].join("\n");
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          ...computerTargetDetails(params.resolved.target),
-          action: params.action,
-          screenIndex: params.resolved.target.screenIndex,
-          frameId: previousFrame.id,
-          refWidth: referenceWidth,
-        },
-      };
+      return textResult(text, {
+        ...computerTargetDetails(params.resolved.target),
+        action: params.action,
+        screenIndex: params.resolved.target.screenIndex,
+        frameId: previousFrame.id,
+        refWidth: referenceWidth,
+      });
     }
     session.bindDeliveredFrame({
       resolved: params.resolved,
@@ -179,7 +189,6 @@ export function createComputerTool(options?: {
       frameId: projected.frameId,
       toolCallId: params.toolCallId,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     return projected.result;
   };
@@ -220,7 +229,6 @@ export function createComputerTool(options?: {
             target: resolved.target,
             action: observationAction,
             referenceWidth,
-            modelHasVision: options?.modelHasVision,
           });
           session.recordObservation(resolved, result, projected.imageCoordinates);
           return action === "get_window_state"
@@ -310,20 +318,17 @@ export function createComputerTool(options?: {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up observation should not fail the action.
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
-              },
-            ],
-            details: {
+          const permissionMissing = readNodePermissionError(err);
+          return textResult(
+            `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
+            {
               ...computerTargetDetails(resolved.target),
               action,
               screenIndex: resolved.target.screenIndex,
               result: actResult,
+              ...(permissionMissing ? { permissionMissing } : {}),
             },
-          };
+          );
         }
       }),
   };

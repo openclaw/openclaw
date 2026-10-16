@@ -3,7 +3,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import {
-  type createChangedExtensionFallbackShards,
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
@@ -39,7 +38,9 @@ export function materializeGatewayCallsitesFixture(cwd: string) {
   writeFileSync(file, "export {};\n");
 }
 
-export function fallbackGroups(shards: ReturnType<typeof createChangedExtensionFallbackShards>) {
+export function fallbackGroups(
+  shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>,
+) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 

@@ -1,10 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createOwnerBackedContractTool,
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
-import { createCopilotToolBridge, makeInvocation } from "./tool-bridge.test-support.js";
+import { createCopilotToolBridge, makeInvocation, runSdkTool } from "./tool-bridge.test-support.js";
 
 const mocks = vi.hoisted(() => ({ publicFactory: vi.fn(() => []) }));
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
@@ -14,6 +15,83 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
 afterEach(() => vi.clearAllMocks());
 
 describe("Copilot host-owned tool construction", () => {
+  it.each(
+    (["tools", "directory", "code"] as const).flatMap((mode) =>
+      (["file", "provider"] as const).map((arm) => ({ mode, arm })),
+    ),
+  )(
+    "keeps $arm memory persistence directly callable with $mode presentation",
+    async ({ mode, arm }) => {
+      const config = {
+        tools: {
+          toolSearch: { enabled: true, mode: mode === "directory" ? "directory" : "tools" },
+          codeMode: mode === "code",
+        },
+      } as const;
+      const originalConfig = structuredClone(config);
+      const name = arm === "file" ? "write" : "memory_store";
+      const persistence = createOwnerBackedContractTool({
+        pluginId: "fixture-memory-owner",
+        name,
+        result: textToolResult("PERSISTED_MEMORY"),
+      });
+      persistence.execute = vi.fn(async () => textToolResult("PERSISTED_MEMORY"));
+      // The host has already projected the selected flush arm. This exercises
+      // the real bridge's later SDK presentation, not host persistence policy.
+      const reader = createOwnerBackedContractTool({
+        pluginId: "fixture-memory-owner",
+        name: "read",
+        result: textToolResult("HOST_PINNED_READER"),
+      });
+      const bridge = await createCopilotToolBridge({
+        attemptParams: {
+          config,
+          trigger: "memory",
+          toolsAllow: ["read", name],
+          ...(arm === "file"
+            ? { memoryFlushWritePath: "memory/2026-10-09.md" }
+            : {
+                memoryFlushTools: {
+                  flushId: "fixture-flush",
+                  ownerPluginId: "fixture-memory-owner",
+                  persistenceToolNames: [name],
+                  recordPersistenceToolSuccess: () => {},
+                },
+              }),
+          hostCapabilities: createCopilotTestHostCapabilities(() => [reader, persistence]),
+        },
+      });
+      try {
+        const surface = bridge.promptToolPolicy.apply();
+        expect(bridge.codeModeEngaged).toBe(false);
+        expect(bridge.sourceTools.map((tool) => tool.name)).toEqual(["read", name]);
+        expect(surface.tools.map((tool) => tool.name)).toEqual(["read", name]);
+        expect(surface.callableToolNames).toEqual(["read", name]);
+        expect(surface.toolSchemaDirectoryPrompt).toBeUndefined();
+        const sdkPersistence = expectDefined(
+          surface.tools.find((tool) => tool.name === name),
+          "direct memory persistence handler",
+        );
+        const args = { content: "remember this" };
+        await expect(
+          runSdkTool(sdkPersistence, args, makeInvocation({ toolName: name })),
+        ).resolves.toMatchObject({
+          resultType: "success",
+          textResultForLlm: "PERSISTED_MEMORY",
+        });
+        expect(persistence.execute).toHaveBeenCalledExactlyOnceWith(
+          "call-1",
+          args,
+          undefined,
+          undefined,
+        );
+        expect(config).toEqual(originalConfig);
+      } finally {
+        bridge.cleanup?.();
+      }
+    },
+  );
+
   it("uses the host-prepared reader without rebinding it or calling the public factory", async () => {
     let active = true;
     const reader = createOwnerBackedContractTool({
@@ -27,7 +105,7 @@ describe("Copilot host-owned tool construction", () => {
       }
       return textToolResult("HOST_PINNED_READER");
     });
-    const createToolSurface = vi.fn(() => [reader]);
+    const createToolSurfaceAsync = vi.fn(async () => [reader]);
     const bindToolSurface = vi.fn(() => {
       throw new Error("Host-created tools must not be rebound");
     });
@@ -41,12 +119,12 @@ describe("Copilot host-owned tool construction", () => {
         toolsAllow: ["read"],
         hostCapabilities: {
           ...createCopilotTestHostCapabilities(),
-          createToolSurface,
+          createToolSurfaceAsync,
           bindToolSurface,
         },
       },
     });
-    expect(createToolSurface).toHaveBeenCalledExactlyOnceWith(
+    expect(createToolSurfaceAsync).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ skillsSnapshot, workspaceDir: "/workspace" }),
       { cwd: "/workspace" },
     );
@@ -54,6 +132,7 @@ describe("Copilot host-owned tool construction", () => {
     expect(bindToolSurface).not.toHaveBeenCalled();
     expect(bridge.sourceTools).toContain(reader);
     const sdkReader = bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "read");
+    expect(sdkReader).toMatchObject({ skipPermission: true, overridesBuiltInTool: true });
     expect(sdkReader?.handler).toBeTypeOf("function");
     const invocation = makeInvocation({ toolName: "read", toolCallId: "read-1", arguments: {} });
     const result = await sdkReader!.handler!({}, invocation);

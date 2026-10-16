@@ -1,6 +1,8 @@
 // Control UI E2E covers completed-work expansion and persistent visual outcomes.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
+import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 
 let artifactDir: string | undefined;
@@ -36,6 +38,183 @@ async function captureProof(page: import("playwright").Page, name: string) {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it.each([
+    { scenario: "widget first", browserFirst: false, framed: false },
+    { scenario: "browser first", browserFirst: true, framed: false },
+    { scenario: "widget first in a run frame", browserFirst: false, framed: true },
+  ])(
+    "keeps widgets and browser previews in execution order ($scenario)",
+    async ({ browserFirst, framed }) => {
+      await suite.withPage(
+        { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" },
+        async ({ page }) => {
+          const sessionKey = "agent:main:dashboard:visual-order";
+          const viewId = "cv_visual_order";
+          const canvasResult = {
+            kind: "canvas",
+            presentation: { target: "assistant_message", title: "Release confidence" },
+            view: { id: viewId, url: `/__openclaw__/canvas/documents/${viewId}/index.html` },
+          };
+          const browserTab = {
+            target: "host",
+            profile: "managed",
+            targetId: "visual-order-tab",
+            title: "Release reference",
+            url: "https://example.com/release",
+          };
+          const nestedExec = (
+            id: string,
+            toolName: string,
+            input: Record<string, unknown>,
+            value: unknown,
+            timestamp: number,
+            details?: Record<string, unknown>,
+          ) => {
+            const json = JSON.stringify(value);
+            const text =
+              toolName === "browser"
+                ? `<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: Browser\n---\n${json}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>`
+                : json;
+            const result = { content: [{ type: "text", text }], details };
+            return [
+              {
+                role: "assistant",
+                content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
+                timestamp,
+              },
+              createNestedToolActivity({
+                runId: "visual-order-run",
+                scopeId: id,
+                afterEntryId: id,
+                startOrder: 0,
+                parentToolCallId: id,
+                toolCallId: `${id}-child`,
+                toolName,
+                input,
+                result,
+                isError: false,
+                startedAt: timestamp + 100,
+                timestamp: timestamp + 200,
+              }),
+              {
+                role: "toolResult",
+                toolCallId: id,
+                toolName: "exec",
+                content: result.content,
+                timestamp: timestamp + 300,
+              },
+            ];
+          };
+          const widgetMessages = [
+            ...nestedExec(
+              "widget",
+              "show_widget",
+              { title: "Release confidence" },
+              canvasResult,
+              browserFirst ? 3_000 : 2_000,
+            ),
+            {
+              role: "assistant",
+              content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
+              timestamp: browserFirst ? 4_000 : 3_000,
+            },
+          ];
+          const browserMessages = nestedExec(
+            "open",
+            "browser",
+            { action: "open", targetUrl: browserTab.url },
+            browserTab,
+            browserFirst ? 2_000 : 4_000,
+            { browserTab },
+          );
+          const history = [
+            {
+              role: "user",
+              content: "Show a widget and check the release page.",
+              timestamp: 1_000,
+            },
+            ...(browserFirst
+              ? [...browserMessages, ...widgetMessages]
+              : [...widgetMessages, ...browserMessages]),
+            ...nestedExec(
+              "close",
+              "browser",
+              { action: "close", targetId: browserTab.targetId },
+              { ok: true },
+              5_000,
+            ),
+            {
+              role: "assistant",
+              content: "The widget and release reference are ready.",
+              timestamp: 6_000,
+            },
+          ];
+          await installMockGateway(page, {
+            sessionKey,
+            methodResponses: {
+              "canvas.document.view": canvasView(`<!doctype html>
+              <style>body { margin: 0; padding: 24px; background: #132332; color: #eaf5ff; font: 16px system-ui; }
+              div { margin-top: 18px; padding: 18px; background: #254c65; border-radius: 8px; }</style>
+              <h2>Release confidence</h2><p>First output · inline widget</p>
+              <div>Gateway 92% &nbsp; Control UI 84% &nbsp; Mobile 68%</div>`),
+            },
+            historyMessages: projectChatDisplayMessages(
+              history.map((message, index) =>
+                framed
+                  ? Object.assign(message, {
+                      __openclaw: {
+                        id: `visual-${index}`,
+                        seq: index + 1,
+                        runId: "visual-order-run",
+                      },
+                    })
+                  : message,
+              ),
+            ),
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await page
+            .getByText("The widget and release reference are ready.", { exact: true })
+            .waitFor();
+          const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
+          const browser = page.locator("openclaw-browser-tab-card");
+          await widget.waitFor();
+          await browser.waitFor();
+          await waitForChatScrollIdle(page);
+          expect(await widget.count()).toBe(1);
+          expect(await browser.count()).toBe(1);
+          expect(
+            await page
+              .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
+              .evaluateAll((elements) =>
+                elements.map((element) =>
+                  element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
+                ),
+              ),
+          ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
+          const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
+          expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
+          for (const expanded of [true, false]) {
+            await workedFor.click();
+            await waitForChatScrollIdle(page);
+            expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
+            expect(await widget.count()).toBe(1);
+            expect(await browser.count()).toBe(1);
+            const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
+              const rects = elements.map((element) => element.getBoundingClientRect());
+              return rects.flatMap((rect, index) => {
+                const next = rects[index + 1];
+                return next && rect.bottom > next.top
+                  ? [{ bottom: rect.bottom, nextTop: next.top }]
+                  : [];
+              });
+            });
+            expect(overlaps).toEqual([]);
+          }
+        },
+      );
+    },
+  );
   it("keeps visual output visible and virtual rows apart when completed work expands", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1200 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:worked-for-geometry";

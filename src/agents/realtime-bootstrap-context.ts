@@ -52,19 +52,6 @@ function formatRealtimeBootstrapContextFileName(pathValue: string): string {
   return path.basename(pathValue.trim().replace(/\\/g, "/"));
 }
 
-function resolveRealtimeBootstrapContextContentBudget(params: {
-  preamble: string;
-  fileNames: readonly string[];
-  totalMaxChars: number;
-}): number {
-  const separatorChars = "\n\n".length * params.fileNames.length;
-  const headingChars = params.fileNames.reduce(
-    (total, fileName) => total + `### ${fileName}\n`.length,
-    0,
-  );
-  return params.totalMaxChars - params.preamble.length - separatorChars - headingChars;
-}
-
 /** Builds bounded realtime instructions from selected profile bootstrap files. */
 export async function resolveRealtimeBootstrapContextInstructions(params: {
   agentId: string;
@@ -118,12 +105,8 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   }
   selectedFiles.sort((left, right) => {
     // Preserve requested profile-file order, then path-sort duplicate sources.
-    const leftOrder = requestedOrder.get(left.name) ?? 0;
-    const rightOrder = requestedOrder.get(right.name) ?? 0;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.path.localeCompare(right.path);
+    const order = (requestedOrder.get(left.name) ?? 0) - (requestedOrder.get(right.name) ?? 0);
+    return order || left.path.localeCompare(right.path);
   });
   if (selectedFiles.length === 0) {
     return undefined;
@@ -134,11 +117,11 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
     "\n",
   );
   const fileNames = selectedFiles.map((file) => formatRealtimeBootstrapContextFileName(file.path));
-  const contentBudget = resolveRealtimeBootstrapContextContentBudget({
-    preamble,
-    fileNames,
-    totalMaxChars,
-  });
+  const contentBudget =
+    totalMaxChars -
+    preamble.length -
+    "\n\n".length * fileNames.length -
+    fileNames.reduce((total, fileName) => total + `### ${fileName}\n`.length, 0);
   if (contentBudget <= 0) {
     params.warn?.(
       `realtime bootstrap context budget is too small to include selected profile files (limit ${totalMaxChars})`,

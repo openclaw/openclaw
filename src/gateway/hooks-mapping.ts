@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -7,8 +8,9 @@ import {
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
-import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -353,25 +355,17 @@ function normalizeForEachKey(raw: string | undefined): string | undefined {
   }
   // Fan-out replaces one top-level payload key with a single-item array per
   // dispatch; nested paths would require rebuilding arbitrary object graphs.
-  if (/[.[\]]/.test(key) || BLOCKED_PATH_KEYS.has(key)) {
+  if (/[.[\]]/.test(key) || isBlockedObjectKey(key)) {
     throw new Error(`Hook mapping forEach must be a top-level payload key: ${raw}`);
   }
   return key;
 }
 
 function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
-  if (mapping.matchPath) {
-    if (mapping.matchPath !== normalizeHookMatchPath(ctx.path)) {
-      return false;
-    }
-  }
-  if (mapping.matchSource) {
-    const source = readStringValue(ctx.payload.source);
-    if (!source || source !== mapping.matchSource) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    (!mapping.matchPath || mapping.matchPath === normalizeHookMatchPath(ctx.path)) &&
+    (!mapping.matchSource || mapping.matchSource === readStringValue(ctx.payload.source))
+  );
 }
 
 function buildActionFromMapping(mapping: HookMappingResolved, ctx: HookMappingContext): HookAction {
@@ -416,7 +410,10 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const mode =
+      override.mode === "now" || override.mode === "next-heartbeat"
+        ? override.mode
+        : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
       mappingId: base.mappingId,
@@ -431,7 +428,9 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "now" || override.wakeMode === "next-heartbeat"
+      ? override.wakeMode
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     mappingId: base.mappingId,
@@ -517,28 +516,21 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
-  const mod = await importFileModule({
-    modulePath: transform.modulePath,
-    cacheBust: true,
-    nowMs: generation,
+  const mod: Record<string, unknown> = await import(
+    `${pathToFileURL(transform.modulePath).href}?t=${generation}`
+  );
+  const fn = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName: transform.exportName,
+    fallbackExportNames: ["default", "transform"],
   });
-  const fn = resolveTransformFn(mod, transform.exportName);
+  if (!fn) {
+    throw new Error("hook transform module must export a function");
+  }
   if (generation === transformCacheBustVersion) {
     transformCache.set(cacheKey, fn);
   }
   return fn;
-}
-
-function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = resolveFunctionModuleExport<HookTransformFn>({
-    mod,
-    exportName,
-    fallbackExportNames: ["default", "transform"],
-  });
-  if (!candidate) {
-    throw new Error("hook transform module must export a function");
-  }
-  return candidate;
 }
 
 function safeRealpathSync(candidate: string): string | null {
@@ -606,14 +598,7 @@ function resolveOptionalContainedPath(
 }
 
 export function normalizeHookMatchPath(raw?: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
+  return normalizeOptionalString(raw)?.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
 function renderOptional(value: string | undefined, ctx: HookMappingContext) {
@@ -625,9 +610,6 @@ function renderOptional(value: string | undefined, ctx: HookMappingContext) {
 }
 
 function renderTemplate(template: string, ctx: HookMappingContext) {
-  if (!template) {
-    return "";
-  }
   return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, expr: string) => {
     const value = resolveTemplateExpr(expr.trim(), ctx);
     if (value === undefined || value === null) {
@@ -665,11 +647,6 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
-// Block traversal into prototype-chain properties on attacker-controlled
-// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
-// for config path traversal.
-const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -694,7 +671,7 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       current = current[part] as unknown;
       continue;
     }
-    if (BLOCKED_PATH_KEYS.has(part)) {
+    if (isBlockedObjectKey(part)) {
       return undefined;
     }
     if (typeof current !== "object") {

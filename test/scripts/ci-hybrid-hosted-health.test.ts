@@ -85,58 +85,52 @@ describe("hybrid hosted assignment health", () => {
     expect(timeout).toHaveBeenCalledWith(10_000);
   });
 
-  it.each([
-    { status: "queued", runner_id: null, started_at: null },
-    { status: "completed", runner_id: 12, started_at: at(0) },
-  ])("falls back on $status assignment stalls", async (job) => {
-    mockActions([preflight({ completed_at: at(60) }), sentinel(job)]);
-    await expect(inspect()).resolves.toMatchObject({
-      healthy: false,
-      reason: "hosted-assignment-stalled",
-      sampledJobs: 1,
-    });
-  });
-
-  it.each<[number, boolean]>([
-    [59, true],
-    [60, false],
-    [179, false],
-  ])("admits optional hosted checks after %s seconds: %s", async (wait, healthy) => {
-    mockActions([
-      preflight({ completed_at: at(500) }),
-      sentinel({ created_at: at(wait + 10), started_at: at(10) }),
-    ]);
-    await expect(inspect()).resolves.toMatchObject({ healthy, maxWaitSeconds: wait });
-  });
-
-  it("uses job creation when a sentinel is created after preflight", async () => {
-    mockActions([preflight({ completed_at: at(500) }), sentinel({ created_at: at(100) })]);
-    await expect(inspect()).resolves.toMatchObject({ healthy: true, maxWaitSeconds: 5 });
-  });
-
-  it.each([
-    [preflight({ run_attempt: 1 }), sentinel()],
-    [preflight(), sentinel({ run_attempt: 1 })],
-    [
-      preflight(),
-      sentinel({ created_at: at(20), runner_id: null, status: "queued", started_at: null }),
-    ],
-    [preflight(), sentinel({ conclusion: "skipped" })],
-    [preflight(), sentinel({ labels: ["self-hosted", "ubuntu-24.04"] })],
-    [preflight(), sentinel({ started_at: at(1_801) })],
-    [preflight({ completed_at: at(-1) }), sentinel()],
-  ])("requires fresh assigned evidence from the current attempt (%#)", async (...jobs) => {
-    mockActions(jobs);
-    await expect(inspect()).resolves.toMatchObject({
-      healthy: false,
-      reason: "no-fresh-hosted-evidence",
-    });
-  });
-
-  it("ignores the current run, cancelled or stale runs, forks, and manual dispatches", async () => {
-    const fetch = mockActions(
-      [preflight(), sentinel()],
+  const evidence: {
+    name: string;
+    jobs: unknown[];
+    runs?: unknown[];
+    expected: Partial<Awaited<ReturnType<typeof inspectHybridHostedHealth>>>;
+    calls?: number;
+  }[] = [
+    {
+      name: "queued assignment stalls",
+      jobs: [
+        preflight({ completed_at: at(60) }),
+        sentinel({ status: "queued", runner_id: null, started_at: null }),
+      ],
+      expected: { healthy: false, reason: "hosted-assignment-stalled", sampledJobs: 1 },
+    },
+    ...[
+      { wait: 59, healthy: true },
+      { wait: 60, healthy: false },
+    ].map(({ wait, healthy }) => ({
+      name: `${wait}-second assignment threshold`,
+      jobs: [
+        preflight({ completed_at: at(500) }),
+        sentinel({ created_at: at(wait + 10), started_at: at(10) }),
+      ],
+      expected: { healthy, maxWaitSeconds: wait },
+    })),
+    ...[
+      [preflight({ run_attempt: 1 }), sentinel()],
+      [preflight(), sentinel({ run_attempt: 1 })],
       [
+        preflight(),
+        sentinel({ created_at: at(20), runner_id: null, status: "queued", started_at: null }),
+      ],
+      [preflight(), sentinel({ conclusion: "skipped" })],
+      [preflight(), sentinel({ labels: ["self-hosted", "ubuntu-24.04"] })],
+      [preflight(), sentinel({ started_at: at(1_801) })],
+      [preflight({ completed_at: at(-1) }), sentinel()],
+    ].map((jobs, index) => ({
+      name: `unusable current-attempt evidence ${index}`,
+      jobs,
+      expected: { healthy: false, reason: "no-fresh-hosted-evidence" },
+    })),
+    {
+      name: "current, cancelled, stale, fork or manual runs",
+      jobs: [preflight(), sentinel()],
+      runs: [
         run({ id: 99 }),
         run({ conclusion: "cancelled" }),
         run({ conclusion: "skipped" }),
@@ -146,18 +140,32 @@ describe("hybrid hosted assignment health", () => {
         run({ event: "pull_request", head_repository: { full_name: "fork/openclaw" } }),
         run({ event: "workflow_dispatch" }),
       ],
-    );
-    await expect(inspect()).resolves.toMatchObject({ healthy: false, sampledJobs: 0 });
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("bounds evidence to three recent attempts", async () => {
-    const fetch = mockActions(
-      [preflight(), sentinel()],
-      [run(), run({ id: 11 }), run({ id: 12 }), run({ id: 13 })],
-    );
-    await expect(inspect()).resolves.toMatchObject({ healthy: true, sampledJobs: 3 });
-    expect(fetch).toHaveBeenCalledTimes(4);
+      expected: { healthy: false, sampledJobs: 0 },
+      calls: 1,
+    },
+    {
+      name: "at most three recent attempts",
+      jobs: [preflight(), sentinel()],
+      runs: [run(), run({ id: 11 }), run({ id: 12 }), run({ id: 13 })],
+      expected: { healthy: true, sampledJobs: 3 },
+      calls: 4,
+    },
+    ...[
+      { runner_id: null, status: "completed", conclusion: "failure" },
+      { labels: null },
+      { created_at: "invalid" },
+    ].map((job, index) => ({
+      name: `incomplete hosted assignment evidence ${index}`,
+      jobs: [preflight(), sentinel(job)],
+      expected: { healthy: false, reason: "hosted-health-unavailable" },
+    })),
+  ];
+  it.each(evidence)("evaluates $name", async ({ jobs, runs, expected, calls }) => {
+    const fetch = mockActions(jobs, runs);
+    await expect(inspect()).resolves.toMatchObject(expected);
+    if (calls !== undefined) {
+      expect(fetch).toHaveBeenCalledTimes(calls);
+    }
   });
 
   it.each([
@@ -171,18 +179,6 @@ describe("hybrid hosted assignment health", () => {
       reason: "hosted-health-unavailable",
       sampledJobs: 0,
       maxWaitSeconds: 0,
-    });
-  });
-
-  it.each([
-    { runner_id: null, status: "completed", conclusion: "failure" },
-    { labels: null },
-    { created_at: "invalid" },
-  ])("fails closed on incomplete hosted assignment evidence (%#)", async (job) => {
-    mockActions([preflight(), sentinel(job)]);
-    await expect(inspect()).resolves.toMatchObject({
-      healthy: false,
-      reason: "hosted-health-unavailable",
     });
   });
 });

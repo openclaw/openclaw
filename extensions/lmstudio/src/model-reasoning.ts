@@ -18,9 +18,9 @@ export function buildLmstudioReasoningEffortMap(
 ): Record<string, string> | undefined {
   const disabled = supportedReasoningEfforts.includes("none") ? "none" : undefined;
   const max =
-    supportedReasoningEfforts.find((option) => option === "xhigh") ??
-    supportedReasoningEfforts.find((option) => option === "high") ??
-    supportedReasoningEfforts.find((option) => option !== "none");
+    LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS.findLast((option) =>
+      supportedReasoningEfforts.includes(option),
+    ) ?? supportedReasoningEfforts.find((option) => option !== "none");
   const map = {
     ...(disabled ? { off: disabled, none: disabled } : {}),
     ...(max ? { adaptive: max, max } : {}),

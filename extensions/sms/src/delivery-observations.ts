@@ -43,12 +43,7 @@ export type SmsDeliveryRecord = {
   observations: SmsDeliveryObservation[];
 };
 
-export type SmsDeliveryRecorder = {
-  record: (params: {
-    account: ResolvedSmsAccount;
-    form: Record<string, string>;
-  }) => Promise<{ duplicate: boolean; record: SmsDeliveryRecord }>;
-};
+export type SmsDeliveryRecorder = ReturnType<typeof createSmsDeliveryRecorder>;
 
 let deliveryStore: PluginStateKeyedStore<SmsDeliveryRecord> | undefined;
 let deliveryStoreRuntime: ReturnType<typeof getSmsRuntime> | undefined;
@@ -232,7 +227,7 @@ async function recordSmsDeliveryObservation(params: {
   messageSid: string;
   observation: SmsDeliveryObservation;
   store: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord }> {
+}) {
   if (!params.store.observe || !params.store.compareAndApply) {
     throw new Error("SMS delivery observations require plugin state comparisons.");
   }
@@ -273,9 +268,9 @@ async function recordSmsDeliveryObservation(params: {
 
 export function createSmsDeliveryRecorder(
   store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
-): SmsDeliveryRecorder {
+) {
   return {
-    async record({ account, form }) {
+    async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
       const parsed = parseSmsDeliveryObservation(form);
       if (!parsed) {
         throw new Error("Invalid Twilio delivery status callback.");
@@ -295,7 +290,7 @@ export async function recordInitialSmsDeliveryResult(params: {
   result: SmsSendResult;
   nowMs?: number;
   store?: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord } | null> {
+}) {
   const messageSid = params.result.sid.trim();
   const status = normalizeDeliveryStatus(params.result.status ?? "");
   if (!messageSid || !status) {

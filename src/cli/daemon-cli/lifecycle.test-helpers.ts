@@ -19,13 +19,11 @@ export function createGatewayProcessExpectations(
   };
 }
 
-type RestartPostCheckContext = {
-  activationAccepted: boolean;
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
+type RestartPostCheckContext = Parameters<
+  NonNullable<
+    Parameters<typeof import("./lifecycle-core.js").runServiceRestart>[0]["postRestartCheck"]
+  >
+>[0];
 
 export type RestartParams = {
   opts?: { json?: boolean };

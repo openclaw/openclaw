@@ -15,7 +15,6 @@ import {
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import "../channels/turn/dispatch-result.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
 import {
   dispatchAssembledChannelTurn,
@@ -35,6 +34,12 @@ import type {
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "../channels/turn/types.js";
+import {
+  publicChannelTurn,
+  publicChannelTurnParams,
+  type PublicChannelTurnParams,
+  type PublicReplyParams,
+} from "./reply-options.js";
 export {
   hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
@@ -119,7 +124,10 @@ export {
 } from "../channels/location.js";
 export type { LogFn } from "../channels/logging.js";
 export { logInboundDrop } from "../channels/logging.js";
-export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export {
+  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
+} from "../channels/session-envelope.js";
 export {
   classifyChannelInboundEvent,
   resolveUnmentionedGroupInboundPolicy,
@@ -127,6 +135,7 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundEnvelopeInput,
 } from "../channels/inbound-event/envelope.js";
@@ -210,15 +219,17 @@ export const filterChannelTurnSupplementalContext = filterChannelInboundSuppleme
 export type ChannelInboundEventRunnerParams<
   TRaw,
   TDispatchResult = DispatchFromConfigResult,
-> = RunChannelTurnParams<TRaw, TDispatchResult>;
+> = PublicChannelTurnParams<TRaw, TDispatchResult, ChannelCoreManagedTurnDeliveryAdapter>;
 export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
-export type AssembledInboundReply = AssembledChannelTurn;
+export type AssembledInboundReply = PublicReplyParams<AssembledChannelTurn>;
 export type ChannelInboundTurnPlan<
   TOwnership extends "core" | "provider_message_sending" = "core",
-> = ChannelTurnPlan<
-  TOwnership extends "provider_message_sending"
-    ? ChannelProviderOwnedMessageSendingDeliveryAdapter
-    : ChannelCoreManagedTurnDeliveryAdapter
+> = PublicReplyParams<
+  ChannelTurnPlan<
+    TOwnership extends "provider_message_sending"
+      ? ChannelProviderOwnedMessageSendingDeliveryAdapter
+      : ChannelCoreManagedTurnDeliveryAdapter
+  >
 >;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 export type {
@@ -238,7 +249,7 @@ export async function runPreparedInboundReply<TDispatchResult>(
 }
 
 export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: RunChannelTurnParams<
+  params: PublicChannelTurnParams<
     TRaw,
     TDispatchResult,
     ChannelProviderOwnedMessageSendingDeliveryAdapter
@@ -248,18 +259,21 @@ export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfi
   params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
+  params: PublicChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ) {
   const run = runChannelTurn as (
     value: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
   ) => Promise<ChannelTurnResult<TDispatchResult>>;
-  return await run(params);
+  return await run(publicChannelTurnParams(params));
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
-  return await dispatchAssembledChannelTurn(params);
+  return await dispatchAssembledChannelTurn(publicChannelTurn(params));
 }
 
+export function dispatchChannelInboundTurn(
+  params: PublicReplyParams<ChannelTurnPlan<ChannelTurnDeliveryAdapter>>,
+): Promise<ChannelTurnResult>;
 export function dispatchChannelInboundTurn(
   params: ChannelInboundTurnPlan<"provider_message_sending">,
 ): Promise<ChannelTurnResult>;
@@ -267,12 +281,12 @@ export function dispatchChannelInboundTurn(
   params: ChannelInboundTurnPlan,
 ): Promise<ChannelTurnResult>;
 export async function dispatchChannelInboundTurn(
-  params: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+  params: PublicReplyParams<ChannelTurnPlan<ChannelTurnDeliveryAdapter>>,
 ) {
   const dispatch = dispatchRoutedChannelTurn as (
     value: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
   ) => Promise<ChannelTurnResult>;
-  return await dispatch(params);
+  return await dispatch(publicChannelTurn(params));
 }
 
 export {

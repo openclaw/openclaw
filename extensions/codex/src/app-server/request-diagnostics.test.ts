@@ -1,0 +1,263 @@
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import * as diagnostics from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerRpcError } from "./rpc-error.js";
+
+const shared = vi.hoisted(() => ({
+  acquire: vi.fn(),
+  release: vi.fn(),
+  retire: vi.fn(),
+}));
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
+  createIsolatedCodexAppServerClient: shared.acquire,
+  getLeasedSharedCodexAppServerClient: shared.acquire,
+  releaseLeasedSharedCodexAppServerClient: shared.release,
+  retireSharedCodexAppServerClientIfCurrent: shared.retire,
+}));
+// mock-isolation: Timeout logging must not start session-store I/O under the fake clock.
+vi.mock("./sandbox-guard.js", () => ({
+  prepareCodexAppServerDirectSandboxBypassBlock: async () => ({
+    block: undefined,
+    async assertCurrent() {},
+    release() {},
+  }),
+}));
+
+const { withCodexAppServerJsonClient } = await import("./request.js");
+type LogRecord = Extract<diagnostics.DiagnosticEventPayload, { type: "log.record" }>;
+type Options = Parameters<typeof withCodexAppServerJsonClient>[0];
+const MESSAGE = "codex app-server scope timed out";
+const clientInstanceId = "11111111-1111-4111-8111-111111111111";
+const trace = { traceId: "2".repeat(32), spanId: "3".repeat(16) };
+let records: LogRecord[];
+let unsubscribe: () => void;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.resetAllMocks();
+  diagnostics.resetDiagnosticEventsForTest();
+  vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent" });
+  records = [];
+  unsubscribe = diagnostics.onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record" && event.message === MESSAGE) {
+      records.push(event);
+    }
+  });
+});
+
+afterEach(async () => {
+  await diagnostics.waitForDiagnosticEventsDrained();
+  unsubscribe();
+  resetLogger();
+  diagnostics.resetDiagnosticEventsForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+function client(
+  request: (
+    method: string,
+    params?: unknown,
+    options?: { signal?: AbortSignal },
+  ) => Promise<unknown> = async () => ({}),
+) {
+  return { request, getInstanceId: () => clientInstanceId, closeAndWait: vi.fn(async () => {}) };
+}
+
+async function record() {
+  await diagnostics.waitForDiagnosticEventsDrained();
+  expect(records).toHaveLength(1);
+  return records[0]!;
+}
+
+function start(run: Parameters<typeof withCodexAppServerJsonClient>[1], options: Options = {}) {
+  return withCodexAppServerJsonClient(
+    { timeoutMs: 50, pluginConfig: { appServer: { requestTimeoutMs: 10 } }, ...options },
+    run,
+  ).catch((error: unknown) => error);
+}
+
+describe("scoped Codex timeout diagnostics", () => {
+  it("reports acquisition without guessing startup, authentication, a client, or a method", async () => {
+    const entered = createDeferred<void>();
+    const acquired = createDeferred<ReturnType<typeof client>>();
+    shared.acquire.mockImplementation(() => {
+      entered.resolve();
+      return acquired.promise;
+    });
+    const run = vi.fn(async () => undefined);
+    const result = start(run);
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await result).toMatchObject({ name: "AgentHarnessPreflightError" });
+    expect((await record()).attributes).toMatchObject({
+      phase: "acquire-client",
+      timeoutMs: 100,
+      elapsedMs: 150,
+    });
+    expect(records[0]?.attributes).not.toHaveProperty("clientInstanceId");
+    expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
+    acquired.resolve(client());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).not.toHaveBeenCalled();
+    expect(shared.release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the existing trace without logging concurrent request payloads", async () => {
+    const entered = createDeferred<void>();
+    const pending = createDeferred<object>();
+    const privateText = "synthetic-private-prompt-token-environment";
+    let started = 0;
+    const request = vi.fn(
+      (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+        if (++started === 5) {
+          entered.resolve();
+        }
+        return method === "account/read" ? Promise.resolve({}) : pending.promise;
+      },
+    );
+    shared.acquire.mockResolvedValue(client(request));
+    const result = runWithDiagnosticTraceContext(trace, () =>
+      start(
+        async (send) => {
+          const calls = ["app/read", "model/list", "app/read", "account/read", privateText].map(
+            (method) =>
+              send({ method, requestParams: { prompt: privateText, token: privateText } }),
+          );
+          return await Promise.all(calls);
+        },
+        {
+          // These identifiers test redaction; no session owner participates in this scope.
+          config: { agents: { entries: {} } },
+          sessionId: privateText,
+          sessionKey: privateText,
+        },
+      ),
+    );
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      result,
+      "Codex scope settled before all diagnostic requests started",
+    );
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+    const logged = await record();
+    expect(logged.trace).toMatchObject(trace);
+    expect(logged.attributes).toMatchObject({
+      phase: "client-request",
+    });
+    expect(JSON.stringify(logged)).not.toContain(privateText);
+    expect(JSON.stringify(logged)).not.toContain("account/read");
+    expect(logged.attributes).not.toHaveProperty("runId");
+    expect(logged.attributes).not.toHaveProperty("rpcId");
+    expect(request.mock.calls.every((call) => call[2]?.signal?.aborted)).toBe(true);
+    pending.resolve({});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shared.release).toHaveBeenCalledOnce();
+    expect(shared.retire).not.toHaveBeenCalled();
+    expect(records).toHaveLength(1);
+  });
+
+  it("reports release separately and preserves isolated shutdown budgets", async () => {
+    const closing = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const acquired = client();
+    acquired.closeAndWait.mockImplementation(async () => {
+      closing.resolve();
+      await finish.promise;
+    });
+    shared.acquire.mockResolvedValue(acquired);
+    const result = start(async (send) => send({ method: "model/list" }), {
+      isolated: true,
+      timeoutMessage: "custom timeout",
+      isolatedShutdown: { exitTimeoutMs: 200, forceKillDelayMs: 300 },
+    });
+    await closing.promise;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await result).toMatchObject({ message: "custom timeout" });
+    expect((await record()).attributes).toMatchObject({
+      phase: "release-client",
+    });
+    expect(acquired.closeAndWait).toHaveBeenCalledExactlyOnceWith({
+      exitTimeoutMs: 200,
+      forceKillDelayMs: 300,
+    });
+    expect(shared.release).not.toHaveBeenCalled();
+    finish.resolve();
+  });
+
+  it("keeps the default 60 second callback deadline", async () => {
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    shared.acquire.mockResolvedValue(client());
+    const result = withCodexAppServerJsonClient({}, async () => {
+      entered.resolve();
+      await finish.promise;
+    }).catch((error: unknown) => error);
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(records).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+    expect((await record()).attributes).toMatchObject({ timeoutMs: 60_000, elapsedMs: 60_000 });
+    finish.resolve();
+  });
+
+  it.each(["disabled", "throwing sink"] as const)(
+    "keeps timeout and abandonment semantics with %s diagnostics",
+    async (mode) => {
+      if (mode === "disabled") {
+        vi.mocked(diagnostics.areDiagnosticsEnabledForProcess).mockReturnValue(false);
+      } else {
+        vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {
+          throw new Error("sink");
+        });
+      }
+      const entered = createDeferred<void>();
+      const finish = createDeferred<void>();
+      shared.acquire.mockResolvedValue(client());
+      const result = start(async () => {
+        entered.resolve();
+        await finish.promise;
+      });
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+      expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
+      expect(records).toEqual([]);
+      finish.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(shared.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves RPC errors and caller cancellation without emitting a timeout", async () => {
+    const error = new CodexAppServerRpcError(
+      { code: -32601, message: "unsupported" },
+      "model/list",
+    );
+    shared.acquire.mockResolvedValue(
+      client(
+        vi.fn(async () => {
+          throw error;
+        }),
+      ),
+    );
+    expect(await start(async (send) => send({ method: "model/list" }))).toBe(error);
+    const controller = new AbortController();
+    const cancelled = new Error("cancelled");
+    controller.abort(cancelled);
+    expect(await start(async () => undefined, { signal: controller.signal })).toBe(cancelled);
+    expect(records).toEqual([]);
+    expect(shared.acquire).toHaveBeenCalledOnce();
+    expect(shared.release).toHaveBeenCalledOnce();
+  });
+});

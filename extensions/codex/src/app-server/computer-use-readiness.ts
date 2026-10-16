@@ -9,9 +9,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type { CodexThreadStartResponse, JsonValue } from "./protocol.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
-/** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
@@ -59,8 +57,6 @@ export function createComputerUseRequest(params: {
     });
 }
 
-type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
-
 export type CodexComputerUseRepairStatus = {
   attempted: boolean;
   killedPids: number[];
@@ -69,7 +65,7 @@ export type CodexComputerUseRepairStatus = {
 };
 
 export type CodexComputerUseLiveTestStatus = {
-  status: CodexComputerUseLiveTestState;
+  status: "skipped" | "passed" | "failed";
   ok: boolean;
   attempted: boolean;
   attempts: number;
@@ -82,10 +78,10 @@ export type CodexComputerUseLiveTestStatus = {
 };
 
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
-const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
+const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness check";
 const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
 const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
-const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.getState();";
+const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.listApps();";
 
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;
@@ -97,12 +93,29 @@ export async function runCodexComputerUseLiveTest(params: {
   const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
-  const probe = resolveComputerUseLiveTestProbe(params.tools);
+  const probe =
+    params.tools?.includes(COMPUTER_USE_UNIFIED_JS_TOOL) &&
+    !params.tools.includes(COMPUTER_USE_LIST_APPS_TOOL)
+      ? { tool: COMPUTER_USE_UNIFIED_JS_TOOL, arguments: { code: COMPUTER_USE_UNIFIED_JS_PROBE } }
+      : { tool: COMPUTER_USE_LIST_APPS_TOOL, arguments: {} };
+  const liveTestStatus = (attempts: number, error?: string): CodexComputerUseLiveTestStatus => ({
+    status: error === undefined ? "passed" : "failed",
+    ok: error === undefined,
+    attempted: true,
+    attempts,
+    timeoutMs: params.config.liveTestTimeoutMs,
+    retried: attempts > 1,
+    repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
+    durationMs: Math.max(0, Date.now() - startedAt),
+    message:
+      error === undefined
+        ? "Computer Use live test passed."
+        : `Computer Use live test failed after ${attempts} attempts: ${error}`,
+    ...(error === undefined ? {} : { error }),
+  });
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
-    let outcome:
-      | { ok: true; liveTest: CodexComputerUseLiveTestStatus }
-      | { ok: false; error: unknown };
+    let outcome: { liveTest: CodexComputerUseLiveTestStatus } | { error: unknown };
     try {
       const thread = await params.request<CodexThreadStartResponse>(
         "thread/start",
@@ -133,22 +146,9 @@ export async function runCodexComputerUseLiveTest(params: {
           `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
         );
       }
-      outcome = {
-        ok: true,
-        liveTest: {
-          status: "passed",
-          ok: true,
-          attempted: true,
-          attempts: attempt + 1,
-          timeoutMs: params.config.liveTestTimeoutMs,
-          retried: attempt > 0,
-          repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-          durationMs: Math.max(0, Date.now() - startedAt),
-          message: "Computer Use live test passed.",
-        },
-      };
+      outcome = { liveTest: liveTestStatus(attempt + 1) };
     } catch (error) {
-      outcome = { ok: false, error };
+      outcome = { error };
     }
     let cleanupError: Error | undefined;
     if (threadId) {
@@ -158,16 +158,13 @@ export async function runCodexComputerUseLiveTest(params: {
         cleanupError = toErrorObject(error, "Computer Use readiness cleanup failed");
       }
     }
-    if (
-      !outcome.ok &&
-      (params.signal?.aborted || isCodexAppServerStartSelectionChangedError(outcome.error))
-    ) {
+    if ("error" in outcome && params.signal?.aborted) {
       throw toErrorObject(outcome.error, "Computer Use live test failed");
     }
     if (cleanupError) {
       throw cleanupError;
     }
-    if (outcome.ok) {
+    if ("liveTest" in outcome) {
       return { liveTest: outcome.liveTest, ...(repair ? { repair } : {}) };
     }
     lastError = outcome.error;
@@ -175,38 +172,13 @@ export async function runCodexComputerUseLiveTest(params: {
       repair = await repairComputerUseMcpRuntime(params.request, params.config);
     }
   }
-  const errorMessage = describeControlFailure(lastError);
   return {
-    liveTest: {
-      status: "failed",
-      ok: false,
-      attempted: true,
-      attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
-      timeoutMs: params.config.liveTestTimeoutMs,
-      retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
-      repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-      durationMs: Math.max(0, Date.now() - startedAt),
-      message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
-      error: errorMessage,
-    },
+    liveTest: liveTestStatus(
+      COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
+      describeControlFailure(lastError),
+    ),
     ...(repair ? { repair } : {}),
   };
-}
-
-function resolveComputerUseLiveTestProbe(tools: readonly string[] | undefined): {
-  tool: string;
-  arguments: Record<string, JsonValue>;
-} {
-  if (
-    tools?.includes(COMPUTER_USE_UNIFIED_JS_TOOL) &&
-    !tools.includes(COMPUTER_USE_LIST_APPS_TOOL)
-  ) {
-    return {
-      tool: COMPUTER_USE_UNIFIED_JS_TOOL,
-      arguments: { code: COMPUTER_USE_UNIFIED_JS_PROBE },
-    };
-  }
-  return { tool: COMPUTER_USE_LIST_APPS_TOOL, arguments: {} };
 }
 
 async function repairComputerUseMcpRuntime(

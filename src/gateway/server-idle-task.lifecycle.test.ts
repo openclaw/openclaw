@@ -115,7 +115,7 @@ it.each(["suspension", "restart signal"] as const)(
       stopping = Promise.resolve(handle.stop()).then(() => {
         closed = true;
       });
-      await clock.advanceBy(0);
+      await stopping;
       expect(closed).toBe(true);
       expect(run).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);

@@ -122,35 +122,45 @@ enum ChatCommandPaletteModel {
     }
 }
 
-/// Presentation-scoped results, not a second session cache. A generation also
-/// fences A → B → A searches whose transports finish after cancellation.
+/// Presentation-scoped results; the view's search task owns cancellation.
+@MainActor
 struct ChatCommandPaletteSearch {
     struct Request: Equatable {
         let query: String
         let target: OpenClawChatSessionTarget
     }
 
-    private(set) var generation: UInt64 = 0
     private(set) var request: Request?
     private var matches: [OpenClawChatSessionEntry] = []
+    private var owner: OpenClawChatSessionSidebarData?
+    private var read: OpenClawChatSessionSidebarData.Read?
+    private var matchIDs: [String] = []
     private(set) var isLoading = false
 
-    mutating func begin(_ request: Request) -> UInt64 {
-        self.generation &+= 1
+    mutating func begin(_ request: Request, owner: OpenClawChatSessionSidebarData? = nil) {
+        self.owner = owner
+        self.read = owner?.beginRead()
+        self.matchIDs = []
         self.request = request
         self.matches = []
         self.isLoading = !request.query.isEmpty
-        return self.generation
     }
 
-    mutating func complete(_ matches: [OpenClawChatSessionEntry], generation: UInt64) {
-        guard generation == self.generation else { return }
-        self.matches = matches
+    mutating func complete(_ matches: [OpenClawChatSessionEntry]) {
+        if let owner, let read {
+            self.matchIDs = owner.receive(matches, read: read)
+        } else {
+            self.matches = matches
+        }
         self.isLoading = false
     }
 
     func rows(for request: Request) -> [OpenClawChatSessionEntry] {
-        self.request == request ? self.matches : []
+        guard self.request == request else { return [] }
+        if let owner {
+            return owner.scopeRevision == self.read?.scope ? owner.project(self.matchIDs) : []
+        }
+        return self.matches
     }
 }
 #endif

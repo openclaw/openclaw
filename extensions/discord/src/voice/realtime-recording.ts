@@ -17,8 +17,7 @@ export class DiscordRealtimeRecordingInput {
   hasAudio = false;
   eligible = true;
   unavailable: boolean;
-  private audioSealed = false;
-  private batchSealed = false;
+  private readonly sealed = { audio: false, batch: false };
   private pending = 0;
   private readonly listeners = new Set<() => void>();
 
@@ -68,18 +67,13 @@ export class DiscordRealtimeRecordingInput {
     this.notify();
   }
 
-  sealAudio(): void {
-    this.audioSealed = true;
-    this.notify();
-  }
-
-  sealBatch(): void {
-    this.batchSealed = true;
+  seal(input: "audio" | "batch"): void {
+    this.sealed[input] = true;
     this.notify();
   }
 
   get complete(): boolean {
-    return this.audioSealed && this.batchSealed && this.pending === 0;
+    return this.sealed.audio && this.sealed.batch && this.pending === 0;
   }
 
   subscribe(listener: () => void): () => void {
@@ -100,8 +94,7 @@ export class DiscordRealtimeRecording {
   private capture: Capture;
   private speaker: { id: string; label: string } | undefined;
   private firstStartedAt: number | undefined;
-  private sawInput = false;
-  private multipleInputs = false;
+  private inputCount = 0;
   private unavailable = false;
   private stopped = false;
   private publishing = false;
@@ -135,8 +128,7 @@ export class DiscordRealtimeRecording {
         }
         this.capture = input.capture;
         this.speaker ??= speaker;
-        this.multipleInputs ||= this.sawInput;
-        this.sawInput = true;
+        this.inputCount += 1;
         this.firstStartedAt ??= input.startedAt;
       }
       if (input.complete) {
@@ -173,7 +165,7 @@ export class DiscordRealtimeRecording {
     this.finals.push({
       text,
       bytes,
-      ...(!this.multipleInputs ? { startedAt: this.firstStartedAt } : {}),
+      ...(this.inputCount < 2 ? { startedAt: this.firstStartedAt } : {}),
     });
     void this.publish();
   }
@@ -197,9 +189,7 @@ export class DiscordRealtimeRecording {
       unsubscribe();
     }
     this.inputs.clear();
-    for (const final of this.finals) {
-      this.bytes -= final.bytes;
-    }
+    this.bytes -= this.finals.reduce((total, final) => total + final.bytes, 0);
     this.finals = [];
     if (!this.publishing) {
       this.finishCompletion?.resolve();

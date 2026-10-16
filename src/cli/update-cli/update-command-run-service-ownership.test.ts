@@ -24,6 +24,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import { admitUpdateCommandRun } from "./update-command-run.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
@@ -47,6 +48,7 @@ it.each([
 ] as const)(
   "preserves verified ownership and warns on unavailable inspection (%s)",
   async (scenario) => {
+    stubNodeRuntime();
     const home = dirs.make("update-loaded-admission-");
     const callerState = path.join(home, ".openclaw-caller");
     const serviceState = path.join(home, ".openclaw-service");
@@ -168,6 +170,10 @@ it.each([
           { type: "as", data: [] },
           { type: "b", data: false },
           { type: "s", data: "loaded" },
+          { type: "s", data: "enabled" },
+          { type: "s", data: "active" },
+          { type: "b", data: true },
+          { type: "b", data: false },
         ]);
       }
       return response([

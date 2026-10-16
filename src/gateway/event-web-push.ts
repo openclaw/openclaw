@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { WebPushNotificationCategory } from "../../packages/gateway-protocol/src/schema/push.js";
@@ -49,6 +54,7 @@ export type HumanMentionWebPush = {
   agentId: string;
   senderLabel?: string;
   sessionTitle?: string;
+  prepare: () => Promise<void>;
   isCurrent: () => boolean;
 };
 
@@ -130,17 +136,20 @@ export function createEventWebPushDelivery(params: {
     opts?: GatewayBroadcastOpts,
     mention?: HumanMentionWebPush,
   ): void => {
+    let stage = "subscriptions";
     void (async () => {
       if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
         return;
       }
+      stage = "sender";
       const sender = await prepareWebPushNotificationSender(params.stateDir);
+      stage = "authority";
       const agentId = normalizeOptionalString(
         opts?.agentId ?? (isRecord(payload) ? payload.agentId : undefined),
       );
       const sessionKeys = opts?.sessionKeys ?? [];
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId },
+        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =
@@ -230,8 +239,9 @@ export function createEventWebPushDelivery(params: {
             .digest("base64url")
             .slice(0, 32);
           return {
-            start: () =>
-              Promise.all(
+            start: () => {
+              stage = "delivery";
+              return Promise.all(
                 [...groups.values()].map((group) =>
                   sender({
                     subscriptions: group.subscriptions,
@@ -249,7 +259,8 @@ export function createEventWebPushDelivery(params: {
                     },
                   }),
                 ),
-              ),
+              );
+            },
           };
         },
       );
@@ -265,9 +276,16 @@ export function createEventWebPushDelivery(params: {
           failed,
         });
       }
-    })().catch(() => {
-      // Transport failures can contain endpoints and payload bytes; log only the closed category.
-      log.warn("event Web Push delivery could not complete", { category: notification.category });
+    })().catch((error: unknown) => {
+      log.warn("event Web Push delivery could not complete", {
+        category: notification.category,
+        stage,
+        error: formatErrorMessage(error),
+        errorName: readErrorName(error),
+        errorCode: extractErrorCode(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        retry: false,
+      });
     });
   };
 

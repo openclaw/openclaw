@@ -45,7 +45,7 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           cfg: config,
           authStore: store,
           env,
-          allowPreparedRuntimeAuth: false,
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5" }),
       ).toMatchObject({ availability: true, evidence: "provider-config", selectedAuthMode: mode });
@@ -95,7 +95,7 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
       cfg: config,
       authStore: store,
       env: {},
-      allowPreparedRuntimeAuth: false,
+      preparedRuntimeAuthStore: { version: 1, profiles: {} },
       routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
     }).evaluateModelAuth(provider, {
       modelId: "gpt-5.5",
@@ -171,7 +171,7 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           cfg: config,
           authStore: store,
           env: {},
-          allowPreparedRuntimeAuth: false,
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(provider === "openai" ? dualRoutes : null),
         }).evaluateModelAuth(provider, { modelId: "gpt-5.5", pinnedProfileId: pin }),
       ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
@@ -206,7 +206,7 @@ describe("session account pin admission", () => {
         cfg,
         authStore: store,
         env: {},
-        allowPreparedRuntimeAuth: false,
+        preparedRuntimeAuthStore: { version: 1, profiles: {} },
       }).evaluateModelAuth("openai", {
         modelId: "CHAT-LATEST",
         ...(selection === "pinned" ? { pinnedProfileId: pin } : {}),
@@ -272,7 +272,7 @@ describe("session account pin admission", () => {
         cfg,
         authStore: store,
         env: {},
-        allowPreparedRuntimeAuth: false,
+        preparedRuntimeAuthStore: { version: 1, profiles: {} },
       }).evaluateModelAuth("openai", {
         modelId: "chat-latest",
         ...(state === "shared-fallback" ? { pinnedProfileId: "openai:chatgpt" } : {}),
@@ -379,7 +379,7 @@ describe("session account pin admission", () => {
           cfg: config,
           authStore: store,
           env: {},
-          allowPreparedRuntimeAuth: false,
+          preparedRuntimeAuthStore: { version: 1, profiles: {} },
           routeResolverFactory: routeResolverFactory(null),
         }).evaluateModelAuth(provider, { modelId: "synthetic-model", pinnedProfileId: pin }),
       ).toMatchObject(

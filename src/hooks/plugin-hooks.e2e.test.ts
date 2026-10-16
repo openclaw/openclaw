@@ -20,6 +20,7 @@ import {
 
 const pluginId = "qa-plugin-hook-contracts";
 const recordedEventsKey = Symbol.for("openclaw.qa.plugin-hook-contracts.events");
+const transcriptResultKey = Symbol.for("openclaw.qa.plugin-hook-contracts.transcript-result");
 const registeredHookNames = [
   "before_tool_call",
   "message_received",
@@ -55,6 +56,7 @@ function loadFixturePlugin() {
     id: pluginId,
     body: `
 const eventsKey = Symbol.for("openclaw.qa.plugin-hook-contracts.events");
+const transcriptResultKey = Symbol.for("openclaw.qa.plugin-hook-contracts.transcript-result");
 function record(hookName, event, context) {
   const events = globalThis[eventsKey] ?? (globalThis[eventsKey] = []);
   events.push({ hookName, event, context });
@@ -87,8 +89,17 @@ module.exports = {
     api.on("session_start", (event, context) => {
       record("session_start", event, context);
     });
-    api.on("session_end", (event, context) => {
-      record("session_end", event, context);
+    api.on("session_end", async (event, context) => {
+      try {
+        const endedTranscriptResult = context.endedTranscript?.available
+          ? await context.endedTranscript.readTail({ maxMessages: 10, maxBytes: 64 * 1024 })
+          : context.endedTranscript;
+        record("session_end", event, { ...context, endedTranscriptResult });
+        globalThis[transcriptResultKey]?.resolve(endedTranscriptResult);
+      } catch (error) {
+        globalThis[transcriptResultKey]?.reject(error);
+        throw error;
+      }
     });
     api.on("cron_changed", (event, context) => {
       record("cron_changed", event, context);
@@ -123,6 +134,7 @@ afterEach(() => {
   resetGlobalHookRunner();
   resetPluginLoaderTestStateForTest();
   delete (globalThis as Record<PropertyKey, unknown>)[recordedEventsKey];
+  delete (globalThis as Record<PropertyKey, unknown>)[transcriptResultKey];
 });
 
 afterAll(() => {

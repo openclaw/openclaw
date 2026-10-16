@@ -1,4 +1,3 @@
-// Reusable CLI error-message formatters that keep recovery hints consistent across commands.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "./command-format.js";
 
@@ -8,41 +7,24 @@ function formatInlineCliCommand(command: string): string {
   return `\`${formatCliCommand(command)}\``;
 }
 
-/** Explain the valid TCP port range with a concrete example. */
-export function formatPortRangeHint(example = DEFAULT_GATEWAY_PORT_EXAMPLE): string {
-  return `Use a port number from 1 to 65535, for example ${example}.`;
+export function formatPortRangeHint(): string {
+  return `Use a port number from 1 to 65535, for example ${DEFAULT_GATEWAY_PORT_EXAMPLE}.`;
 }
 
-/** Format an invalid CLI port option using the shared port-range hint. */
-export function formatInvalidPortOption(
-  option: string,
-  example = DEFAULT_GATEWAY_PORT_EXAMPLE,
-): string {
-  return `Invalid ${option}. ${formatPortRangeHint(example)}`;
+export function formatInvalidPortOption(option: string): string {
+  return `Invalid ${option}. ${formatPortRangeHint()}`;
 }
 
-/** Explain a bad configured port and include the equivalent CLI override. */
-export function formatInvalidConfigPort(
-  path: string,
-  example = DEFAULT_GATEWAY_PORT_EXAMPLE,
-): string {
-  return `Invalid ${path} in config. Set ${path} to a number from 1 to 65535, or pass --port ${example}.`;
+export function formatInvalidConfigPort(path: string): string {
+  return `Invalid ${path} in config. Set ${path} to a number from 1 to 65535, or pass --port ${DEFAULT_GATEWAY_PORT_EXAMPLE}.`;
 }
 
-/** Format the standard missing-channel error plus channel-list recovery command. */
-export function formatUnknownChannelMessage(params: {
-  channel: string;
-  listCommand?: string;
-  purpose?: string;
-}): string {
-  const purpose = params.purpose ? ` for ${params.purpose}` : "";
-  const listCommand = params.listCommand ?? "openclaw channels list --all";
-  return `Unknown channel "${params.channel}"${purpose}. Run ${formatInlineCliCommand(
-    listCommand,
+export function formatUnknownChannelMessage(params: { channel: string }): string {
+  return `Unknown channel "${params.channel}". Run ${formatInlineCliCommand(
+    "openclaw channels list --all",
   )} to see configured and installable channels.`;
 }
 
-/** Format a channel capability miss with the inspection command for that channel. */
 export function formatUnsupportedChannelActionMessage(params: {
   channel: string;
   action: string;
@@ -55,7 +37,6 @@ export function formatUnsupportedChannelActionMessage(params: {
   )} to inspect supported actions.`;
 }
 
-/** Format strict JSON parsing failures without exposing long untrusted input verbatim. */
 export function formatStrictJsonParseFailure(params: { value: string; cause: unknown }): string {
   const rawCause = params.cause instanceof Error ? params.cause.message : String(params.cause);
   const cause = rawCause.trim().replace(/[.。]+$/u, "");
@@ -71,12 +52,7 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   ].join(" ");
 }
 
-/** Normalize gateway failure text and attach the deep-status recovery command. */
-export function formatGatewayCommandFailure(params: {
-  action: string;
-  error: unknown;
-  inspectCommand?: string;
-}): string {
+export function formatGatewayCommandFailure(params: { action: string; error: unknown }): string {
   const raw = params.error instanceof Error ? params.error.message : String(params.error);
   const message = raw
     .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
@@ -84,14 +60,12 @@ export function formatGatewayCommandFailure(params: {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[.。]+$/u, "");
-  const inspectCommand = params.inspectCommand ?? "openclaw gateway status --deep";
   const detail = message ? `: ${message}` : "";
   return `Could not ${params.action} because the Gateway did not respond${detail}. Run ${formatInlineCliCommand(
-    inspectCommand,
+    "openclaw gateway status --deep",
   )} to inspect the active Gateway.`;
 }
 
-/** Format a generic lookup miss with the list command that can recover it. */
 export function formatLookupMiss(params: {
   noun: string;
   value: string;
@@ -104,7 +78,6 @@ export function formatLookupMiss(params: {
   )} to see recent ${valueLabel}s.`;
 }
 
-/** Format a plugin lookup miss with optional ClawHub search guidance. */
 export function formatMissingPluginMessage(params: {
   id: string;
   listCommand?: string;

@@ -26,23 +26,12 @@ export type DraftSessionCreateSelection = Partial<
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };
 
-export function canStartSessionAsDraft(params: {
-  allowedVisibilities?: readonly string[];
-  hasMultipleIdentities?: boolean;
-}): boolean {
-  return (
-    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
-  );
-}
-
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
   return !name || WORKTREE_NAME_PATTERN.test(name);
 }
 
-/** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
-  key?: string;
   agentId: string;
   message: string;
   mentions?: readonly HumanMention[];
@@ -60,6 +49,7 @@ export function buildDraftSessionCreateParams(draft: {
   projectId?: string;
   projectGitUrl?: string;
   repository?: SessionCreateParams["repository"];
+  deviceFolder?: SessionCreateParams["deviceFolder"];
   worktree: boolean;
   worktreeSource?: SessionCreateParams["worktreeSource"];
   baseRef?: string;
@@ -69,6 +59,9 @@ export function buildDraftSessionCreateParams(draft: {
   catalogId?: string;
   category?: string;
 }): SessionCreateParams {
+  const displayName = normalizeOptionalString(draft.displayName);
+  const baseRef = normalizeOptionalString(draft.baseRef);
+  const worktreeName = normalizeOptionalString(draft.worktreeName);
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
   const catalogId = normalizeOptionalString(draft.catalogId);
@@ -82,11 +75,15 @@ export function buildDraftSessionCreateParams(draft: {
     draft.deferInitialTurn && draft.visibility !== "incognito"
       ? truncateUtf16Safe(draft.message.trim(), 1_000)
       : undefined;
-  const emptyWorkspace = draft.worktreeSource === "empty";
-  const repository = emptyWorkspace ? undefined : draft.repository;
+  const deviceFolder = draft.deviceFolder;
+  const emptyWorkspace = !deviceFolder && draft.worktreeSource === "empty";
+  const repository = deviceFolder || emptyWorkspace ? undefined : draft.repository;
   const projectId =
-    emptyWorkspace || repository ? undefined : normalizeOptionalString(draft.projectId);
+    deviceFolder || emptyWorkspace || repository
+      ? undefined
+      : normalizeOptionalString(draft.projectId);
   const projectGitUrl =
+    !deviceFolder &&
     !emptyWorkspace &&
     !repository &&
     !projectId &&
@@ -94,19 +91,22 @@ export function buildDraftSessionCreateParams(draft: {
       ? normalizeOptionalString(draft.projectGitUrl)
       : undefined;
   const customFolder =
-    !emptyWorkspace && !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace
+    !deviceFolder &&
+    !emptyWorkspace &&
+    !repository &&
+    !projectId &&
+    !projectGitUrl &&
+    cwd &&
+    cwd !== workspace
       ? cwd
       : undefined;
   return {
-    ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message,
     ...(!draft.deferInitialTurn && draft.mentions?.length
       ? { mentions: draft.mentions.map((mention) => ({ ...mention })) }
       : {}),
-    ...(normalizeOptionalString(draft.displayName)
-      ? { displayName: normalizeOptionalString(draft.displayName) }
-      : {}),
+    ...(displayName ? { displayName } : {}),
     ...(titleSource ? { titleSource } : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
@@ -125,18 +125,15 @@ export function buildDraftSessionCreateParams(draft: {
     ...(projectId ? { projectId } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(repository ? { repository: { ...repository } } : {}),
+    ...(deviceFolder ? { deviceFolder: { ...deviceFolder, path: deviceFolder.path.trim() } } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),
-    ...(draft.worktree && !repository && !emptyWorkspace
+    ...(draft.worktree && !deviceFolder && !repository && !emptyWorkspace
       ? {
           worktree: true,
           // Passing the base explicitly also skips the create-time origin fetch.
-          ...(normalizeOptionalString(draft.baseRef)
-            ? { worktreeBaseRef: normalizeOptionalString(draft.baseRef) }
-            : {}),
-          ...(normalizeOptionalString(draft.worktreeName)
-            ? { worktreeName: normalizeOptionalString(draft.worktreeName) }
-            : {}),
+          ...(baseRef ? { worktreeBaseRef: baseRef } : {}),
+          ...(worktreeName ? { worktreeName } : {}),
         }
       : {}),
   };

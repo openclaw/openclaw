@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred } from "./promise.js";
 
 afterEach(() => {
@@ -65,6 +66,7 @@ describe("multi-Gateway suite acquisition ownership", () => {
         return {
           port: owner.port,
           hookToken: "synthetic-hook",
+          state: { writeAuthProfiles: async () => {} },
           startGateway: async () => {},
           stopGateway,
           cleanup: async () => {

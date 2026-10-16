@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as openClawRoot from "../../infra/openclaw-root.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as controlPlaneSentinel from "../../infra/update-control-plane-sentinel.js";
+import * as postCoreCapability from "../../infra/update-post-core-capability.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, readControlPlaneUpdateSentinelMeta } =
   controlPlaneSentinel;
@@ -44,6 +46,62 @@ import { updateCommand } from "./update-command.js";
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+describe("post-core child output", () => {
+  it.each([
+    ["win32", false, "pipe"],
+    ["win32", true, "pipe"],
+    ["linux", false, "inherit"],
+    ["darwin", false, "inherit"],
+    ["linux", true, "pipe"],
+    ["darwin", true, "pipe"],
+  ] as const)("routes %s output (json=%s) through %s", async (platform, json, stdio) => {
+    const state = await createOpenClawTestState({ label: "post-core-stdio" });
+    try {
+      const root = state.path("package");
+      await writePackageRoot(root, "9999.0.0");
+      vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
+      const stdout = { pipe: vi.fn() };
+      const stderr = { pipe: vi.fn() };
+      mocks.spawn.mockImplementation(() => {
+        const child = Object.assign(new EventEmitter(), { stdout, stderr });
+        queueMicrotask(() => {
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        });
+        return child;
+      });
+      await withMockedPlatform(platform, async () => {
+        expect(
+          await continuePostCoreUpdateInFreshProcess({
+            root,
+            channel: "stable",
+            requestedChannel: null,
+            opts: { json },
+            pluginInstallRecords: {},
+            updateStartedAtMs: 123,
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          }),
+        ).toEqual({ resumed: true });
+      });
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Array),
+        expect.objectContaining({ stdio }),
+      );
+      if (stdio === "pipe") {
+        expect(stdout.pipe).toHaveBeenCalledWith(json ? process.stderr : process.stdout);
+        expect(stderr.pipe).toHaveBeenCalledWith(process.stderr);
+      } else {
+        expect(stdout.pipe).not.toHaveBeenCalled();
+        expect(stderr.pipe).not.toHaveBeenCalled();
+      }
+    } finally {
+      await state.cleanup();
+    }
+  });
 });
 
 describe("managed post-core root handoff", () => {

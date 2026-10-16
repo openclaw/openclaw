@@ -145,7 +145,13 @@ describe("cross-OS installer fetch", () => {
       const dir = tempDirs.make("openclaw-cross-os-installer-");
       const healthyMarker = join(dir, "healthy.txt");
       const stalledMarker = join(dir, "stalled.txt");
+      const logPath = join(dir, "installer.log");
+      const startedAt = new Date().toISOString();
+      const started = performance.now();
+      const requests: Array<{ url: string | undefined; elapsedMs: number }> = [];
+      let completed = false;
       const server = createServer((request, response) => {
+        requests.push({ url: request.url, elapsedMs: performance.now() - started });
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         if (request.url === "/healthy") {
           response.end(
@@ -174,43 +180,51 @@ describe("cross-OS installer fetch", () => {
         const env = { ...process.env, TEMP: dir, TMP: dir };
         const timeouts = { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 };
 
-        const healthy = await runPowerShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/healthy`,
-              installTarget: "proof-target",
-              platform: "win32",
-            },
-            timeouts,
-          ),
+        const result = await runPowerShell({
+          script: [
+            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:started ' + [DateTime]::UtcNow.ToString('O'))",
+            buildInstallerSmokeScript(
+              {
+                installerUrl: `${baseUrl}/healthy`,
+                installTarget: "proof-target",
+                platform: "win32",
+              },
+              timeouts,
+            ),
+            "if (-not $?) { throw 'Healthy installer command failed' }",
+            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:healthy-complete ' + [DateTime]::UtcNow.ToString('O'))",
+            buildInstallerSmokeScript(
+              {
+                installerUrl: `${baseUrl}/stalled`,
+                installTarget: "proof-target",
+                platform: "win32",
+              },
+              timeouts,
+            ),
+          ].join("\n"),
           cwd: dir,
           env,
-          logPath: join(dir, "healthy.log"),
+          logPath,
         });
 
-        expect(healthy.exitCode).toBe(0);
+        expect(result.stdout).toContain("OPENCLAW_INSTALLER_PROOF:healthy-complete ");
         expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
-        expect(installerTempFiles(dir)).toEqual([]);
-
-        const stalled = await runPowerShell({
-          script: buildInstallerSmokeScript(
-            {
-              installerUrl: `${baseUrl}/stalled`,
-              installTarget: "proof-target",
-              platform: "win32",
-            },
-            timeouts,
-          ),
-          cwd: dir,
-          env,
-          logPath: join(dir, "stalled.log"),
-        });
-
-        expect(stalled.exitCode).not.toBe(0);
-        expect(`${stalled.stdout}\n${stalled.stderr}`).toContain("exit 28");
+        expect(requests.map(({ url }) => url)).toEqual(["/healthy", "/stalled"]);
+        expect(result.exitCode).not.toBe(0);
+        expect(`${result.stdout}\n${result.stderr}`).toContain("exit 28");
         expect(existsSync(stalledMarker)).toBe(false);
+        // Each installer uses a distinct GUID, so the final inventory covers both cleanups.
         expect(installerTempFiles(dir)).toEqual([]);
+        completed = true;
       } finally {
+        if (!completed) {
+          console.error("Windows installer proof failed", {
+            startedAt,
+            elapsedMs: performance.now() - started,
+            requests,
+            commandLog: existsSync(logPath) ? readFileSync(logPath, "utf8") : undefined,
+          });
+        }
         server.closeAllConnections();
         await new Promise<void>((resolvePromise) => {
           server.close(() => resolvePromise());

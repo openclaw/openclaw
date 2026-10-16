@@ -1,4 +1,3 @@
-// Tlon plugin module implements targets behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 type TlonTarget =
   | { kind: "dm"; ship: string }
@@ -60,12 +59,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     if (parts.length === 2) {
       const hostShip = normalizeShip(expectDefined(parts[0], "two-part group host"));
       const channelName = expectDefined(parts[1], "two-part group channel");
-      return {
-        kind: "group",
-        nest: `chat/${hostShip}/${channelName}`,
-        hostShip,
-        channelName,
-      };
+      return makeGroupTarget({ hostShip, channelName });
     }
     return null;
   }

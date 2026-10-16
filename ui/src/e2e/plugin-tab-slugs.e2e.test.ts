@@ -1,7 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
-import type { PluginPage } from "../pages/plugin/plugin-page.ts";
+import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -10,6 +11,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI plugin tab slugs" });
 const pluginId = "reports-fixture";
@@ -61,12 +63,15 @@ async function expectReports(page: Page, pathname = "/reports") {
     .waitFor();
   expect(new URL(page.url()).pathname).toBe(pathname);
   expect(
-    await page.locator("openclaw-plugin-page").evaluate((element: PluginPage) => ({
+    await page.locator("openclaw-plugin-page").evaluate((element: PluginPageElement) => ({
       pluginId: element.pluginId,
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  const sidebarEntry = page.locator(`[data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`);
+  await openSidebarPages(page);
+  const sidebarEntry = page.locator(
+    `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
+  );
   expect(await sidebarEntry.getAttribute("href")).toBe("/reports");
   expect(await sidebarEntry.getAttribute("aria-current")).toBe("page");
   expect(await sidebarEntry.isVisible()).toBe(true);
@@ -77,7 +82,13 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installReports(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const entry = page.getByRole("link", { name: "Reports", exact: true });
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Pages", exact: true })
+        .click();
+      const entry = page
+        .locator(".sidebar-pages")
+        .getByRole("link", { name: "Reports", exact: true });
       await entry.waitFor();
       expect(await entry.getAttribute("href")).toBe("/reports");
       await entry.click();
@@ -150,14 +161,22 @@ suite.define(() => {
       async ({ page }) => {
         const { frameRequests } = await installReports(page);
         await page.goto(`${suite.server.baseUrl}chat`);
-        // Bootstrap must publish the script policy before the scripted fixture mounts.
-        await page.waitForFunction(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          return app?.runtime?.context.config.current.embedSandboxMode === "scripts";
-        });
-        await page.getByRole("link", { name: "Reports", exact: true }).click();
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(page, (context) => context.config.current.embedSandboxMode),
+          )
+          .toBe("scripts");
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
+        await page
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "Reports", exact: true })
+          .click();
+        // The first frame must receive the script policy without a corrective reload.
+        const sandbox = await page.locator("openclaw-plugin-page iframe").getAttribute("sandbox");
+        expect(sandbox?.split(/\s+/u)).toContain("allow-scripts");
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
@@ -171,12 +190,49 @@ suite.define(() => {
           await sidebar
             .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
             .click();
-          await sidebar
-            .getByRole("menuitem", {
-              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
-              exact: true,
-            })
-            .waitFor();
+          try {
+            await sidebar
+              .getByRole("menuitem", {
+                name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+                exact: true,
+              })
+              .waitFor();
+          } catch (error) {
+            try {
+              const state = await withTimeout(
+                evaluateControlUiContext(page, (context) => {
+                  const browserSidebar = document.querySelector("openclaw-app-sidebar");
+                  const toggle = browserSidebar?.querySelector("openclaw-theme-mode-toggle");
+                  const button = toggle?.querySelector(".theme-mode-toggle");
+                  const menu = browserSidebar?.querySelector<HTMLElement>(".sidebar-identity-menu");
+                  const trigger = browserSidebar?.querySelector(".sidebar-identity-card");
+                  return {
+                    mode: context.theme.mode,
+                    resolvedMode: context.theme.resolvedMode,
+                    documentMode: document.documentElement.dataset.themeMode ?? null,
+                    toggleMode: toggle?.mode ?? null,
+                    toggleMenuItem: toggle?.menuItem ?? null,
+                    buttonLabel: button?.getAttribute("aria-label") ?? null,
+                    buttonRole: button?.getAttribute("role") ?? null,
+                    menuPresent: Boolean(menu),
+                    menuOpen: menu?.matches(":popover-open") ?? null,
+                    menuVisible: menu?.checkVisibility({ checkVisibilityCSS: true }) ?? null,
+                    menuFocusWithin: menu?.matches(":focus-within") ?? null,
+                    triggerExpanded: trigger?.getAttribute("aria-expanded") ?? null,
+                  };
+                }),
+                5_000,
+                "plugin color mode failure diagnostics",
+              );
+              console.error(
+                "[plugin-tab-slugs] color mode label did not advance",
+                JSON.stringify({ currentMode, ...state }),
+              );
+            } catch {
+              console.error("[plugin-tab-slugs] color mode diagnostics unavailable");
+            }
+            throw error;
+          }
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await expect

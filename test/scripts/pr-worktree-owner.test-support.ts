@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
 import { createProvisionIsolationFixture } from "./pr-provision-isolation.test-support.js";
 
@@ -11,6 +12,7 @@ export function createProvisionOwnerFixture(
   mode: "native" | "managed" = "native",
   files = 128,
 ) {
+  const nodeExecPath = requireNodeTool("node");
   const root = realpathSync(directory);
   const source = process.cwd();
   const canonical = join(root, "repo");
@@ -107,9 +109,9 @@ fi
         owner,
       ];
       if (options.holdExitedDescendants) {
-        args.unshift("-c", exitedDescendantReaper, process.execPath);
+        args.unshift("-c", exitedDescendantReaper, nodeExecPath);
       }
-      return spawnSync(options.holdExitedDescendants ? "python3" : process.execPath, args, {
+      return spawnSync(options.holdExitedDescendants ? "python3" : nodeExecPath, args, {
         cwd: canonical,
         env,
         encoding: "utf8",

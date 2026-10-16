@@ -15,8 +15,6 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 
-const TELEGRAM_CHANNEL = "telegram" as const;
-
 type TelegramConfigAccessorAccount = {
   config: TelegramAccountConfig;
 };
@@ -35,7 +33,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedTelegramAccount,
   TelegramConfigAccessorAccount
 >({
-  sectionKey: TELEGRAM_CHANNEL,
+  sectionKey: "telegram",
   listAccountIds: listTelegramAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
   resolveAccessorAccount: resolveTelegramConfigAccessorAccount,

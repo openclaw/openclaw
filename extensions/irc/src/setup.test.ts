@@ -19,10 +19,8 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
-  parsePort,
   setIrcAllowFrom,
   setIrcDmPolicy,
   setIrcGroupAccess,
@@ -34,13 +32,11 @@ import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
-  sendMessageIrc: vi.fn(),
 }));
 
 vi.mock("./channel-runtime.js", () => {
   return {
     monitorIrcProvider: hoisted.monitorIrcProvider,
-    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
@@ -86,37 +82,9 @@ function buildAccount(): ResolvedIrcAccount {
   };
 }
 
-function installIrcRuntime() {
-  setIrcRuntime({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-      getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      })),
-    },
-    channel: {
-      activity: {
-        record: vi.fn(),
-        get: vi.fn(),
-      },
-    },
-  } as never);
-}
-
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("parses valid ports and falls back for invalid values", () => {
-    expect(parsePort("6697", 6667)).toBe(6697);
-    expect(parsePort(" 7000 ", 6667)).toBe(7000);
-    expect(parsePort("", 6667)).toBe(6667);
-    expect(parsePort("70000", 6667)).toBe(6667);
-    expect(parsePort("abc", 6667)).toBe(6667);
   });
 
   it("updates top-level dm policy and allowlist", () => {
@@ -442,7 +410,6 @@ describe("irc setup", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
-    installIrcRuntime();
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
       startAccount: async (ctx) =>

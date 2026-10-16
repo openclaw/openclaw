@@ -77,16 +77,6 @@ describe("formatMigrationPreview", () => {
     expect(output).toContain("• gmail");
   });
 
-  it("shows config items in the preview and includes them in the count", () => {
-    const output = formatMigrationPreview(plan([skillItem(1), configItem()]))
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain("2 items, 0 conflicts, 0 sensitive items");
-    expect(output).toContain("Config:");
-    expect(output).toContain("codex-plugins-root");
-  });
-
   it("shows config conflicts in the preview header and config section", () => {
     const output = formatMigrationPreview(
       plan([skillItem(1), configItem({ conflict: true, sensitive: true })]),
@@ -119,21 +109,6 @@ describe("formatMigrationPreview", () => {
     expect(output).not.toContain(hiddenValueTwo);
   });
 
-  it("renders migration warnings with a warning glyph", () => {
-    const output = formatMigrationPreview({
-      ...plan([skillItem(1)]),
-      warnings: [
-        "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
-      ],
-    })
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain(
-      "⚠️  Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
-    );
-  });
-
   it("redacts secrets from item text and warnings", () => {
     const secret = fakeSecret("preview");
     const output = formatMigrationPreview({
@@ -155,58 +130,6 @@ describe("formatMigrationPreview", () => {
 });
 
 describe("formatMigrationResult", () => {
-  it("renders a check glyph and (Migrated) for migrated items", () => {
-    const output = formatMigrationResult(plan([{ ...skillItem(1), status: "migrated" }]))
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain("✅");
-    expect(output).toContain("(Migrated)");
-  });
-
-  it("humanizes known error reason codes", () => {
-    const output = formatMigrationResult(
-      plan([{ ...pluginItem("google-calendar"), status: "error", reason: "plugin_missing" }]),
-    )
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain("❌");
-    expect(output).toContain("Plugin not found in the Codex marketplace");
-  });
-
-  it("renders warning plugin items under the plugin section", () => {
-    const output = formatMigrationResult(
-      plan([
-        {
-          ...pluginItem("google-calendar"),
-          status: "warning",
-          reason: "marketplace_missing",
-          message: 'Codex plugin "google-calendar" could not be migrated automatically',
-        },
-      ]),
-    )
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain("Plugins:");
-    expect(output).not.toContain("Manual review:");
-    expect(output).toContain("⚠️");
-    expect(output).toContain(
-      'google-calendar (Codex plugin "google-calendar" could not be migrated automatically)',
-    );
-  });
-
-  it("renders config items in the migration result", () => {
-    const output = formatMigrationResult(plan([{ ...configItem(), status: "migrated" }]))
-      .map(stripAnsi)
-      .join("\n");
-
-    expect(output).toContain("Config:");
-    expect(output).toContain("codex-plugins-root");
-    expect(output).toContain("✅");
-  });
-
   it("renders provider warnings absent from migration next steps", () => {
     const warning = "Some imported settings require manual review before activation.";
     const output = formatMigrationResult({

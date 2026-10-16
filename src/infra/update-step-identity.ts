@@ -160,8 +160,6 @@ for (const operation of [
     `preflight-${operation.replace(/[^a-z]+/gu, "-").replace(/-$/u, "")}`,
   );
 }
-const publicIds = new Set(stepIds.values());
-
 const gitArgumentSteps: ReadonlyArray<readonly [string, string]> = [
   ["git rollback delete ", "git-rollback-delete-branch"],
   ["git checkout ", "git-checkout"],
@@ -171,10 +169,11 @@ const gitArgumentSteps: ReadonlyArray<readonly [string, string]> = [
   ["git rev-parse ", "git-resolve-target"],
   ["git show-ref ", "git-show-branch"],
 ];
-for (const [, id] of gitArgumentSteps) {
-  publicIds.add(id);
-}
-publicIds.add("git-resolve-upstream");
+const publicIds = new Set([
+  ...stepIds.values(),
+  ...gitArgumentSteps.map(([, id]) => id),
+  "git-resolve-upstream",
+]);
 
 /** A closed projection also handles history produced by a restored released updater. */
 export function resolvePublicUpdateStepId(name: string): string | undefined {

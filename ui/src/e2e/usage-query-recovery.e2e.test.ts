@@ -2,8 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage failed date query attribution",

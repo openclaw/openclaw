@@ -43,6 +43,7 @@ export function createCodexAppServerConnectionHealthService(
 
       const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
         await import("./shared-client.js");
+      const { sleepWithAbort } = await import("openclaw/plugin-sdk/runtime-env");
       const { isUnsupportedCodexAppServerVersionError } = await import("./client.js");
       if (signal.aborted) {
         return;
@@ -97,7 +98,7 @@ export function createCodexAppServerConnectionHealthService(
           Math.round(exponentialDelayMs * (0.75 + Math.random() * 0.5)),
           MAX_RECONNECT_DELAY_MS,
         );
-        await waitForReconnect(reconnectDelayMs, signal);
+        await sleepWithAbort(reconnectDelayMs, signal, { ref: false }).catch(() => undefined);
       }
     }
   };
@@ -164,7 +165,7 @@ function waitForCodexAppServerClose(
   signal: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve) => {
-    if (signal.aborted) {
+    if (signal.aborted || client.getCloseError()) {
       resolve();
       return;
     }
@@ -175,24 +176,6 @@ function waitForCodexAppServerClose(
       resolve();
     };
     const removeCloseHandler = client.addCloseHandler(finish);
-    signal.addEventListener("abort", finish, { once: true });
-  });
-}
-
-function waitForReconnect(delayMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-
-    const finish = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timer = setTimeout(finish, delayMs);
-    timer.unref();
     signal.addEventListener("abort", finish, { once: true });
   });
 }

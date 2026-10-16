@@ -27,6 +27,7 @@ import {
   resetDiagnosticMemoryForTest,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
+import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -53,10 +54,7 @@ import {
   isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
-import {
-  logWithSessionDiagnosticContext,
-  retireSessionDiagnosticLogs,
-} from "./diagnostic-session-context.js";
+import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
@@ -73,6 +71,7 @@ import {
   isDiagnosticSessionStateCurrent,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
+  touchDiagnosticSessionState,
   type SessionRef,
   type SessionState,
   type SessionStateValue,
@@ -153,18 +152,7 @@ async function recoverStuckSession(
     });
 }
 
-function pushLimitedDiagnosticLabel(
-  labels: string[],
-  state: {
-    sessionId?: string;
-    sessionKey?: string;
-    state: SessionStateValue;
-    queueDepth: number;
-    activeQueuedTurn?: boolean;
-    lastActivity: number;
-  },
-  now: number,
-): void {
+function pushLimitedDiagnosticLabel(labels: string[], state: SessionState, now: number): void {
   const label = state.sessionKey ?? state.sessionId ?? "unknown";
   const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
   const activity = getDiagnosticSessionActivitySnapshot(
@@ -182,11 +170,7 @@ function pushLimitedDiagnosticLabel(
   );
 }
 
-function resolveDiagnosticQueuedBacklog(state: {
-  activeQueuedTurn?: boolean;
-  queueDepth: number;
-  state: SessionStateValue;
-}): number {
+function resolveDiagnosticQueuedBacklog(state: SessionState): number {
   return Math.max(
     0,
     state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
@@ -399,13 +383,6 @@ export function logWebhookReceived(params: DiagnosticLogParams<"webhook.received
     return;
   }
   webhookStats.received += 1;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
-        params.chatId ?? "unknown"
-      } total=${webhookStats.received}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
@@ -420,15 +397,6 @@ export function logWebhookProcessed(params: DiagnosticLogParams<"webhook.process
     return;
   }
   webhookStats.processed += 1;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `webhook processed: channel=${params.channel} type=${
-        params.updateType ?? "unknown"
-      } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
-        webhookStats.processed
-      }`,
-    );
-  }
   emitDiagnosticEvent({
     type: "webhook.processed",
     channel: params.channel,
@@ -469,15 +437,6 @@ export function logMessageReceived(params: DiagnosticLogParams<"message.received
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message received: channel=${params.channel ?? "unknown"} chatId=${
-        params.chatId ?? "unknown"
-      } messageId=${params.messageId ?? "unknown"} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
-    );
-  }
   emitDiagnosticEvent({
     type: "message.received",
     sessionId: params.sessionId,
@@ -493,13 +452,6 @@ export function logMessageReceived(params: DiagnosticLogParams<"message.received
 export function logMessageDispatchStarted(params: DiagnosticLogParams<"message.dispatch.started">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
-  }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message dispatch started: channel=${params.channel ?? "unknown"} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
-    );
   }
   emitDiagnosticEvent({
     type: "message.dispatch.started",
@@ -542,7 +494,12 @@ export function logMessageDispatchCompleted(
   markActivity();
 }
 
-export function logMessageProcessed(params: DiagnosticLogParams<"message.processed">) {
+export function logMessageProcessed(
+  params: DiagnosticLogParams<"message.processed"> & {
+    userPrompt?: string;
+    finalResponse?: string;
+  },
+) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -559,34 +516,13 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
     }`;
     diag[level](payload);
   }
-  emitDiagnosticEvent({
-    type: "message.processed",
-    channel: params.channel,
-    chatId: params.chatId,
-    messageId: params.messageId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    durationMs: params.durationMs,
-    outcome: params.outcome,
-    reason: params.reason,
-    error: params.error,
-  });
+  emitMessageProcessedDiagnosticEvent(params);
   markActivity();
 }
 
 export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.created">) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
-  }
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `session turn created: runId=${params.runId} sessionId=${
-        params.sessionId ?? "unknown"
-      } sessionKey=${params.sessionKey ?? "unknown"} agentId=${
-        params.agentId ?? "unknown"
-      } channel=${params.channel ?? "unknown"} trigger=${params.trigger}`,
-    );
   }
   emitDiagnosticEvent({
     type: "session.turn.created",
@@ -610,28 +546,15 @@ export function logSessionStateChange(
     return;
   }
   const state = getDiagnosticSessionState(params);
-  const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(state);
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
     state.activeQueuedTurn = false;
-  }
-  if (!isProbeSession && diag.isEnabled("debug")) {
-    diag.debug(
-      `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } prev=${prevState} new=${params.state} reason="${params.reason ?? ""}" queueDepth=${
-        state.queueDepth
-      }`,
-    );
   }
   emitDiagnosticEvent({
     type: "session.state",
@@ -649,11 +572,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  const state = getDiagnosticSessionState(params);
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
+  touchDiagnosticSessionState(getDiagnosticSessionState(params));
   markActivity();
 }
 
@@ -776,7 +695,6 @@ function logSessionAttention(
     level:
       classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
     sessionKey: params.sessionKey,
-    activeSessionId: params.sessionId,
     format: (sessionFields) => {
       const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
         .filter(Boolean)
@@ -830,7 +748,6 @@ let updateHeartbeatOptions:
   | undefined;
 
 function stopDiagnosticObservations() {
-  retireSessionDiagnosticLogs();
   stopDiagnosticGcObserver();
   lastDiagnosticHeartbeatTickAt = undefined;
   stopDiagnosticRunActivityTracking();
@@ -964,9 +881,6 @@ export function startGatewayDiagnosticHeartbeat(
       emitDiagnosticLivenessWarning(livenessSample, work, now);
     }
 
-    diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${work.activeCount} waiting=${work.waitingCount} queued=${work.queuedCount} nextWakeAtMs=${scheduler.nextWakeAtMs ?? "none"}`,
-    );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
       webhooks: {
@@ -1062,6 +976,7 @@ export function startGatewayDiagnosticHeartbeat(
     id: "diagnostic-heartbeat",
     atMs: scheduler.now() + DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
     everyMs: DIAGNOSTIC_HEARTBEAT_INTERVAL_MS,
+    phase: "maintenance",
     run: tick,
   });
   heartbeatJob = job;

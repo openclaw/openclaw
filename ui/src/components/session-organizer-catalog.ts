@@ -91,7 +91,7 @@ export async function deleteSessionGroup(
   }
 }
 
-export async function updateSessionGroupDefaults(
+export function updateSessionGroupDefaults(
   host: SessionOrganizerControllerHost,
   group: string,
   defaults: { cwd: string | null; worktree: boolean },

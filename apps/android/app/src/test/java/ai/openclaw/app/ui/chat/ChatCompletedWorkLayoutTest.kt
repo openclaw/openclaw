@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.IdlingResource
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
@@ -668,21 +669,37 @@ class ChatCompletedWorkLayoutTest {
 
   private fun showToolResults(results: List<JsonObject>) {
     val history = Json.parseToJsonElement(HISTORY).jsonObject
+    val expectedEntryIds =
+      results.map {
+        it
+          .getValue("__openclaw")
+          .jsonObject
+          .getValue("id")
+          .jsonPrimitive
+          .content
+      }
     // No later answer: exercise the retained failure rows through the real timeline owner.
     historyResponse = JsonObject(history + ("messages" to JsonArray(results))).toString()
     composeRule.runOnIdle { model.refreshChat() }
-    composeRule.waitUntil {
-      composeRule.runOnIdle {
-        !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } ==
-          results.map {
-            it
-              .getValue("__openclaw")
-              .jsonObject
-              .getValue("id")
-              .jsonPrimitive
-              .content
-          }
+    // History is published from IO, then bridged to the ViewModel on Main.
+    val historyRefresh =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } == expectedEntryIds
+
+        override fun getDiagnosticMessageIfBusy(): String =
+          "Chat history loading=${model.chatHistoryLoading.value} " +
+            "entries=${model.chatMessages.value.map { it.entryId }} expected=$expectedEntryIds"
       }
+    composeRule.registerIdlingResource(historyRefresh)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(historyRefresh)
+    }
+    composeRule.runOnIdle {
+      assertTrue("The tool history refresh must finish", !model.chatHistoryLoading.value)
+      assertEquals(expectedEntryIds, model.chatMessages.value.map { it.entryId })
     }
   }
 

@@ -16,8 +16,8 @@ describe("resolveSlackMessageSubtypeHandler", () => {
 
     const handler = resolveSlackMessageSubtypeHandler(event);
     expect(handler?.eventKind).toBe("message_changed");
-    expect(handler?.resolveSenderId(event)).toBe("U1");
-    expect(handler?.contextKey(event)).toBe("slack:message:changed:D1:123.456");
+    expect(handler?.senderId).toBe("U1");
+    expect(handler?.contextKey).toBe("slack:message:changed:D1:123.456");
     expect(handler?.describe("DM with @user")).toContain("edited");
   });
 });

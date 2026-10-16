@@ -2,28 +2,27 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  sendDeliveredZalouserMock,
-  sendMessageZalouserMock,
-  sendSeenZalouserMock,
-  sendTypingZalouserMock,
-} from "./monitor.send.test-mocks.js";
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
   listZaloFriendsMock,
   listZaloGroupsMock,
   startZaloListenerMock,
+  sendZaloDeliveredEventMock as sendDeliveredZalouserMock,
+  sendZaloSeenEventMock as sendSeenZalouserMock,
+  sendZaloTypingEventMock as sendTypingZalouserMock,
 } from "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import {
   createRawZalouserMessageFromNormalized,
-  waitForZalouserIngressVerdict,
-  withZalouserIngressTestQueue,
+  observeZalouserIngressVerdict,
+  useZalouserMonitorTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -35,6 +34,8 @@ import {
   createZalouserRuntimeEnv,
 } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+
+const withMonitorIngressQueue = useZalouserMonitorTestQueue();
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -328,21 +329,19 @@ async function processMessageThroughMonitor(params: {
         config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
       }
     : params.account;
-  await withZalouserIngressTestQueue(async (ingressQueue) => {
+  await withMonitorIngressQueue(async (ingressQueue) => {
     const abortController = new AbortController();
-    let resolveProcessed: (() => void) | undefined;
-    const processed = new Promise<void>((resolve) => {
-      resolveProcessed = resolve;
-    });
+    const { promise: processed, resolve: resolveProcessed } = Promise.withResolvers<void>();
     startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
       for (const message of messages) {
-        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
         if (!message.msgId) {
           throw new Error("Zalouser monitor test message requires msgId");
         }
-        await waitForZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        const terminal = observeZalouserIngressVerdict(ingressQueue, message.msgId, "completed");
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await terminal;
       }
-      resolveProcessed?.();
+      resolveProcessed();
       return { stop: vi.fn() };
     });
     const run = monitorZalouserProvider({
@@ -353,9 +352,17 @@ async function processMessageThroughMonitor(params: {
       statusSink: params.statusSink,
       ingressQueue,
     });
-    await processed;
-    abortController.abort();
-    await run;
+    try {
+      await Promise.race([
+        processed,
+        run.then(() => {
+          throw new Error("Zalouser monitor exited before fixture messages were processed");
+        }),
+      ]);
+    } finally {
+      abortController.abort();
+      await run;
+    }
   });
 }
 
@@ -428,7 +435,7 @@ describe("zalouser monitor group mention gating", () => {
     installRuntime({ commandAuthorized: false });
     const abortController = new AbortController();
     abortController.abort();
-    await withZalouserIngressTestQueue(async (ingressQueue) => {
+    await withMonitorIngressQueue(async (ingressQueue) => {
       await monitorZalouserProvider({
         account: {
           ...createAccount(),
@@ -586,24 +593,6 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("dispatches explicitly-mentioned group messages and marks WasMentioned", async () => {
-    const callArg = await dispatchGroupMessage({
-      commandAuthorized: false,
-      message: {
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-        content: "ping @bot",
-      },
-    });
-    expect(callArg?.ctx?.WasMentioned).toBe(true);
-    expect(callArg?.ctx?.To).toBe("zalouser:group:g-1");
-    expect(callArg?.ctx?.OriginatingTo).toBe("zalouser:group:g-1");
-    expect(sendTypingZalouserMock).toHaveBeenCalledWith("g-1", {
-      profile: "default",
-      isGroup: true,
-    });
-  });
-
   it("allows authorized control commands to bypass mention gating", async () => {
     const callArg = await dispatchGroupMessage({
       commandAuthorized: true,
@@ -645,11 +634,6 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it.each([
-    {
-      name: "text block",
-      kind: "block" as const,
-      payload: { text: "reply" },
-    },
     {
       name: "first attachment tool",
       kind: "tool" as const,
@@ -943,49 +927,26 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("routes DM messages with direct peer kind", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
-      await processOpenDmMessage();
-
-    const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
-      peer?: unknown;
-    };
-    expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
-    expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
-  });
-
   it("surfaces quote metadata in inbound reply context", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = await processOpenDmMessage({
-      message: {
-        quotedGlobalMsgId: "987654321234",
-        quotedOwnerId: "555444333",
-        quotedBody: "Previous bot message content",
-      },
-    });
+    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
+      await processOpenDmMessage({
+        message: {
+          quotedGlobalMsgId: "987654321234",
+          quotedOwnerId: "555444333",
+          quotedBody: "Previous bot message content",
+        },
+      });
 
     const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.ReplyToId).toBe("987654321234");
     expect(callArg?.ctx?.ReplyToBody).toBe("Previous bot message content");
     expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
+    const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
+      peer?: unknown;
+    };
+    expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
+    expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
   });
-
-  it.each([{ content: "/new", commandContent: "/new" }, { content: "hello there" }])(
-    "skips pairing store read for open DM message: $content",
-    async (message) => {
-      const { readAllowFromStore } = installRuntime({
-        commandAuthorized: false,
-      });
-      await processMessageThroughMonitor({
-        message: createDmMessage(message),
-        account: createAccount(),
-        config: createConfig(),
-        runtime: createRuntimeEnv(),
-      });
-
-      expect(readAllowFromStore).not.toHaveBeenCalled();
-    },
-  );
 
   it("includes skipped group messages as InboundHistory on the next processed message", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({

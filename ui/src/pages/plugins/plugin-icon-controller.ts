@@ -69,9 +69,7 @@ export class PluginIconController {
     }
   }
 
-  isLoading(key: string): boolean {
-    return this.requests.has(key);
-  }
+  readonly isLoading = (key: string): boolean => this.requests.has(key);
 
   reconcile(result: PluginListResult | null) {
     const eligiblePluginIds = new Set(

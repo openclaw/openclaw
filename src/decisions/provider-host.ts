@@ -50,7 +50,6 @@ type Health = {
   config: PluginEntryConfig | undefined;
   failures: number;
   openUntil: number;
-  authFailed: boolean;
   trial: boolean;
   lastSuccessAt?: number;
 };
@@ -89,7 +88,6 @@ export class DecisionProviderHost {
         config: providerConfig,
         failures: 0,
         openUntil: 0,
-        authFailed: false,
         trial: false,
       };
     }
@@ -162,9 +160,13 @@ export class DecisionProviderHost {
     await Promise.all([...this.pending.values()].map((request) => request.done));
   }
 
-  private ready(): boolean {
+  private ready(): boolean | undefined {
     try {
-      const available = this.provider.isReady?.() ?? true;
+      // Providers may resolve per-call credentials without prepared local evidence.
+      if (this.provider.isReady === undefined) {
+        return undefined;
+      }
+      const available = this.provider.isReady();
       if (typeof available !== "boolean") {
         throw new DecisionContractError();
       }
@@ -182,17 +184,16 @@ export class DecisionProviderHost {
       config.plugins?.enabled !== false &&
       config.plugins?.entries?.[this.record.id]?.enabled !== false;
     const admitted = !this.retired && !this.reloadPause && instance?.acceptingCalls === true;
-    const credentialReady = admitted && instance.run(() => this.ready());
+    const readiness = admitted && instance.run(() => this.ready());
     return {
       providerId: this.provider.id,
       pluginId: this.record.id,
       configured,
-      credentialReady,
+      credentialReady: readiness === true,
       callable:
         configured &&
         enabled &&
-        credentialReady &&
-        !health.authFailed &&
+        readiness !== false &&
         !health.trial &&
         health.openUntil <= performance.now() &&
         this.pending.size < MAX_CONCURRENT,
@@ -213,6 +214,7 @@ export class DecisionProviderHost {
     config: OpenClawConfig,
     registry: PluginRegistry,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     const started = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
@@ -226,6 +228,7 @@ export class DecisionProviderHost {
         registry,
         facts,
         consumerId,
+        isAdmissible,
       );
       return outcome;
     } finally {
@@ -248,6 +251,7 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
@@ -261,10 +265,10 @@ export class DecisionProviderHost {
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
-    if (!instance.runInRegistry(registry, () => this.ready())) {
+    if (instance.runInRegistry(registry, () => this.ready()) === false) {
       return this.unavailable("credentials-unavailable");
     }
-    if (health.authFailed || health.openUntil > performance.now() || health.trial) {
+    if (health.openUntil > performance.now() || health.trial) {
       return this.unavailable("circuit-open");
     }
     if (this.pending.size >= MAX_CONCURRENT) {
@@ -285,10 +289,15 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
+    let observedInterruption: DecisionOutcome | undefined;
+    let admissionError: { error: unknown } | undefined;
     const interrupted = (): DecisionOutcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
+      }
+      if (admissionError) {
+        throw admissionError.error;
       }
       if (
         this.retired ||
@@ -301,9 +310,22 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
-        const outcome = this.unavailable("deadline");
-        this.fail(health, "transport");
-        return outcome;
+        // The host deadline bounds this request; it is not a provider-reported outage.
+        // Genuine transport and rate-limit failures are accounted below.
+        return this.unavailable("deadline");
+      }
+      if (observedInterruption) {
+        return observedInterruption;
+      }
+      try {
+        if (isAdmissible && !isAdmissible()) {
+          return this.unavailable("disabled");
+        }
+      } catch (error) {
+        // Adapters may sanitize this error and yield during cleanup. Preserve
+        // the caller-owned terminal assertion rather than treating it as health.
+        admissionError = { error };
+        throw error;
       }
       const currentConfig = readConfig();
       const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -336,6 +358,16 @@ export class DecisionProviderHost {
               ...(options.agentId ? { agentId: options.agentId } : {}),
               signal,
               deadlineMonotonicMs,
+              ...(isAdmissible
+                ? {
+                    isAdmissible: () => {
+                      // The same owner fences consumer and provider generations. Keep
+                      // its observed outcome even if config changes back during cleanup.
+                      observedInterruption ??= interrupted();
+                      return observedInterruption === undefined;
+                    },
+                  }
+                : {}),
             });
           },
           // The provider callback's physical settlement is already tracked by
@@ -392,6 +424,9 @@ export class DecisionProviderHost {
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
       }
+      if (admissionError) {
+        throw admissionError.error;
+      }
       if (error instanceof DecisionContractError) {
         throw error;
       }
@@ -417,11 +452,13 @@ export class DecisionProviderHost {
     ) {
       return;
     }
-    if (reason === "authentication") {
-      health.authFailed = true;
-      return;
-    }
-    if (reason === "unsupported-input" || reason === "credentials-unavailable") {
+    // The provider resolves credentials per evaluation. Rejecting one credential
+    // must not block other agents or a replacement credential at this shared host.
+    if (
+      reason === "authentication" ||
+      reason === "unsupported-input" ||
+      reason === "credentials-unavailable"
+    ) {
       return;
     }
     health.failures++;

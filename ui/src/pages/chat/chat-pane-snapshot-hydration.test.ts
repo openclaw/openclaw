@@ -1,14 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { IDBFactory } from "fake-indexeddb";
-import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createInitializationContext,
+  createPaneTestHost,
+  getPaneTestRuntime,
+  createGatewayBrowserClientFixture,
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -16,7 +22,7 @@ import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inp
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -28,9 +34,10 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
-import "./chat-pane.ts";
+import "./chat-pane.tsx";
 
 const transcriptOnlyHello = gatewayHelloForMethods(["chat.history"]);
 
@@ -42,12 +49,22 @@ describe("stored chat snapshot hydration", () => {
     sharedMessages: ChatMessageCache,
     client?: GatewayBrowserClient,
   ) {
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
-    pane.context = createInitializationContext(client);
+    pane.context = createInitializationContext(
+      client ??
+        createGatewayBrowserClientFixture({
+          offlineRecoveryScope: "test-recovery-scope",
+          recoveryScopeReady: false,
+        }),
+    );
     pane.context.gateway.snapshot.hello = transcriptOnlyHello;
     vi.spyOn(pane.context.sessions, "listBranches").mockResolvedValue([]);
     return pane;
@@ -58,11 +75,17 @@ describe("stored chat snapshot hydration", () => {
     messages: ReturnType<typeof nativeHistoryMessage>[],
   ) {
     const writer = new SessionSnapshotStore();
-    writer.write(targetSessionKey, {
-      messages,
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "persistent-session",
-    });
+    writer.write(
+      resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey: targetSessionKey },
+      ),
+      {
+        messages,
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "persistent-session",
+      },
+    );
     await writer.flush();
   }
 
@@ -86,12 +109,15 @@ describe("stored chat snapshot hydration", () => {
       const request = vi.fn().mockResolvedValue({
         messages: [],
         sessionId: "cached-initial-session",
-        sessionInfo: { key: targetSessionKey, hasActiveRun: true, status: "running" },
-      });
-      const client = {
-        request,
-        addEventListener: vi.fn(() => vi.fn()),
-      } as unknown as GatewayBrowserClient;
+        sessionInfo: {
+          key: targetSessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: true,
+          status: "running",
+        },
+      } satisfies ChatHistoryResult);
+      const client = createGatewayBrowserClientFixture({ request });
       const context = createInitializationContext(client);
       context.gateway.snapshot.hello = transcriptOnlyHello;
       vi.spyOn(context.sessions, "listBranches").mockResolvedValue([]);
@@ -123,7 +149,7 @@ describe("stored chat snapshot hydration", () => {
           state.connected = true;
           throw stopAfterAttach;
         });
-        expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+        expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
         return pane;
       };
       const first = mount();
@@ -145,22 +171,22 @@ describe("stored chat snapshot hydration", () => {
       }
       const remounted = mount(cacheMode === "stored");
       const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const renderPane = () => {
-        render(
-          renderChatThread(
-            {
-              ...threadProps("cached-initial-pane", targetSessionKey, remounted.state.chatMessages),
-              pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
-              assistantAttachmentAuthToken: "test-auth-token",
-              connectionEpoch: 1,
-              onRequestUpdate: renderPane,
-            },
-            transcript,
-          ),
-          container,
-        );
+      let view: ReturnType<typeof mountChatThread> | undefined;
+      const renderPane = (): ReturnType<typeof mountChatThread> => {
+        const props = {
+          ...threadProps("cached-initial-pane", targetSessionKey, remounted.state.chatMessages),
+          pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
+          assistantAttachmentAuthToken: "test-auth-token",
+          connectionEpoch: 1,
+          onRequestUpdate: renderPane,
+        };
+        if (view) {
+          view.update(props);
+        } else {
+          view = mountChatThread(props, transcript);
+        }
         transcript.hostUpdated();
+        return view;
       };
       try {
         await vi.waitFor(() =>
@@ -170,8 +196,9 @@ describe("stored chat snapshot hydration", () => {
             }),
           ).not.toBeNull(),
         );
-        renderPane();
+        const { container } = renderPane();
         transcript.hostConnected();
+        flush();
         const displayed = expectDefined(
           container.querySelector<HTMLImageElement>(".chat-message-image"),
           "remounted initial image",
@@ -187,11 +214,7 @@ describe("stored chat snapshot hydration", () => {
           expect(container.querySelector('[aria-busy="true"]')).toBeNull();
           expect(container.textContent).toContain(text);
           const sender = container.querySelector(".chat-sender-name");
-          if (author === undefined) {
-            expect(sender).toBeNull();
-          } else {
-            expect(sender?.textContent?.trim()).toBe(author);
-          }
+          expect(sender?.textContent?.trim()).toBe(author ?? "Message");
         };
         expectRenderedInput("Keep the attributed initial image", "Local Author");
         const metadata = {
@@ -242,7 +265,7 @@ describe("stored chat snapshot hydration", () => {
         expect(container.textContent).not.toContain(custodyMessage.content);
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
-        render(null, container);
+        view?.unmount();
         releaseChatMediaResourceSubscriber(renderPane);
         transcript.hostDisconnected();
         remounted.disconnectedCallback();
@@ -260,7 +283,7 @@ describe("stored chat snapshot hydration", () => {
     await writeStoredSnapshot(targetSessionKey, cachedMessages);
     const response = createDeferred<Record<string, unknown>>();
     const request = vi.fn(() => response.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = createGatewayBrowserClientFixture({ request });
     const sharedMessages: ChatMessageCache = new Map();
     const store = new SessionSnapshotStore(sharedMessages);
     store.connect();
@@ -279,11 +302,11 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
       expect(request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey: targetSessionKey }),
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
 
@@ -327,7 +350,7 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
       await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
@@ -347,9 +370,18 @@ describe("stored chat snapshot hydration", () => {
       addEventListener: vi.fn(() => vi.fn()),
       request: vi.fn(),
     } as unknown as GatewayBrowserClient;
-    const context = createInitializationContext();
+    const context = createInitializationContext(
+      createGatewayBrowserClientFixture({
+        offlineRecoveryScope: "test-recovery-scope",
+        recoveryScopeReady: false,
+      }),
+    );
     context.gateway.snapshot.client = client;
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
+    const pane = createPaneTestHost(
+      "openclaw-chat-runtime-test",
+      ChatPaneRuntime,
+    ) as unknown as TestChatPane;
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
@@ -379,7 +411,7 @@ describe("stored chat snapshot hydration", () => {
     });
 
     try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(stopAfterAttach);
       expect(attachedState?.chatMessages).toEqual([
         expect.objectContaining({
           role: "user",

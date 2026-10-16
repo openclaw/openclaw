@@ -107,15 +107,16 @@ class WearReplyNotifierTest {
   }
 
   @Test
+  @Config(application = WearApplication::class)
   fun visibilityTracksOverlappingActivityLifecycles() {
-    val tracker = VisibleActivityTracker()
+    val app = RuntimeEnvironment.getApplication() as WearApplication
 
-    tracker.onStarted()
-    tracker.onStarted()
-    tracker.onStopped()
-    assertTrue(tracker.isVisible())
-    tracker.onStopped()
-    assertTrue(!tracker.isVisible())
+    app.onActivityStarted()
+    app.onActivityStarted()
+    app.onActivityStopped()
+    assertTrue(app.isActivityVisible())
+    app.onActivityStopped()
+    assertTrue(!app.isActivityVisible())
   }
 
   @Test

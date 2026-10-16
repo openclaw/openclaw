@@ -1,24 +1,35 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
+  isSessionNodePayloadSelect,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
   appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
-import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
+import { readSessionActorProjectionReceipt } from "../config/sessions/session-actor-replica.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "../config/sessions/session-canonical-key.js";
+import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly-scope.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "../state/openclaw-agent-db-schema-helpers.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -66,6 +77,72 @@ async function withHistory(
     });
   });
 }
+
+it("reuses complete accounting facts and reloads them after a transcript write", async () => {
+  await withHistory(async ({ target, database }) => {
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Accounting receipt proof requires a physical database");
+    }
+    const actorTarget = {
+      sessionKey: target.transcript.sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    const actor = captureDurableSessionActor({
+      database: target.database,
+      target: actorTarget,
+      lifetime: authority,
+    });
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+    const reader = createReadonlySessionHistoryReader(target);
+    const options = { includeByteSize: true, includeUsage: false };
+    const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
+    try {
+      const before = read();
+      await actor.read(authority);
+      const receipt = readSessionActorProjectionReceipt({
+        path: database.path,
+        sessionKey: actorTarget.sessionKey,
+        sessionId: target.transcript.sessionId,
+      });
+      expect(receipt).toBeDefined();
+      const observed = observeSqliteReadSql(Object.getPrototypeOf(database.db.prepare("SELECT 1")));
+      const redundant = () =>
+        observed.queries.filter(
+          (sql) =>
+            sql.includes('from "session_nodes"') ||
+            sql.includes('from "session_participants"') ||
+            sql.includes('"reset_active_position"'),
+        );
+      try {
+        expect(withSessionTranscriptProjectionReceipt(receipt, read)).toEqual(before);
+        expect(redundant()).toEqual([]);
+        await appendTranscriptMessage(target.transcript, {
+          eventId: "accounting-next",
+          parentId: "requested-message",
+          message: { role: "user", content: "Updated accounting" },
+        });
+        await waitForSessionTranscriptProjection(target.transcript);
+        observed.queries.length = 0;
+        expect(withSessionTranscriptProjectionReceipt(receipt, read).eventCount).toBe(
+          before.eventCount! + 1,
+        );
+        expect(redundant().length).toBeGreaterThan(0);
+      } finally {
+        observed.restore();
+      }
+    } finally {
+      await actor.release();
+      owner.close();
+    }
+  });
+});
 
 it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
   await withHistory(async ({ target, database }) => {
@@ -171,7 +248,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
       if (!retained.found) {
         throw new Error("expected retained history reader");
       }
-      const connection = retained.value;
+      const connection = requireNativeSqliteDatabase(retained.value);
       const reader = createReadonlySessionHistoryReader(target);
       const read = () =>
         scope.run(target.database, () =>
@@ -179,10 +256,23 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
         );
       const external = new DatabaseSync(target.database.path);
       try {
-        if (admission !== "cold") {
+        if (admission === "cold") {
+          // The host fixture writer can already have published canonical admission.
+          markCanonicalSessionValidationPending(database);
+        } else {
           expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
             "requested-message",
           ]);
+          // The race must reach SQLite while canonical admission stays warm.
+          const missingEntryReader = createReadonlySessionHistoryReader({
+            ...target,
+            entryValidationKey: "agent:main:missing-row",
+          });
+          await scope.run(target.database, () =>
+            missingEntryReader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+              maxMessages: 10,
+            }),
+          );
         }
         if (admission === "policy") {
           setCanonicalSqliteSessionMainKey(database, "custom");
@@ -196,7 +286,8 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           const statement = prepare(sql);
           if (
             selectedInTransaction === undefined &&
-            /^select \* from "session_nodes" where "session_key" = /i.test(sql)
+            isSessionNodePayloadSelect(sql) &&
+            / from "session_nodes" where "session_key" = /i.test(sql)
           ) {
             selectedInTransaction = connection.isTransaction;
             // Commit after admission but before the exact row read. The same snapshot
@@ -247,18 +338,6 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
     });
   },
 );
-
-it("observes a row changed after preparation and before the first worker read", async () => {
-  await withHistory(async ({ target, database }) => {
-    const reader = createReadonlySessionHistoryReader(target);
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run("{", target.entryValidationKey!);
-    await expect(
-      reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-    ).rejects.toThrow("openclaw doctor --fix");
-  });
-});
 
 it("revalidates the retained handle between paged and anchored reader invocations", async () => {
   await withHistory(async ({ target, database }) => {
@@ -338,7 +417,7 @@ it.each(["missing", "successor", "retained"] as const)(
   },
 );
 
-it("keeps canonical key validation on each admitted reader handle", async () => {
+it("revalidates canonical keys when repair publishes pending rows", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
     const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
@@ -357,6 +436,7 @@ it("keeps canonical key validation on each admitted reader handle", async () => 
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run("Agent:main:readonly-history");
+    markCanonicalSessionValidationPending(database, ["Agent:main:readonly-history"]);
     await expect(
       reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
     ).rejects.toThrow("openclaw doctor --fix");
@@ -401,12 +481,6 @@ it("validates participant projection on the current reader handle", async () => 
 it("admits history without creating a missing additive participant table", async () => {
   await withHistory(async ({ target, database }) => {
     database.db.exec("DROP TABLE session_participants");
-    expect(() =>
-      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
-        agentId: database.agentId,
-        pathname: database.path,
-      }),
-    ).not.toThrow();
     const reader = createReadonlySessionHistoryReader(target);
     const page = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
       maxMessages: 10,

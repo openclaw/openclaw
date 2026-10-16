@@ -3,10 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 
 const LEGACY_MODELS_ADD_CODEX_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-pro"]);
-const LEGACY_MODELS_ADD_CODEX_APIS = new Set([
-  "openai-codex-responses",
-  "openai-chatgpt-responses",
-]);
 
 /** Return true when a model entry matches the legacy Codex `/models add` default shape. */
 export function isLegacyModelsAddCodexMetadataModel(params: {
@@ -23,8 +19,7 @@ export function isLegacyModelsAddCodexMetadataModel(params: {
     return false;
   }
   return (
-    typeof model.api === "string" &&
-    LEGACY_MODELS_ADD_CODEX_APIS.has(model.api) &&
+    model.api === "openai-chatgpt-responses" &&
     model.reasoning === true &&
     Array.isArray(model.input) &&
     model.input.length === 2 &&

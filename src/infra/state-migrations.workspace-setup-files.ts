@@ -8,8 +8,10 @@ import {
 } from "../agents/workspace-legacy-state.js";
 import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
-import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
+import {
+  LegacyMigrationSourceClaim,
+  type LegacyMigrationSourceSnapshot as SourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
@@ -22,7 +24,7 @@ async function readBoundedRegularFile(params: {
   sourcePath: string;
   maxBytes: number;
 }): Promise<SourceSnapshot> {
-  const { buffer, stat } = await params.sourceRoot.read(params.relativePath, {
+  const { buffer, stat, exactIdentity } = await params.sourceRoot.read(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
     maxBytes: params.maxBytes,
@@ -35,8 +37,8 @@ async function readBoundedRegularFile(params: {
   }
   return {
     sourcePath: params.sourcePath,
-    dev: stat.dev,
-    ino: stat.ino,
+    dev: exactIdentity.dev,
+    ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,
     sha256: createHash("sha256").update(buffer).digest("hex"),
     size: buffer.length,
@@ -85,7 +87,7 @@ export async function archiveWorkspaceSetupSource(
 export function createLegacySourceClaim(
   sourceRoot: Root,
   source: LegacyWorkspaceStateSource,
-): LegacyMigrationSourceClaim<SourceSnapshot> {
+): LegacyMigrationSourceClaim {
   return new LegacyMigrationSourceClaim({
     stateRoot: sourceRoot,
     stateDir: source.rootDir,

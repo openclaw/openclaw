@@ -245,7 +245,7 @@ suite.define(() => {
         const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Reviewer" })
           .click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
@@ -322,9 +322,7 @@ suite.define(() => {
         } else if (dismissal === "navigation") {
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.locator(".sidebar-identity-card").click();
-          await sidebar
-            .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
-            .click();
+          await sidebar.locator('.sidebar-identity-menu [data-value="command:usage"]').click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
         } else {
           const sockets = await gateway.getSocketCount();
@@ -385,7 +383,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".chat-pane__workspace-chip").click();
         await gateway.waitForRequest("worktrees.branches");
-        await page.getByText(label, { exact: true }).click();
+        await page
+          .locator(".chat-pane__workspace-menu")
+          .getByRole("menuitem", { name: label, exact: true })
+          .click();
 
         const alert = page.getByRole("alert").filter({ hasText: "Copy failed" });
         await alert.waitFor({ state: "visible", timeout: 10_000 });

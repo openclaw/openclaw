@@ -1,5 +1,8 @@
 /** Tests provider replay helper normalization and deterministic ordering. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -9,18 +12,9 @@ import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 } from "./provider-replay-helpers.js";
-
-function expectFields(actual: unknown, expected: Record<string, unknown>): void {
-  if (!actual || typeof actual !== "object") {
-    throw new Error("Expected record");
-  }
-  const record = actual as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 describe("provider replay helpers", () => {
   it("builds strict openai-completions replay policy", () => {
@@ -106,6 +100,16 @@ describe("provider replay helpers", () => {
       repairToolUseResultPairing: true,
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
+    });
+  });
+
+  it("retains operator context for an admitted in-history system route", () => {
+    expect(
+      buildNativeAnthropicReplayPolicyForModel("claude-opus-5", undefined, true),
+    ).toMatchObject({
+      inHistorySystemUpdates: true,
+      appendOnlyRuntimeContext: true,
+      preserveNativeAnthropicToolUseIds: true,
     });
   });
 
@@ -300,7 +304,7 @@ describe("provider replay helpers", () => {
     ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
 
-  it("sanitizes Gemini replay ordering with a bootstrap turn", () => {
+  it("retains the deprecated synchronous Gemini replay adapter", () => {
     const customEntries: Array<{ customType: string; data: unknown }> = [];
 
     const result = sanitizeGoogleGeminiReplayHistory({
@@ -327,4 +331,39 @@ describe("provider replay helpers", () => {
     expect(bootstrapMessage?.content).toBe("(session bootstrap)");
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
+});
+
+it("awaits the Gemini bootstrap marker and propagates write failure without sync fallback", async () => {
+  const committed = createDeferredCore<string>();
+  const legacy = vi.fn(() => {
+    throw new Error("synchronous persistence called");
+  });
+  const sessionState = {
+    getCustomEntries: () => [],
+    appendCustomEntry: legacy,
+    appendCustomEntryAsync: vi.fn(() => committed.promise),
+  };
+  const context = {
+    provider: "google",
+    sessionId: "awaited-replay",
+    messages: [makeAgentAssistantMessage({ content: [{ type: "text", text: "hello" }] })],
+    sessionState,
+  };
+  let completed = false;
+  const replay = sanitizeGoogleGeminiReplayHistoryAsync(context).then((messages) => {
+    completed = true;
+    return messages;
+  });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  committed.resolve("bootstrap-marker");
+  const messages = await replay;
+  expect(messages[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
+  expect(legacy).not.toHaveBeenCalled();
+
+  sessionState.appendCustomEntryAsync.mockRejectedValueOnce(new Error("worker commit rejected"));
+  await expect(sanitizeGoogleGeminiReplayHistoryAsync(context)).rejects.toThrow(
+    "worker commit rejected",
+  );
+  expect(legacy).not.toHaveBeenCalled();
 });

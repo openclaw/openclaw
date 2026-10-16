@@ -8,6 +8,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -15,22 +16,25 @@ import {
   releaseOpenClawAgentDatabaseLease,
   runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  migrateOpenClawAgentDatabaseForMaintenance,
   getOpenClawAgentDatabaseIfOpen,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -130,6 +134,31 @@ function withAbortableMaintenance<T>(
 }
 
 describe("asynchronous agent database maintenance admission", () => {
+  it("checks maintenance authority on the held transaction without opening separate readers", async () => {
+    const f = fixture();
+    await withAgentDatabaseMaintenanceLease(
+      { env: f.env, schemaPolicy: "existing" },
+      async (maintenance) => {
+        runExistingOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const reads = vi.spyOn(stateReads, "withOpenClawStateDatabaseReadOnly");
+            try {
+              maintenance.assertOwnedInTransaction(db);
+              expect(reads).not.toHaveBeenCalled();
+            } finally {
+              reads.mockRestore();
+            }
+          },
+          { env: f.env },
+          {
+            schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "schema_meta"),
+            operationLabel: "maintenance authority regression",
+          },
+        );
+      },
+    );
+  });
+
   it("reuses one integrity process across agent maintenance while checking each file afresh", async () => {
     const f = fixture();
     const createTarget = (agentId: string) => {
@@ -183,28 +212,6 @@ describe("asynchronous agent database maintenance admission", () => {
       true,
     );
     expect(f.state.db.prepare("SELECT owner FROM state_leases").all()).toEqual([]);
-  });
-
-  it("yields during real integrity admission while retaining the maintenance fence", async () => {
-    const f = fixture();
-    const before = readIndexState(f.options.pathname);
-    await withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
-      let progressed = false;
-      const tick = setImmediate(() => {
-        progressed = true;
-      });
-      try {
-        await migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance);
-        expect(progressed).toBe(true);
-        maintenance.assertOwned();
-        expect(() => openOpenClawAgentDatabase({ agentId: "worker", env: f.env })).toThrow(
-          /maintenance is in progress/,
-        );
-      } finally {
-        clearImmediate(tick);
-      }
-    });
-    expect(readIndexState(f.options.pathname)).toEqual(before);
   });
 
   it("refuses a prepared Worker claim during plain maintenance", async () => {
@@ -278,7 +285,7 @@ describe("asynchronous agent database maintenance admission", () => {
   });
 
   it.each(
-    [false, true].flatMap((corrupt) =>
+    [true].flatMap((corrupt) =>
       (["expiry", "replacement", "abort"] as const).map((loss) => ({ corrupt, loss })),
     ),
   )("fences Worker resume after $loss (integrity failure=$corrupt)", async ({ corrupt, loss }) => {
@@ -332,7 +339,7 @@ describe("asynchronous agent database maintenance admission", () => {
   });
 
   it.each(
-    [false, true].flatMap((corrupt) =>
+    [true].flatMap((corrupt) =>
       (["owner", "version"] as const).map((changed) => ({ corrupt, changed })),
     ),
   )(

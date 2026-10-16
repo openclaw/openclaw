@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 
-describe.each(["config", "env"] as const)("Codex app-server %s arguments", (source) => {
+describe("Codex app-server arguments", () => {
   it.each([
     {
+      source: "config",
       raw: String.raw`app-server -c log_dir=/tmp/openclaw\logs --listen stdio://`,
       expected: [
         "app-server",
@@ -14,10 +15,11 @@ describe.each(["config", "env"] as const)("Codex app-server %s arguments", (sour
       ],
     },
     {
+      source: "env",
       raw: 'app-server --listen "stdio://',
       expected: ["app-server", "--listen", "stdio://"],
     },
-  ])("preserves shipped string parsing: $raw", ({ raw, expected }) => {
+  ])("preserves shipped $source string parsing: $raw", ({ source, raw, expected }) => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: { mode: "yolo", ...(source === "config" ? { args: raw } : {}) },

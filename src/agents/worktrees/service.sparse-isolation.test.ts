@@ -4,13 +4,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates } from "./template-registry.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const execFileAsync = promisify(execFile);
@@ -42,10 +42,10 @@ async function gitMetadata(target: string) {
 describe("ManagedWorktreeService sparse isolation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       cleanup();
     }),
   );
@@ -66,6 +66,8 @@ describe("ManagedWorktreeService sparse isolation", () => {
   });
 
   it("preserves isolated source and guarded fallback across sparse checkout changes", async () => {
+    // Sparse isolation must not depend on Btrfs checkout timing selection.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     await fs.mkdir(path.join(repo, ".openclaw/worktree-profiles"), { recursive: true });
     await fs.mkdir(path.join(repo, "selected"), { recursive: true });
     await fs.mkdir(path.join(repo, "excluded"), { recursive: true });
@@ -79,7 +81,10 @@ describe("ManagedWorktreeService sparse isolation", () => {
     const targets = new Map<string, string>([["repository", repo]]);
     const observe = async () => {
       const samples = [];
-      for (const target of [...targets.values(), ...listTemplates(env).map((t) => t.path)]) {
+      for (const target of [
+        ...targets.values(),
+        ...(await listTemplatesAsync(env)).map((t) => t.path),
+      ]) {
         samples.push(await gitMetadata(target));
       }
       expect(new Set(samples.map((s) => s.indexPath)).size).toBe(samples.length);
@@ -101,9 +106,9 @@ describe("ManagedWorktreeService sparse isolation", () => {
       );
       const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
       const created = await service.create({ repoRoot: repo, name, baseRef: commit, profiles });
-      // Sparse setup enables shared worktreeConfig, keeping later full creates on Git.
+      // Only explicitly profiled creates need native sparse materialization.
       expect(vi.mocked(backend.cloneTemplate).mock.calls.length > calls, name).toBe(
-        name === "full-cold" || name === "full-warm",
+        !profiles?.length,
       );
       for (const sibling of siblings) {
         expect(await fs.readFile(sibling.index), sibling.label).toEqual(sibling.indexBytes);
@@ -147,7 +152,7 @@ describe("ManagedWorktreeService sparse isolation", () => {
       fullB.path,
       fullD.path,
       companion.path,
-      ...listTemplates(env).map((t) => t.path),
+      ...(await listTemplatesAsync(env)).map((t) => t.path),
     ]) {
       expect(await read(target, "selected/source.txt")).toBe("selected\n");
       expect(await read(target, "excluded/source.txt")).toBe("excluded\n");

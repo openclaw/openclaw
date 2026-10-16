@@ -2,18 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertOwnedPath,
   chromeProductRoots,
   discoverChromeExtensionIds,
-  generateChromeExtensionIdForPath,
   installStableChromeExtension,
   stableChromeExtensionDir,
-} from "./extension-install-layout.js";
-import {
   browserExtensionStatus,
   installChromeExtensionBootstrap,
   resolveChromeExtensionLoadPath,
-} from "./extension-install.js";
+} from "./extension-install-fixture.test-support.js";
+import { assertOwnedPath, generateChromeExtensionIdForPath } from "./extension-install-layout.js";
 import {
   FOUNDATION_STORE_ID,
   predictedId,

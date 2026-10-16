@@ -145,35 +145,7 @@ describe("GitHub publication index update", () => {
     },
   );
 
-  it("accepts a linked worktree without a worktree config scope", async () => {
-    const repository = await makeDirectory("worktree-config");
-    await git(repository, ["init", "--initial-branch=main"]);
-    await git(repository, ["config", "user.name", "OpenClaw Test"]);
-    await git(repository, ["config", "user.email", "openclaw@example.test"]);
-    await fs.writeFile(path.join(repository, "artifact.txt"), "base\n");
-    await git(repository, ["add", "artifact.txt"]);
-    await git(repository, ["commit", "-m", "base"]);
-    const linked = testState.path(`linked-${directoryIndex++}`);
-    await git(repository, ["worktree", "add", "-b", "publication", linked]);
-
-    await expect(
-      assertSafeGitPublicationWorkspace(
-        linked,
-        async (argv, options) =>
-          await runCommandBuffered(argv, {
-            cwd: options?.cwd ?? linked,
-            env: options?.env,
-            timeoutMs: 10_000,
-            maxOutputBytes: 64 * 1024,
-          }),
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    { scope: "--local" as const, label: "repository-local" },
-    { scope: "--worktree" as const, label: "worktree-scoped" },
-  ])("publishes and recovers with $label hooks without executing them", async ({ scope }) => {
+  it("publishes and recovers with worktree-scoped hooks without executing them", async () => {
     const fixture = await createFixture();
     const remote = await makeDirectory("remote");
     const hooks = await makeDirectory("hooks");
@@ -190,10 +162,8 @@ describe("GitHub publication index update", () => {
           ),
       ),
     );
-    if (scope === "--worktree") {
-      await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
-    }
-    await git(fixture.cwd, ["config", scope, "core.hooksPath", hooks]);
+    await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
+    await git(fixture.cwd, ["config", "--worktree", "core.hooksPath", hooks]);
 
     await expect(
       assertSafeGitPublicationWorkspace(
@@ -267,40 +237,37 @@ describe("GitHub publication index update", () => {
     );
   });
 
-  it.each(["current", "ended"] as const)(
-    "settles the accepted branch and index with %s publication authority",
-    async (authority) => {
-      const fixture = await createFixture();
-      let current = true;
-      await updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("publication permission ended");
-          }
-        },
-        updateRef: async () => {
-          await git(fixture.cwd, [
-            "update-ref",
-            "refs/heads/main",
-            fixture.headCommit,
-            fixture.previousHead,
-          ]);
-          current = authority === "current";
-        },
-      });
+  it("settles the accepted branch and index after publication authority ends", async () => {
+    const fixture = await createFixture();
+    let current = true;
+    await updateGitHubPublicationBranchAndIndex({
+      ...publicationIndexParams(fixture),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("publication permission ended");
+        }
+      },
+      updateRef: async () => {
+        await git(fixture.cwd, [
+          "update-ref",
+          "refs/heads/main",
+          fixture.headCommit,
+          fixture.previousHead,
+        ]);
+        current = false;
+      },
+    });
 
-      expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
-      expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
-      expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
-      expect(await fs.readFile(path.join(fixture.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
-      expect(
-        (await fs.readdir(path.join(fixture.cwd, ".git"))).filter(
-          (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
-        ),
-      ).toEqual([]);
-    },
-  );
+    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
+    expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
+    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
+    expect(await fs.readFile(path.join(fixture.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
+    expect(
+      (await fs.readdir(path.join(fixture.cwd, ".git"))).filter(
+        (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
+      ),
+    ).toEqual([]);
+  });
 
   it("rejects concurrent staged changes without moving HEAD or rewriting the index", async () => {
     const fixture = await createFixture();

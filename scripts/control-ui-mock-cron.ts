@@ -303,36 +303,17 @@ export function buildCronMocks(
     ),
   };
   const runByJobId = new Map(runs.map((entry) => [entry.jobId, entry]));
-  const sortedJobLists = [
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted(
-        (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted(
-        (left, right) => (right.state?.nextRunAtMs ?? 0) - (left.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => left.name.localeCompare(right.name)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => right.name.localeCompare(left.name)),
-    },
-  ];
+  const sortComparators: Record<string, (left: CronJob, right: CronJob) => number> = {
+    nextRunAtMs: (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
+    updatedAtMs: (left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0),
+    name: (left, right) => left.name.localeCompare(right.name),
+  };
+  const sortedJobLists = Object.entries(sortComparators).flatMap(([sortBy, compare]) =>
+    ["asc", "desc"].map((sortDir) => ({
+      match: { sortBy, sortDir },
+      jobs: jobs.toSorted(sortDir === "asc" ? compare : (left, right) => compare(right, left)),
+    })),
+  );
 
   return {
     "cron.status": status,

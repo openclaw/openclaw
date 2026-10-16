@@ -12,36 +12,26 @@ export function isPrivateQaCliEnabled(env: NodeJS.ProcessEnv = process.env): boo
   return env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
-function resolvePrivateQaSourceModuleSpecifier(params?: {
-  env?: NodeJS.ProcessEnv;
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  resolvePackageRootSync?: typeof resolveOpenClawPackageRootSync;
-  existsSync?: typeof fs.existsSync;
-}): string | null {
-  const env = params?.env ?? process.env;
-  if (!isPrivateQaCliEnabled(env)) {
+function resolvePrivateQaSourceModuleSpecifier(): string | null {
+  if (!isPrivateQaCliEnabled()) {
     return null;
   }
-  const resolvePackageRootSync = params?.resolvePackageRootSync ?? resolveOpenClawPackageRootSync;
-  const packageRoot = resolvePackageRootSync({
-    argv1: params?.argv1 ?? process.argv[1],
-    cwd: params?.cwd ?? process.cwd(),
-    moduleUrl: params?.moduleUrl ?? import.meta.url,
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
   });
   if (!packageRoot) {
     return null;
   }
-  const existsSync = params?.existsSync ?? fs.existsSync;
   const sourceModulePath = path.join(packageRoot, PRIVATE_QA_DIST_RELATIVE_PATH);
   const hasSourceCheckoutMarker = SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS.some((relativePath) =>
-    existsSync(path.join(packageRoot, relativePath)),
+    fs.existsSync(path.join(packageRoot, relativePath)),
   );
   if (
     !hasSourceCheckoutMarker ||
-    !existsSync(path.join(packageRoot, "src")) ||
-    !existsSync(sourceModulePath)
+    !fs.existsSync(path.join(packageRoot, "src")) ||
+    !fs.existsSync(sourceModulePath)
   ) {
     return null;
   }
@@ -49,19 +39,10 @@ function resolvePrivateQaSourceModuleSpecifier(params?: {
 }
 
 /** Load the private QA module from a source checkout or throw a user-facing availability error. */
-export function loadPrivateQaCliModule(params?: {
-  env?: NodeJS.ProcessEnv;
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  resolvePackageRootSync?: typeof resolveOpenClawPackageRootSync;
-  existsSync?: typeof fs.existsSync;
-  importModule?: (specifier: string) => Promise<Record<string, unknown>>;
-}): Promise<Record<string, unknown>> {
-  const specifier = resolvePrivateQaSourceModuleSpecifier(params);
+export function loadPrivateQaCliModule(): Promise<Record<string, unknown>> {
+  const specifier = resolvePrivateQaSourceModuleSpecifier();
   if (!specifier) {
     throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
   }
-  const importModule = params?.importModule;
-  return importModule ? importModule(specifier) : import(specifier);
+  return import(specifier);
 }

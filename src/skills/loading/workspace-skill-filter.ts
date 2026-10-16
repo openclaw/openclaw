@@ -1,37 +1,32 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  isSessionSkillEnabled,
-  resolveEffectiveAgentSkillFilter,
-} from "../discovery/agent-filter.js";
+import { resolveEffectiveAgentSkillFilter } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveSkillKey } from "./frontmatter.js";
+import { isSkillEntrySelected, resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 
 export function filterSkillEntries(
   entries: SkillEntry[],
-  config?: OpenClawConfig,
-  skillFilter?: string[],
-  skillOverrides?: Readonly<Record<string, boolean>>,
-  eligibility?: SkillEligibilityContext,
-  hasBin?: (bin: string) => boolean,
-  platform?: string,
+  opts?: {
+    config?: OpenClawConfig;
+    skillFilter?: string[];
+    skillOverrides?: Readonly<Record<string, boolean>>;
+    eligibility?: SkillEligibilityContext;
+    hasBin?: (bin: string) => boolean;
+    platform?: string;
+  },
 ): SkillEntry[] {
+  const { config, skillFilter, skillOverrides, eligibility, hasBin, platform } = opts ?? {};
   const bundledAllowlist = resolveBundledAllowlist(config);
   assertUnambiguousManagedSkillNames(entries);
   const normalized = normalizeSkillFilter(skillFilter);
   const filtered = entries.filter(
     (entry) =>
-      isSessionSkillEnabled(
-        entry.skill.name,
-        normalized,
-        skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      ) && shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
+      isSkillEntrySelected(entry, normalized, skillOverrides) &&
+      shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
   );
   if (skillFilter !== undefined || skillOverrides !== undefined) {
     const label = normalized?.length ? normalized.join(", ") : "(none)";

@@ -7,6 +7,8 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -47,16 +49,14 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
-  platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
 }): { file: string; args: string[] | string } {
-  const platform = params.platform ?? process.platform;
-  if (!isWindowsBatchCommand(params.file, platform)) {
+  if (!isWindowsBatchCommand(params.file)) {
     return { file: params.file, args: params.args };
   }
   const program = resolveWindowsSpawnProgram({
     command: params.file,
-    platform,
+    platform: process.platform,
     env: params.env,
     execPath: process.execPath,
     allowShellFallback: true,
@@ -71,9 +71,7 @@ function resolveTerminalPtyInvocation(params: {
     return { file: invocation.command, args: invocation.argv };
   }
   return {
-    file:
-      resolveEnvironmentValue(params.env, "COMSPEC")?.trim() ||
-      resolveTrustedWindowsCmdExe(platform),
+    file: resolveEnvironmentValue(params.env, "COMSPEC")?.trim() || resolveTrustedWindowsCmdExe(),
     // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
     args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
   };
@@ -99,7 +97,11 @@ function bunTerminalHasFlowControl(): boolean {
 
 export async function spawnTerminalPty(
   params: TerminalPtySpawnParams,
-  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
+  lifecycle?: {
+    abortSignal?: AbortSignal;
+    assertCurrent?: () => void;
+    initiateSpawn?: SpawnInitiation;
+  },
 ): Promise<TerminalPtyHandle> {
   const assertCurrent = () => {
     lifecycle?.assertCurrent?.();
@@ -108,11 +110,26 @@ export async function spawnTerminalPty(
     }
   };
   if (process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl()) {
+    const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
     // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    return await spawnNodeTerminalPty(params, assertCurrent);
+    const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    if (pty.pid > 0) {
+      recordSpawn?.();
+    }
+    return pty;
   }
+  const launch = await prepareTerminalPty(params);
+  assertCurrent();
+  return lifecycle?.initiateSpawn ? lifecycle.initiateSpawn(launch) : launch();
+}
+
+/** Load the native backend before a remote host grants the final synchronous launch. */
+export async function prepareTerminalPty(
+  params: TerminalPtySpawnParams,
+): Promise<() => TerminalPtyHandle> {
+  const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
@@ -128,8 +145,13 @@ export async function spawnTerminalPty(
     const bunEnv = env ?? inheritedTerminalEnv(terminalName);
     // node-pty always exports the child's working directory as PWD.
     bunEnv.PWD = params.cwd ?? process.cwd();
-    assertCurrent();
-    return spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+    return () => {
+      const pty = spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+      if (pty.pid > 0) {
+        recordSpawn?.();
+      }
+      return pty;
+    };
   }
   const { spawn } = await import("@lydell/node-pty");
   const invocation = resolveTerminalPtyInvocation({
@@ -137,30 +159,51 @@ export async function spawnTerminalPty(
     args: params.args,
     env: env ?? process.env,
   });
-  assertCurrent();
-  const pty = spawn(invocation.file, invocation.args, {
-    name: terminalName,
-    cols: params.cols,
-    rows: params.rows,
-    cwd: params.cwd,
-    env,
-  });
-  return {
-    get pid() {
-      return pty.pid;
-    },
-    // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
-    write: (data) => pty.write(data as string),
-    resize: (cols, rows) => pty.resize(cols, rows),
-    pause: () => pty.pause(),
-    resume: () => pty.resume(),
-    onData: (listener) => pty.onData(listener),
-    onExit: (listener) => pty.onExit(listener),
-    kill: (signal) =>
-      signalTerminalPtyTree(pty.pid, signal, (sig) =>
-        process.platform === "win32" ? pty.kill() : pty.kill(sig),
-      ),
-  } satisfies TerminalPtyHandle;
+  return () => {
+    const pty = spawn(invocation.file, invocation.args, {
+      name: terminalName,
+      cols: params.cols,
+      rows: params.rows,
+      cwd: params.cwd,
+      env,
+    });
+    if (pty.pid > 0) {
+      recordSpawn?.();
+    } else if (recordSpawn && process.platform === "win32") {
+      // ConPTY assigns its PID asynchronously. Silent open terminals are attributed
+      // at their first data or exit; telemetry never delays the admitted handle.
+      let settled = false;
+      const observe = (exited = false) => {
+        if (settled || (pty.pid <= 0 && !exited)) {
+          return;
+        }
+        settled = true;
+        if (pty.pid > 0) {
+          recordSpawn();
+        }
+        dataSubscription.dispose();
+        exitSubscription.dispose();
+      };
+      const dataSubscription = pty.onData(() => observe());
+      const exitSubscription = pty.onExit(() => observe(true));
+    }
+    return {
+      get pid() {
+        return pty.pid;
+      },
+      // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
+      write: (data) => pty.write(data as string),
+      resize: (cols, rows) => pty.resize(cols, rows),
+      pause: () => pty.pause(),
+      resume: () => pty.resume(),
+      onData: (listener) => pty.onData(listener),
+      onExit: (listener) => pty.onExit(listener),
+      kill: (signal) =>
+        signalTerminalPtyTree(pty.pid, signal, (sig) =>
+          process.platform === "win32" ? pty.kill() : pty.kill(sig),
+        ),
+    } satisfies TerminalPtyHandle;
+  };
 }
 
 // node-pty inherits process.env without host terminal-multiplexer state.

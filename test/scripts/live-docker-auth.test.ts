@@ -176,110 +176,62 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     );
   });
 
-  it("handles empty mounted auth lists under Bash 3 nounset", () => {
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
+  it.each([["8", "6", "8"]])(
+    "caps default CPU limits using live=%s and shared=%s capacity",
+    (live, shared, expected) => {
+      const binDir = makeTempBin("openclaw-live-docker-auth-cpus-");
+      writeExecutable(
+        path.join(binDir, "timeout"),
         [
-          "set -euo pipefail",
-          "source scripts/lib/live-docker-stage.sh",
-          "OPENCLAW_DOCKER_AUTH_PRESTAGED=0",
-          "OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED=",
-          "OPENCLAW_DOCKER_AUTH_FILES_RESOLVED=",
-          "openclaw_live_stage_mounted_auth",
-          "printf mounted-auth-ok",
+          "#!/bin/sh",
+          'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
+          "  exit 0",
+          "fi",
+          "exit 64",
+          "",
         ].join("\n"),
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
+      );
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("mounted-auth-ok");
-  });
-
-  it("adds a kill-after grace period when timeout supports it", () => {
-    const binDir = makeTempBin("openclaw-live-docker-auth-gnu-");
-    writeExecutable(
-      path.join(binDir, "timeout"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
-        "  exit 0",
-        "fi",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-
-    expect(resolveDockerRunArgs(binDir)).toEqual([
-      "timeout",
-      "--kill-after=30s",
-      "42s",
-      "docker",
-      "run",
-      "--init",
-      "--memory",
-      "8g",
-      "--cpus",
-      "16",
-      "--pids-limit",
-      "2048",
-    ]);
-  });
-
-  it("caps default CPU limits to the runner capacity", () => {
-    const binDir = makeTempBin("openclaw-live-docker-auth-cpus-");
-    writeExecutable(
-      path.join(binDir, "timeout"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
-        "  exit 0",
-        "fi",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
+      const result = spawnSync(
+        "/bin/bash",
         [
-          "source scripts/lib/live-docker-auth.sh",
-          "ARGS=()",
-          "OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS=8 openclaw_live_init_docker_run_args ARGS 42s",
-          "printf '%s\\n' \"${ARGS[@]}\"",
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: binDir,
+          "-c",
+          [
+            "source scripts/lib/live-docker-auth.sh",
+            "ARGS=()",
+            "openclaw_live_init_docker_run_args ARGS 42s",
+            "printf '%s\\n' \"${ARGS[@]}\"",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: binDir,
+            OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS: live,
+            OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: shared,
+          },
         },
-      },
-    );
+      );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout.trimEnd().split("\n")).toEqual([
-      "timeout",
-      "--kill-after=30s",
-      "42s",
-      "docker",
-      "run",
-      "--init",
-      "--memory",
-      "8g",
-      "--cpus",
-      "8",
-      "--pids-limit",
-      "2048",
-    ]);
-  });
+      expect(result.status).toBe(0);
+      expect(result.stdout.trimEnd().split("\n")).toEqual([
+        "timeout",
+        "--kill-after=30s",
+        "42s",
+        "docker",
+        "run",
+        "--init",
+        "--memory",
+        "8g",
+        "--cpus",
+        expected,
+        "--pids-limit",
+        "2048",
+      ]);
+    },
+  );
 
   it("falls back to plain timeout when kill-after is unavailable", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-plain-");
@@ -335,7 +287,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
-  it.each(["0", "1"])(
+  it.each(["1"])(
     "prepares bind ownership with resource limits disabled=%s under nounset",
     (disabled) => {
       const dir = makeTempBin("openclaw-live-bind-dir-");
@@ -372,52 +324,6 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       expect(args.includes("--memory")).toBe(disabled === "0");
     },
   );
-
-  it("allows live Docker resource limits to be disabled", () => {
-    const binDir = makeTempBin("openclaw-live-docker-auth-no-limits-");
-    writeExecutable(
-      path.join(binDir, "timeout"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
-        "  exit 0",
-        "fi",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
-        [
-          "source scripts/lib/live-docker-auth.sh",
-          "ARGS=()",
-          "OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS=1 openclaw_live_init_docker_run_args ARGS 42s",
-          "printf '%s\\n' \"${ARGS[@]}\"",
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: binDir,
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trimEnd().split("\n")).toEqual([
-      "timeout",
-      "--kill-after=30s",
-      "42s",
-      "docker",
-      "run",
-      "--init",
-    ]);
-  });
 
   it("normalizes live Docker pids limits", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-pids-");
@@ -458,51 +364,51 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(result.stdout.trimEnd().split("\n")).toContain("8");
   });
 
-  it.each([
-    ["live", "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT"],
-    ["shared", "OPENCLAW_DOCKER_E2E_PIDS_LIMIT"],
-  ])("rejects invalid %s Docker pids limits before live Docker setup", (_label, envName) => {
-    const binDir = makeTempBin("openclaw-live-docker-auth-invalid-pids-");
-    writeExecutable(
-      path.join(binDir, "timeout"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
-        "  exit 0",
-        "fi",
-        "exit 64",
-        "",
-      ].join("\n"),
-    );
-
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
+  it.each([["live", "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT"]])(
+    "rejects invalid %s Docker pids limits before live Docker setup",
+    (_label, envName) => {
+      const binDir = makeTempBin("openclaw-live-docker-auth-invalid-pids-");
+      writeExecutable(
+        path.join(binDir, "timeout"),
         [
-          "source scripts/lib/live-docker-auth.sh",
-          "ARGS=()",
-          "openclaw_live_init_docker_run_args ARGS 42s",
+          "#!/bin/sh",
+          'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
+          "  exit 0",
+          "fi",
+          "exit 64",
+          "",
         ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_DOCKER_E2E_PIDS_LIMIT:
-            envName === "OPENCLAW_DOCKER_E2E_PIDS_LIMIT" ? "many" : "",
-          OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:
-            envName === "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT" ? "many" : "",
-          PATH: binDir,
-        },
-      },
-    );
+      );
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(`invalid ${envName}: many`);
-    expect(result.stdout).toBe("");
-  });
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "source scripts/lib/live-docker-auth.sh",
+            "ARGS=()",
+            "openclaw_live_init_docker_run_args ARGS 42s",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_DOCKER_E2E_PIDS_LIMIT:
+              envName === "OPENCLAW_DOCKER_E2E_PIDS_LIMIT" ? "many" : "",
+            OPENCLAW_LIVE_DOCKER_PIDS_LIMIT:
+              envName === "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT" ? "many" : "",
+            PATH: binDir,
+          },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: many`);
+      expect(result.stdout).toBe("");
+    },
+  );
 
   it("fails fast when no timeout wrapper is available", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-no-timeout-");

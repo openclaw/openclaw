@@ -1,10 +1,12 @@
+import type {
+  SessionFileEntry,
+  SessionFileState,
+  SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  type SessionFileEntry,
-  type SessionFileState,
-  type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+} from "openclaw/plugin-sdk/session-key-runtime";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;
@@ -48,13 +50,11 @@ export function resolveMemorySessionStartupState(params: {
     }
     const indexedMtimeMs = Number(existing.mtime);
     const indexedSize = Number(existing.size);
-    if (!Number.isFinite(indexedMtimeMs) || !Number.isFinite(indexedSize)) {
-      dirtyFiles.push(file.absPath);
-      continue;
-    }
     // Activity and transcript revisions can move backward after
     // restore/reset. The downstream content-hash gate suppresses unchanged rewrites.
     if (
+      !Number.isFinite(indexedMtimeMs) ||
+      !Number.isFinite(indexedSize) ||
       file.size !== indexedSize ||
       file.mtimeMs !== indexedMtimeMs ||
       (file.revisionMs !== undefined && !existing.hash.startsWith(`sqlite:${file.revisionMs}:`))
@@ -74,12 +74,7 @@ export function resolveMemorySessionSyncPlan(params: {
   targetSessionFiles: Set<string> | null;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
-}): {
-  activePaths: Set<string> | null;
-  existingRows: MemorySourceFileStateRow[] | null;
-  existingHashes: Map<string, string> | null;
-  indexAll: boolean;
-} {
+}) {
   const activePaths = params.targetSessionFiles
     ? null
     : new Set(params.files.map((file) => params.sessionPathForFile(file)));

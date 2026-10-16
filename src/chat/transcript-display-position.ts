@@ -25,9 +25,6 @@ export type TranscriptDisplayPosition = z.infer<typeof positionSchema>;
 export function readTranscriptDisplayPosition(
   value: unknown,
 ): TranscriptDisplayPosition | undefined {
-  if (!asOptionalRecord(value)) {
-    return undefined;
-  }
   const parsed = positionSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }

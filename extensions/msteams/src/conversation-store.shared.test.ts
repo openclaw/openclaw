@@ -1,7 +1,7 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -16,13 +16,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function createStore() {
   const stateDir = tempDirs.make("openclaw-msteams-store-");
-  return createMSTeamsConversationStoreState({
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    ttlMs: 60_000,
-  });
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  return createMSTeamsConversationStoreState();
 }
 
 describe("msteams conversation store ('state')", () => {
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);

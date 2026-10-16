@@ -8,10 +8,10 @@ import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
-  getSessionMcpRuntimeManagerForTesting,
-  releaseSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
+import { getSessionMcpRuntimeTestManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
 import {
@@ -55,35 +55,27 @@ afterEach(async () => {
     );
 });
 
-it("retires excluded discovery servers while retaining prepared session tools", async () => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const acquired = await acquireSessionMcpRuntime({ ...params, cfg: config() });
-  const healthy = await probeMcpServer(acquired.runtime, "healthy");
-  const excluded = await probeMcpServer(acquired.runtime, "changed");
+it.each([false, true])(
+  "retires excluded servers after all acquisitions release (shared=%s)",
+  async (shared) => {
+    const { params, config } = await createMcpProbeFixture(tempDirs);
+    const input = { ...params, cfg: config() };
+    const discovery = await acquireSessionMcpRuntime(input);
+    const active = shared ? await acquireSessionMcpRuntime(input) : discovery;
+    const healthy = await probeMcpServer(active.runtime, "healthy");
+    const excluded = await probeMcpServer(active.runtime, "changed");
 
-  await releaseSessionMcpRuntime(acquired, new Set(["healthy"]));
-
-  expect(() => process.kill(excluded.pid, 0)).toThrow();
-  expect(await probeMcpServer(acquired.runtime, "healthy")).toEqual(healthy);
-  await disposeAllSessionMcpRuntimes();
-  expect(() => process.kill(healthy.pid, 0)).toThrow();
-});
-
-it("preserves an excluded server until its other active acquisition releases", async () => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const input = { ...params, cfg: config() };
-  const discovery = await acquireSessionMcpRuntime(input);
-  const active = await acquireSessionMcpRuntime(input);
-  const healthy = await probeMcpServer(active.runtime, "healthy");
-  const excluded = await probeMcpServer(active.runtime, "changed");
-
-  await releaseSessionMcpRuntime(discovery, new Set(["healthy"]));
-  expect(await probeMcpServer(active.runtime, "changed")).toEqual(excluded);
-
-  await releaseSessionMcpRuntime(active, new Set(["healthy"]));
-  expect(() => process.kill(excluded.pid, 0)).toThrow();
-  expect(await probeMcpServer(active.runtime, "healthy")).toEqual(healthy);
-});
+    await releaseSessionMcpRuntime(discovery, new Set(["healthy"]));
+    if (shared) {
+      expect(await probeMcpServer(active.runtime, "changed")).toEqual(excluded);
+      await releaseSessionMcpRuntime(active, new Set(["healthy"]));
+    }
+    expect(() => process.kill(excluded.pid, 0)).toThrow();
+    expect(await probeMcpServer(active.runtime, "healthy")).toEqual(healthy);
+    await disposeAllSessionMcpRuntimes();
+    expect(() => process.kill(healthy.pid, 0)).toThrow();
+  },
+);
 
 it("does not let stale discovery prune servers transferred to a replacement", async () => {
   const { params, config } = await createMcpProbeFixture(tempDirs);
@@ -116,10 +108,8 @@ it("releases capacity when every configured server is excluded before connection
           cfg,
         });
         await releaseSessionMcpRuntime(acquired, new Set());
-        expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
-        expect(
-          getSessionMcpRuntimeManagerForTesting().resolveSessionId(sessionKey),
-        ).toBeUndefined();
+        expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
+        expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBeUndefined();
       }
     })(),
   ).resolves.toBeUndefined();
@@ -141,7 +131,7 @@ it.each(["exported acquisition", "harness materialization"])(
     const acquired = await acquireSessionMcpRuntime(input);
     const original = await materializeBundleMcpToolsForRun(acquired);
     const healthy = await probeMcpServer(acquired.runtime, "healthy");
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     const started = createDeferred();
     const released = createDeferred();
     releases.push(() => released.resolve());
@@ -191,7 +181,7 @@ it("releases static admission when requester resolution fails during required re
   const original = await acquireSessionMcpRuntime(input);
   const healthy = await probeMcpServer(original.runtime, "healthy");
   original.releaseLease();
-  const manager = getSessionMcpRuntimeManagerForTesting();
+  const manager = getSessionMcpRuntimeTestManager();
   readAuthorization.mockImplementationOnce(async () => {
     manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
     throw new Error("requester authorization unavailable");
@@ -211,7 +201,7 @@ it.each(["empty", "catalog failure"])(
       ...params,
       cfg: { plugins: { enabled: false } },
     });
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     expect(acquired.runtime.activeLeases).toBe(1);
     manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
     if (result === "catalog failure") {

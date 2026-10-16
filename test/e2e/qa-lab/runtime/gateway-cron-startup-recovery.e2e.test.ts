@@ -178,7 +178,7 @@ describe("Gateway cron startup recovery", () => {
     const config = {
       agents: {
         defaults: { workspace: path.join(tempHome, "workspace"), skipBootstrap: true },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
       gateway: { auth: { mode: "token", token } },
       plugins: { slots: { memory: "none" } },

@@ -1,5 +1,5 @@
 import { createRouter } from "@openclaw/uirouter";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,13 +7,14 @@ import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
+  retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
@@ -22,12 +23,16 @@ type FixtureOptions = {
   data?: NewSessionRouteData;
   request?: (method: string, params?: unknown) => Promise<unknown>;
   modelCatalog?: (params?: unknown) => Promise<unknown>;
+  placementPolicy?: () => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
     if (method === "models.list") {
       return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
+    if (method === "agents.list" && options.placementPolicy) {
+      return options.placementPolicy();
     }
     if (options.request) {
       return options.request(method, params);
@@ -39,7 +44,36 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   const router = createRouter<RouteId, ApplicationContext>({
     routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
   });
+  const lifetime = new AbortController();
+  onTestFinished(() => lifetime.abort());
+  const roster = {
+    defaultId: "main",
+    agents: options.agents ?? [
+      {
+        id: "main",
+        workspace: "/workspace",
+        workspaceGit: false,
+        model: { primary: "openai/gpt-5.6-luna" },
+      },
+    ],
+  };
+  // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agents = {
+    subscribe: () => () => undefined,
+    state: {
+      agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
+    },
+    refreshList: async () => {
+      // A failed refresh publishes no policy, like the roster owner.
+      const policy = await options.placementPolicy?.().catch(() => undefined);
+      if (policy) {
+        agents.state.agentsList = Object.assign({}, roster, policy);
+      }
+      return agents.state.agentsList;
+    },
+  };
   const context = {
+    lifecycleAbortSignal: lifetime.signal,
     router,
     gateway: options.gateway ?? {
       subscribe: () => () => undefined,
@@ -65,22 +99,9 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
       setSessionKey: vi.fn(),
     },
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          agents: options.agents ?? [
-            {
-              id: "main",
-              workspace: "/workspace",
-              workspaceGit: false,
-              model: { primary: "openai/gpt-5.6-luna" },
-            },
-          ],
-        },
-      },
-    },
+    agents,
     sessions: {
+      subscribe: () => () => undefined,
       state: { result: null },
       createResult: vi.fn(),
       describe: ((params, describeOptions) => {
@@ -96,7 +117,10 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
+    config: {
+      subscribe: () => () => undefined,
+      current: { cliAgentsEnabled: true, terminalEnabled: true },
+    },
     basePath: "",
     replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
@@ -108,9 +132,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
-  const host = new TestReactiveControllerHost();
   const gateway = new DraftGatewayState(
-    host,
     () => ({
       context,
       data: options.data,
@@ -128,7 +150,8 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
-      requestUpdate: vi.fn(),
+      readAgents: () => context.agents,
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
@@ -142,14 +165,14 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
   );
   const browser = new DraftPlaceBrowser(
-    host,
     gateway,
     () => ({
       context,
       isAdmin: place?.isAdmin() ?? false,
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
+      updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
       onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
@@ -168,22 +191,27 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const requestUpdate = vi.fn();
+  const changed = vi.fn();
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
+    {
+      changed,
+      closeTransientUi: vi.fn(),
+      takePreparedTitle: options.takePreparedTitle,
+      retainForHandoff: options.retainForHandoff,
+    },
   );
   gateway.synchronize(context.gateway);
-  place.setAgentsHydrated(true);
+  place.agentsHydrated = true;
   place.adoptAgentDefaults();
-  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, changed };
 }
 
 export function registerTextPayload(id: string) {

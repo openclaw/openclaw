@@ -2,10 +2,7 @@ import {
   defineBundledChannelEntry,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { registerReefCliMetadata } from "./cli-metadata.js";
-
-const loadReefCommandsRuntime = createLazyRuntimeModule(() => import("./commands.runtime.js"));
 
 function registerReefFullRuntime(api: OpenClawPluginApi): void {
   api.registerCommand({
@@ -15,7 +12,7 @@ function registerReefFullRuntime(api: OpenClawPluginApi): void {
     requireAuth: true,
     exposeSenderIsOwner: true,
     handler: async (params) => {
-      const { handleReefCommand } = await loadReefCommandsRuntime();
+      const { handleReefCommand } = await import("./commands.runtime.js");
       return await handleReefCommand(params);
     },
   });

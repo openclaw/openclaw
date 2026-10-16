@@ -1,19 +1,16 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
-
-const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
-  () => import("./server-startup-post-attach.js"),
-);
 
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
@@ -23,9 +20,18 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  // Join startup through its returned promise without giving resident listeners the boot scope.
+  const start = (signal?: AbortSignal) =>
+    runOutsideAsyncWorkScope(() =>
+      startGatewayServerWithSdkHost(port, opts, sdkResourceHost, signal),
+    );
   return await sdkResourceHost.run(() =>
-    startGatewayServerWithSdkHost(port, opts, sdkResourceHost),
+    opts.startupOperation ? opts.startupOperation(start) : start(),
   );
 }
 
@@ -33,10 +39,12 @@ async function startGatewayServerWithSdkHost(
   port: number,
   opts: GatewayServerOptions,
   sdkResourceHost: LegacyPluginSdkResourceHost,
+  signal?: AbortSignal,
 ): Promise<GatewayServer> {
   const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
+    deferRequestRuntime: true,
     sdkResourceHost,
   });
   // A Gateway restart must refresh restored skill catalogs, even in the same process.
@@ -47,17 +55,16 @@ async function startGatewayServerWithSdkHost(
     void beginMacOSSystemCaWarmupOnce({ log });
   }
   let startupSettled: Promise<void>;
-  const {
-    beginClosePrelude,
-    closeOnStartupFailure,
-    prepareClose,
-    terminalSessions,
-    shutdownRuntime,
-  } = gatewayKernel;
+  let tailscaleStopping: Promise<void> | undefined;
+  let stopStartingTailscale: (() => void) | undefined;
+  const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
+      httpRequestLifetime: gatewayKernel.gatewayRequestContext,
+      waitForRequestRuntime: gatewayKernel.ensureRequestRuntimeReady,
       updateCanary: opts.updateCanary,
+      onListening: opts.gatewayStateOwner?.markListening,
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
@@ -69,10 +76,19 @@ async function startGatewayServerWithSdkHost(
                 backend,
                 controlUiBasePath: gatewayKernel.controlUiBasePath,
                 logTailscale,
+                signal,
               });
-              // The server close handle is not published until this callback settles.
-              // Startup failure therefore owns teardown before normal close can race it.
               gatewayKernel.kernel.setTailscaleCleanup(cleanup);
+              stopStartingTailscale = () => {
+                tailscaleStopping ??= cleanup?.();
+                void tailscaleStopping?.catch(() => {});
+              };
+              // Keep cancellation ownership until the full server close handle is published.
+              signal?.addEventListener("abort", stopStartingTailscale, { once: true });
+              if (signal?.aborted) {
+                stopStartingTailscale();
+                signal.throwIfAborted();
+              }
             },
           }
         : {}),
@@ -90,14 +106,19 @@ async function startGatewayServerWithSdkHost(
       logChannels,
       logCron,
       logReload,
-      loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
     startupSettled = startup.startupSettled;
+    signal?.throwIfAborted();
   } catch (err) {
     // Failed startup must release work whose normal timer was never armed.
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
+  } finally {
+    if (stopStartingTailscale) {
+      signal?.removeEventListener("abort", stopStartingTailscale);
+    }
+    await tailscaleStopping;
   }
   void startupSettled.then(
     () => {
@@ -124,13 +145,11 @@ async function startGatewayServerWithSdkHost(
       if (!closePromise) {
         closePromise = sdkResourceHost
           .run(async () => {
-            const prelude = beginClosePrelude(optsLocal);
+            const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
-            await prelude;
-            const close = await prepareClose(optsLocal);
             await runGatewayCloseSteps({
               owner: gatewayKernel,
-              close,
+              close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {
                 await shutdownRuntime.runGlobalGatewayStopSafely({

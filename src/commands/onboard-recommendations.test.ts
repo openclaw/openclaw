@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
+  type OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -10,6 +12,24 @@ import {
   onboardRecommendationsCommand,
   refreshOnboardRecommendationsCommand,
 } from "./onboard-recommendations.js";
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  const loadConfigMock = vi.fn(actual.loadConfig);
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    captureRuntimeConfigAsyncReader: () => async () => loadConfigMock(),
+  };
+});
+
+vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/onboarding-recommendations.js")>();
+  return {
+    ...actual,
+    createOnboardingRecommendationsStore: vi.fn(actual.createOnboardingRecommendationsStore),
+  };
+});
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -57,23 +77,7 @@ function createOffer(
   };
 }
 
-describe.each([
-  {
-    operation: "read",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      onboardRecommendationsCommand({ agent, json: true }, runtime),
-  },
-  {
-    operation: "acknowledge",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      acknowledgeOnboardRecommendationsCommand({ agent }, runtime),
-  },
-  {
-    operation: "refresh",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      refreshOnboardRecommendationsCommand({ agent }, runtime),
-  },
-])("onboard recommendations $operation selection", ({ run }) => {
+describe("onboard recommendations read selection", () => {
   it.each([
     { agent: "   ", error: "--agent must not be blank" },
     { agent: "writer!", error: 'Unknown agent id "writer!"' },
@@ -105,7 +109,9 @@ describe.each([
           nowMs: 1,
         });
 
-        await expect(run(agent, makeRuntime())).rejects.toThrow(error);
+        await expect(
+          onboardRecommendationsCommand({ agent, json: true }, makeRuntime()),
+        ).rejects.toThrow(error);
         expect(await store.read()).toEqual(offer);
       });
     },
@@ -113,36 +119,36 @@ describe.each([
 });
 
 describe("onboard recommendations command", () => {
-  it("returns stored matches as JSON without rescanning", async () => {
-    const runtime = makeRuntime();
-    const read = vi.fn(async () => createOffer());
+  let store: OnboardingRecommendationsStore;
 
-    await onboardRecommendationsCommand({ json: true }, runtime, { read });
-
-    expect(read).toHaveBeenCalledOnce();
-    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
-    expect(typeof output).toBe("string");
-    expect(JSON.parse(output as string)).toEqual([
-      { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
-    ]);
-    expect(output).not.toContain("Connects conversations");
-    expect(output).not.toContain("Chat plugin");
+  beforeEach(() => {
+    vi.mocked(loadConfig).mockReturnValue({
+      agents: { entries: { main: { workspace: "/tmp/onboard-recommendations-test" } } },
+    });
+    store = {
+      read: vi.fn(),
+      writeOffer: vi.fn(),
+      acknowledge: vi.fn(),
+      updatePending: vi.fn(),
+      clearPending: vi.fn(),
+      clear: vi.fn(),
+    };
+    vi.mocked(createOnboardingRecommendationsStore).mockReturnValue(store);
   });
 
-  it("returns an empty JSON list when no offer is stored", async () => {
-    const runtime = makeRuntime();
-
-    await onboardRecommendationsCommand({ json: true }, runtime, { read: async () => null });
-
-    expect(runtime.log).toHaveBeenCalledWith("[]");
+  afterEach(() => {
+    vi.mocked(loadConfig).mockReset();
+    vi.mocked(createOnboardingRecommendationsStore).mockReset();
   });
 
   it("returns an empty JSON list after the offer was answered", async () => {
     const runtime = makeRuntime();
 
-    await onboardRecommendationsCommand({ json: true }, runtime, {
+    Object.assign(store, {
       read: async () => createOffer({ acceptedAt: 2, updatedAt: 2 }),
     });
+
+    await onboardRecommendationsCommand({ json: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
@@ -153,7 +159,9 @@ describe("onboard recommendations command", () => {
       createOffer({ acceptedAt: 2, updatedAt: 2, matches: [] }),
     );
 
-    await acknowledgeOnboardRecommendationsCommand({}, runtime, { acknowledge });
+    Object.assign(store, { acknowledge });
+
+    await acknowledgeOnboardRecommendationsCommand({}, runtime);
 
     expect(acknowledge).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Onboarding recommendations acknowledged.");
@@ -164,10 +172,12 @@ describe("onboard recommendations command", () => {
     const updatePending = vi.fn(async () => createOffer({ updatedAt: 2, matches: [] }));
     const matches = [chatMatch(), notesMatch()];
 
-    await acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime, {
+    Object.assign(store, {
       read: async () => createOffer({ matches }),
       updatePending,
     });
+
+    await acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime);
 
     expect(updatePending).toHaveBeenCalledWith({
       matches: [matches[1]],
@@ -189,11 +199,13 @@ describe("onboard recommendations command", () => {
     const acknowledge = vi.fn();
     const updatePending = vi.fn();
 
-    await acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime, {
+    Object.assign(store, {
       read: async () => createOffer({ matches: [] }),
       acknowledge,
       updatePending,
     });
+
+    await acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith("Unknown pending recommendation id: missing-skill");
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -206,10 +218,12 @@ describe("onboard recommendations command", () => {
     const updatePending = vi.fn(async () => null);
     const match = notesMatch();
 
-    await acknowledgeOnboardRecommendationsCommand({ retry: [match.candidateId] }, runtime, {
+    Object.assign(store, {
       read: async () => createOffer({ matches: [match] }),
       updatePending,
     });
+
+    await acknowledgeOnboardRecommendationsCommand({ retry: [match.candidateId] }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "Stored recommendations changed; read them again before recording retries.",
@@ -222,10 +236,12 @@ describe("onboard recommendations command", () => {
     const runtime = makeRuntime();
     const clearPending = vi.fn(async () => true);
 
-    await onboardRecommendationsCommand({ json: true }, runtime, {
+    Object.assign(store, {
       read: async () => createOffer({ matches: [notesMatch("notes")] }),
       clearPending,
     });
+
+    await onboardRecommendationsCommand({ json: true }, runtime);
 
     expect(clearPending).toHaveBeenCalledWith({
       expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
@@ -237,7 +253,9 @@ describe("onboard recommendations command", () => {
     const runtime = makeRuntime();
     const clear = vi.fn(async () => true);
 
-    await refreshOnboardRecommendationsCommand({}, runtime, { clear });
+    Object.assign(store, { clear });
+
+    await refreshOnboardRecommendationsCommand({}, runtime);
 
     expect(clear).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith(
@@ -248,7 +266,7 @@ describe("onboard recommendations command", () => {
   it("drops unsafe install identifiers from the bootstrap payload", async () => {
     const runtime = makeRuntime();
 
-    await onboardRecommendationsCommand({ json: true }, runtime, {
+    Object.assign(store, {
       read: async () =>
         createOffer({
           matches: [
@@ -268,6 +286,8 @@ describe("onboard recommendations command", () => {
         }),
     });
 
+    await onboardRecommendationsCommand({ json: true }, runtime);
+
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
@@ -275,7 +295,7 @@ describe("onboard recommendations command", () => {
     const runtime = makeRuntime();
     const match = chatMatch();
 
-    await onboardRecommendationsCommand({ json: true }, runtime, {
+    Object.assign(store, {
       read: async () =>
         createOffer({
           matches: [
@@ -289,8 +309,13 @@ describe("onboard recommendations command", () => {
         }),
     });
 
-    expect(JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string)).toEqual([
+    await onboardRecommendationsCommand({ json: true }, runtime);
+
+    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    expect(JSON.parse(output as string)).toEqual([
       { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
     ]);
+    expect(output).not.toContain("Connects conversations");
+    expect(output).not.toContain("Chat plugin");
   });
 });

@@ -73,7 +73,7 @@ Select the role globally or for one agent:
 ```
 
 The default artifact directory is `<stateDir>/models/onnx`. Set the plugin's
-`modelDir` to use another directory; the download, verify, and probe commands also
+`modelDir` to use another directory; the `download`, `verify`, and `probe` commands also
 accept `--model-dir <path>`. Artifacts are grouped by model ID. Downloads use fixed
 repository revisions, sizes, and SHA256 hashes. Existing mismatched files are
 refused rather than overwritten. `openclaw onnx verify <model>` checks an installation.

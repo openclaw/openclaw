@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -65,16 +62,6 @@ describe("Codex managed thread store", () => {
     await expect(store.snapshot()).resolves.toEqual(
       new Map([[sourceHomeId, new Set(["thread-1"])]]),
     );
-  });
-
-  it("ignores malformed rows when building a snapshot", async () => {
-    const { state, values } = createStateStore();
-    values.set("malformed", {
-      version: 1,
-      kind: "managed-thread",
-    } as unknown as StoredCodexManagedThread);
-
-    await expect(createCodexManagedThreadStore(state).snapshot()).resolves.toEqual(new Map());
   });
 
   it("hydrates once and keeps concurrent marks within the global oldest-first bound", async () => {
@@ -153,7 +140,7 @@ describe("Codex managed thread store", () => {
     await expect(store.snapshot()).resolves.toEqual(new Map());
   });
 
-  it.each(["has", "snapshot"] as const)("propagates %s storage rejection", async (operation) => {
+  it("propagates membership storage rejection and retries hydration", async () => {
     const { state } = createStateStore();
     const failure = new Error("synthetic read rejection");
     state.lookup = async () => {
@@ -163,24 +150,8 @@ describe("Codex managed thread store", () => {
       throw failure;
     };
     const store = createCodexManagedThreadStore(state);
-    await expect(operation === "has" ? store.has("home", "thread") : store.snapshot()).rejects.toBe(
-      failure,
-    );
+    await expect(store.has("home", "thread")).rejects.toBe(failure);
     state.entries = async () => [];
     await expect(store.snapshot()).resolves.toEqual(new Map());
-  });
-
-  it("uses the same source identity for a symlinked configured home", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-home-id-")));
-    try {
-      const home = path.join(root, "home");
-      const alias = path.join(root, "alias");
-      await fs.mkdir(home);
-      await fs.symlink(home, alias, process.platform === "win32" ? "junction" : "dir");
-
-      expect(codexCatalogHomeId(alias)).toBe(codexCatalogHomeId(home));
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
   });
 });

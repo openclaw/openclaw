@@ -186,7 +186,7 @@ describe("gateway cli backend live helpers", () => {
     ).toEqual({
       action: "fail",
       message:
-        'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 and OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live probes.',
+        'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 and OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live checks.',
     });
 
     expect(

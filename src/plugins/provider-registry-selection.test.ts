@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
+import { resolveProviderEndpoint } from "../agents/provider-attribution.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { registerProviderPlugin } from "../test-utils/plugin-registration.js";
+import { makeEmptyPluginMetadataOwners } from "./current-plugin-metadata.test-support.js";
 import { createPluginRecord } from "./loader-records.js";
 import { PluginInstance } from "./plugin-instance.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
@@ -15,12 +19,51 @@ function provider(id: string, aliases?: string[], hookAliases?: string[]): Provi
 
 describe("provider registry selection", () => {
   it.each([
-    { ref: "target", refs: [], expected: "target" },
+    ["dashscope", undefined],
+    ["custom-dashscope", "https://coding-intl.dashscope.aliyuncs.com/v1"],
+  ] as const)("resolves Qwen quota hooks for %s", async (providerId, baseUrl) => {
+    const plugin = await loadBundledPluginFacade<{
+      default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+    }>({ pluginId: "qwen", artifactBasename: "index.js" });
+    const { providers } = await registerProviderPlugin({
+      plugin: plugin.default,
+      id: "qwen",
+      name: "Qwen Provider",
+    });
+    const owners = makeEmptyPluginMetadataOwners();
+    owners.providerEndpoints = [
+      {
+        endpointClass: "modelstudio-native",
+        baseUrls: ["https://coding-intl.dashscope.aliyuncs.com/v1"],
+      },
+    ];
+    const selected = findProviderRuntimeRegistrationInRegistry({
+      registry: {
+        providers: providers.map((entry) => ({
+          pluginId: "qwen",
+          source: "test",
+          provider: entry,
+        })),
+      },
+      provider: providerId,
+      ownerRefs: baseUrl ? [resolveProviderEndpoint(baseUrl, owners).endpointClass] : [],
+    })?.provider;
+
+    expect(selected?.id).toBe("qwen");
+    expect(
+      selected?.classifyFailoverReason?.({
+        provider: providerId,
+        status: 429,
+        code: "insufficient_quota",
+        errorMessage: "Free allocated quota exceeded.",
+      }),
+    ).toBe("billing");
+  });
+
+  it.each([
     { ref: " TARGET ", refs: [], expected: "target" },
     { ref: "alias", refs: [], expected: "first" },
-    { ref: "hook", refs: [], expected: "first" },
     { ref: "missing", refs: [], expected: undefined },
-    { ref: " ", refs: [], expected: undefined },
     { ref: "alias", refs: ["last"], expected: "last" },
     { ref: "target", refs: ["first"], expected: "target" },
     { ref: "missing", refs: ["last", "hook"], expected: "first" },

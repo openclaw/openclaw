@@ -247,36 +247,4 @@ describe("Tool Search execution scheduling", () => {
       clearToolSearchCatalog(ctx);
     }
   });
-
-  it.each(["sequential", "parallel"] as const)(
-    "rejects incompatible reentrancy from a %s caller rather than deadlocking",
-    async (executionMode) => {
-      const child: AnyAgentTool = {
-        name: "child",
-        label: "child",
-        description: "child",
-        parameters: Type.Object({}),
-        executionMode: "sequential",
-        execute: vi.fn(async () => jsonResult({ ok: true })),
-      };
-      const parent: AnyAgentTool = {
-        ...child,
-        name: "parent",
-        executionMode,
-        execute: async () => {
-          await runtime.call("child");
-          return jsonResult({ ok: true });
-        },
-      };
-      const harness = fixture([parent, child]);
-      const { runtime } = harness;
-      try {
-        await expect(runtime.call("parent")).rejects.toThrow("Reentrant tool call");
-        expect(child.execute).not.toHaveBeenCalled();
-        await expect(runtime.call("child")).resolves.toBeDefined();
-      } finally {
-        clearToolSearchCatalog(harness.ctx);
-      }
-    },
-  );
 });

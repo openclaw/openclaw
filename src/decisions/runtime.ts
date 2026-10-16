@@ -15,6 +15,11 @@ import {
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  assertAllowedCompletionModel,
+  resolvePluginLlmPolicy,
+} from "../plugins/runtime/runtime-model-policy.js";
+import { modelKey } from "../shared/model-key.js";
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
@@ -41,6 +46,8 @@ export async function evaluateDecisionInRegistry(
   registry: PluginRegistry | null,
   config: OpenClawConfig,
   consumerId?: string,
+  isAdmissible?: () => boolean,
+  canDispatch?: () => boolean,
 ): Promise<DecisionOutcome> {
   const options = { ...inputOptions };
   if (
@@ -68,6 +75,11 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
+  // Registration supplies consumer identity; request fields cannot select another plugin's policy.
+  const pluginPolicy = resolvePluginLlmPolicy(config, consumerId);
+  // The public Decision contract takes the operation's owning agent explicitly.
+  // This runtime is consumer-bound, not agent-bound; applying LLM override policy
+  // here would reject owner-agent calls. Omission still selects the global role.
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
     return skipped({ status: "unavailable", reason: "disabled" });
@@ -117,6 +129,12 @@ export async function evaluateDecisionInRegistry(
         new Error("Decision evaluation requires its current Gateway binding."),
     });
     modelExecution = bindOperatorModelExecution(capturedOperator.authority, model);
+    // A configured role is not a caller model override; only all-completion policy applies.
+    assertAllowedCompletionModel({
+      resolvedModelRef: modelKey(model.provider, model.model),
+      pluginPolicyId: consumerId,
+      pluginPolicy,
+    });
     const modelSignal = modelExecution
       ? AbortSignal.any([options.signal, modelExecution.signal])
       : options.signal;
@@ -128,22 +146,19 @@ export async function evaluateDecisionInRegistry(
     assertCurrent();
     // Root callers carry their own work signal: provider replacement may still allow fallback.
     // Prepared views additionally lose consumer authority when their finite view is released.
-    if (rootCaller) {
-      const result = await entry.host.evaluate(
-        submitted,
-        { ...options, signal: modelSignal },
-        selected.model,
-        config,
-        registry,
-        consumerId,
-      );
-      assertCurrent();
-      return result;
+    let signal = modelSignal;
+    if (!rootCaller) {
+      if (!authority?.() || !lifetime) {
+        throw new Error("Decision consumer authority closed.");
+      }
+      signal = AbortSignal.any([modelSignal, lifetime]);
+      signal.throwIfAborted();
     }
-    if (!authority?.() || !lifetime) {
-      throw new Error("Decision consumer authority closed.");
+    // Admission-only preferences stop new evaluations after preparation. Do not
+    // pass them to the provider: admitted work retains independent live guards.
+    if ((canDispatch && !canDispatch()) || (isAdmissible && !isAdmissible())) {
+      return skipped({ status: "unavailable", reason: "disabled" });
     }
-    const signal = AbortSignal.any([modelSignal, lifetime]);
     const result = await entry.host.evaluate(
       submitted,
       { ...options, signal },
@@ -151,10 +166,13 @@ export async function evaluateDecisionInRegistry(
       config,
       registry,
       consumerId,
+      isAdmissible,
     );
-    signal.throwIfAborted();
+    if (!rootCaller) {
+      signal.throwIfAborted();
+    }
     assertCurrent();
-    if (!authority()) {
+    if (!rootCaller && !authority?.()) {
       throw new Error("Decision consumer authority closed.");
     }
     return result;

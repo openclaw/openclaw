@@ -45,18 +45,6 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   "googleChatChannelRuntime",
 );
 
-type GoogleChatTextSendContext = Pick<
-  ChannelMessageSendTextContext,
-  | "cfg"
-  | "to"
-  | "text"
-  | "accountId"
-  | "replyToId"
-  | "threadId"
-  | "assertDirectAdapterHandoff"
-  | "onPlatformSendDispatch"
->;
-
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
     providerConfigPresent: (cfg) => cfg.channels?.googlechat !== undefined,
@@ -192,7 +180,7 @@ export const googlechatOutboundAdapter = {
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
-      const normalized = normalizeGoogleChatTarget(normalizeOptionalString(to));
+      const normalized = normalizeGoogleChatTarget(to);
       return normalized
         ? { ok: true as const, to: normalized }
         : {
@@ -212,7 +200,7 @@ export const googlechatOutboundAdapter = {
       threadId,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
-    }: GoogleChatTextSendContext) => {
+    }: Omit<ChannelMessageSendTextContext, "onDeliveryResult">) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,

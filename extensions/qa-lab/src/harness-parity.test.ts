@@ -6,7 +6,7 @@ import {
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 type HarnessVariant = Parameters<typeof buildHarnessParityCell>[0]["variant"];

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { forceFreePortAndWait } from "../cli/ports.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -22,8 +22,13 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   probe: vi.fn(),
   darwinCommand: vi.fn(),
+  identity: vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(() => null),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: mocks.identity,
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: mocks.exec,
@@ -53,6 +58,13 @@ it("enforces the lock observation deadline after native argv inspection", async 
   );
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   vi.spyOn(process, "kill").mockReturnValue(true);
+  mocks.identity.mockImplementation((pid) => ({
+    pid,
+    parentPid: 0,
+    startTimeMicros: 1,
+    startTimeResolutionMicros: 1,
+    exited: false,
+  }));
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   mocks.darwinCommand.mockImplementation(() => {
@@ -139,10 +151,12 @@ it.each([
   mocks.darwinCommand.mockImplementation((pid: number) =>
     pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
   );
+  let portCleared = false;
   const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
+    portCleared = true;
     return true;
   });
   const previousLoggerOverride = loggingState.overrideSettings;
@@ -195,9 +209,9 @@ it.each([
             return "424242";
           }
           if (command.endsWith("netstat.exe")) {
-            return "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
+            return portCleared ? "" : "TCP 127.0.0.1:43123 0.0.0.0:0 LISTENING 424242";
           }
-          return "p424242\ncnode\n";
+          return portCleared ? "" : "p424242\ncnode\n";
         },
       );
       const parent = { ...process.env };
@@ -240,7 +254,9 @@ it.each([
           expect(killMock).not.toHaveBeenCalled();
         }
       } else {
-        expect(forceFreePort(43123)).toEqual([expect.objectContaining({ pid: 424242 })]);
+        expect((await forceFreePortAndWait(43123)).killed).toEqual([
+          expect.objectContaining({ pid: 424242 }),
+        ]);
       }
       expect(process.env).toEqual(parent);
       expect(reports.length).toBeGreaterThan(0);

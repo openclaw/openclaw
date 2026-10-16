@@ -34,27 +34,55 @@ vi.mock("./service-layout.js", async (original) => ({
 }));
 
 function taskReference(xml: string): string {
-  return new DOMParser().parseFromString(xml, "text/xml").querySelector("Exec > Command")!
-    .textContent;
+  const action = new DOMParser().parseFromString(xml, "text/xml").querySelector("Exec")!;
+  const command = action.querySelector("Command")!.textContent;
+  const args = action.querySelector("Arguments")?.textContent;
+  if (args) {
+    expect(command).toMatch(/[/\\]cmd\.exe$/i);
+    expect(args).toMatch(/^\/d \/s \/c ""[^"\r\n]+\.cmd""$/);
+    return args.slice('/d /s /c ""'.length, -2);
+  }
+  return command;
 }
 
-it.each([
-  "before-create",
-  "create-failed",
-  "after-create",
-  "unverified-create",
-  "after-delete",
-  "normal",
-])("keeps the registered task runnable while retiring a new VBS launcher: %s", async (fault) => {
+it.each(
+  [
+    "before-create",
+    "create-failed",
+    "after-create",
+    "unverified-create",
+    "after-delete",
+    "normal",
+  ].flatMap((fault) =>
+    // Unattended Gateway installs replace the existing CMD; no new launcher is deleted.
+    fault === "after-delete"
+      ? [{ fault, mode: "desktop" }]
+      : [
+          { fault, mode: "desktop" },
+          { fault, mode: "unattended" },
+        ],
+  ),
+)("keeps the registered task runnable during $mode rollback: $fault", async ({ fault, mode }) => {
   const f = await fixture("win32");
-  const launcher = f.files[1]!;
+  const desktop = mode === "desktop";
+  if (desktop) {
+    // Only the explicit desktop variant still creates a VBS artifact to retire.
+    f.env.OPENCLAW_SERVICE_KIND = "node";
+    await expect(fs.access(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  const launcher = desktop ? f.files[1]! : f.sourcePath;
   const referenced = () => taskReference(f.task());
   await f.install();
   expect(referenced()).toBe(launcher);
   await fs.access(referenced());
   const receipt = await f.capture.finish();
   const execute = native.task.getMockImplementation()!;
+  let restoredXmlVerified = false;
   native.task.mockImplementation(async (args: string[]) => {
+    if (args[0] === "/Create") {
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      await fs.access(referenced());
+    }
     if (args[0] === "/Create" && fault === "before-create") {
       throw new Error("interrupted task restoration");
     }
@@ -62,6 +90,9 @@ it.each([
       return { code: 1, stdout: "", stderr: "injected create failure" };
     }
     const result = await execute(args);
+    if (args[0] === "/Query" && args.includes("/XML") && result.stdout === f.originalTask) {
+      restoredXmlVerified = true;
+    }
     if (args[0] === "/Create" && fault === "after-create") {
       throw new Error("interrupted task restoration");
     }
@@ -71,10 +102,14 @@ it.each([
     return result;
   });
   const unlink = fs.unlink.bind(fs);
+  let retired = false;
   const retire = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
-    if (file === launcher && fault === "normal") {
+    expect(file).not.toBe(f.sourcePath);
+    if (file === launcher) {
       expect(f.task()).toBe(f.originalTask);
+      expect(restoredXmlVerified).toBe(true);
       await fs.access(referenced());
+      retired = true;
     }
     await unlink(file);
     if (file === launcher && fault === "after-delete") {
@@ -88,11 +123,13 @@ it.each([
     const error = await restore().catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(Error);
     await fs.access(referenced());
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
     if (fault !== "after-delete") {
       await fs.access(launcher);
       expect(String(error)).toContain(launcher);
       expect(String(error)).toContain("Restore and verify");
     }
+    expect(retired).toBe(fault === "after-delete");
     retire.mockRestore();
     native.task.mockImplementation(execute);
     const retained = await readRetainedReceipt(f.capture.backupPaths);
@@ -108,41 +145,53 @@ it.each([
   expect(f.task()).toBe(f.originalTask);
   expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
   await fs.access(referenced());
-  await expect(fs.stat(launcher)).rejects.toMatchObject({ code: "ENOENT" });
+  if (desktop) {
+    await expect(fs.stat(launcher)).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    await fs.access(launcher);
+  }
 });
 
-it("warns with the retained launcher and recovery step when compensation cannot restore task XML", async () => {
-  const f = await fixture("win32");
-  const warnings: string[] = [];
-  const execute = native.task.getMockImplementation()!;
-  let creates = 0;
-  native.task.mockImplementation(async (args: string[]) => {
-    if (args[0] === "/Create" && ++creates === 2) {
-      return { code: 1, stdout: "", stderr: "injected restore failure" };
+it.each(["desktop", "unattended"])(
+  "warns with the retained %s launcher and recovery step when compensation cannot restore task XML",
+  async (mode) => {
+    const f = await fixture("win32");
+    if (mode === "desktop") {
+      f.env.OPENCLAW_SERVICE_KIND = "node";
     }
-    return execute(args);
-  });
-  await expect(
-    reconcileGatewayServiceDefinition({
-      env: f.env,
-      root: "/old",
-      command: f.command,
-      expectedCommand: f.command,
-      install: async (hooks) => {
-        await f.install(hooks);
-        throw new Error("injected activation failure");
-      },
-      warn: (message) => warnings.push(message),
-    }),
-  ).rejects.toThrow("UPDATE_NATIVE_AUTHORITY");
-  expect(
-    warnings.some(
-      (message) => message.includes(f.files[1]!) && message.includes("Restore and verify"),
-    ),
-  ).toBe(true);
-  await fs.access(taskReference(f.task()));
-  await fs.access(f.files[1]!);
-});
+    const launcher = mode === "desktop" ? f.files[1]! : f.sourcePath;
+    const warnings: string[] = [];
+    const execute = native.task.getMockImplementation()!;
+    let creates = 0;
+    native.task.mockImplementation(async (args: string[]) => {
+      if (args[0] === "/Create" && ++creates === 2) {
+        return { code: 1, stdout: "", stderr: "injected restore failure" };
+      }
+      return execute(args);
+    });
+    await expect(
+      reconcileGatewayServiceDefinition({
+        env: f.env,
+        root: "/old",
+        command: f.command,
+        expectedCommand: f.command,
+        install: async (hooks) => {
+          await f.install(hooks);
+          throw new Error("injected activation failure");
+        },
+        warn: (message) => warnings.push(message),
+      }),
+    ).rejects.toThrow("UPDATE_NATIVE_AUTHORITY");
+    expect(
+      warnings.some(
+        (message) => message.includes(launcher) && message.includes("Restore and verify"),
+      ),
+    ).toBe(true);
+    await fs.access(taskReference(f.task()));
+    await fs.access(launcher);
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+  },
+);
 
 it.each([
   { fault: "checkpoint", receipt: true },
@@ -226,7 +275,12 @@ it.each(["publication", "activation"])(
         loaded = false;
       }
       if (args[0] !== "print" || loaded) {
-        return { code: 0, stdout: "state = running\npid = 42", stderr: "", termination: "exit" };
+        return {
+          code: 0,
+          stdout: `${args[1]} = {\n\tstate = running\n\tpid = 42\n}`,
+          stderr: "",
+          termination: "exit",
+        };
       }
       return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
     });

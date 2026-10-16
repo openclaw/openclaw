@@ -31,16 +31,6 @@ export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   );
 }
 
-export function withEmbeddedRunLaneTimeout(
-  opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number,
-): CommandQueueEnqueueOptions | undefined {
-  if (opts?.taskTimeoutMs !== undefined) {
-    return opts;
-  }
-  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
-}
-
 export function resolveEmbeddedRunSessionLanePolicy(
   trigger: RunEmbeddedAgentParams["trigger"],
   inputProvenance?: RunEmbeddedAgentParams["inputProvenance"],
@@ -48,21 +38,12 @@ export function resolveEmbeddedRunSessionLanePolicy(
   priority: CommandQueueEnqueueOptions["priority"];
   canResumeAcrossRotation: boolean;
 } {
-  let triggerPriority: CommandQueueEnqueueOptions["priority"];
-  switch (trigger) {
-    case "user":
-    case "manual":
-      triggerPriority = "foreground";
-      break;
-    case "cron":
-    case "heartbeat":
-    case "memory":
-    case "overflow":
-      triggerPriority = "background";
-      break;
-    default:
-      triggerPriority = "normal";
-  }
+  const triggerPriority =
+    trigger === "user" || trigger === "manual"
+      ? "foreground"
+      : ["cron", "heartbeat", "memory", "overflow"].includes(trigger ?? "")
+        ? "background"
+        : "normal";
   const isRestartRecovery = isMainSessionRestartRecoveryInputProvenance(inputProvenance);
   // Inter-session work must yield to humans without losing already-admitted
   // user work when the Gateway lifecycle rotates while it waits.

@@ -1,11 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
-import { afterEach, expect, it, vi } from "vitest";
-import { waitForDead } from "../../test/helpers/process-wait.js";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as commands from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
+import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
@@ -14,28 +25,51 @@ import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-sup
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+let cleanupFixture: (() => Promise<void>) | undefined;
+const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
+  afterEach(async () => {
+    try {
+      // afterEach precedes onTestFinished, including while a timed-out body unwinds.
+      await cleanupFixture?.();
+    } finally {
+      cleanupFixture = undefined;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      cleanupDirs();
+    }
+  }),
+);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
 });
 
-async function waitForFile(file: string): Promise<void> {
-  const started = performance.now();
-  while (!(await fs.stat(file).catch(() => undefined))) {
-    if (performance.now() - started > 5_000) {
-      throw new Error(`Worker did not reach ${path.basename(file)}`);
-    }
-    await new Promise<void>((resolve) => {
-      realSetTimeout(resolve, 10);
+// Receipts and command settlement travel independently. The fixture publishes the
+// complete marker before it can reply, so that record decides a settlement race.
+async function fixtureEventBeforeSettlement(
+  file: string,
+  receipt: Promise<void>,
+  operation: PromiseLike<unknown>,
+): Promise<void> {
+  const settled = Promise.resolve(operation).then(async () => {
+    await fs.access(file).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        throw new Error(`Worker did not reach ${path.basename(file)}`);
+      }
+      throw error;
     });
-  }
+  });
+  await Promise.race([receipt, settled]);
 }
 
-it.each([undefined, 600_000])(
+it.for([undefined, 600_000])(
   "honors the %s ms allowance during metadata inventory",
-  async (timeoutMs) => {
+  async (timeoutMs, { signal, onTestFinished }) => {
     const root = tempDirs.make("openclaw-metadata-budget-");
     const file = path.join(root, "database.sqlite");
     const ready = path.join(root, "ready");
@@ -51,6 +85,7 @@ it.each([undefined, 600_000])(
       if (file === ${JSON.stringify(file)}) {
         fs.writeFileSync(${JSON.stringify(`${ready}.tmp`)}, JSON.stringify({ pid: process.pid }));
         fs.renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
+        fs.writeSync(2, "metadata fixture ready\\n");
         while (!fs.existsSync(${JSON.stringify(release)})) {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
         }
@@ -59,6 +94,29 @@ it.each([undefined, 600_000])(
     };
   `,
     );
+    // The stat hook blocks its event loop; synchronous stderr still reaches the
+    // command's existing output observer without waiting for a socket connection.
+    const readyReceipt = createDeferred();
+    const run = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+      if (typeof options === "number") {
+        return run(argv, options);
+      }
+      let stderr = "";
+      return run(argv, {
+        ...options,
+        onOutputChunk(chunk, stream) {
+          const result = options.onOutputChunk?.(chunk, stream);
+          if (stream === "stderr") {
+            stderr += chunk.toString();
+            if (stderr.includes("metadata fixture ready\n")) {
+              readyReceipt.resolve();
+            }
+          }
+          return result;
+        },
+      });
+    });
     const timers = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const operation = readUpdateStateDatabaseSizes([file], {
@@ -71,8 +129,24 @@ it.each([undefined, 600_000])(
       (sizes) => ({ sizes }),
       (error: unknown) => ({ error }),
     );
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        try {
+          await fs.writeFile(release, "continue");
+        } finally {
+          // A failed release must still cancel and join the blocked stat worker.
+          controller.abort();
+          await operation;
+        }
+      })());
+    cleanupFixture = cleanup;
+    onTestFinished(cleanup);
     try {
-      await waitForFile(ready);
+      await withinTest(
+        fixtureEventBeforeSettlement(ready, readyReceipt.promise, operation),
+        signal,
+      );
       const { pid } = JSON.parse(await fs.readFile(ready, "utf8")) as { pid: number };
       const deadlines = timers.mock.calls.flatMap(([callback, delay, ...args], index) =>
         delay !== undefined && delay >= 30_000 ? [{ callback, delay, args, index }] : [],
@@ -122,15 +196,12 @@ it.each([undefined, 600_000])(
       expect(() => process.kill(pid, 0)).toThrow();
       expect(await fs.readFile(file, "utf8")).toBe("database");
     } finally {
-      await fs.writeFile(release, "continue");
-      controller.abort();
-      await operation;
+      await cleanup();
     }
   },
 );
 
-it.each([
-  { name: "slow startup", bytes: 4096, waits: [31_000], completes: true },
+it.for([
   { name: "large database", bytes: 2 * 1024 ** 3, waits: [800_000], completes: true },
   {
     name: "late-discovered database",
@@ -157,15 +228,10 @@ it.each([
   },
 ])(
   "budgets schema inspection for $name",
-  async ({
-    bytes,
-    discoveredBytes,
-    waits,
-    completes,
-    configuredCache,
-    timeoutMs,
-    diagnosticBytes,
-  }) => {
+  async (
+    { bytes, discoveredBytes, waits, completes, configuredCache, timeoutMs, diagnosticBytes },
+    { signal, onTestFinished },
+  ) => {
     const root = tempDirs.make("openclaw-state-budget-");
     const stateDir = path.join(root, "source");
     const database = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -191,6 +257,7 @@ it.each([
       import fs from "node:fs/promises";
       import path from "node:path";
       import { setTimeout as sleep } from "node:timers/promises";
+      ${fixtureReceiptClientSource(receipts.endpoint)}
       let input = "";
       for await (const chunk of process.stdin) input += chunk;
       const request = JSON.parse(input);
@@ -210,12 +277,14 @@ it.each([
       // Existence signals readiness, so publish the complete scratch path together.
       await fs.writeFile(${JSON.stringify(`${ready}.tmp`)}, await fs.realpath(scratch));
       await fs.rename(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
+      sendReceipt(${JSON.stringify(ready)}, "ready");
       let last = "";
       while (${waits.some((milliseconds) => milliseconds > 0)} && !(await fs.stat(${JSON.stringify(release)}).catch(() => undefined))) {
         const next = await fs.readFile(${JSON.stringify(progress)}, "utf8").catch(() => "");
         if (next && next !== last) {
           await fs.appendFile(copy, next);
           await fs.writeFile(${JSON.stringify(progress)} + "." + next, "written");
+          sendReceipt(${JSON.stringify(progress)}, next);
           last = next;
         }
         await sleep(10);
@@ -229,6 +298,7 @@ it.each([
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
     const waitForObservation = observeUpdateCandidateIoProgress();
+    const controller = new AbortController();
     let failed = false;
     const result = readUpdateStateSchemaVersions({
       root,
@@ -236,6 +306,7 @@ it.each([
       config: {},
       timeoutMs,
       env: configuredCache ? { XDG_CACHE_HOME: cache } : {},
+      signal: controller.signal,
     }).then(
       (versions) => ({ versions }),
       (error: unknown) => {
@@ -243,18 +314,30 @@ it.each([
         return { error };
       },
     );
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        try {
+          await fs.writeFile(release, "done");
+        } catch (error) {
+          controller.abort(error);
+          throw error;
+        } finally {
+          if (signal.aborted) {
+            controller.abort(signal.reason);
+          }
+          await result;
+        }
+      })());
+    cleanupFixture = cleanup;
+    onTestFinished(cleanup);
     try {
       if (waits.some((milliseconds) => milliseconds > 0)) {
-        await waitForFile(ready).catch(async (error: unknown) => {
-          if (failed) {
-            const outcome = await result;
-            if ("error" in outcome) {
-              throw outcome.error;
-            }
-          }
-          throw error;
-        });
-        await waitForObservation(discoveredBytes ?? 4);
+        await withinTest(
+          fixtureEventBeforeSettlement(ready, receipts.waitFor(ready, "ready"), result),
+          signal,
+        );
+        await withinTest(waitForObservation(discoveredBytes ?? 4), signal);
         for (const [index, milliseconds] of waits.entries()) {
           elapsed += milliseconds;
           if (failed) {
@@ -262,8 +345,15 @@ it.each([
           }
           if (index < waits.length - 1) {
             await fs.writeFile(progress, String(index + 1));
-            await waitForFile(`${progress}.${index + 1}`);
-            await waitForObservation(4 + index + 1);
+            await withinTest(
+              fixtureEventBeforeSettlement(
+                `${progress}.${index + 1}`,
+                receipts.waitFor(progress, String(index + 1)),
+                result,
+              ),
+              signal,
+            );
+            await withinTest(waitForObservation(4 + index + 1), signal);
           }
         }
       } else {
@@ -276,9 +366,7 @@ it.each([
         expect(relative.split(path.sep)[0]).not.toBe("..");
       }
     } finally {
-      await fs.writeFile(release, "done");
-      // Join the real process and its pipes before the fixture owner removes files.
-      await result;
+      await cleanup();
     }
     if (completes) {
       expect(await result).toEqual({ versions: [{ path: database, userVersion: 3 }] });
@@ -297,10 +385,19 @@ it.each(
   async ({ source, cancelled }) => {
     const root = await fs.realpath(tempDirs.make("rehearsal-unsettled-"));
     const stateDir = path.join(root, "source");
+    vi.useFakeTimers();
     const controller = new AbortController();
+    const workerEntered = createDeferred();
+    const workerExit =
+      createDeferred<Awaited<ReturnType<typeof commands.runUtf8CommandWithTimeout>>>();
     const original = commands.runUtf8CommandWithTimeout;
     vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
       if ((source === "probe") !== argv.includes("--eval")) {
+        if (source === "probe") {
+          // Keep admitted work pending through the reported-progress quiet period.
+          workerEntered.resolve();
+          return workerExit.promise;
+        }
         return original(argv, options);
       }
       if (cancelled) {
@@ -316,21 +413,46 @@ it.each(
         cleanup: "uncertain",
       };
     });
-    await expect(
-      prepareUpdateCandidateStateSnapshot({
-        config: {},
-        stateDir,
-        candidateRoot: root,
-        env: { TMPDIR: root },
-        workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
-    const retained = (await fs.readdir(root)).filter((name) =>
-      name.startsWith("openclaw-update-canary-"),
-    );
-    expect(retained).toHaveLength(1);
-    expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
+    const operation = prepareUpdateCandidateStateSnapshot({
+      config: {},
+      stateDir,
+      candidateRoot: root,
+      env: { TMPDIR: root },
+      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
+      signal: controller.signal,
+    });
+    const rejected = expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
+    const settleWorker = () =>
+      workerExit.resolve({
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: null,
+        killed: true,
+        termination: "signal",
+        cleanup: "normal",
+      });
+    try {
+      if (source === "probe") {
+        await awaitGateBeforeSettlement(
+          workerEntered.promise,
+          operation,
+          "worker was not admitted",
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        settleWorker();
+      }
+      await rejected;
+      const retained = (await fs.readdir(root)).filter((name) =>
+        name.startsWith("openclaw-update-canary-"),
+      );
+      expect(retained).toHaveLength(1);
+      expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
+    } finally {
+      controller.abort();
+      settleWorker();
+      await operation.catch(() => {});
+    }
   },
 );
 
@@ -384,7 +506,9 @@ it.each(["stdout", "stderr"] as const)(
         }),
       ).rejects.toThrow(/^Update state snapshot failed \(output-limit\):/);
       expect(deadlineReached).toBe(false);
-      await waitForDead(Number(await fs.readFile(pidPath, "utf8")), 5_000);
+      // Snapshot rejection follows the command owner's process-tree settlement.
+      const pid = Number(await fs.readFile(pidPath, "utf8"));
+      expect(isProcessAlive(pid)).toBe(false);
       expect(
         (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
       ).toEqual([]);
@@ -397,32 +521,11 @@ it.each(["stdout", "stderr"] as const)(
 
 it("refuses a grown WAL family at the post-inventory capacity gate", async () => {
   const root = await fs.realpath(tempDirs.make("rehearsal-wal-growth-"));
+  await materializeUpdateCandidateStateWorker(root);
   const stateDir = path.join(root, "source");
   const database = path.join(stateDir, "state", "openclaw.sqlite");
   await fs.mkdir(path.dirname(database), { recursive: true });
   const db = openNodeSqliteDatabase(database);
-  const ready = path.join(root, "inventory-ready");
-  const runner = path.join(root, "inventory-runner.mjs");
-  // Execute the real inventory child, then grow the synthetic WAL before the parent remeasures it.
-  await fs.writeFile(
-    runner,
-    `
-    import fs from "node:fs";
-    import { spawnSync } from "node:child_process";
-    let input = "";
-    for await (const chunk of process.stdin) input += chunk;
-    const request = JSON.parse(input);
-    if (request.mode !== "inventory") throw new Error("snapshot must not be launched after WAL growth");
-    const child = spawnSync(process.execPath, process.argv.slice(2), { input, encoding: "utf8" });
-    if (child.status !== 0) { process.stderr.write(child.stderr); process.exit(child.status ?? 1); }
-    fs.writeFileSync(${JSON.stringify(ready)}, "inventory-complete");
-    while (!fs.existsSync(${JSON.stringify(ready + ".grown")})) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-    process.stdout.write(child.stdout);
-  `,
-  );
-  useRehearsalWorkerFixture(runner);
   try {
     db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE payload(bytes BLOB);",
@@ -434,6 +537,23 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       checkedPath: root,
       availableBytes: free,
       totalBytes: free,
+    });
+    const run = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (...args) => {
+      const [argv, options] = args;
+      if (!argv.some((arg) => /[/\\]update-candidate-state\.worker\.[cm]?[jt]s$/.test(arg))) {
+        return run(...args);
+      }
+      if (typeof options === "number" || typeof options.input !== "string") {
+        throw new Error("Expected a serialized inventory request");
+      }
+      expect(JSON.parse(options.input)).toMatchObject({ mode: "inventory" });
+      const result = await run(...args);
+      // Grow the real WAL after inventory settles, before the parent remeasures it.
+      if (result.code === 0 && result.termination === "exit") {
+        db.exec("INSERT INTO payload VALUES (zeroblob(2097152));");
+      }
+      return result;
     });
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({
@@ -449,9 +569,6 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       (error: unknown) => ({ error }),
     );
     try {
-      await waitForFile(ready);
-      db.exec("INSERT INTO payload VALUES (zeroblob(2097152));");
-      await fs.writeFile(ready + ".grown", "continue");
       expect(await outcome).toMatchObject({
         error: {
           capacity: expect.objectContaining({ reason: "snapshot-capacity-insufficient" }),
@@ -463,7 +580,6 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
         (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
       ).toEqual([]);
     } finally {
-      await fs.writeFile(ready + ".grown", "release");
       controller.abort();
       await outcome;
     }

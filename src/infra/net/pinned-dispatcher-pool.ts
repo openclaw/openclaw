@@ -14,7 +14,6 @@ export type PinnedDispatcherLease = {
 
 type PinnedDispatcherPoolEntry = {
   key: string;
-  groupKey: string;
   dispatcher: Dispatcher;
   activeLeases: number;
   idleTimer?: ReturnType<typeof setTimeout>;
@@ -34,7 +33,6 @@ type PinnedDispatcherPoolOptions = {
  */
 export class PinnedDispatcherPool {
   private readonly entries = new Map<string, PinnedDispatcherPoolEntry>();
-  private readonly ownedEntries = new Set<PinnedDispatcherPoolEntry>();
   private readonly maxEntries: number;
   private readonly idleTtlMs: number;
   private closed = false;
@@ -46,7 +44,6 @@ export class PinnedDispatcherPool {
 
   acquire(params: {
     key: string;
-    groupKey: string;
     createDispatcher: () => Dispatcher;
   }): PinnedDispatcherLease | undefined {
     if (this.closed) {
@@ -55,23 +52,13 @@ export class PinnedDispatcherPool {
 
     const existing = this.entries.get(params.key);
     if (existing) {
-      if (existing.idleTimer) {
-        clearTimeout(existing.idleTimer);
-        existing.idleTimer = undefined;
-      }
+      clearTimeout(existing.idleTimer);
+      existing.idleTimer = undefined;
       existing.activeLeases += 1;
       // Map insertion order is the cache's LRU order.
       this.entries.delete(existing.key);
       this.entries.set(existing.key, existing);
       return this.createLease(existing, true);
-    }
-
-    // A changed pin, timeout, or policy for one origin must fence the old
-    // dispatcher before a replacement becomes reusable.
-    for (const entry of this.entries.values()) {
-      if (entry.groupKey === params.groupKey) {
-        this.retireEntry(entry);
-      }
     }
 
     if (this.entries.size >= this.maxEntries) {
@@ -87,25 +74,21 @@ export class PinnedDispatcherPool {
 
     const entry: PinnedDispatcherPoolEntry = {
       key: params.key,
-      groupKey: params.groupKey,
       dispatcher: params.createDispatcher(),
       activeLeases: 1,
     };
-    this.ownedEntries.add(entry);
     this.entries.set(entry.key, entry);
     return this.createLease(entry, false);
   }
 
   async closeAll(): Promise<void> {
     this.closed = true;
-    const entries = [...this.ownedEntries];
+    const entries = [...this.entries.values()];
     this.entries.clear();
     await Promise.all(
       entries.map((entry) => {
-        if (entry.idleTimer) {
-          clearTimeout(entry.idleTimer);
-          entry.idleTimer = undefined;
-        }
+        clearTimeout(entry.idleTimer);
+        entry.idleTimer = undefined;
         // Explicit lifecycle shutdown is bounded by closeDispatcher and must not
         // wait indefinitely for an abandoned response-body finalizer.
         return this.startClose(entry);
@@ -143,21 +126,15 @@ export class PinnedDispatcherPool {
     if (this.entries.get(entry.key) === entry) {
       this.entries.delete(entry.key);
     }
-    if (entry.idleTimer) {
-      clearTimeout(entry.idleTimer);
-      entry.idleTimer = undefined;
-    }
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
     if (entry.activeLeases === 0) {
       void this.startClose(entry);
     }
   }
 
   private startClose(entry: PinnedDispatcherPoolEntry): Promise<void> {
-    entry.closePromise ??= runInDispatcherPoolContext(() =>
-      closeDispatcher(entry.dispatcher).finally(() => {
-        this.ownedEntries.delete(entry);
-      }),
-    );
+    entry.closePromise ??= runInDispatcherPoolContext(() => closeDispatcher(entry.dispatcher));
     return entry.closePromise;
   }
 }

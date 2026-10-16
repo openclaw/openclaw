@@ -8,11 +8,7 @@ function normalizeDiscordTarget(
   raw: string | null | undefined,
   defaultKind: "user" | "channel",
 ): string | undefined {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return undefined;
-  }
-  return parseDiscordTarget(trimmed, { defaultKind })?.normalized;
+  return parseDiscordTarget(normalizeOptionalString(raw) ?? "", { defaultKind })?.normalized;
 }
 
 function buildDiscordConversationIdentity(

@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
 import { validateTalkConfigResult } from "../../packages/gateway-protocol/src/index.js";
 import type { TalkConfigResult } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
@@ -10,7 +11,6 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
 import { withSpeechProviders } from "./talk/test-helpers.js";
 import {
   connectOk,
@@ -197,26 +197,6 @@ describe("gateway talk.config", () => {
     await withConnection(["operator.read", "operator.admin"], async (ws) => {
       const payload = await fetchOkConfig(ws, { includeSecrets: true });
       expectProvider(payload?.config.talk, undefined, redacted, "secret-key-abc");
-    });
-  });
-
-  it("preserves configured Talk provider data when plugin-owned defaults exist", async () => {
-    await writeTalkConfig({ voiceId: "voice-from-config" });
-    await withEnvAsync({ [API_ENV]: "env-acme-key" }, async () => {
-      await withProvider(
-        ({ talkProviderConfig }) => ({ ...talkProviderConfig, apiKey: process.env[API_ENV] }),
-        async () => {
-          await withConnection(["operator.read"], async (ws) => {
-            const payload = await fetchOkConfig(ws);
-            const talk = payload?.config.talk;
-            expect(talk?.provider).toBe(PROVIDER);
-            expect(talk?.resolved?.provider).toBe(PROVIDER);
-            expect(talk?.providers?.[PROVIDER]).toHaveProperty("voiceId", "voice-from-config");
-            expect(talk?.resolved?.config).toHaveProperty("voiceId", "voice-from-config");
-            expect(talk?.providers?.[PROVIDER]?.apiKey).toBeUndefined();
-          });
-        },
-      );
     });
   });
 

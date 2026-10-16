@@ -1,5 +1,9 @@
 // Runtime-only rendering and config fallback for `openclaw channels status`.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
@@ -37,31 +41,18 @@ function formatEventLoopBits(value: unknown): string | null {
   const reasons = Array.isArray(record.reasons)
     ? record.reasons.filter((reason): reason is string => typeof reason === "string")
     : [];
-  const delayMaxMs =
-    typeof record.delayMaxMs === "number" && Number.isFinite(record.delayMaxMs)
-      ? Math.round(record.delayMaxMs)
-      : null;
-  const utilization =
-    typeof record.utilization === "number" && Number.isFinite(record.utilization)
-      ? record.utilization
-      : null;
-  const cpuCoreRatio =
-    typeof record.cpuCoreRatio === "number" && Number.isFinite(record.cpuCoreRatio)
-      ? record.cpuCoreRatio
-      : null;
-  const degradedSinceMs =
-    typeof record.degradedSinceMs === "number" && Number.isFinite(record.degradedSinceMs)
-      ? Math.max(0, record.degradedSinceMs)
-      : null;
-  const delayP99Ms =
-    typeof record.delayP99Ms === "number" && Number.isFinite(record.delayP99Ms)
-      ? Math.round(record.delayP99Ms)
-      : null;
+  const delayMaxMs = asFiniteNumber(record.delayMaxMs);
+  const utilization = asFiniteNumber(record.utilization);
+  const cpuCoreRatio = asFiniteNumber(record.cpuCoreRatio);
+  const degradedSinceMs = asFiniteNumber(record.degradedSinceMs);
+  const delayP99Ms = asFiniteNumber(record.delayP99Ms);
   return [
-    degradedSinceMs != null ? `for ${formatDurationCompact(degradedSinceMs) ?? "0s"}` : null,
-    delayP99Ms != null ? `(p99 ${delayP99Ms}ms)` : null,
+    degradedSinceMs != null
+      ? `for ${formatDurationCompact(Math.max(0, degradedSinceMs)) ?? "0s"}`
+      : null,
+    delayP99Ms != null ? `(p99 ${Math.round(delayP99Ms)}ms)` : null,
     reasons.length ? `reasons=${reasons.join(",")}` : null,
-    delayMaxMs != null ? `eventLoopDelayMaxMs=${delayMaxMs}` : null,
+    delayMaxMs != null ? `eventLoopDelayMaxMs=${Math.round(delayMaxMs)}` : null,
     utilization != null ? `eventLoopUtilization=${utilization}` : null,
     cpuCoreRatio != null ? `cpuCoreRatio=${cpuCoreRatio}` : null,
   ]
@@ -105,44 +96,22 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.connected === "boolean") {
         bits.push(account.connected ? "connected" : "disconnected");
       }
-      const inboundAt =
-        typeof account.lastInboundAt === "number" && Number.isFinite(account.lastInboundAt)
-          ? account.lastInboundAt
-          : null;
-      const outboundAt =
-        typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
-          ? account.lastOutboundAt
-          : null;
-      const transportAt =
-        typeof account.lastTransportActivityAt === "number" &&
-        Number.isFinite(account.lastTransportActivityAt)
-          ? account.lastTransportActivityAt
-          : null;
-      if (inboundAt) {
-        bits.push(`in:${formatTimeAgo(Date.now() - inboundAt)}`);
-      }
-      if (outboundAt) {
-        bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
-      }
-      if (transportAt) {
-        bits.push(`transport:${formatTimeAgo(Date.now() - transportAt)}`);
+      for (const [key, label] of [
+        ["lastInboundAt", "in"],
+        ["lastOutboundAt", "out"],
+        ["lastTransportActivityAt", "transport"],
+      ] as const) {
+        const timestamp = asFiniteNumber(account[key]);
+        if (timestamp) {
+          bits.push(`${label}:${formatTimeAgo(Date.now() - timestamp)}`);
+        }
       }
       appendModeBit(bits, account);
-      const botUsername = (() => {
-        const bot = account.bot as { username?: string | null } | undefined;
-        const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
-        const raw = bot?.username ?? probeBot?.username ?? "";
-        if (typeof raw !== "string") {
-          return "";
-        }
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return "";
-        }
-        return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-      })();
+      const bot = account.bot as { username?: string | null } | undefined;
+      const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
+      const botUsername = normalizeOptionalString(bot?.username ?? probeBot?.username);
       if (botUsername) {
-        bits.push(`bot:${botUsername}`);
+        bits.push(`bot:${botUsername.startsWith("@") ? botUsername : `@${botUsername}`}`);
       }
       if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
         bits.push(`dm:${account.dmPolicy}`);
@@ -174,7 +143,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
-        bits.push(probe.ok ? "works" : "probe failed");
+        bits.push(probe.ok ? "works" : "check failed");
       }
       const audit = account.audit as { ok?: boolean } | undefined;
       if (audit && typeof audit.ok === "boolean") {
@@ -211,7 +180,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push("");
   }
   lines.push(
-    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health checks to status output (requires a reachable gateway).`,
   );
   return lines;
 }

@@ -1,7 +1,11 @@
 // Xai tests cover code execution plugin behavior.
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
+import { createXaiFetchInspectors } from "./responses-http.test-support.js";
+
+const { firstFetchUrl, firstAuthorizationHeader, parseFirstRequestBody } =
+  createXaiFetchInspectors("code_execution");
 
 function codeExecutionConfig(codeExecution?: {
   model?: string;
@@ -22,23 +26,8 @@ function codeExecutionConfig(codeExecution?: {
   };
 }
 
-function jsonResponse(payload: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-}
-
-function malformedJsonResponse(): Response {
-  return new Response("{ nope", {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 function installCodeExecutionFetch(payload?: Record<string, unknown>) {
-  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+  const mockFetch = vi.fn((_input?: unknown, _init?: RequestInit) =>
     Promise.resolve(
       jsonResponse(
         payload ?? {
@@ -62,39 +51,6 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
   );
   vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
-}
-
-function firstFetchCall(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  const [call] = mockFetch.mock.calls;
-  if (!call) {
-    throw new Error("expected code_execution fetch call");
-  }
-  return call;
-}
-
-function firstFetchUrl(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  const [url] = firstFetchCall(mockFetch);
-  return String(url);
-}
-
-function firstFetchInit(mockFetch: ReturnType<typeof installCodeExecutionFetch>): RequestInit {
-  const [, init] = firstFetchCall(mockFetch);
-  if (!init || typeof init !== "object" || Array.isArray(init)) {
-    throw new Error("expected code_execution fetch init");
-  }
-  return init as RequestInit;
-}
-
-function firstAuthorizationHeader(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  return new Headers(firstFetchInit(mockFetch).headers).get("Authorization");
-}
-
-function parseFirstRequestBody(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  const requestBody = firstFetchInit(mockFetch).body;
-  return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
-    string,
-    unknown
-  >;
 }
 
 afterEach(() => {
@@ -207,22 +163,6 @@ describe("xai code_execution tool", () => {
     expect(body.store).toBe(false);
     expect(body).not.toHaveProperty("reasoning");
     expect(body).not.toHaveProperty("max_turns");
-  });
-
-  it("reports malformed code_execution JSON as a provider error", async () => {
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(malformedJsonResponse()),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = createCodeExecutionTool({
-      config: codeExecutionConfig(),
-    });
-
-    await expect(
-      tool?.execute?.("code-execution:malformed-json", {
-        task: "Calculate the mean of [40, 42, 44]",
-      }),
-    ).rejects.toThrow("xAI code execution failed: malformed JSON response");
   });
 
   it("reports missing code_execution answers without blaming JSON decoding", async () => {

@@ -205,7 +205,7 @@ it("authenticates SSO webhooks before real sender authorization, token I/O, and 
   // createPluginRuntimeMock retains the production stable ingress policy resolver.
   const policy = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
   setMSTeamsRuntime(runtime);
-  const store = createMSTeamsSsoTokenStoreFs({ stateDir });
+  const store = createMSTeamsSsoTokenStoreFs();
   const cfg = createConfig();
   updateMSTeamsConfig(cfg, {
     webhook: { path: "" },

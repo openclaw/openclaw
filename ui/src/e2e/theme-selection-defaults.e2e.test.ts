@@ -104,8 +104,7 @@ suite.define(() => {
 
         const selected = { "ui.theme": "absolutely", "ui.themeMode": "dark", "ui.accent": "theme" };
         // Reconcile a fresh authoritative snapshot after the outgoing atomic reset.
-        let reads = (await gateway.getRequests("users.prefs.get")).length;
-        await gateway.deferNext("users.prefs.get");
+        let reads = await gateway.deferNext("users.prefs.get");
         await gateway.emitGatewayEvent("users.prefs.changed", {
           profileId,
           keys: Object.keys(initialEntries),
@@ -150,8 +149,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).map((r) => r.params))
           .toContainEqual({ entries: { "ui.accent": "#5b9cf6" } });
-        reads = (await gateway.getRequests("users.prefs.get")).length;
-        await gateway.deferNext("users.prefs.get");
+        reads = await gateway.deferNext("users.prefs.get");
         await gateway.closeLatest();
         await respondProfile(custom, reads);
         await expect.poll(read).toMatchObject({

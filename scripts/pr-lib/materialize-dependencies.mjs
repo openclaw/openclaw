@@ -13,6 +13,13 @@ const manifestPath = join(dirname(process.argv[3]), "package.json");
 const manifest = existsSync(manifestPath)
   ? JSON.parse(readFileSync(manifestPath, "utf8"))
   : undefined;
+const markdownManifestPath = join(dirname(manifestPath), "packages/markdown-core/package.json");
+const markdownManifest = existsSync(markdownManifestPath)
+  ? JSON.parse(readFileSync(markdownManifestPath, "utf8"))
+  : undefined;
+const markdownDependencies = markdownManifest
+  ? ["mdast-util-from-markdown", "mdast-util-gfm-table", "micromark-extension-gfm-table"]
+  : [];
 // Pre-#149585 anchors contain no package manifest and need only these tooling pins.
 const dependencies = [
   "tsx",
@@ -22,6 +29,7 @@ const dependencies = [
   ...(manifest
     ? [
         "@openclaw/fs-safe",
+        "@openclaw/proc-safe",
         "@openclaw/proxyline",
         "acorn",
         "chalk",
@@ -33,9 +41,10 @@ const dependencies = [
         "ipaddr.js",
         "jiti",
         "json5",
-        "koffi",
         "kysely",
+        ...markdownDependencies,
         "p-map",
+        "partial-json",
         "semver",
         "string-width",
         "tsdown",
@@ -50,14 +59,24 @@ const dependencies = [
   // An older parent or the current supervisor may already have pinned this package.
   // Preserve that installation even if canonical aliases change during the run.
   const present = lstatSync(link, { throwIfNoEntry: false });
-  const installedPath = present ? link : join(process.argv[2], dependency);
+  const workspace = markdownDependencies.includes(dependency)
+    ? "packages/markdown-core"
+    : undefined;
+  const installedPath = present
+    ? link
+    : join(
+        workspace ? join(dirname(process.argv[2]), workspace, "node_modules") : process.argv[2],
+        dependency,
+      );
   try {
     const target = realpathSync(installedPath);
     if (!statSync(target).isDirectory()) {
       throw new Error("not a package directory");
     }
+    const dependencyManifest = workspace ? markdownManifest : manifest;
     const expectedVersion =
-      manifest?.dependencies?.[dependency] ?? manifest?.devDependencies?.[dependency];
+      dependencyManifest?.dependencies?.[dependency] ??
+      dependencyManifest?.devDependencies?.[dependency];
     const installedVersion = JSON.parse(readFileSync(join(target, "package.json"), "utf8")).version;
     if (manifest && (!expectedVersion || installedVersion !== expectedVersion)) {
       console.error(

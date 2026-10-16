@@ -7,12 +7,8 @@
 export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
-  CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
-  CliBackendNativeToolMode,
   CliBackendPlugin,
-  CliBackendSideQuestionToolMode,
-  CliBackendToolAvailabilityEnforcement,
   CliBundleMcpMode,
   PluginTextTransforms,
 } from "./cli-backend.types.js";

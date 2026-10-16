@@ -78,27 +78,15 @@ export function mergeMSTeamsMediaFacts(
       : undefined;
     const positionalIndex =
       options.positionallyAligned === false || index >= nativeMedia.length ? undefined : index;
-    const mayUseFallbackOrder = options.positionallyAligned === false;
-    const isEligibleUnresolved = (media: MSTeamsInboundMedia) => !media.path && !media.sourceId;
-    const sameKindUnresolvedIndexes = mayUseFallbackOrder
-      ? merged
-          .slice(0, nativeSlotCount)
-          .flatMap((media, mediaIndex) =>
-            isEligibleUnresolved(media) && media.kind === materialized.kind ? [mediaIndex] : [],
-          )
-      : [];
     const unresolvedIndexes =
-      sameKindUnresolvedIndexes.length === 0 && mayUseFallbackOrder
+      options.positionallyAligned === false
         ? merged
             .slice(0, nativeSlotCount)
-            .flatMap((media, mediaIndex) => (isEligibleUnresolved(media) ? [mediaIndex] : []))
+            .flatMap((media, mediaIndex) => (!media.path && !media.sourceId ? [mediaIndex] : []))
         : [];
     const fallbackIndex =
-      sameKindUnresolvedIndexes.length > 0
-        ? sameKindUnresolvedIndexes[0]
-        : unresolvedIndexes.length === 1
-          ? unresolvedIndexes[0]
-          : undefined;
+      unresolvedIndexes.find((mediaIndex) => merged[mediaIndex]?.kind === materialized.kind) ??
+      (unresolvedIndexes.length === 1 ? unresolvedIndexes[0] : undefined);
     const targetIndex = sourceIndex ?? positionalIndex ?? fallbackIndex;
     if (targetIndex === undefined) {
       if (materialized.sourceId) {
@@ -150,8 +138,6 @@ export async function resolveMSTeamsInboundMedia(params: {
   deadline?: MSTeamsRequestDeadline;
   /** Opt into Graph lookup when Teams strips file markers from channel/group HTML. */
   graphMediaFallback?: boolean;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const {
     attachments,
@@ -166,7 +152,6 @@ export async function resolveMSTeamsInboundMedia(params: {
     serviceUrl,
     activity,
     log,
-    preserveFilenames,
   } = params;
 
   let mediaList = await downloadMSTeamsAttachments({
@@ -175,7 +160,6 @@ export async function resolveMSTeamsInboundMedia(params: {
     tokenProvider,
     allowHosts,
     authAllowHosts: params.authAllowHosts,
-    preserveFilenames,
     deadline: params.deadline,
     logger: log,
   });
@@ -211,14 +195,11 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
         });
-        if (bfMedia.media.length > 0) {
-          mediaList = mergeMSTeamsMediaFacts(mediaList, bfMedia.media, {
-            positionallyAligned: false,
-          });
-        }
+        mediaList = mergeMSTeamsMediaFacts(mediaList, bfMedia.media, {
+          positionallyAligned: false,
+        });
         if (!hasMaterializedMedia(bfMedia.media)) {
           log.debug?.("bot framework attachments fetch empty", {
             conversationType,
@@ -228,11 +209,7 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (
-      shouldFetchGraphMessage &&
-      !hasMaterializedMedia(mediaList) &&
-      !isBotFrameworkPersonalChat
-    ) {
+    if (shouldFetchGraphMessage && !isBotFrameworkPersonalChat) {
       const graphTeamAadGroupId =
         conversationType.trim().toLowerCase() === "channel" && !teamAadGroupId
           ? await params.resolveTeamAadGroupId?.()
@@ -259,15 +236,12 @@ export async function resolveMSTeamsInboundMedia(params: {
           maxBytes,
           allowHosts,
           authAllowHosts: params.authAllowHosts,
-          preserveFilenames,
           deadline: params.deadline,
           logger: log,
         });
-        if (graphMedia.media.length > 0) {
-          mediaList = mergeMSTeamsMediaFacts(mediaList, graphMedia.media, {
-            positionallyAligned: false,
-          });
-        }
+        mediaList = mergeMSTeamsMediaFacts(mediaList, graphMedia.media, {
+          positionallyAligned: false,
+        });
         if (!hasMaterializedMedia(mediaList)) {
           log.debug?.("graph media fetch empty", {
             messageUrl,

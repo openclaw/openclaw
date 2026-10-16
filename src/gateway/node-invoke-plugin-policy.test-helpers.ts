@@ -10,7 +10,10 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
-import { waitForApprovalRequested } from "./server-methods/approval-request.test-support.js";
+import {
+  createApprovalClient,
+  waitForApprovalRequested,
+} from "./server-methods/approval-request.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 export const DEMO_PLUGIN_ID = "demo";
@@ -78,38 +81,6 @@ export function createContext(opts?: {
     } as unknown as GatewayRequestContext,
     invoke,
   };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-export function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: ["operator.approvals"],
-    },
-  } as GatewayClient;
-}
-
-export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
 }
 
 export function createOperatorClient(connId = "conn-requester"): GatewayClient {

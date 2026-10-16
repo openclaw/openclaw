@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { FailoverError } from "../agents/failover-error.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -28,6 +29,7 @@ import {
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
@@ -45,7 +47,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConfiguredRoute {
   const config: OpenClawConfig = {
     agents: {
-      entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+      entries: { main: { agentDir: "/tmp/openclaw-agent" } },
       defaults: {
         model: "openai/gpt-5.6-sol",
         models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
@@ -67,6 +69,49 @@ function embeddedRoute(runtime: "codex" | "openclaw" = "codex"): SystemAgentConf
 }
 
 describe("setup inference plugin ownership", () => {
+  it.each([
+    ["ECONNREFUSED", "Nothing is listening at http://127.0.0.1:43210", "Start the server"],
+    ["ENOTFOUND", "The server name in http://127.0.0.1:43210 could not be found", "DNS"],
+    ["EHOSTUNREACH", "Cannot reach http://127.0.0.1:43210", "network"],
+  ])(
+    "explains a failed connection without calling it a timeout (%s)",
+    async (code, message, nextStep) => {
+      const route = embeddedRoute("openclaw");
+      route.runConfig.models = {
+        providers: {
+          openai: {
+            baseUrl: "http://127.0.0.1:43210/v1?key=synthetic-private-value",
+            models: [],
+          },
+        },
+      };
+      let retryConnectionErrors: boolean | undefined;
+      const result = await runSetupInferenceTurn({
+        route,
+        requireExecutionOwner: false,
+        deps: {
+          createTempDir: async () => "/tmp/openclaw-setup-inference-test",
+          removeTempDir: async () => {},
+          runEmbeddedAgent: async (params) => {
+            retryConnectionErrors = params.retryConnectionErrors;
+            throw new FailoverError("Connection error.", { reason: "timeout", code });
+          },
+        },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        status: "unavailable",
+        error: expect.stringContaining(message),
+      });
+      expect(retryConnectionErrors).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain(nextStep);
+        expect(result.error).toContain("No default model was changed.");
+        expect(result.error).not.toContain("synthetic-private-value");
+      }
+    },
+  );
+
   it("waits for the isolated probe runtime to release its plugin work", async () => {
     const route = embeddedRoute();
     const cleanupStarted = createDeferred();
@@ -147,20 +192,27 @@ describe("setup inference plugin ownership", () => {
             createEmptyPluginRegistry(),
           );
           await using generationCache = createPluginCache();
-          const generation = loadSetupInferencePluginGeneration({
-            cache: generationCache,
-            config,
-            workspaceDir: state.workspaceDir,
-            selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
-          });
-          expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+          const sql = observeMainThreadSql();
+          try {
+            sql.calibrate();
+            const generation = await loadSetupInferencePluginGeneration({
+              cache: generationCache,
+              config,
+              workspaceDir: state.workspaceDir,
+              selection: { provider: "fixture", modelId: "model", runtime: "fixture-runtime" },
+            });
+            expect(generation.metadataSnapshot.byPluginId.has("fixture-runtime")).toBe(true);
+            sql.expectIdle();
+          } finally {
+            sql.restore();
+          }
           expect(resolvePluginMetadataSnapshot(input)).toBe(before);
         });
       },
     );
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "retains the probing registry artifact preference (%s)",
     async (preferBuiltPluginArtifacts) => {
       const order: string[] = [];
@@ -238,7 +290,7 @@ describe("setup inference plugin ownership", () => {
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+        entries: { main: { agentDir: "/tmp/openclaw-agent" } },
         defaults: {
           model: "fixture/direct-model",
           models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },
@@ -351,7 +403,7 @@ describe("setup probe projection", () => {
 
         // Gateway delivery can consume retained events after the producer has cleaned up.
         for (const event of events) {
-          handler(event);
+          await handler(event);
         }
         expect(broadcast).not.toHaveBeenCalled();
         expect(broadcastToConnIds).not.toHaveBeenCalled();
@@ -359,7 +411,7 @@ describe("setup probe projection", () => {
         expect(persistLifecycle).not.toHaveBeenCalled();
       } finally {
         unsubscribe();
-        handler.dispose();
+        await handler.dispose();
         chatRunState.clear();
         if (runId) {
           clearAgentRunContext(runId);

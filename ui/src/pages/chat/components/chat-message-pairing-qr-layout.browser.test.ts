@@ -1,7 +1,8 @@
-import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import { en } from "../../../i18n/locales/en.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import baseCss from "../../../styles/base.css?inline";
 import layoutCss from "../../../styles/chat/layout.css?inline";
@@ -11,13 +12,13 @@ import textCss from "../../../styles/chat/text.css?inline";
 const containers: HTMLElement[] = [];
 const originalCopy = en.chat.pairingQrExpired;
 afterEach(() => {
+  cleanupSolid();
   if (originalCopy === undefined) {
     delete en.chat.pairingQrExpired;
   } else {
     en.chat.pairingQrExpired = originalCopy;
   }
   for (const container of containers.splice(0)) {
-    render(nothing, container);
     container.remove();
   }
 });
@@ -50,14 +51,19 @@ describe("expired pairing QR layout", () => {
           expiresAtMs: 1,
         })),
       };
-      render(
-        html`<style>
-            ${baseCss}${layoutCss}${messageCss}${textCss}
-          </style>
-          <div class="chat-group assistant">
-            ${renderGroupedMessage(prepareChatMessageRender(message), "expired-qr", { isStreaming: false, showReasoning: false })}
-          </div>`,
-        container,
+      const style = document.createElement("style");
+      style.textContent = baseCss + layoutCss + messageCss + textCss;
+      const group = document.createElement("div");
+      group.className = "chat-group assistant";
+      container.append(style, group);
+      mountSolid(
+        GroupedMessage,
+        {
+          preparation: prepareChatMessageRender(message),
+          messageKey: "expired-qr",
+          options: { isStreaming: false, showReasoning: false },
+        },
+        group,
       );
       const cards = [...container.querySelectorAll<HTMLElement>(".chat-pairing-qr-expired")];
       expect(cards).toHaveLength(2);

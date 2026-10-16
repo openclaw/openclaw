@@ -1,13 +1,10 @@
-// Qa Lab plugin module implements mock auth behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeQaAuthProfiles } from "./auth-store.js";
 
-/** Providers the mock harness stages placeholder credentials for by default. */
 const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
 
-/** Agent IDs the mock harness stages credentials under. */
 const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 
 export function buildQaMockProfileId(provider: string): string {

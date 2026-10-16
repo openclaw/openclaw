@@ -3,7 +3,6 @@ import type {
   CreateGhosttyTerminalOptions,
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
-import type { ReactiveControllerHost } from "lit";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
@@ -35,6 +34,14 @@ export type TerminalOperation = {
   cancelIntent?: () => void;
 };
 
+export type TerminalRestoreBatch = {
+  operation: TerminalOperation;
+  pending: Map<string, TerminalPanelSessionTab | undefined>;
+  userClosedTab: boolean;
+  input: { interacted: boolean; stop: () => void };
+  cancelIntent?: () => void;
+};
+
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
   catalog?: CatalogSessionKey,
@@ -61,13 +68,17 @@ export type TerminalPanelSessionControllerState = {
   error: TerminalPanelError | null;
 };
 
-export interface TerminalPanelSessionControllerHost extends ReactiveControllerHost {
+export interface TerminalPanelSessionControllerHost {
+  readonly updateComplete: Promise<unknown>;
+  readonly ownerDocument: Document;
+  requestUpdate(): void;
   readonly isConnected: boolean;
   readonly client: TerminalGatewayClient | null;
   readonly agentId: string | null;
   readonly sessionKey: string | null;
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
+  readonly terminalFontFamily: string;
   readonly fullscreen: boolean;
   readonly page: boolean;
   readonly routeTarget: TerminalRouteTarget;
@@ -76,6 +87,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly terminalPanelUploadController: TerminalPanelUploadController;
   createTerminalController(
     options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
   ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
   findTerminalPanelViewport(): Element | null;
@@ -84,14 +96,10 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   restoreTerminalPanelOpenState(): boolean;
 }
 
-export const TERMINAL_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 export const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
-/** Reduces a shell path to a tab label, e.g. "/bin/zsh" -> "zsh". */
 export function shellBasename(shell: string): string {
-  const base = shell.split(/[\\/]/).pop()?.trim();
-  return base && base.length > 0 ? base : "shell";
+  return shell.split(/[\\/]/).pop()?.trim() || "shell";
 }
 
 export function forceTerminalRender(controller: GhosttyTerminalController): void {

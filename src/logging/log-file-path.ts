@@ -63,11 +63,6 @@ export function resolveConfiguredLogFilePath(
   return config?.logging?.file ?? resolveDefaultRollingLogFile(options);
 }
 
-/** Returns whether a path is one of OpenClaw's dated rolling log files. */
-export function isRollingLogFilePath(file: string): boolean {
-  return ROLLING_LOG_FILE_RE.test(path.basename(file));
-}
-
 /** Returns whether a configured path had the legacy default rolling filename shape. */
 export function isLegacyRollingLogFilePath(file: string): boolean {
   const base = path.basename(file);

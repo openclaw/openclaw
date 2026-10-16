@@ -28,7 +28,6 @@ const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const introRoutes = [
   "appearance",
   "approvals",
-  "cloud-workers",
   "labs",
   "mcp",
   "secrets",
@@ -51,10 +50,7 @@ const settingsGuidanceLinks: ReadonlyArray<{
   route: string;
   container: string;
   section?: string;
-}> = [
-  { route: "cloud-workers", container: ".page-subtitle" },
-  { route: "mcp", section: "Configured servers", container: ".settings-section__desc" },
-];
+}> = [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
 
 const sectionAlignmentRoutes = [
   "appearance",
@@ -192,7 +188,7 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
-  it("keeps agent identity inputs inside their fields at desktop and mobile widths", async () => {
+  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
@@ -203,15 +199,18 @@ suite.define(() => {
 
       for (const viewport of responsiveViewports) {
         await page.setViewportSize(viewport);
-        for (const name of ["Display name", "Emoji"]) {
-          const input = editor.getByRole("textbox", { name, exact: true });
-          await input.focus();
+        for (const [name, control] of [
+          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
+          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
+          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
+        ] as const) {
+          await control.focus();
           await expect
             .poll(
               () =>
-                input.evaluate((element) => {
+                control.evaluate((element) => {
                   const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest("label")!.getBoundingClientRect();
+                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
                   const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
                   return (
                     inputBox.width > 0 &&
@@ -508,18 +507,22 @@ suite.define(() => {
         pathname: "/settings/appearance",
         routeId: "appearance",
       });
-      const desktopInsets = await page.evaluate(() => ({
-        configPadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".config-content")!).paddingLeft,
-        ),
-        headerPadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".content-header")!).paddingLeft,
-        ),
-        pagePadding: Number.parseFloat(
-          getComputedStyle(document.querySelector<HTMLElement>(".settings-page")!).paddingLeft,
-        ),
-      }));
-      expect(desktopInsets).toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
+      const readDesktopInsets = () =>
+        page.evaluate(() => ({
+          configPadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".config-content")!).paddingLeft,
+          ),
+          headerPadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".content-header")!).paddingLeft,
+          ),
+          pagePadding: Number.parseFloat(
+            getComputedStyle(document.querySelector<HTMLElement>(".settings-page")!).paddingLeft,
+          ),
+        }));
+      // The shared header transitions its padding after adopting the settings layout.
+      await expect
+        .poll(readDesktopInsets)
+        .toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
     } finally {
       await context.close();
     }
@@ -580,11 +583,13 @@ suite.define(() => {
           });
 
         expect(
-          (await page.locator(".cron-list-hub-tabs wa-tab").allTextContents()).map((label) =>
+          (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
             label.trim(),
           ),
         ).toEqual(["All", "Active", "Paused", "Run history"]);
-        expect(await page.locator(".cron-toolbar__filters wa-radio-group").count()).toBe(0);
+        expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
+          0,
+        );
         expect(await page.locator(".cron-stats").count()).toBe(0);
         expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
         expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([
@@ -607,7 +612,7 @@ suite.define(() => {
         expect(await pickerTitle.textContent()).toBe("Agent");
         expect(
           await page
-            .locator('.agent-select [part="menu"]')
+            .locator(".agent-select__menu")
             .evaluate((menu) => getComputedStyle(menu).opacity),
         ).toBe("1");
         if (proofEnabled) {
@@ -703,14 +708,16 @@ suite.define(() => {
       expect(await page.locator(".page-subtitle").textContent()).toBe(
         "Messages, text-to-speech, and meeting capture settings.",
       );
-      expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
-      expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(
-        ["Messages", "Voice"],
-      );
+      expect(await page.locator(".config-sections-hub-tabs").count()).toBe(1);
+      expect(
+        (await page.locator(".config-sections-hub-tabs .hub-tab").allTextContents()).map((label) =>
+          label.trim(),
+        ),
+      ).toEqual(["Messages", "Voice"]);
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
       const spacing = await page.evaluate(() => {
         const subtitle = document.querySelector<HTMLElement>(".page-subtitle");
-        const tabs = document.querySelector<HTMLElement>("wa-tab-group.config-sections-hub-tabs");
+        const tabs = document.querySelector<HTMLElement>(".config-sections-hub-tabs");
         const section = document.querySelector<HTMLElement>(".settings-section");
         if (!subtitle || !tabs || !section) {
           throw new Error("Communications layout did not render");
@@ -779,9 +786,7 @@ suite.define(() => {
           page.evaluate(() => {
             const content = document.querySelector<HTMLElement>("main.content");
             const lead = document.querySelector<HTMLElement>(".config-lead");
-            const tabs = document.querySelector<HTMLElement>(
-              "wa-tab-group.config-sections-hub-tabs",
-            );
+            const tabs = document.querySelector<HTMLElement>(".config-sections-hub-tabs");
             if (!content || !lead || !tabs) {
               return null;
             }
@@ -829,6 +834,11 @@ suite.define(() => {
           await page
             .getByRole("heading", { name: "Defaults for all agents", exact: true })
             .waitFor();
+        }
+
+        if (route === "cloud-workers") {
+          expect(await page.locator(".page-subtitle").count()).toBe(0);
+          await page.locator(".cloud-environments__advanced > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(

@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { onAgentEventForRun, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
@@ -22,6 +26,7 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 afterEach(() => {
   resetAgentEventsForTest({ preserveListeners: true });
   resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("native event custody", () => {
@@ -29,6 +34,7 @@ describe("native event custody", () => {
     "retains the admitted source through yield but fences %s events",
     async (ending) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const context = createContext();
         const resolver = () => context;
         context.resolveGatewayContext = resolver;

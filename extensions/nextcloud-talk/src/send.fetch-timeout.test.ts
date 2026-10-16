@@ -28,29 +28,46 @@ async function expectHangingTalkRequestTimesOut(params: {
   path: string;
   run: (baseUrl: string) => Promise<unknown>;
 }): Promise<void> {
-  let received = false;
-  await withServer(
-    (request) => {
-      received = true;
-      expect(request.method).toBe("POST");
-      expect(request.url).toBe(params.path);
-      request.resume();
-    },
-    async (baseUrl) => {
-      let thrown: unknown;
-      try {
-        await params.run(baseUrl);
-      } catch (error) {
-        thrown = error;
-      }
-
-      expect(received).toBe(true);
-      if (!(thrown instanceof Error)) {
-        throw new Error(`expected request timeout, received ${String(thrown)}`);
-      }
-      expect(["AbortError", "TimeoutError"]).toContain(thrown.name);
-    },
-  );
+  const received = createDeferred<void>();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await withServer(
+      (request) => {
+        expect(request.method).toBe("POST");
+        expect(request.url).toBe(params.path);
+        request.resume();
+        received.resolve();
+      },
+      async (baseUrl) => {
+        let settled = false;
+        const pending = params.run(baseUrl).then(
+          () => {
+            settled = true;
+            return undefined;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+        await Promise.race([
+          received.promise,
+          pending.then(() => {
+            throw new Error("Request settled before the server received it");
+          }),
+        ]);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+        const thrown = await pending;
+        if (!(thrown instanceof Error)) {
+          throw new Error(`expected request timeout, received ${String(thrown)}`);
+        }
+        expect(["AbortError", "TimeoutError"]).toContain(thrown.name);
+      },
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 function captureStalledErrorBodyDeadline() {

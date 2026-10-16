@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createWorkerPlacementRunnerAvailabilityReader,
+  createWorkerPlacementRuntimeInstallReader,
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
@@ -47,6 +48,69 @@ function activePlacement(environmentId = "environment-1") {
 }
 
 describe("worker placement projection", () => {
+  it("limits inference metadata to the exact active worker-turn binding", () => {
+    const placement = {
+      ...RECORD_BASE,
+      state: "active" as const,
+      environmentId: "environment-device",
+      activeOwnerEpoch: 7,
+      workspaceBaseManifestRef: "manifest-1",
+      remoteWorkspaceDir: "/workspace",
+      workerBundleHash: BUNDLE_HASH,
+    };
+    const environment = {
+      environmentId: placement.environmentId,
+      providerId: "device",
+      profileId: "named-device",
+      ownerEpoch: 7,
+      state: "attached" as const,
+      leaseId: "lease-device",
+      nodeDeviceId: "paired-node",
+      attachedSessionIds: [placement.sessionId],
+      profileSnapshot: { settings: { device: "paired-node", inference: "worker" } },
+      inference: "worker" as const,
+    };
+    const project = (record: WorkerSessionPlacementRecord, prepared = environment) =>
+      projectWorkerSessionPlacement(
+        record,
+        undefined,
+        undefined,
+        readWorkerPlacementIdentity(record, undefined, prepared),
+      );
+    const active = project(placement);
+    expect(active).toHaveProperty("inference", "worker");
+    expect(Value.Check(SessionPlacementSchema, active)).toBe(true);
+    expect(active).not.toHaveProperty("profileSnapshot");
+    for (const changed of [
+      { ...environment, environmentId: "replacement" },
+      { ...environment, ownerEpoch: 8 },
+      { ...environment, attachedSessionIds: [] },
+      { ...environment, attachedSessionIds: ["other-session"] },
+      { ...environment, attachedSessionIds: [placement.sessionId, "other-session"] },
+      { ...environment, nodeDeviceId: "" },
+    ]) {
+      expect(project(placement, changed)).not.toHaveProperty("inference");
+    }
+    for (const state of ["idle", "draining", "destroyed", "failed", "orphaned"] as const) {
+      const identity = readWorkerPlacementIdentity(placement, undefined, { ...environment, state });
+      expect(
+        projectWorkerSessionPlacement(placement, undefined, undefined, identity),
+      ).not.toHaveProperty("inference");
+    }
+    expect(project({ ...placement, executionMode: "remote-exec" })).not.toHaveProperty("inference");
+    for (const state of ["draining", "reconciling", "reclaimed"] as const) {
+      const projected = project({ ...placement, state });
+      expect(projected).not.toHaveProperty("inference");
+      expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    }
+    expect(project({ ...placement, state: "failed", recoveryError: "stopped" })).not.toHaveProperty(
+      "inference",
+    );
+    expect(
+      project({ ...RECORD_BASE, state: "local", environmentId: null, activeOwnerEpoch: null }),
+    ).not.toHaveProperty("inference");
+  });
+
   it.each(["local", "requested", "provisioning", "failed", "reclaimed"] as const)(
     "retains machine identity only for worker placement states (%s)",
     (state) => {
@@ -118,6 +182,63 @@ describe("worker placement projection", () => {
 
     expect(projectWorkerSessionPlacement(active, diskSpace)).toMatchObject({ diskSpace });
     expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
+  });
+
+  it("projects provisioning transfers before node assignment and active transfers by stale node build", () => {
+    const record = {
+      ...RECORD_BASE,
+      state: "provisioning" as const,
+      environmentId: "environment-1",
+      activeOwnerEpoch: null,
+    };
+    const observation = {
+      nodeId: "device-1",
+      environmentIds: [record.environmentId],
+      bundleHash: BUNDLE_HASH,
+      phase: "transferring" as const,
+      transferredBytes: 0,
+      totalBytes: 1_000,
+      startedAtMs: 250,
+      updatedAtMs: 250,
+    };
+    const reader = createWorkerPlacementRuntimeInstallReader({
+      environments: { get: () => undefined },
+      installer: {
+        readInstall: (nodeId) => (nodeId === observation.nodeId ? observation : undefined),
+        readInstallForEnvironment: (id) => (id === record.environmentId ? observation : undefined),
+        version: () => 1,
+      },
+    });
+    const active = { ...activePlacement(), workerBundleHash: "c".repeat(64) };
+    const environment = { nodeDeviceId: "device-1" };
+    expect(reader.read(record, environment)).toBeUndefined();
+    expect(reader.read(active, environment)).toBeUndefined();
+    observation.transferredBytes = 100;
+    expect(reader.read(active, environment)).toMatchObject({ transferredBytes: 100 });
+    const projected = projectWorkerSessionPlacement(
+      record,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      { workerRuntimeInstall: reader.read(record, { nodeDeviceId: null }) },
+    );
+    expect(projected).toHaveProperty("workerRuntimeInstall", {
+      phase: "transferring",
+      transferredBytes: 100,
+      totalBytes: 1_000,
+      startedAtMs: 250,
+      updatedAtMs: 250,
+    });
+    expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    expect(reader.read(record, null)).toMatchObject({ transferredBytes: 100 });
+    expect(reader.read({ ...record, environmentId: "unrelated" }, environment)).toBeUndefined();
+    expect(reader.read(active, null)).toBeUndefined();
+    expect(reader.read(active, { nodeDeviceId: "other-device" })).toBeUndefined();
+    expect(reader.read(activePlacement(), environment)).toBeUndefined();
+    expect(reader.read({ ...activePlacement(), state: "draining" })).toBeUndefined();
   });
 
   it.each(["active", "draining"] as const)(
@@ -230,27 +351,47 @@ describe("worker placement projection", () => {
     expect(reader.read(active)).toBeUndefined();
   });
 
-  it("projects move status without exposing operation authority", () => {
-    const projected = projectWorkerPlacementMove({
-      operationId: "move:v1:opaque",
-      sessionId: "session-1",
-      source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-      target: { kind: "device", deviceId: "device-1" },
-      abandonSource: false,
-      lastError: "device worker is offline",
-      createdAtMs: 100,
-      updatedAtMs: 200,
-    });
+  it.each([false, true])(
+    "projects failed Move retry facts without operation authority (abandon=%s)",
+    (abandonSource) => {
+      const projected = projectWorkerPlacementMove({
+        operationId: "move:v1:opaque",
+        sessionId: "session-1",
+        source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+        target: { kind: "gateway" },
+        abandonSource,
+        lastError: "device worker is offline",
+        createdAtMs: 100,
+        updatedAtMs: 200,
+      });
 
-    expect(projected).toEqual({
-      target: { kind: "device", deviceId: "device-1" },
-      error: "device worker is offline",
-      updatedAtMs: 200,
-    });
-    expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
-    expect(projected).not.toHaveProperty("operationId");
-    expect(projected).not.toHaveProperty("source");
-  });
+      expect(projected).toEqual({
+        target: { kind: "gateway" },
+        error: "device worker is offline",
+        updatedAtMs: 200,
+        retry: {
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "gateway" },
+          ...(abandonSource ? { abandonSource: true } : {}),
+        },
+      });
+      expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
+      expect(projected).not.toHaveProperty("operationId");
+      expect(projected.retry).not.toHaveProperty("operationId");
+      expect(
+        projectWorkerPlacementMove({
+          operationId: "move:v1:opaque",
+          sessionId: "session-1",
+          source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "gateway" },
+          abandonSource,
+          lastError: null,
+          createdAtMs: 100,
+          updatedAtMs: 200,
+        }),
+      ).not.toHaveProperty("retry");
+    },
+  );
 
   it("emits only fields valid for each placement discriminator", () => {
     const records = [

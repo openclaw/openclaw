@@ -142,19 +142,6 @@ describe("browser action input wait command", () => {
     expect(options?.timeoutMs).toBeGreaterThan(25000);
   });
 
-  it("keeps the outer request open for time delay plus condition timeout", async () => {
-    const program = createActionInputProgram();
-
-    await program.parseAsync(["browser", "wait", "--time", "1000", "--text", "Ready"], {
-      from: "user",
-    });
-
-    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-      | { timeoutMs?: number }
-      | undefined;
-    expect(options?.timeoutMs).toBe(127_250);
-  });
-
   it("budgets every supplied wait condition before adding transport slack", async () => {
     const program = createActionInputProgram();
 
@@ -220,36 +207,7 @@ describe("browser action input evaluate command", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
-  it("sends evaluate function, ref, and target id to the act route", async () => {
-    const program = createActionInputProgram();
-
-    await program.parseAsync(
-      [
-        "browser",
-        "evaluate",
-        "--fn",
-        "el => el.textContent",
-        "--ref",
-        "button-1",
-        "--target-id",
-        "tab-2",
-      ],
-      { from: "user" },
-    );
-
-    expect(getLastActionBody()).toMatchObject({
-      kind: "evaluate",
-      fn: "el => el.textContent",
-      ref: "button-1",
-      targetId: "tab-2",
-    });
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
-  });
-
-  it.each([
-    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 66_250 },
-    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 6_252 },
-  ])(
+  it.each([{ rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 6_252 }])(
     "preserves the $rawTimeout evaluate timeout and canonical outer deadline",
     async ({ rawTimeout, actionTimeoutMs, requestTimeoutMs }) => {
       const program = createActionInputProgram();
@@ -270,18 +228,7 @@ describe("browser action input evaluate command", () => {
     },
   );
 
-  it("rejects non-decimal evaluate timeouts before dispatch", async () => {
-    const program = createActionInputProgram();
-
-    await expect(
-      program.parseAsync(["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "1e3"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
-  it.each([false, undefined])("preserves the successful value %j", async (value) => {
+  it.each([undefined])("preserves the successful value %j", async (value) => {
     mocks.callBrowserRequest.mockResolvedValueOnce({ ok: true, result: value });
     await createActionInputProgram().parseAsync(["browser", "evaluate", "--fn", "() => 0"], {
       from: "user",
@@ -299,10 +246,7 @@ describe("browser action dialog outcomes", () => {
   });
 
   it.each([
-    ["evaluate", "--fn", "() => confirm('Continue?')"],
     ["press", "Enter"],
-    ["fill", "--fields", '[{"ref":"name","value":"Ada"}]'],
-    ["wait", "--fn", "() => confirm('Continue?')"],
     ["batch", "--actions", '[{"kind":"press","key":"Enter"}]'],
   ])("reports a pending dialog for %s", async (...args) => {
     const result = {

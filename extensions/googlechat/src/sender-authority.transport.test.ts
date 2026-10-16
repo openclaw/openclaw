@@ -2,6 +2,7 @@ import type { ServerResponse } from "node:http";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
@@ -239,7 +240,6 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
   });
 
   it("settles an accepted durable message after authority expires while reading its body", async () => {
-    const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");
     await withOpenClawTestState(
       { label: "googlechat-authority-settlement", layout: "state-only" },
       async () => {

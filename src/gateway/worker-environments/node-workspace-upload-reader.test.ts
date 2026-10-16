@@ -178,13 +178,18 @@ describe("workspace upload byte stream", () => {
       baseManifestRaw: upload.baseRaw,
       currentManifestRaw: upload.currentRaw,
     });
-    const commit = vi.fn();
+    const commit = vi.fn(async () => {});
     diagnostics.stage("apply-result");
     const result = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef,
       expectedBaseManifestRef: upload.baseManifestRef,
-      journal: { load: () => undefined, begin: () => {}, commit, abort: () => {} },
+      journal: {
+        load: async () => undefined,
+        begin: async () => {},
+        commit,
+        abort: async () => {},
+      },
     });
     diagnostics.stage("assertions");
     expect(result.manifestRef).toBe(upload.currentManifestRef);
@@ -194,8 +199,8 @@ describe("workspace upload byte stream", () => {
     }
   }, 60_000);
 
-  it.each(["cancellation", "independent failure"] as const)(
-    "preserves manifest computation %s when the owner closes",
+  it.each(["cancellation", "independent failure", "decode outage"] as const)(
+    "preserves manifest computation %s without rejecting the manifest",
     async (outcome) => {
       const controller = new AbortController();
       const f = fixture(controller);
@@ -203,26 +208,23 @@ describe("workspace upload byte stream", () => {
       const failure =
         outcome === "cancellation"
           ? reason
-          : new WorkerTaskError("worker exited before cancellation", "unavailable");
+          : new WorkerTaskError(
+              "workspace computation unavailable",
+              outcome === "decode outage" ? "overloaded" : "unavailable",
+            );
       vi.spyOn(manifestWorker, "decodeWorkspaceManifest").mockImplementationOnce(async () => {
         // The failure is already settled when the reader observes the later abort.
-        queueMicrotask(() => controller.abort(reason));
+        if (outcome !== "decode outage") {
+          queueMicrotask(() => controller.abort(reason));
+        }
         throw failure;
       });
       await expect(f.upload([f.payload])).rejects.toBe(failure);
+      expect(nodeWorkspaceTransferInvalidReason(failure)).toBeUndefined();
       expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
     },
   );
-  it("preserves a decode outage without rejecting the manifest", async () => {
-    const f = fixture();
-    const failure = new WorkerTaskError("workspace computation unavailable", "overloaded");
-    vi.spyOn(manifestWorker, "decodeWorkspaceManifest").mockRejectedValueOnce(failure);
-
-    await expect(f.upload([f.payload])).rejects.toBe(failure);
-    expect(nodeWorkspaceTransferInvalidReason(failure)).toBeUndefined();
-    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
-  });
-  it.each(["coalesced", "fragmented", "short writes"])(
+  it.each(["fragmented", "short writes"])(
     "stages consecutive manifest headers and file bodies in %s chunks",
     async (chunking) => {
       const f = fixture();
@@ -246,20 +248,6 @@ describe("workspace upload byte stream", () => {
       expect(await fs.readFile(path.join(result.stagingRoot, "result.bin"))).toEqual(f.file);
     },
   );
-
-  it("checks upload authority before writing after open", async () => {
-    const f = fixture();
-    let authorityError: Error | undefined;
-    const observed = observeUploadFile(() => {
-      authorityError = f.revoke();
-    });
-
-    const error = await f.upload([f.payload]).catch((failure: unknown) => failure);
-
-    expect(error).toBe(authorityError);
-    expect(observed.bytesBeforeClose()).toEqual(Buffer.alloc(0));
-    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
-  });
 
   it("joins a pending short write before cancellation closes and removes staging", async () => {
     const controller = new AbortController();
@@ -296,14 +284,19 @@ describe("workspace upload byte stream", () => {
     expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
   });
 
-  it.each(["zero progress", "I/O error"])(
-    "preserves a %s write failure when cancellation also occurs",
+  it.each(["authority closed after open", "zero progress", "I/O error"])(
+    "stops staging and preserves %s before any bytes are written",
     async (failure) => {
       const controller = new AbortController();
       const f = fixture(controller);
       const reason = new Error("upload canceled during failed write");
       const diskError = Object.assign(new Error("upload disk failure"), { code: "EIO" });
+      let authorityError: Error | undefined;
       const observed = observeUploadFile((handle) => {
+        if (failure === "authority closed after open") {
+          authorityError = f.revoke();
+          return;
+        }
         vi.spyOn(handle, "write").mockImplementationOnce((async (bytes: Uint8Array) => {
           controller.abort(reason);
           if (failure === "I/O error") {
@@ -315,7 +308,9 @@ describe("workspace upload byte stream", () => {
 
       const error = await f.upload([f.payload]).catch((caught: unknown) => caught);
 
-      if (failure === "I/O error") {
+      if (failure === "authority closed after open") {
+        expect(error).toBe(authorityError);
+      } else if (failure === "I/O error") {
         expect(error).toBe(diskError);
       } else {
         expect(error).toMatchObject({ code: "helper-failed" });
@@ -326,27 +321,23 @@ describe("workspace upload byte stream", () => {
     },
   );
 
-  it("rejects premature EOF across chunk boundaries", async () => {
-    const f = fixture();
+  it.each(["premature EOF", "buffered suffix", "next chunk suffix"])(
+    "rejects %s",
+    async (suffix) => {
+      const f = fixture();
+      const truncated = suffix === "premature EOF";
+      const chunks = truncated
+        ? [f.payload.subarray(0, 2), f.payload.subarray(2, 3)]
+        : suffix === "buffered suffix"
+          ? [Buffer.concat([f.payload, Buffer.from("!")])]
+          : [f.payload, Buffer.from("!")];
 
-    await expect(
-      f
-        .upload([f.payload.subarray(0, 2), f.payload.subarray(2, 3)])
-        .catch(nodeWorkspaceTransferInvalidReason),
-    ).resolves.toBe("premature_eof");
-    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
-  });
-
-  it.each(["buffered", "next chunk"])("rejects trailing bytes in the %s suffix", async (suffix) => {
-    const f = fixture();
-    const chunks =
-      suffix === "buffered"
-        ? [Buffer.concat([f.payload, Buffer.from("!")])]
-        : [f.payload, Buffer.from("!")];
-
-    await expect(
-      f.upload(chunks, f.payload.length + 1).catch(nodeWorkspaceTransferInvalidReason),
-    ).resolves.toBe("trailing_bytes");
-    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
-  });
+      await expect(
+        f
+          .upload(chunks, f.payload.length + (truncated ? 0 : 1))
+          .catch(nodeWorkspaceTransferInvalidReason),
+      ).resolves.toBe(truncated ? "premature_eof" : "trailing_bytes");
+      expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
+    },
+  );
 });

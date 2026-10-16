@@ -35,9 +35,11 @@ describe("inherited SQLite BEGIN deadline", () => {
   it("keeps the first nonblocking attempt after queue/startup consumed the budget", async () => {
     const { db } = await fixture();
     const beginDeadlineNs = process.hrtime.bigint() - 1n;
+    const prepare = vi.spyOn(db, "prepare");
     await runSqliteImmediateTransaction(
       db,
       async () => () => {
+        expect(prepare.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout")).toHaveLength(1);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         db.prepare("INSERT INTO entries VALUES (?)").run("committed");
       },

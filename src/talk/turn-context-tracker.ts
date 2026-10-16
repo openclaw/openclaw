@@ -7,7 +7,7 @@ const DEFAULT_REALTIME_VOICE_IGNORED_CONTEXT_TTL_MS = 10_000;
 /**
  * Retention and clock controls for realtime voice turn context tracking.
  */
-export type RealtimeVoiceTurnContextTrackerOptions = {
+type RealtimeVoiceTurnContextTrackerOptions = {
   limit?: number;
   ignoredContextTtlMs?: number;
   now?: () => number;
@@ -17,10 +17,7 @@ export type RealtimeVoiceTurnContextTrackerOptions = {
 /**
  * Mutable handle for a single realtime voice turn and caller-owned per-turn metadata.
  */
-export type RealtimeVoiceTurnContextHandle<
-  TContext,
-  TExtra extends object = Record<never, never>,
-> = TExtra & {
+export type RealtimeVoiceTurnContextHandle<TContext, TExtra extends object = object> = TExtra & {
   id: string;
   context: TContext;
   hasAudio: boolean;
@@ -36,24 +33,9 @@ type RealtimeVoiceTurnContextOpenArgs<TExtra extends object> = keyof TExtra exte
 /**
  * Tracks which realtime voice turn context should be attached to the next audio-bearing response.
  */
-export type RealtimeVoiceTurnContextTracker<
-  TContext,
-  TExtra extends object = Record<never, never>,
-> = {
-  open(
-    context: TContext,
-    ...extra: RealtimeVoiceTurnContextOpenArgs<TExtra>
-  ): RealtimeVoiceTurnContextHandle<TContext, TExtra>;
-  markAudio(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>): void;
-  close(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>): void;
-  consumeAudioContext(): TContext | undefined;
-  peekAudioTurn(): RealtimeVoiceTurnContextHandle<TContext, TExtra> | undefined;
-  hasAudioContext(): boolean;
-  rememberIgnoredContext(context: TContext | undefined): void;
-  consumeIgnoredContext(): TContext | undefined;
-  size(): number;
-  clear(): void;
-};
+export type RealtimeVoiceTurnContextTracker<TContext, TExtra extends object = object> = ReturnType<
+  typeof createRealtimeVoiceTurnContextTracker<TContext, TExtra>
+>;
 
 // Ignored context is kept outside the turn queue so one discarded response can still be
 // correlated if provider audio arrives just after the response was cancelled.
@@ -62,12 +44,9 @@ type RecentIgnoredContext<TContext> = {
   createdAt: number;
 };
 
-export function createRealtimeVoiceTurnContextTracker<
-  TContext,
-  TExtra extends object = Record<never, never>,
->(
+export function createRealtimeVoiceTurnContextTracker<TContext, TExtra extends object = object>(
   options: RealtimeVoiceTurnContextTrackerOptions = {},
-): RealtimeVoiceTurnContextTracker<TContext, TExtra> {
+) {
   const turns: RealtimeVoiceTurnContextHandle<TContext, TExtra>[] = [];
   let recentIgnoredContext: RecentIgnoredContext<TContext> | undefined;
   let nextId = 0;
@@ -130,7 +109,7 @@ export function createRealtimeVoiceTurnContextTracker<
     )[owner] === true;
 
   return {
-    open(context, ...extra) {
+    open(context: TContext, ...extra: RealtimeVoiceTurnContextOpenArgs<TExtra>) {
       const startedAt = now();
       const handle: RealtimeVoiceTurnContextHandle<TContext, TExtra> = {
         ...(extra[0] ?? ({} as TExtra)),
@@ -147,7 +126,7 @@ export function createRealtimeVoiceTurnContextTracker<
       }
       return handle;
     },
-    markAudio(handle) {
+    markAudio(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>) {
       if (!owns(handle)) {
         return;
       }
@@ -158,7 +137,7 @@ export function createRealtimeVoiceTurnContextTracker<
         prune();
       }
     },
-    close(handle) {
+    close(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>) {
       if (!owns(handle)) {
         return;
       }
@@ -186,7 +165,7 @@ export function createRealtimeVoiceTurnContextTracker<
       prepareForAudioContextRead();
       return turns.some((turn) => turn.hasAudio);
     },
-    rememberIgnoredContext(context) {
+    rememberIgnoredContext(context: TContext | undefined) {
       if (context === undefined) {
         return;
       }

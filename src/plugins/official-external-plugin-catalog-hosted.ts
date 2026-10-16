@@ -8,6 +8,7 @@ import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-b
 import {
   HostedCatalogSignedFeedMonotonicityError,
   isOfficialExternalPluginCatalogFeed,
+  isOfficialExternalPluginCatalogRollback,
   parseOfficialExternalPluginCatalogTimestamp,
   parseOfficialExternalPluginCatalogEntries,
   filterOfficialExternalPluginCatalogEntriesBySourceRefs,
@@ -104,14 +105,6 @@ function bundledFallbackResult(
     entries: listOfficialExternalPluginCatalogEntries(),
     error: formatErrorMessage(error),
     ...(metadata ? { metadata } : {}),
-  };
-}
-
-function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPluginCatalogLoadResult {
-  return {
-    source: "bundled-fallback",
-    entries: [],
-    error: formatErrorMessage(error),
   };
 }
 
@@ -320,22 +313,6 @@ function removeOfficialExternalPluginCatalogInstallAuthority(
   };
 }
 
-function isHostedCatalogSignedFeedRollback(params: {
-  candidate: OfficialExternalPluginCatalogFeed;
-  current: Pick<OfficialExternalPluginCatalogFeed, "sequence"> & { generatedAt?: string };
-}): boolean {
-  if (params.candidate.sequence < params.current.sequence) {
-    return true;
-  }
-  if (params.candidate.sequence > params.current.sequence) {
-    return false;
-  }
-  if (params.current.generatedAt === undefined) {
-    return false;
-  }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
-}
-
 function assertSnapshotMatchesRequestValidators(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   ifNoneMatch?: string;
@@ -367,6 +344,7 @@ async function snapshotOrBundledFallbackResult(params: {
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
+  let error = params.error;
   if (params.snapshotStore) {
     try {
       const snapshot = await params.snapshotStore.read(params.url);
@@ -374,21 +352,13 @@ async function snapshotOrBundledFallbackResult(params: {
         return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
       }
     } catch (snapshotErr) {
-      if (params.verification?.mode === "signed") {
-        return emptyBundledFallbackResult(
-          `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
-        );
-      }
-      return bundledFallbackResult(
-        `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
-        params.metadata,
-      );
+      error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
     }
   }
   if (params.verification?.mode === "signed") {
-    return emptyBundledFallbackResult(params.error);
+    return { source: "bundled-fallback", entries: [], error: formatErrorMessage(error) };
   }
-  return bundledFallbackResult(params.error, params.metadata);
+  return bundledFallbackResult(error, params.metadata);
 }
 
 async function resolveHostedCatalogSnapshotStore(params: {
@@ -591,7 +561,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
                 })
               ).feed;
         if (
-          isHostedCatalogSignedFeedRollback({
+          isOfficialExternalPluginCatalogRollback({
             candidate: parsed.feed,
             current,
           })

@@ -24,9 +24,27 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
   const references: Array<{ label: string; value: WeakRef<object> }> = [];
   const ids: number[] = [];
   let failLaunch = true;
+  let lookupResult: "missing" | "error" | undefined;
+  const store = createFileSessionStore({ stateDir: state.root });
   const runtime = new AcpxRuntime({
     cwd: state.root,
-    sessionStore: createFileSessionStore({ stateDir: state.root }),
+    sessionStore: {
+      load: async (key) => {
+        if (lookupResult) {
+          const generation = acpxOperationScope.getStore()?.generation;
+          assert.ok(generation, "Lookup must retain its owner until the read settles");
+          references.push({
+            label: `lookup:${generation.id}`,
+            value: new WeakRef(generation),
+          });
+          if (lookupResult === "error") {
+            throw new Error("synthetic lookup failure");
+          }
+        }
+        return store.load(key);
+      },
+      save: (record) => store.save(record),
+    },
     agentRegistry: createAgentRegistry({
       overrides: { fixture: [process.execPath, peer, directory] },
     }),
@@ -65,6 +83,22 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
       await assert.rejects(ensure(index), /synthetic admission launch failure/);
     }
     const failedIds = [...ids];
+    if (scenario === "initial") {
+      for (let index = 0; index < 8; index++) {
+        lookupResult = index % 2 === 0 ? "missing" : "error";
+        const lookupInput = {
+          sessionKey: `lookup-only-${index}`,
+          agentId: "main",
+          agent: "fixture",
+        };
+        if (lookupResult === "error") {
+          await assert.rejects(runtime.findSession(lookupInput), /synthetic lookup failure/);
+        } else {
+          assert.equal(await runtime.findSession(lookupInput), undefined);
+        }
+      }
+      lookupResult = undefined;
+    }
     const control = unownedControl();
     // Cross task boundaries so completed admission frames no longer keep WeakRefs alive.
     // Fixed full collections allow GC convergence; the broken registry retains every owner.
@@ -79,7 +113,7 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
     console.log(
       JSON.stringify({ scenario, observed: references.length, retained, controlCollected: true }),
     );
-    assert.deepEqual(retained, [], "Failed first admissions retained unreachable lifecycle owners");
+    assert.deepEqual(retained, [], "Unused admissions or lookups retained lifecycle owners");
 
     failLaunch = false;
     const handle = await ensure(0);
@@ -107,7 +141,10 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
         env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: target(0).sessionKey }],
       },
     ]);
-    await runtime.close({ handle, reason: "test-complete", discardPersistentState: true });
+    await runtime.close({ handle, reason: "test-complete" });
+    const found = await runtime.findSession({ ...target(0), agent: "fixture" });
+    assert.ok(found, "Ordinary close preserves discoverable session history");
+    assert.equal((await runtime.getStatus({ handle: found })).details?.closed, true);
   } finally {
     await runtime.shutdown();
   }

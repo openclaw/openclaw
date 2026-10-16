@@ -65,15 +65,6 @@ export async function finalizeFeishuMessageProcessing(params: {
   return await ("kind" in claim ? claim.handle : claim).commit();
 }
 
-/** Forgets a recorded message so a retryable synthetic event can be handled on redelivery. */
-export async function forgetProcessedFeishuMessage(
-  messageId: string | undefined | null,
-  namespace = "global",
-  log?: FeishuDedupeLog,
-): Promise<boolean> {
-  return await feishuDedupeState.guard.forget(messageId, dedupeOptions(namespace, log));
-}
-
 /** Checks recency without claiming or recording. */
 export async function hasProcessedFeishuMessage(
   messageId: string | undefined | null,

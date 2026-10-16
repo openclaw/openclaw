@@ -93,7 +93,6 @@ describe("scheduled restart during gateway suspension", () => {
     scheduleGatewayRestart({
       delayMs: 1_000,
       reason: "config.patch",
-      skipCooldown: true,
     });
 
     const prepared = prepareSuspension("request-restart-delay", {
@@ -185,7 +184,6 @@ describe("scheduled restart during gateway suspension", () => {
     scheduleGatewayRestart({
       delayMs: 0,
       reason: "config.patch",
-      skipCooldown: true,
       emitHooks: {
         beforeEmit: async () => preparation,
       },
@@ -216,7 +214,7 @@ describe("scheduled restart during gateway suspension", () => {
     setPreRestartDeferralCheck(preRestartCheck);
     setGatewayRestartPolicy({ allowExternal: true });
 
-    scheduleGatewayRestart({ delayMs: 0, skipCooldown: true });
+    scheduleGatewayRestart({ delayMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(1);
     expect(preRestartCheck).toHaveBeenCalledTimes(2);
@@ -234,7 +232,7 @@ describe("scheduled restart during gateway suspension", () => {
 
   it("cancels delayed restart work during a transient reset", async () => {
     const emitSpy = vi.spyOn(process, "emit");
-    scheduleGatewayRestart({ delayMs: 1_000, skipCooldown: true });
+    scheduleGatewayRestart({ delayMs: 1_000 });
 
     resetGatewayRestartStateForInProcessRestart();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -246,7 +244,7 @@ describe("scheduled restart during gateway suspension", () => {
   it("cancels a due restart waiting behind a prepared suspension", async () => {
     const emitSpy = vi.spyOn(process, "emit");
     expect(prepareSuspension("request-reset-waiting-restart")).toMatchObject({ status: "ready" });
-    scheduleGatewayRestart({ delayMs: 0, skipCooldown: true });
+    scheduleGatewayRestart({ delayMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(0);
 
@@ -266,7 +264,6 @@ describe("scheduled restart during gateway suspension", () => {
     const { promise: preparation, resolve: releasePreparation } = createDeferred();
     scheduleGatewayRestart({
       delayMs: 0,
-      skipCooldown: true,
       emitHooks: {
         beforeEmit: async () => {
           preparationStarted();

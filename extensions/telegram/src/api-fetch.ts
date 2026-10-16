@@ -37,11 +37,7 @@ export async function lookupTelegramChatId(params: {
   const transport = resolveTelegramTransport(proxyFetch, { network: params.network });
   try {
     return await fetchTelegramChatId({
-      token: params.token,
-      chatId: params.chatId,
-      signal: params.signal,
-      apiRoot: params.apiRoot,
-      timeoutSeconds: params.timeoutSeconds,
+      ...params,
       fetchImpl: transport.fetch,
     });
   } finally {

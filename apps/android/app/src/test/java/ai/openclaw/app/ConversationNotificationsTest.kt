@@ -376,6 +376,15 @@ class ConversationNotificationsTest {
   }
 
   @Test
+  @Config(sdk = [31])
+  fun preTiramisuPostsWithoutRuntimeNotificationPermission() {
+    shadowOf(RuntimeEnvironment.getApplication()).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+    assertTrue(ConversationReplyNotifier(context).show(target.toComposerOwner(), target.runId, "Synthetic reply"))
+    assertEquals("Synthetic reply", currentNotification().extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+  }
+
+  @Test
   fun deniedNotificationPermissionDoesNotRetireExistingPublication() {
     val reply = replyFrom(postAssistantReply(target, "Synthetic reply"))
     shadowOf(RuntimeEnvironment.getApplication()).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)

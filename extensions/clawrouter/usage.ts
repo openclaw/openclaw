@@ -1,5 +1,8 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
+import {
+  buildUsageErrorSnapshot,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
@@ -124,12 +127,7 @@ export async function fetchClawRouterUsage(params: {
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
     if (!payload) {
-      return {
-        provider: "clawrouter",
-        displayName: "ClawRouter",
-        windows: [],
-        error: "Malformed usage response",
-      };
+      return buildUsageErrorSnapshot("clawrouter", "Malformed usage response");
     }
     const budget = payload.budget;
     const limitMicros = asFiniteNumberInRange(budget?.limitMicros, { min: 0 });

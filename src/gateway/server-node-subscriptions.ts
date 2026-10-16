@@ -16,7 +16,6 @@ type NodeSendEventFn = (opts: {
   preparePayload?: NodeEventPayloadPreparation;
 }) => void | Promise<unknown>;
 
-/** Manages node subscriptions to gateway session events. */
 export function createNodeSubscriptionManager() {
   type Subscription = { pairingGeneration: string };
   type Recipient = { pairingGeneration: string; subscriptions: Map<string, Subscription> };

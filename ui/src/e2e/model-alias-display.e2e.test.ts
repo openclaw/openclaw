@@ -115,7 +115,7 @@ suite.define(() => {
             "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
           },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
     const gateway = await installMockGateway(page, {
@@ -152,6 +152,7 @@ suite.define(() => {
         'openclaw-agents-page openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
       );
       await select.waitFor({ state: "visible", timeout: 10_000 });
+      await select.locator(".picker-select__trigger").click();
       await expect
         .poll(() =>
           select.locator('[role="option"][data-value="anthropic/claude-opus-4-8"]').textContent(),

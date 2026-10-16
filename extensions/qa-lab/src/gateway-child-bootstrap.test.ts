@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { isQaPosixProcessGroupAlive } from "./posix-process-group.js";
+import { inspectLinuxProcessGroup, isQaPosixProcessGroupAlive } from "./posix-process-group.js";
 import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -99,7 +99,10 @@ if (command === "descendant") {
     }
   } else if (current === "gateway") {
     fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), String(process.pid));
-    http.createServer((_request, response) => response.end("ok"))
+    http.createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/readyz" ? { ready: true, agentDatabases: [] } : { ok: true }));
+})
       .listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
   } else if (current === "message") {
     const ownerPid = Number(fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "candidate-owner"), "utf8"));
@@ -188,7 +191,13 @@ async function fixture(phase: string, mode: string) {
     for (const entry of records()) {
       expect(pidAlive(entry.pid), `fixture PID ${entry.pid}`).toBe(false);
       if (entry.pid === entry.pgid) {
-        expect(isQaPosixProcessGroupAlive(entry.pgid)).toBe(false);
+        const groupAlive = isQaPosixProcessGroupAlive(entry.pgid);
+        expect(
+          groupAlive,
+          groupAlive
+            ? `fixture PGID ${entry.pgid} failure inspection: ${JSON.stringify(inspectLinuxProcessGroup(entry.pgid))}`
+            : undefined,
+        ).toBe(false);
       }
     }
   };

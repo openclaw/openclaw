@@ -4,13 +4,12 @@ import type { CronJob } from "../cron/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   invalidateSessionAutomationIndex,
-  claimSessionAutomationEpoch,
   registerSessionAutomationSource,
   sessionHasAutomation,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 
-const cfg = {} as OpenClawConfig;
+const cfg: OpenClawConfig = {};
 
 function job(partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob {
   return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
@@ -21,17 +20,6 @@ afterEach(() => {
 });
 
 describe("session automation index", () => {
-  test("reports sessions bound to enabled jobs", () => {
-    const jobs = [job({ id: "a" }), job({ id: "b", enabled: false })];
-    registerSessionAutomationSource({
-      getJobs: () => jobs,
-      getDefaultAgentId: () => "main",
-    });
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(true);
-    expect(sessionHasAutomation("agent:main:cron:b", cfg)).toBe(false);
-    expect(sessionHasAutomation("agent:main:main", cfg)).toBe(false);
-  });
-
   test("unchanged bindings publish nothing, including shared bindings and in-place edits", () => {
     const first = job({ id: "a", sessionTarget: "main" });
     const second = job({ id: "b", sessionTarget: "main" });
@@ -58,36 +46,6 @@ describe("session automation index", () => {
     } finally {
       stop();
     }
-  });
-
-  test("owner publications invalidate the memo after in-place job mutations", () => {
-    const jobs = [job({ id: "a" })];
-    registerSessionAutomationSource({
-      getJobs: () => jobs,
-      getDefaultAgentId: () => "main",
-    });
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(true);
-    (jobs[0] as { enabled: boolean }).enabled = false;
-    invalidateSessionAutomationIndex();
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(false);
-  });
-
-  test("unregistering the source clears automation state", () => {
-    registerSessionAutomationSource({
-      getJobs: () => [job({ id: "a" })],
-      getDefaultAgentId: () => "main",
-    });
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(true);
-    registerSessionAutomationSource(null);
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(false);
-  });
-
-  test("reports false before the cron store is loaded", () => {
-    registerSessionAutomationSource({
-      getJobs: () => undefined,
-      getDefaultAgentId: () => "main",
-    });
-    expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(false);
   });
 
   test("publishes additions, removals, retargets, and mutable routing config deltas", () => {
@@ -176,24 +134,20 @@ describe("session automation index", () => {
     }
   });
 
-  test("stale services cannot clobber or clear a replacement registration", () => {
+  test("stopped services cannot clear a replacement registration", () => {
     expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
     try {
-      const staleEpoch = claimSessionAutomationEpoch();
       const staleSource = {
         getJobs: () => [job({ id: "stale" })],
         getDefaultAgentId: () => "main",
       };
-      const freshEpoch = claimSessionAutomationEpoch();
       const freshSource = {
         getJobs: () => [job({ id: "fresh" })],
         getDefaultAgentId: () => "main",
       };
-      registerSessionAutomationSource(freshSource, freshEpoch);
-      // Config-reload race: the older service's start resolves late.
-      registerSessionAutomationSource(staleSource, staleEpoch);
+      registerSessionAutomationSource(freshSource);
       expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
       expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
       unregisterSessionAutomationSource(staleSource);

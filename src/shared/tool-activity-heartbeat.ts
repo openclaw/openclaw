@@ -36,7 +36,7 @@ export function onToolActivity(runId: string, listener: () => void): () => void 
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.size === 0 && runListeners.get(runId) === listeners) {
       runListeners.delete(runId);
     }
   };

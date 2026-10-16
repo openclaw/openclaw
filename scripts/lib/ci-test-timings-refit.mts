@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
+import type { NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
   createNativeSoloTimingKey,
@@ -15,6 +16,7 @@ import {
   splitExtensionTestProcessTargets,
 } from "./extension-test-plan.mts";
 import { isConstrainedCiCheckHost } from "./local-check-runtime.mts";
+import { isRecord } from "./record-shared.mjs";
 import {
   createCompactSplitTimingGeneration,
   parseCompactSplitTimingKey,
@@ -27,23 +29,37 @@ export type CiTimingRun = {
   completeInventory: boolean;
   /** The workflow/job SHA identifies the PR head, while tests run its merge-ref. */
   pullRequestMergeRef?: boolean;
+  /** Historical file durations cannot reprice a changed UI test. */
+  changedUiFiles?: string[];
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
-    | { kind: "compact" | "tooling"; text: string; labels: string[] }
+    | { kind: "compact" | "tooling" | "release-packed"; text: string; labels: string[] }
   )[];
 };
 
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
-type RuntimeTimingGroup = {
-  shard_name: string;
-  timing_key?: string;
-  configs: string[];
+function normalizeTimingLog(text: string): string {
+  // Quoted child output remains nested; only gh's outer job/step columns are removed.
+  return stripVTControlCharacters(text).replace(
+    /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
+    "",
+  );
+}
+
+/** Dispatch inputs are recorded in job environment headers, not the runs API. */
+export function isCiTimingRuntimeTrial(text: string): boolean {
+  return /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_CI_TEST_RUNTIME_POLICY: (?:bun-all|dual-all)\s*$/mu.test(
+    normalizeTimingLog(text),
+  );
+}
+
+type RuntimeTimingGroup = Omit<
+  NodeTestShardGroup,
+  "runner" | "requiresDist" | "pretestBuildMode" | "includePatterns"
+> & {
   includePatterns?: string[] | null;
-  env?: Record<string, string>;
-  fallbackMaxWorkers?: number;
-  minTotalMemoryBytes?: number;
 };
 
 function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
@@ -389,6 +405,113 @@ function hasNativeSoloJobEnvironment(text: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function readPackedReleaseLog(text: string, labels: string[], samples: Samples) {
+  const resources = readWorkerResources(text);
+  const descriptors = readRuntimeTimingGroups(text);
+  const jobWorkers = readJobWorkerCeiling(text);
+  if (
+    !labels.includes("ubuntu-24.04") ||
+    labels.some((label) => label === "self-hosted" || /^(?:blacksmith-|runson)/u.test(label)) ||
+    readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual" ||
+    resources?.requestedPlans !== 1 ||
+    resources.admittedPlans !== 1 ||
+    descriptors.length < 2 ||
+    descriptors.some((group) => {
+      const workers = intersectWorkerCeilings(
+        jobWorkers,
+        parseWorkerCeiling(group.env?.OPENCLAW_VITEST_MAX_WORKERS),
+      );
+      return !group.timing_key?.startsWith("release-full-") || workers !== 2;
+    })
+  ) {
+    return;
+  }
+  const receipts = [
+    ...text.matchAll(/^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:completion\] (.+)$/gmu),
+  ];
+  if (receipts.length !== 1) {
+    return;
+  }
+  let completion: unknown;
+  try {
+    completion = JSON.parse(receipts[0]![2]!);
+  } catch {
+    return;
+  }
+  if (
+    !isRecord(completion) ||
+    completion.version !== 1 ||
+    completion.planned !== descriptors.length ||
+    completion.completed !== descriptors.length ||
+    completion.failedInvocations !== 0 ||
+    typeof completion.invocations !== "number" ||
+    !Number.isSafeInteger(completion.invocations)
+  ) {
+    return;
+  }
+  const groups = new Map<string, { start?: number; end: number; node: boolean }>(
+    descriptors.map((group) => [group.timing_key!, { end: 0, node: false }]),
+  );
+  if (groups.size !== descriptors.length) {
+    return;
+  }
+  let active: { key: string; start: number } | undefined;
+  let currentGroup: string | undefined;
+  let invocations = 0;
+  let lastTimestamp = 0;
+  for (const event of text.matchAll(
+    /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))$/gmu,
+  )) {
+    const timestamp = Date.parse(event[1]!);
+    const key = event[2]!;
+    const owner = key.replace(/^(?:bun|bun-native):/u, "");
+    const group = groups.get(owner);
+    if (!group || !Number.isFinite(timestamp) || timestamp < lastTimestamp) {
+      return;
+    }
+    lastTimestamp = timestamp;
+    if (event[3] === "begin") {
+      if (active || (group.start !== undefined && currentGroup !== owner)) {
+        return;
+      }
+      if (key === owner) {
+        // The runtime selection owner starts dual policy with one full Node run.
+        if (group.node) {
+          return;
+        }
+        group.node = true;
+      } else if (!group.node) {
+        return;
+      }
+      currentGroup = owner;
+      group.start ??= timestamp;
+      active = { key, start: timestamp };
+    } else {
+      if (active?.key !== key || event[4] !== "0" || timestamp <= active.start) {
+        return;
+      }
+      group.end = timestamp;
+      invocations += 1;
+      active = undefined;
+    }
+  }
+  if (
+    active ||
+    invocations !== completion.invocations ||
+    !(Date.parse(receipts[0]![1]!) >= lastTimestamp) ||
+    [...groups.values()].some(
+      (group) => !group.node || group.start === undefined || group.end <= group.start,
+    )
+  ) {
+    return;
+  }
+  // The completion receipt accounts for every invocation. Include all selected
+  // Bun runs and the gaps between runtimes in one complete serial group wall.
+  for (const [key, group] of groups) {
+    recordSample(samples, key, (group.end - group.start!) / 1000);
   }
 }
 
@@ -924,6 +1047,7 @@ export function refitTestTimings(
     toolingGithub: new Set<number>(),
   };
   const overhead: number[] = [];
+  const changedUiFiles = new Set<string>();
   const observedParents = { blacksmith: new Set<string>(), github: new Set<string>() };
   const runtimeSamples = {
     blacksmith: new Map<string, number[]>(),
@@ -939,17 +1063,30 @@ export function refitTestTimings(
       .map((observation) => [runtimePlacementTimingIdentity(observation), observation]),
   );
   const uniqueRuns = new Map<number, CiTimingRun>();
+  const trialRunIds = new Set(
+    runs
+      .filter((run) => run.logs.some((log) => isCiTimingRuntimeTrial(log.text)))
+      .map((run) => run.id),
+  );
   for (const run of runs) {
+    // Exclude the whole run, including other attempts, from sampling and pruning.
+    if (trialRunIds.has(run.id)) {
+      continue;
+    }
     const retained = uniqueRuns.get(run.id);
     if (retained) {
       retained.logs.push(...run.logs);
       retained.completeInventory = retained.completeInventory && run.completeInventory;
       retained.pullRequestMergeRef ||= run.pullRequestMergeRef;
+      retained.changedUiFiles = [
+        ...new Set([...(retained.changedUiFiles ?? []), ...(run.changedUiFiles ?? [])]),
+      ];
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
   }
-  for (const run of uniqueRuns.values()) {
+  const acceptedRuns = [...uniqueRuns.values()];
+  for (const run of acceptedRuns) {
     const current = {
       uiE2e: new Map<string, number[]>(),
       repoE2e: new Map<string, number[]>(),
@@ -963,13 +1100,10 @@ export function refitTestTimings(
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
-      // `gh run view --log` adds job/step columns outside the timestamped record.
-      // A timestamped child line may quote that format; its contents stay nested.
-      const text = stripVTControlCharacters(log.text).replace(
-        /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
-        "",
-      );
-      if (log.kind === "tooling") {
+      const text = normalizeTimingLog(log.text);
+      if (log.kind === "release-packed") {
+        readPackedReleaseLog(text, log.labels, current.github);
+      } else if (log.kind === "tooling") {
         const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
           ? "toolingBlacksmith"
           : "toolingGithub";
@@ -994,11 +1128,15 @@ export function refitTestTimings(
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
     }
+    for (const file of run.changedUiFiles ?? []) {
+      current.uiE2e.delete(file);
+      changedUiFiles.add(file);
+    }
     for (const profile of ["blacksmith", "github"] as const) {
       recordCompleteParentSamples(
         current[profile],
         observedParents[profile],
-        !run.pullRequestMergeRef,
+        !run.pullRequestMergeRef && !run.logs.some((log) => log.kind === "release-packed"),
       );
       for (const [identity, values] of currentRuntime[profile]) {
         recordSample(runtimeSamples[profile], identity, median(values));
@@ -1038,7 +1176,11 @@ export function refitTestTimings(
   }
 
   const completeInventoryRuns = new Set(
-    [...uniqueRuns.values()].filter((run) => run.completeInventory).map((run) => run.id),
+    acceptedRuns
+      .filter(
+        (run) => run.completeInventory && !run.logs.some((log) => log.kind === "release-packed"),
+      )
+      .map((run) => run.id),
   );
   const pruningRunCount = (profile: keyof typeof contributingRuns) =>
     [...contributingRuns[profile]].filter((id) => completeInventoryRuns.has(id)).length;
@@ -1049,8 +1191,10 @@ export function refitTestTimings(
   const keepOverhead =
     measuredOverhead === undefined ||
     (oldOverhead !== undefined && Math.abs(measuredOverhead - oldOverhead) <= oldOverhead * 0.15);
-  const runIds = [...new Set(runs.map((run) => run.id))].toSorted((a, b) => a - b);
-  const pullRequestRunIds = runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id);
+  const runIds = acceptedRuns.map((run) => run.id).toSorted((a, b) => a - b);
+  const pullRequestRunIds = acceptedRuns
+    .filter((run) => run.pullRequestMergeRef)
+    .map((run) => run.id);
   function refitRuntime(profile: "blacksmith" | "github"): RuntimePlacementTiming[] {
     return Object.entries(
       refitMap(
@@ -1110,13 +1254,18 @@ export function refitTestTimings(
       ),
     },
     uiE2e: {
-      fileSeconds: refitMap(samples.uiE2e, previous?.uiE2e.fileSeconds, pruningRunCount("uiE2e")),
+      fileSeconds: refitMap(
+        samples.uiE2e,
+        previous?.uiE2e.fileSeconds,
+        pruningRunCount("uiE2e"),
+        changedUiFiles,
+      ),
       perFileOverheadSeconds: keepOverhead
         ? (oldOverhead ?? 0)
         : Math.round(measuredOverhead * 10) / 10,
     },
     updatedAt:
-      runs
+      acceptedRuns
         .map((run) => run.createdAt.slice(0, 10))
         .toSorted()
         .at(-1) ??

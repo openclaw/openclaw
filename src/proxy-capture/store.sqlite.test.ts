@@ -9,6 +9,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -85,9 +86,10 @@ describe("DebugProxyCaptureStore", () => {
             ...event,
           });
         }
-        const prepare = store.db.prepare.bind(store.db);
+        const db = requireNativeSqliteDatabase(store.db);
+        const prepare = db.prepare.bind(db);
         const materializations: MockInstance[] = [];
-        vi.spyOn(store.db, "prepare").mockImplementation((sql) => {
+        vi.spyOn(db, "prepare").mockImplementation((sql) => {
           const statement = prepare(sql);
           materializations.push(vi.spyOn(statement, "all"));
           return statement;
@@ -371,6 +373,7 @@ describe("DebugProxyCaptureStore", () => {
         ? acquireDebugProxyCaptureStore(dbPath, blobDir)
         : acquireDebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
     const sessionId = "rollback-session";
+    const db = requireNativeSqliteDatabase(lease.store.db);
 
     try {
       lease.store.upsertSession({
@@ -401,7 +404,7 @@ describe("DebugProxyCaptureStore", () => {
         operation === "deleteSessions"
           ? lease.store.deleteSessions([sessionId])
           : lease.store.purgeAll();
-      lease.store.db.setAuthorizer((action, table) =>
+      db.setAuthorizer((action, table) =>
         action === constants.SQLITE_DELETE && table === deniedTable
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
@@ -411,7 +414,7 @@ describe("DebugProxyCaptureStore", () => {
         expect(() => lease.store.deleteSessions(["missing"])).toThrow(/not authorized/u);
       }
       expect(cleanup).toThrow(/not authorized/u);
-      lease.store.db.setAuthorizer(null);
+      db.setAuthorizer(null);
       expect(lease.store.listSessions()).toHaveLength(1);
       expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
       expect(lease.store.readBlob(blob.blobId)).toBe("rollback payload");
@@ -428,7 +431,7 @@ describe("DebugProxyCaptureStore", () => {
       }
       expect(cleanup()).toEqual({ sessions: 0, events: 0, blobs: 0 });
     } finally {
-      lease.store.db.setAuthorizer(null);
+      db.setAuthorizer(null);
       lease.release();
     }
   });
@@ -468,6 +471,7 @@ describe("DebugProxyCaptureStore", () => {
               path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
               path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
             );
+      const db = requireNativeSqliteDatabase(lease.store.db);
       const event = {
         sessionId: "rejected-event",
         ts: 7,
@@ -486,13 +490,13 @@ describe("DebugProxyCaptureStore", () => {
         metaJson: '{"fixture":true}',
       } as const;
       try {
-        lease.store.db.setAuthorizer((action, table) =>
+        db.setAuthorizer((action, table) =>
           action === constants.SQLITE_INSERT && table === "capture_events"
             ? constants.SQLITE_DENY
             : constants.SQLITE_OK,
         );
         expect(() => lease.store.recordEvent(event)).toThrow(/not authorized/u);
-        lease.store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         expect(lease.store.listSessions()).toEqual([]);
         expect(lease.store.getSessionEvents(event.sessionId)).toEqual([]);
 
@@ -503,7 +507,7 @@ describe("DebugProxyCaptureStore", () => {
         ]);
         expect(lease.store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
       } finally {
-        lease.store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         lease.release();
       }
     },
@@ -605,6 +609,7 @@ describe("DebugProxyCaptureStore", () => {
               path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
               path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
             );
+      const db = requireNativeSqliteDatabase(store.db);
       const record = (overrides: Partial<CaptureEventRecord>) =>
         store.recordEvent({
           sessionId: "captured",
@@ -705,7 +710,7 @@ describe("DebugProxyCaptureStore", () => {
         expect(store.listSessions(0)).toEqual([]);
         expect(store.listSessions(-1)).toHaveLength(5);
 
-        store.db.setAuthorizer((action, table) =>
+        db.setAuthorizer((action, table) =>
           action === constants.SQLITE_READ && table === "capture_events"
             ? constants.SQLITE_DENY
             : constants.SQLITE_OK,
@@ -715,14 +720,14 @@ describe("DebugProxyCaptureStore", () => {
         }
         expect(() => store.listSessions()).toThrow(/prohibited/u);
         expect(store.db.isOpen).toBe(true);
-        store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         expect(
           Object.fromEntries(
             presets.map((preset) => [preset, store.queryPreset(preset, "captured")]),
           ),
         ).toEqual(results);
       } finally {
-        store.db.setAuthorizer(null);
+        db.setAuthorizer(null);
         store.close();
       }
     },

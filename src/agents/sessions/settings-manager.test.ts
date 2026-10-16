@@ -1,6 +1,11 @@
 /** Tests session settings loading, persistence, and runtime overrides. */
-import { describe, expect, it } from "vitest";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SettingsManager, type SettingsScope, type SettingsStorage } from "./settings-manager.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 class InspectableSettingsStorage implements SettingsStorage {
   private values: Record<SettingsScope, string | undefined> = {
@@ -26,6 +31,60 @@ class InspectableSettingsStorage implements SettingsStorage {
 }
 
 describe("SettingsManager scoped persistence", () => {
+  it.each(
+    [
+      {
+        retired: { queueMode: "all" },
+        canonical: { steeringMode: "all" },
+        guidance: "steeringMode",
+      },
+      { retired: { websockets: false }, canonical: { transport: "sse" }, guidance: "transport" },
+      {
+        retired: { skills: { customDirectories: ["custom-skill"], enableSkillCommands: false } },
+        canonical: { skills: ["custom-skill"], enableSkillCommands: false },
+        guidance: "enableSkillCommands",
+      },
+      {
+        retired: { retry: { maxDelayMs: 12_000 } },
+        canonical: { retry: { provider: { maxRetryDelayMs: 12_000 } } },
+        guidance: "retry.provider.maxRetryDelayMs",
+      },
+    ].flatMap((settings) => [
+      { ...settings, scope: "global" },
+      { ...settings, scope: "project" },
+    ]),
+  )(
+    "refuses retired $scope settings with $guidance guidance and preserves bytes",
+    async ({ retired, canonical, guidance, scope }) => {
+      const root = tempDirs.make("openclaw-settings-retired-");
+      const agentDir = join(root, "agent");
+      const settingsDir = scope === "global" ? agentDir : join(root, ".openclaw");
+      const settingsPath = join(settingsDir, "settings.json");
+      mkdirSync(settingsDir);
+      const original = `${JSON.stringify({ theme: "keep", ...retired }, null, 4)}\n`;
+      writeFileSync(settingsPath, original);
+      const refusal = expect.objectContaining({
+        code: "INVALID_CONFIG",
+        recovery: "manual",
+        message: expect.stringContaining(guidance),
+      });
+
+      expect(() => SettingsManager.create(root, agentDir)).toThrowError(refusal);
+      expect(readFileSync(settingsPath, "utf8")).toBe(original);
+
+      writeFileSync(settingsPath, JSON.stringify(canonical));
+      const manager = SettingsManager.create(root, agentDir);
+      expect(manager.drainErrors()).toEqual([]);
+      expect(
+        scope === "global" ? manager.getGlobalSettings() : manager.getProjectSettings(),
+      ).toEqual(canonical);
+
+      writeFileSync(settingsPath, original);
+      await expect(manager.reload()).rejects.toThrowError(refusal);
+      expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    },
+  );
+
   it("loads settings from a backend that supplies the pure read contract", () => {
     const manager = SettingsManager.fromStorage({
       readSettingsScope: (scope) => JSON.stringify({ theme: scope }),
@@ -86,22 +145,35 @@ describe("SettingsManager scoped persistence", () => {
     expect(settingsManager.getThemePaths()).toEqual(["external-theme"]);
   });
 
-  it("isolates parse failures to the affected scope", async () => {
-    const storage = new InspectableSettingsStorage();
-    storage.set("global", "{");
-    storage.set("project", { skills: ["old-skill"] });
-    const settingsManager = SettingsManager.fromStorage(storage);
+  it.each([
+    { input: "{", error: SyntaxError, expected: undefined },
+    { input: "null", error: TypeError, expected: null },
+    { input: "42", error: TypeError, expected: 42 },
+    { input: "true", error: TypeError, expected: true },
+    { input: '"invalid"', error: TypeError, expected: "invalid" },
+  ])(
+    "isolates invalid settings $input to the affected scope",
+    async ({ input, error, expected }) => {
+      const storage = new InspectableSettingsStorage();
+      storage.set("global", input);
+      storage.set("project", { skills: ["old-skill"] });
+      const settingsManager = SettingsManager.fromStorage(storage);
 
-    expect(settingsManager.drainErrors()).toEqual([
-      expect.objectContaining({ scope: "global", error: expect.any(SyntaxError) }),
-    ]);
-    settingsManager.setTheme("blocked-global-write");
-    settingsManager.setProjectSkillPaths(["new-skill"]);
-    await settingsManager.flush();
+      expect(settingsManager.drainErrors()).toEqual([
+        expect.objectContaining({ scope: "global", error: expect.any(error) }),
+      ]);
+      settingsManager.setTheme("blocked-global-write");
+      settingsManager.setProjectSkillPaths(["new-skill"]);
+      await settingsManager.flush();
 
-    expect(() => storage.get("global")).toThrow(SyntaxError);
-    expect(storage.get("project")).toEqual({ skills: ["new-skill"] });
-  });
+      if (error === SyntaxError) {
+        expect(() => storage.get("global")).toThrow(SyntaxError);
+      } else {
+        expect(storage.get("global")).toBe(expected);
+      }
+      expect(storage.get("project")).toEqual({ skills: ["new-skill"] });
+    },
+  );
 });
 
 describe("SettingsManager runtime overrides", () => {

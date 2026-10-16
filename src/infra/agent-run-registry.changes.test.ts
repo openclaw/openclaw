@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
+  getAgentRunContext,
   recordAgentRunModel,
   registerAgentRunContext,
   releaseAgentRunContext,
@@ -19,53 +20,74 @@ afterEach(() => {
 
 it("publishes affected session identities for registration, moves, models, and release", () => {
   const changed = vi.fn();
-  const stop = sessionChanges.subscribe(changed);
+  onTestFinished(sessionChanges.subscribe(changed));
   const before = { sessionKey: "agent:main:before", agentId: "main" };
   const after = { sessionKey: "agent:other:after", agentId: "other" };
-  try {
-    registerAgentRunContext("moving", before);
-    expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
-    changed.mockClear();
+  registerAgentRunContext("moving", before);
+  expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
+  changed.mockClear();
 
-    registerAgentRunContext("moving", after);
-    expect(changed.mock.calls).toEqual(
-      expect.arrayContaining([[{ ...before, scope: "runtime" }], [{ ...after, scope: "runtime" }]]),
-    );
-    expect(changed).toHaveBeenCalledTimes(2);
-    changed.mockClear();
+  registerAgentRunContext("moving", after);
+  expect(changed.mock.calls).toEqual(
+    expect.arrayContaining([[{ ...before, scope: "runtime" }], [{ ...after, scope: "runtime" }]]),
+  );
+  expect(changed).toHaveBeenCalledTimes(2);
+  changed.mockClear();
 
-    recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
-    expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
-    changed.mockClear();
-    recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
-    expect(changed).not.toHaveBeenCalled();
+  recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
+  expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
+  changed.mockClear();
+  recordAgentRunModel("moving", { provider: "openai", model: "test-model" });
+  expect(changed).not.toHaveBeenCalled();
 
-    const claim = claimAgentRunContext("moving", after, { trackOwner: true, ownsContext: true });
-    changed.mockClear();
-    releaseAgentRunContext("moving", claim);
-    expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
-    changed.mockClear();
-    clearAgentRunContext("missing");
-    expect(changed).not.toHaveBeenCalled();
-  } finally {
-    stop();
-  }
+  const claim = claimAgentRunContext("moving", after, { trackOwner: true, ownsContext: true });
+  changed.mockClear();
+  releaseAgentRunContext("moving", claim);
+  expect(changed.mock.calls).toEqual([[{ ...after, scope: "runtime" }]]);
+  changed.mockClear();
+  clearAgentRunContext("missing");
+  expect(changed).not.toHaveBeenCalled();
 });
 
 it("invalidates the run projection on lifecycle rotation and orphan cleanup", () => {
   const changed = vi.fn();
-  const stop = sessionChanges.subscribe(changed);
-  try {
-    rotateAgentRunRegistryLifecycleGeneration();
-    expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
-    registerAgentRunContext("orphan", { sessionKey: "orphan", registeredAt: 1 });
-    changed.mockClear();
-    expect(sweepStaleRunContexts(1)).toBe(1);
-    expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
-    changed.mockClear();
-    registerAgentRunContext("session-id-only", { agentId: "worker", sessionId: "shared-id" });
-    expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
-  } finally {
-    stop();
+  onTestFinished(sessionChanges.subscribe(changed));
+  rotateAgentRunRegistryLifecycleGeneration();
+  expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+  registerAgentRunContext("orphan", { sessionKey: "orphan", registeredAt: 1 });
+  changed.mockClear();
+  expect(sweepStaleRunContexts(1)).toBe(1);
+  expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+  changed.mockClear();
+  registerAgentRunContext("session-id-only", { agentId: "worker", sessionId: "shared-id" });
+  expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+});
+
+it("retains model request numbering across run metadata updates and resets fresh registrations", () => {
+  const staleSequence = { value: 99 };
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: staleSequence });
+  const sequence = getAgentRunContext("retrying")?.modelCallSequence;
+  expect(sequence).toEqual({ value: 0 });
+  expect(sequence).not.toBe(staleSequence);
+  if (!sequence) {
+    throw new Error("registered run must own its model request sequence");
   }
+  sequence.value += 1;
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: { value: 0 } });
+  claimAgentRunContext("retrying", { sessionKey: "session" });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toBe(sequence);
+  expect(sequence.value).toBe(1);
+
+  clearAgentRunContext("retrying");
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: sequence });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toEqual({ value: 0 });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).not.toBe(sequence);
+
+  const generation = rotateAgentRunRegistryLifecycleGeneration();
+  claimAgentRunContext("retrying", {
+    lifecycleGeneration: generation,
+    modelCallSequence: sequence,
+  });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toEqual({ value: 0 });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).not.toBe(sequence);
 });

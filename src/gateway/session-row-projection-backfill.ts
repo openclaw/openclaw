@@ -1,11 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { isDeepStrictEqual } from "node:util";
+import { yieldSessionListBackgroundWork } from "./session-projection-work.js";
+import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
 import {
-  canRunSessionListBackgroundWork,
-  yieldSessionListBackgroundWork,
-} from "./session-projection-work.js";
-import type { Row } from "./session-row-projection-record.js";
-import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+  backfillSessionRowTranscriptFields,
+  presentSessionRowTranscriptFields,
+} from "./session-row-transcript-backfill.js";
+
+function transcriptParams(row: Row, entry: EntryRow["entry"]) {
+  return {
+    ...row.storeTarget,
+    agentId: row.agentId,
+    storeAgentId: row.storeTarget.agentId,
+    sessionKey: row.key,
+    sessionId: entry.sessionId,
+    sessionEntry: entry,
+    model: row.materialized && {
+      selectedProvider: row.materialized.source.selectedModel.provider,
+      selectedModel: row.materialized.source.selectedModel.model,
+      config: row.materialized.source.cfg,
+    },
+  };
+}
 
 /** Optional transcript work never participates in row readiness or a foreground response. */
 export function createSessionRowProjectionBackfill(params: {
@@ -19,10 +35,25 @@ export function createSessionRowProjectionBackfill(params: {
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const queued = new Set<string>();
+  const revisions = new Map<string, ReturnType<typeof revision>>();
   let pending: Promise<void> | undefined;
-  let activeId: string | undefined;
   let started = false;
   let disposed = false;
+  function revision(row: EntryRow, watermark: Row["retainedDatabaseFacts"]) {
+    const { entry, materialized } = row;
+    return {
+      generation: row.generation,
+      watermark: watermark?.activitySummaryWatermark,
+      fallback: entry.fallbackNotice && {
+        status: entry.status,
+        lastRunId: entry.lastRunId,
+        modelProvider: entry.modelProvider,
+        model: entry.model,
+        notice: entry.fallbackNotice,
+        selectedModel: materialized?.source.selectedModel,
+      },
+    };
+  }
   async function drain() {
     for (;;) {
       if (disposed || !queued.size) {
@@ -33,9 +64,6 @@ export function createSessionRowProjectionBackfill(params: {
       if (disposed) {
         return;
       }
-      if (!canRunSessionListBackgroundWork()) {
-        continue;
-      }
       const id = queued.values().next().value;
       if (id === undefined) {
         continue;
@@ -43,44 +71,30 @@ export function createSessionRowProjectionBackfill(params: {
       queued.delete(id);
       const row = params.read(id);
       const entry = row?.entry;
-      if (!row || !entry) {
+      const captured = revisions.get(id);
+      if (!row || !entry || !captured) {
         continue;
       }
-      activeId = id;
-      // Same-lifecycle publications retain the generation but supersede these transcript facts.
-      const current = () => !disposed && !queued.has(id) && params.current(row);
-      let interrupted = false;
-      const shouldCommit = () => {
-        if (!canRunSessionListBackgroundWork()) {
-          interrupted = true;
-          return false;
-        }
-        return current();
-      };
       try {
-        const fields = await backfillSessionRowTranscriptFields({
-          ...row.storeTarget,
-          agentId: row.agentId,
-          storeAgentId: row.storeTarget.agentId,
-          sessionKey: row.key,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          shouldCommit,
-          model: row.materialized && {
-            selectedProvider: row.materialized.source.selectedModel.provider,
-            selectedModel: row.materialized.source.selectedModel.model,
-            config: row.materialized.source.cfg,
-          },
-        });
-        if (shouldCommit()) {
-          params.publish(row, fields);
+        const fields = await backfillSessionRowTranscriptFields(transcriptParams(row, entry));
+        const live = params.read(id);
+        // A replacement/private-session revocation must not publish another session's text.
+        if (!disposed && live?.entry && params.current(row)) {
+          const facts = live.retainedDatabaseFacts;
+          params.publish(
+            live,
+            facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined
+              ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
+                  lastMessagePreview: facts.transcriptPreview,
+                  terminalModel: facts.transcriptTerminalModel,
+                })
+              : fields,
+          );
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
-      } finally {
-        activeId = undefined;
-        if (interrupted && current()) {
-          queued.add(id);
+        if (revisions.get(id) === captured) {
+          revisions.delete(id);
         }
       }
     }
@@ -103,28 +117,37 @@ export function createSessionRowProjectionBackfill(params: {
   }
   return {
     start,
-    enqueue(id: string, change?: SessionRowChange) {
-      if (
-        change &&
-        "all" in change &&
-        typeof change.scope === "string" &&
-        !(
-          ((change.scope === "config" || change.scope === "stores") && id === activeId) ||
-          ((change.scope === "config" || change.scope === "catalog") &&
-            params.read(id)?.entry?.fallbackNotice)
-        )
-      ) {
+    prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
+      const id = identity(row);
+      const next = revision(row, facts);
+      if (facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined) {
+        revisions.set(id, next);
+        queued.delete(id);
+        params.publish(
+          row,
+          presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
+            lastMessagePreview: facts.transcriptPreview,
+            terminalModel: facts.transcriptTerminalModel,
+          }),
+        );
         return;
       }
-      queued.add(id);
+      if (!isDeepStrictEqual(revisions.get(id), next)) {
+        revisions.set(id, next);
+        queued.add(id);
+      }
       if (started) {
         start();
       }
     },
-    remove: (id: string) => queued.delete(id),
+    remove(this: void, id: string) {
+      revisions.delete(id);
+      queued.delete(id);
+    },
     dispose() {
       disposed = true;
       queued.clear();
+      revisions.clear();
     },
   };
 }

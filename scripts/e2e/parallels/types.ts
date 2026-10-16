@@ -15,7 +15,6 @@ export interface RunOptions {
   input?: string;
   timeoutMs?: number;
   check?: boolean;
-  quiet?: boolean;
 }
 
 export interface ProviderAuth {

@@ -83,7 +83,12 @@ export function createImapAuthResult(
   spf: AuthenticationStatus = "none",
 ): AuthenticateResult {
   return {
-    dkim: { headerFrom: ["example.com"], envelopeFrom: false, results: [] },
+    dkim: {
+      headerFrom: ["trusted@example.com"],
+      fromFields: 1,
+      envelopeFrom: false,
+      results: [],
+    },
     spf: {
       domain: "example.com",
       "client-ip": "127.0.0.1",
@@ -96,6 +101,7 @@ export function createImapAuthResult(
       policy: "none",
       p: "none",
       sp: "none",
+      testMode: false,
       status: { result: dmarc },
       alignment: { spf: { strict: false }, dkim: { strict: false } },
       info: "",

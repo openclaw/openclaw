@@ -1,56 +1,60 @@
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import type { RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
-// A successful Git status command does not imply a clean checkout.
-export async function runGitCleanCheckStep(options: RunStepOptions) {
+/** Publish completion only after the Git owner classifies its result. */
+export async function runClassifiedGitStep<T>(
+  options: RunStepOptions,
+  classify: (result: UpdateStepResult) => T,
+): Promise<T> {
   const result = await runStep({
     ...options,
     progress: { ...options.progress, onStepComplete: undefined },
   });
-  const dirty = !isFailedUpdateStep(result) && Boolean(result.stdoutTail?.trim());
-  if (dirty) {
-    result.exitCode = 1;
-    result.stderrTail = "This checkout has local changes. Installation has not started.";
-  }
-  options.progress?.onStepComplete?.({
+  const classified = classify(result);
+  await reportUpdateStepCompletion(options.progress, {
     ...result,
     index: options.stepIndex,
     total: options.totalSteps,
   });
-  return { result, dirty };
+  return classified;
 }
 
-// Publish completion only after the owner classifies its recoverable result.
-export async function runGitUpstreamStep(options: RunStepOptions) {
-  const upstreamStep = await runStep({
-    ...options,
-    progress: { ...options.progress, onStepComplete: undefined },
+// A successful Git status command does not imply a clean checkout.
+export function runGitCleanCheckStep(options: RunStepOptions) {
+  return runClassifiedGitStep(options, (result) => {
+    const dirty = !isFailedUpdateStep(result) && Boolean(result.stdoutTail?.trim());
+    if (dirty) {
+      result.exitCode = 1;
+      result.stderrTail = "This checkout has local changes. Installation has not started.";
+    }
+    return { result, dirty };
   });
-  if (
-    typeof upstreamStep.exitCode === "number" &&
-    upstreamStep.exitCode !== 0 &&
-    !upstreamStep.signal &&
-    !upstreamStep.killed &&
-    !upstreamStep.outputLimitExceeded &&
-    (!upstreamStep.termination || upstreamStep.termination === "exit") &&
-    upstreamStep.exitCode !== 130 &&
-    upstreamStep.exitCode !== 143
-  ) {
-    const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-    upstreamStep.advisory = {
-      kind: "recoverable-maintenance",
-      message: `Skipped Git upstream tracking setup. Complete it with: git ${options.argv.slice(1).map(quote).join(" ")}. Reason: ${upstreamStep.stderrTail || "git branch failed"}`,
-    };
-  }
-  options.progress?.onStepComplete?.({
-    ...upstreamStep,
-    index: options.stepIndex,
-    total: options.totalSteps,
+}
+
+export function runGitUpstreamStep(options: RunStepOptions) {
+  return runClassifiedGitStep(options, (upstreamStep) => {
+    if (
+      typeof upstreamStep.exitCode === "number" &&
+      upstreamStep.exitCode !== 0 &&
+      !upstreamStep.signal &&
+      !upstreamStep.killed &&
+      !upstreamStep.outputLimitExceeded &&
+      (!upstreamStep.termination || upstreamStep.termination === "exit") &&
+      upstreamStep.exitCode !== 130 &&
+      upstreamStep.exitCode !== 143
+    ) {
+      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+      upstreamStep.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Skipped Git upstream tracking setup. Complete it with: git ${options.argv.slice(1).map(quote).join(" ")}. Reason: ${upstreamStep.stderrTail || "git branch failed"}`,
+      };
+    }
+    return upstreamStep;
   });
-  return upstreamStep;
 }
 
 export async function runGitActivationBranchCheckStep(stepOptions: RunStepOptions, branch: string) {
@@ -128,7 +132,7 @@ export async function runGitRollbackSteps({
     name: string,
     args: string[],
     expectedSource = source,
-    refChange?: "keep" | "rewrite",
+    refChange?: "keep" | "rewrite" | "detach",
   ) => {
     if (source) {
       await assertSourceCurrent();
@@ -139,84 +143,73 @@ export async function runGitRollbackSteps({
       refChange === "keep" ? args : ["git", "-C", gitRoot, ...args],
       gitRoot,
     );
-    const result = await runStep({
-      ...stepOptions,
-      progress: { ...stepOptions.progress, onStepComplete: undefined },
-      runCommand: async (argv, options) => {
-        assertCurrent();
-        if (refChange === "keep") {
-          return { code: 0, stdout: "", stderr: "" };
-        }
-        if (refChange === "rewrite" && source && branch) {
-          const ref = `refs/heads/${branch}`;
-          const reflog = await stepOptions.runCommand(
-            ["git", "-C", gitRoot, "reflog", "exists", ref],
-            options,
-          );
+    const result = await runClassifiedGitStep(
+      {
+        ...stepOptions,
+        runCommand: async (argv, options) => {
           assertCurrent();
-          const latest =
-            reflog.code === 0
-              ? await stepOptions.runCommand(
-                  ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
-                  options,
-                )
-              : reflog;
-          assertCurrent();
-          if (latest.code !== 0 || !latest.stdout.trim()) {
-            return {
-              ...latest,
-              code: 1,
-              stdout: "",
-              stderr: `Cannot rewrite rollback branch ${branch}: a usable branch reflog is required to verify the transition. Source untouched; previous runtime retained. Inspect the branch and its reflog configuration before recovering manually.`,
-            };
+          if (refChange === "keep") {
+            return { code: 0, stdout: "", stderr: "" };
           }
-        }
-        const commandResult = await stepOptions.runCommand(argv, options);
-        if (refChange === "rewrite" && source && branch && commandResult.code === 0) {
-          const ref = `refs/heads/${branch}`;
-          const previous = await stepOptions.runCommand(
-            ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{1}`],
-            options,
-          );
-          const current = await stepOptions.runCommand(
-            ["git", "-C", gitRoot, "rev-parse", "--verify", ref],
-            options,
-          );
-          assertCurrent();
-          const previousSha = previous.code === 0 ? previous.stdout.trim() : undefined;
-          const currentSha = current.code === 0 ? current.stdout.trim() : undefined;
-          if (previousSha !== source.sha || currentSha !== beforeSha) {
-            const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-            const recovery =
-              currentSha === beforeSha && previousSha && previousSha !== source.sha
-                ? `After inspecting the reflog and preserving local edits, detach with: git checkout --detach --no-overwrite-ignore. If the branch still points to ${beforeSha}, restore the intended ref with: git branch -f ${quote(branch)} ${previousSha}`
-                : `Inspect git reflog ${quote(branch)} and keep the newest intended commit.`;
-            return {
-              ...commandResult,
-              code: 1,
-              stderr: `Cannot verify rollback branch transition: expected ${source.sha} -> ${beforeSha}, observed ${previousSha || "unavailable reflog"} -> ${currentSha || "unreadable ref"}. Previous runtime retained. ${recovery}`,
-            };
+          const commandResult = await stepOptions.runCommand(argv, options);
+          if (refChange === "rewrite" && source && branch && commandResult.code === 0) {
+            const ref = `refs/heads/${branch}`;
+            const previous = await stepOptions.runCommand(
+              ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{1}`],
+              options,
+            );
+            const current = await stepOptions.runCommand(
+              ["git", "-C", gitRoot, "rev-parse", "--verify", ref],
+              options,
+            );
+            assertCurrent();
+            const previousSha = previous.code === 0 ? previous.stdout.trim() : undefined;
+            const currentSha = current.code === 0 ? current.stdout.trim() : undefined;
+            if (previousSha !== source.sha || currentSha !== beforeSha) {
+              const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+              const recovery =
+                currentSha === beforeSha && previousSha && previousSha !== source.sha
+                  ? `After inspecting the reflog and preserving local edits, detach with: git checkout --detach --no-overwrite-ignore. If the branch still points to ${beforeSha}, restore the intended ref with: git branch -f ${quote(branch)} ${previousSha}`
+                  : `Inspect git reflog ${quote(branch)} and keep the newest intended commit.`;
+              return {
+                ...commandResult,
+                code: 1,
+                stderr: `Cannot verify rollback branch transition: expected ${source.sha} -> ${beforeSha}, observed ${previousSha || "unavailable reflog"} -> ${currentSha || "unreadable ref"}. Previous runtime retained. ${recovery}`,
+              };
+            }
           }
-        }
-        return commandResult;
+          return commandResult;
+        },
       },
-    });
-    if (refChange === "keep" && activatedSource) {
-      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-      result.advisory = {
-        kind: "recoverable-maintenance",
-        message: `Kept branch ${DEV_BRANCH} created by this update at ${activatedSource.sha}. Once no worktree uses it, remove it with: git branch -d ${quote(DEV_BRANCH)}`,
-      };
-    }
-    stepOptions.progress?.onStepComplete?.({
-      ...result,
-      index: stepOptions.stepIndex,
-      total: stepOptions.totalSteps,
-    });
+      (rollbackStep) => {
+        if (refChange === "keep" && activatedSource) {
+          const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+          rollbackStep.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Kept branch ${DEV_BRANCH} created by this update at ${activatedSource.sha}. Once no worktree uses it, remove it with: git branch -d ${quote(DEV_BRANCH)}`,
+          };
+        } else if (
+          refChange === "detach" &&
+          source &&
+          branch &&
+          !isFailedUpdateStep(rollbackStep)
+        ) {
+          const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+          const git = `git -C ${quote(gitRoot)}`;
+          rollbackStep.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Restored ${quote(gitRoot)} to ${beforeSha} on a detached HEAD; branch ${quote(branch)} still points to ${source.sha} because it has no reflog to verify a rollback rewrite. Once no worktree uses it, restore it with: ${git} update-ref ${quote(`refs/heads/${branch}`)} ${beforeSha} ${source.sha}, then ${git} switch ${quote(branch)}. Enable reflogs with: ${git} config core.logAllRefUpdates true`,
+          };
+        }
+        return rollbackStep;
+      },
+    );
     assertCurrent();
     if (source) {
       if (isFailedUpdateStep(result)) {
-        throw new Error(`Git source rollback failed at ${name}; previous runtime retained.`);
+        throw new Error(
+          `Git source rollback failed at ${name}; previous runtime retained.${result.stderrTail ? ` ${result.stderrTail}` : ""}`,
+        );
       }
       // Advance only to the command's planned result, never a fresh snapshot
       // that could adopt operator edits made while the child was running.
@@ -229,7 +222,7 @@ export async function runGitRollbackSteps({
     name: string,
     args: string[],
     expectedSource = source,
-    refChange?: "keep" | "rewrite",
+    refChange?: "keep" | "rewrite" | "detach",
   ) => !isFailedUpdateStep(await execute(name, args, expectedSource, refChange));
   // A retained transaction admitted a clean source tree. It owns no dirty
   // files to reset or clean, even if they appear after its last observation.
@@ -261,13 +254,30 @@ export async function runGitRollbackSteps({
   if (attached && checkedOut) {
     if (source) {
       if (source.sha !== beforeSha) {
+        const { runCommand, cwd, timeoutMs } = recoveryStep("git-rollback-source", [], gitRoot);
+        const options = { cwd, timeoutMs };
+        const ref = `refs/heads/${branch}`;
+        const reflog = await runCommand(["git", "-C", gitRoot, "reflog", "exists", ref], options);
+        assertCurrent();
+        const latest =
+          reflog.code === 0
+            ? await runCommand(
+                ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
+                options,
+              )
+            : reflog;
+        assertCurrent();
+        const rewrite = latest.code === 0 && Boolean(latest.stdout.trim());
         // Stay attached for branch custody; porcelain also protects ignored files.
         // checkout -B lacks CAS, so execute verifies its reflog transition afterward.
+        // Without a reflog, detaching writes no branch ref yet restores every tracked input.
         await restore(
           "git-rollback-source",
-          ["checkout", "--no-overwrite-ignore", "-B", branch, beforeSha],
-          { sha: beforeSha, branch },
-          "rewrite",
+          rewrite
+            ? ["checkout", "--no-overwrite-ignore", "-B", branch, beforeSha]
+            : ["checkout", "--detach", "--no-overwrite-ignore", beforeSha],
+          { sha: beforeSha, branch: rewrite ? branch : "HEAD" },
+          rewrite ? "rewrite" : "detach",
         );
       }
     } else {

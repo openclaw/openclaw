@@ -11,10 +11,11 @@ import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-
 
 export type WorkerPlacementRecoveryAdmission = (
   sessionIds: readonly string[],
-  run: () => Promise<void>,
+  run: (mode?: "results-only") => Promise<void>,
 ) => Promise<boolean>;
 
 export type PlacementRecoveryDeps = {
+  isShuttingDown?: () => boolean;
   placements: WorkerDispatchPlacementStore;
   environments: Pick<
     WorkerDispatchEnvironmentService,

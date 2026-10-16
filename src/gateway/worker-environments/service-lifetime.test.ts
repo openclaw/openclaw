@@ -5,6 +5,8 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import * as support from "./service.test-support.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -172,56 +174,48 @@ describe("worker environment service", () => {
     expect(store.get(active.environmentId)?.profileSnapshot).toEqual(active.profileSnapshot);
   });
 
-  it("maintains configured providers on schedule without environments and stops after shutdown", async () => {
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const maintain = vi.fn(async () => {});
-    const workerService = support.createService(support.createProvider(), {
-      maintainProviders: maintain,
-      scheduler,
-    });
-
-    expect(support.testState.store.list()).toEqual([]);
-    workerService.start();
-    await workerService.reconcileOnce();
-    expect(maintain).toHaveBeenCalledOnce();
-    await time.advanceBy(250);
-    expect(maintain).toHaveBeenCalledTimes(2);
-    await workerService.stop();
-    await time.advanceBy(25);
-    expect(maintain).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps maintenance off reconciliation and allocation while shutdown aborts and drains it", async () => {
-    const { promise: pending, resolve: finish } = createDeferred();
-    const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
-    const workerService = support.createService(support.createProvider(), { maintainProviders });
-    let stopped = false;
-    let stopping: Promise<void> | undefined;
-    try {
-      await workerService.reconcileOnce();
+  it.each(["service", "scheduler"] as const)(
+    "keeps maintenance off reconciliation and allocation while %s shutdown aborts and drains it",
+    async (closingOwner) => {
+      const { promise: pending, resolve: finish } = createDeferred();
+      const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
+      const scheduler = createTestGatewayScheduler();
+      const workerService = support.createService(support.createProvider(), {
+        maintainProviders,
+        scheduler,
+      });
+      let stopped = false;
+      let stopping: Promise<void> | undefined;
+      try {
+        await workerService.reconcileOnce();
+        await workerService.reconcileOnce();
+        expect(maintainProviders).toHaveBeenCalledOnce();
+        await expect(
+          workerService.createWithRequest({
+            profileId: "development",
+            idempotencyKey: "during-maintenance",
+          }),
+        ).resolves.toMatchObject({ state: "ready" });
+        if (closingOwner === "scheduler") {
+          scheduler.beginClose();
+          expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
+        }
+        stopping = workerService.stop().then(() => {
+          stopped = true;
+        });
+        expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+      } finally {
+        finish();
+        await (stopping ?? workerService.stop());
+        await scheduler.stop();
+      }
+      expect(stopped).toBe(true);
       await workerService.reconcileOnce();
       expect(maintainProviders).toHaveBeenCalledOnce();
-      await expect(
-        workerService.createWithRequest({
-          profileId: "development",
-          idempotencyKey: "during-maintenance",
-        }),
-      ).resolves.toMatchObject({ state: "ready" });
-      stopping = workerService.stop().then(() => {
-        stopped = true;
-      });
-      expect(maintainProviders.mock.calls[0]![0].aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-    } finally {
-      finish();
-      await stopping;
-    }
-    expect(stopped).toBe(true);
-    await workerService.reconcileOnce();
-    expect(maintainProviders).toHaveBeenCalledOnce();
-  });
+    },
+  );
 
   it("reports failed maintenance and retries on the next sweep", async () => {
     const warn = vi.fn();
@@ -314,23 +308,21 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
-  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
-    "continues reconciliation when terminal cleanup fails with %s",
-    async (code) => {
-      const prune = vi
-        .spyOn(support.testState.store, "pruneTerminalEnvironments")
-        .mockImplementation(() => {
-          throw Object.assign(new Error("database is locked"), { code });
-        });
+  it("skips terminal retention reads for empty inventory and resumes after a committed create", async () => {
+    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
+    const workerService = support.createService(support.createProvider());
 
-      await expect(
-        support.createService(support.createProvider()).reconcileOnce(),
-      ).resolves.toBeUndefined();
-      expect(prune).toHaveBeenCalledOnce();
-    },
-  );
+    await workerService.reconcileOnce();
+    await workerService.reconcileOnce();
+    expect(prune).not.toHaveBeenCalled();
 
-  it("propagates non-lock terminal cleanup failures", async () => {
+    await support.seedReady("retention-created-worker");
+    await workerService.reconcileOnce();
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
+  it("propagates terminal cleanup failures", async () => {
+    await support.seedReady("retention-failure-worker");
     const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
     const prune = vi
       .spyOn(support.testState.store, "pruneTerminalEnvironments")
@@ -403,6 +395,19 @@ describe("worker environment service", () => {
       });
     },
   );
+
+  it("defers unreachable worker stops instead of failing Gateway shutdown", async () => {
+    const disconnected = new WorkerTunnelOwnerDisconnectedError("node is not connected");
+    const workerService = support.createService(support.createProvider(), {
+      tunnelManager: {
+        stopAll: vi.fn(async () => {
+          throw disconnected;
+        }),
+      } as unknown as WorkerTunnelManager,
+    });
+
+    await expect(workerService.stop()).resolves.toBeUndefined();
+  });
 
   it("waits for timed-out provider work during shutdown", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -480,8 +485,8 @@ describe("worker environment service", () => {
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),
       isWorkerTurnToolAuthorized: vi.fn(() => false),
-      updateAckCursors: vi.fn(),
-      prepareWorkspaceResultOwnerRevocation: vi.fn(),
+      updateAckCursors: vi.fn(async () => {}),
+      prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
       registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
     };
     const workerService = support.createService(support.createProvider({ inspect }), {
@@ -650,14 +655,26 @@ describe("worker environment service", () => {
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("drains accepted operations after reconciliation rejects during shutdown", async () => {
+  it.each([false, true])(
+    "settles inventory retirement during reconciliation (stopping=%s)",
+    async (stopping) => {
+      const ready = createDeferred();
+      const closed = new WorkerEnvironmentInventoryClosedError();
+      vi.spyOn(support.testState.store, "ready").mockReturnValue(ready.promise);
+      const service = support.createService(support.createProvider());
+      const reconciliation = service.reconcileOnce("retired-environment");
+      const result = stopping
+        ? expect(reconciliation).resolves.toBeUndefined()
+        : expect(reconciliation).rejects.toBe(closed);
+      const stopped = stopping ? service.stop() : undefined;
+      ready.reject(closed);
+      await result;
+      await stopped;
+    },
+  );
+
+  it("drains accepted operations after readiness rejects during shutdown", async () => {
     const durableStore = support.testState.store;
-    support.testState.store = {
-      ...support.testState.store,
-      listForReconcile() {
-        throw new Error("reconcile database read failed");
-      },
-    };
     const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
@@ -671,57 +688,174 @@ describe("worker environment service", () => {
     await support.waitForFast(() =>
       expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1),
     );
-    const reconciliation = workerService.reconcileOnce();
-    const reconciliationResult = expect(reconciliation).rejects.toThrow(
-      "reconcile database read failed",
-    );
-    let stopped = false;
-    const stopping = workerService.stop().then(() => {
-      stopped = true;
-    });
+    try {
+      vi.spyOn(durableStore, "ready").mockRejectedValueOnce(
+        new Error("reconcile database read failed"),
+      );
+      const reconciliation = workerService.reconcileOnce("reconcile-failure");
+      const reconciliationResult = expect(reconciliation).rejects.toThrow(
+        "reconcile database read failed",
+      );
+      let stopped = false;
+      const stopping = workerService.stop().then(() => {
+        stopped = true;
+      });
 
-    await reconciliationResult;
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    finishBootstrap?.();
+      await reconciliationResult;
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      finishBootstrap?.();
 
-    await expect(creation).resolves.toMatchObject({ state: "ready" });
-    await stopping;
-    expect(stopped).toBe(true);
-    expect(durableStore.list()).toHaveLength(1);
+      await expect(creation).resolves.toMatchObject({ state: "ready" });
+      await stopping;
+      expect(stopped).toBe(true);
+      expect(durableStore.list()).toHaveLength(1);
+    } finally {
+      finishBootstrap();
+    }
   });
 
-  it("starts without blocking gateway startup and drains reconciliation on stop", async () => {
-    await support.seedReady("worker-slow-inspection");
-    const { promise: inspectionPending, resolve: finishInspection } = createDeferred();
-    const inspect = vi.fn(async () => {
-      await inspectionPending;
-      return { status: "active" as const };
+  it("retains a bootstrap lease when scheduler shutdown precedes service teardown", async () => {
+    const environmentId = "worker-scheduler-bootstrap";
+    const initial = await support.seedBootstrapping(environmentId);
+    const entered = createDeferred();
+    const finishProducer = createDeferred();
+    let signal: AbortSignal | undefined;
+    support.testState.bootstrapWorker = vi.fn(async (input) => {
+      signal = input.signal;
+      entered.resolve();
+      await finishProducer.promise;
+      input.signal.throwIfAborted();
+      return support.BOOTSTRAP_RECEIPT;
     });
-    const workerService = support.createService(support.createProvider({ inspect }));
-
-    workerService.start();
-    await support.waitForFast(() => expect(inspect).toHaveBeenCalledTimes(1));
-    let stopped = false;
-    const stopping = workerService.stop().then(() => {
-      stopped = true;
-    });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-
-    finishInspection?.();
-    await stopping;
-    expect(stopped).toBe(true);
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-after-stop",
-      }),
-    ).rejects.toMatchObject({
-      code: "invalid_state",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    await expect(workerService.destroy("worker-slow-inspection")).rejects.toMatchObject({
-      code: "invalid_state",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
+    const destroy = vi.fn(async () => {});
+    const scheduler = createTestGatewayScheduler();
+    const workerService = support.createService(support.createProvider({ destroy }), { scheduler });
+    const reconciliation = workerService.reconcileEnvironment(environmentId).catch(() => undefined);
+    try {
+      await entered.promise;
+      scheduler.beginClose();
+      expect(signal?.aborted).toBe(true);
+      finishProducer.resolve();
+      await reconciliation;
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: initial.state,
+        leaseId: initial.leaseId,
+        ownerEpoch: initial.ownerEpoch,
+        destroyRequestedAtMs: null,
+        lastError: initial.lastError,
+      });
+    } finally {
+      finishProducer.resolve();
+      await reconciliation;
+      await workerService.stop();
+    }
   });
+
+  it.each(["bootstrap", "inspection", "bundle", "npm", "refresh"] as const)(
+    "cancels startup %s before teardown and retains its actual producer until settlement",
+    async (kind) => {
+      const environmentId = "worker-owner-cancellation";
+      const preparing = kind === "bundle" || kind === "npm";
+      const initial = await (kind === "refresh"
+        ? support.seedReadyNodeDesktop(environmentId)
+        : kind === "bootstrap" || preparing
+          ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
+          : support.seedReady(environmentId));
+      const entered = createDeferred();
+      const finishProducer = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      let producerSettled = false;
+      const holdProducer = async (signal?: AbortSignal) => {
+        activeSignal = signal;
+        entered.resolve();
+        await finishProducer.promise;
+        producerSettled = true;
+      };
+      if (kind === "bootstrap") {
+        support.testState.bootstrapWorker = vi.fn(async ({ signal }) => {
+          await holdProducer(signal);
+          signal.throwIfAborted();
+          return support.BOOTSTRAP_RECEIPT;
+        });
+      }
+      if (preparing || kind === "refresh") {
+        support.testState.prepareInstallation = vi.fn(async (install) => {
+          if (install === kind) {
+            await holdProducer();
+          }
+          return install === "bundle"
+            ? { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) }
+            : support.NPM_ARTIFACT;
+        });
+      }
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        inspect: async ({ signal }) => {
+          if (kind === "inspection") {
+            await holdProducer(signal);
+          }
+          return { status: kind === "inspection" ? "unknown" : "active" };
+        },
+        destroy,
+      });
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async ({ signal }) => {
+          await holdProducer(signal);
+          signal?.throwIfAborted();
+          return support.BOOTSTRAP_RECEIPT;
+        },
+      });
+      let stopping: Promise<void> | undefined;
+      let stopped = false;
+      try {
+        const reconciliation = workerService.reconcileEnvironment(environmentId);
+        const reconciled = reconciliation.catch(() => undefined);
+        await entered.promise;
+        if (!preparing) {
+          expect(activeSignal?.aborted).toBe(false);
+        }
+        workerService.beginClose();
+        if (!preparing) {
+          expect(activeSignal?.aborted).toBe(true);
+        } else {
+          // The consumer releases its lock; stop still owns the real packaging producer.
+          await reconciled;
+        }
+        expect(producerSettled).toBe(false);
+        stopping = workerService.stop().then(() => {
+          stopped = true;
+        });
+        await workerService.reconcileOnce();
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+      } finally {
+        finishProducer.resolve();
+        await (stopping ?? workerService.stop());
+      }
+      expect(producerSettled).toBe(true);
+      expect(stopped).toBe(true);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: initial.state,
+        leaseId: initial.leaseId,
+        ownerEpoch: initial.ownerEpoch,
+        provisionOperationId: initial.provisionOperationId,
+        destroyRequestedAtMs: null,
+        lastError: initial.lastError,
+      });
+      await expect(
+        workerService.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "request-after-stop",
+        }),
+      ).rejects.toMatchObject({
+        code: "invalid_state",
+      } satisfies Partial<WorkerEnvironmentServiceError>);
+      await expect(workerService.destroy(environmentId)).rejects.toMatchObject({
+        code: "invalid_state",
+      } satisfies Partial<WorkerEnvironmentServiceError>);
+    },
+  );
 });

@@ -22,6 +22,7 @@ import {
 import { resolveOfficialPluginCohortNpmSpecs } from "./plugin-version-drift.js";
 import type { PluginChannelSyncResult } from "./update-channel.js";
 import {
+  createOperatorManagedPluginUpdateOutcome,
   isPluginInstallRecordUpdateSource,
   type PluginUpdateIntegrityDriftParams,
   type PluginUpdateLogger,
@@ -68,16 +69,18 @@ async function convergePluginReleaseCohortWithLease(
 ): Promise<PluginCohortConvergenceResult> {
   const operatorManaged: PluginUpdateOutcome[] = [];
   const operatorManagedIds = new Set<string>();
-  // Resolve explicit source selection before channel sync can replace its shadowed record.
-  if (params.config.plugins?.load?.paths?.length) {
-    const index = withPluginCache(createPluginCache(), () =>
+  const loadFreshIndex = (config: OpenClawConfig) =>
+    withPluginCache(createPluginCache(), () =>
       loadInstalledPluginIndex({
-        config: params.config,
-        installRecords: params.config.plugins?.installs ?? {},
+        config,
+        installRecords: config.plugins?.installs ?? {},
         workspaceDir: params.workspaceDir,
         env: params.env,
       }),
     );
+  // Resolve explicit source selection before channel sync can replace its shadowed record.
+  if (params.config.plugins?.load?.paths?.length) {
+    const index = loadFreshIndex(params.config);
     const resolver = createInstalledPluginOwnershipResolver(index, params.env);
     for (const plugin of index.plugins) {
       if (plugin.origin !== "config") {
@@ -90,28 +93,14 @@ async function convergePluginReleaseCohortWithLease(
       if (resolved.value.kind !== "operator-managed") {
         continue;
       }
-      const { source, rootDir, shadowedInstallOwner, shadowedInstallRecord } = resolved.value;
+      const { shadowedInstallOwner } = resolved.value;
       operatorManagedIds.add(plugin.pluginId);
       if (shadowedInstallOwner) {
         operatorManagedIds.add(shadowedInstallOwner);
       }
-      const shadowed = shadowedInstallRecord
-        ? ` It shadows the ${shadowedInstallRecord.source} install ${shadowedInstallRecord.spec ?? plugin.pluginId}${shadowedInstallRecord.installPath ? ` at ${shadowedInstallRecord.installPath}` : ""}.`
-        : "";
-      const guidance = `This copy was not updated; verify it against ${params.coreVersion ?? "the updated OpenClaw version"} or remove it from plugins.load.paths.`;
-      const message = `Plugin "${plugin.pluginId}" is operator-managed by plugins.load.paths. ${guidance} Source: ${rootDir}.${shadowed}`;
-      operatorManaged.push({
-        pluginId: plugin.pluginId,
-        status: "skipped",
-        code: "plugin-operator-managed",
-        source,
-        rootDir,
-        shadowedInstallOwner,
-        shadowedInstallRecord,
-        message,
-        guidance: [guidance],
-      });
-      params.logger?.warn?.(message);
+      const outcome = createOperatorManagedPluginUpdateOutcome(resolved.value, params.coreVersion);
+      operatorManaged.push(outcome);
+      params.logger?.warn?.(outcome.message);
     }
   }
   const sync = await syncPluginsForUpdateChannel({
@@ -153,16 +142,7 @@ async function convergePluginReleaseCohortWithLease(
     installOwners = installOwners.filter((id) => !sourceBundledIds.has(id));
   }
   // Without prior package owners there is no retired child policy to reconcile.
-  const beforeIndex = installOwners.length
-    ? withPluginCache(createPluginCache(), () =>
-        loadInstalledPluginIndex({
-          config,
-          installRecords: config.plugins?.installs ?? {},
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }),
-      )
-    : undefined;
+  const beforeIndex = installOwners.length ? loadFreshIndex(config) : undefined;
   const packageUpdateSnapshot = beforeIndex
     ? capturePluginPackageUpdateSnapshot({
         index: beforeIndex,
@@ -179,8 +159,6 @@ async function convergePluginReleaseCohortWithLease(
       // Channel synchronization can replace npm paths with bundled sources.
       records: config.plugins?.installs ?? {},
       config,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
       env: params.env,
     })
   ).filter((entry) => !operatorManagedIds.has(entry.pluginId));
@@ -229,14 +207,7 @@ async function convergePluginReleaseCohortWithLease(
   if (beforeIndex && packageUpdateSnapshot) {
     // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
     // including formerly missing files, without retiring a retained runtime generation.
-    const afterIndex = withPluginCache(createPluginCache(), () =>
-      loadInstalledPluginIndex({
-        config,
-        installRecords: config.plugins?.installs ?? {},
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }),
-    );
+    const afterIndex = loadFreshIndex(config);
     const reconciled = reconcilePluginPackageUpdateConfig({
       config,
       beforeIndex,
@@ -272,8 +243,6 @@ async function convergePluginReleaseCohortWithLease(
       await collectMissingPluginInstallPayloads({
         records: config.plugins?.installs ?? {},
         config,
-        skipDisabledPlugins: true,
-        syncOfficialPluginInstalls: true,
         env: params.env,
       })
     ).filter((entry) => !operatorManagedIds.has(entry.pluginId)),

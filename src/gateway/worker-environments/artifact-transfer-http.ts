@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { sendJson, watchClientDisconnect } from "../http-common.js";
 import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
@@ -31,6 +33,17 @@ export type ArtifactTransferHttpRequest = {
 
 function sendOpaqueNotFound(res: ServerResponse): void {
   sendJson(res, 404, { error: "not_found" });
+}
+
+function streamInterruptionReason(error: unknown, token: string, tarballPath: string): string {
+  const message = (error instanceof Error ? error.message : String(error))
+    .replaceAll(token, "[redacted]")
+    .replaceAll(tarballPath, "[artifact]")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/giu, "[url]")
+    .replace(/(["'])[^"'<>]*[\\/][^"'<>]*\1/gu, "[path]")
+    .replace(/[^\s"'<>(),;=]*[\\/][^\s"'<>(),;]*/gu, "[path]");
+  const redacted = redactSensitiveText(message, { mode: "tools" }).replace(/\s+/gu, " ").trim();
+  return `stream error (${truncateUtf16Safe(redacted || "unknown error", 240)})`;
 }
 
 export async function handleArtifactTransferHttpRequest(
@@ -131,15 +144,25 @@ export function createArtifactTransferHttpCallback(
     if (!authorization) {
       return { kind: "unauthorized" };
     }
+    const { capability } = authorization;
     return {
       kind: "authorized",
       handle: async () => {
+        let servedBytes = 0;
+        let interruptionReason: string | undefined;
+        const authoritySignal = service.authorizationSignal(authorization);
+        const recordAuthorityClosure = () => {
+          interruptionReason ??= `authority closed (${capability.revocationReason ?? "authorization lost"})`;
+        };
+        authoritySignal.addEventListener("abort", recordAuthorityClosure, { once: true });
+        if (authoritySignal.aborted) {
+          recordAuthorityClosure();
+        }
         const clientAbort = new AbortController();
-        const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
-        const signal = AbortSignal.any([
-          service.authorizationSignal(authorization),
-          clientAbort.signal,
-        ]);
+        const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort, () => {
+          interruptionReason ??= "client disconnected";
+        });
+        const signal = AbortSignal.any([authoritySignal, clientAbort.signal]);
         let fileHandle: FileHandle | undefined;
         try {
           const file = await service.openFile(authorization);
@@ -148,30 +171,60 @@ export function createArtifactTransferHttpCallback(
             sendOpaqueNotFound(res);
             return;
           }
+          const range = req.headers.range;
+          const start = range === undefined ? 0 : Number(/^bytes=(\d+)-$/u.exec(range)?.[1]);
+          if (range !== undefined && (!Number.isSafeInteger(start) || start >= file.bytes)) {
+            res.setHeader("Content-Range", `bytes */${file.bytes}`);
+            sendJson(res, 416, { error: "range_not_satisfiable" });
+            return;
+          }
+          // Observers see the client's delivered position, so a ranged serve starts at its offset.
+          servedBytes = start;
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
-              next(
-                service.isAuthorizationCurrent(authorization)
-                  ? null
-                  : new Error("Worker artifact transfer authority closed"),
-                chunk,
-              );
+              if (!service.isAuthorizationCurrent(authorization)) {
+                next(new Error("Worker artifact transfer authority closed"));
+                return;
+              }
+              servedBytes += chunk.length;
+              try {
+                capability.onProgress?.(servedBytes);
+              } catch {
+                // Progress observers cannot interrupt an authorized transfer.
+              }
+              next(null, chunk);
             },
           });
-          res.writeHead(200, {
+          res.writeHead(range === undefined ? 200 : 206, {
             "content-type": "application/octet-stream",
-            "content-length": String(file.bytes),
+            "content-length": String(file.bytes - start),
+            "accept-ranges": "bytes",
+            ...(range === undefined
+              ? {}
+              : { "content-range": `bytes ${start}-${file.bytes - 1}/${file.bytes}` }),
             "x-openclaw-content-sha256": file.sha256,
           });
           // An extra EOF read can outlive the client's Content-Length-complete response
           // and let owner revocation destroy its reused keep-alive socket.
           const stream = file.handle.createReadStream({
-            start: 0,
+            start,
             end: file.bytes - 1,
             autoClose: false,
           });
+          stream.once("error", (error) => {
+            interruptionReason ??= streamInterruptionReason(
+              error,
+              capability.token,
+              capability.artifact.tarballPath,
+            );
+          });
           await pipeline(stream, checkAuthority, res, { signal });
-        } catch {
+        } catch (error) {
+          interruptionReason ??= streamInterruptionReason(
+            error,
+            capability.token,
+            capability.artifact.tarballPath,
+          );
           if (!res.headersSent && !res.destroyed) {
             sendOpaqueNotFound(res);
           } else if (!res.destroyed) {
@@ -179,6 +232,14 @@ export function createArtifactTransferHttpCallback(
           }
         } finally {
           stopWatchingDisconnect();
+          authoritySignal.removeEventListener("abort", recordAuthorityClosure);
+          if (servedBytes !== capability.artifact.tarballBytes || !res.writableFinished) {
+            try {
+              capability.onInterrupted?.(servedBytes, interruptionReason ?? "stream error");
+            } catch {
+              // Interruption observers cannot prevent capability/descriptor cleanup.
+            }
+          }
           try {
             await fileHandle?.close();
           } finally {

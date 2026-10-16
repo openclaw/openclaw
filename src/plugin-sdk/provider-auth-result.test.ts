@@ -44,6 +44,7 @@ describe("buildOauthProviderAuthResult", () => {
           providers: {
             google: {
               baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              headers: { Authorization: undefined, "X-Route": "keep" },
               models: [
                 {
                   id: "google/gemini-3-pro-preview",
@@ -78,6 +79,7 @@ describe("buildOauthProviderAuthResult", () => {
         providers: {
           google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            headers: { Authorization: undefined, "X-Route": "keep" },
             models: [
               {
                 id: "google/gemini-3.1-pro-preview",

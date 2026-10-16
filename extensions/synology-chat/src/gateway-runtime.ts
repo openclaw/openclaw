@@ -1,4 +1,3 @@
-// Synology Chat plugin module implements gateway runtime behavior.
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
@@ -27,11 +26,7 @@ type SynologyGatewayStartupIssueCode =
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path"
   | "duplicate-webhook-url";
-type SynologyGatewayStartupIssue = {
-  code: SynologyGatewayStartupIssueCode;
-  logLevel: "info" | "warn";
-  message: string;
-};
+type SynologyGatewayStartupIssue = ReturnType<typeof buildStartupIssue>;
 
 const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
@@ -39,7 +34,7 @@ function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
   message: string,
   logLevel: "info" | "warn" = "warn",
-): SynologyGatewayStartupIssue {
+) {
   return { code, logLevel, message };
 }
 
@@ -197,7 +192,6 @@ export function validateSynologyGatewayAccountStartup(params: {
 export async function registerSynologyWebhookRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-  accountId: string;
   log?: SynologyGatewayLog;
   abortSignal?: AbortSignal;
 }): Promise<() => Promise<void>> {

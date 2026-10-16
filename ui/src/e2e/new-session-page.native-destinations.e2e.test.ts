@@ -161,7 +161,10 @@ suite.define(() => {
         await row.getByRole("link").click();
       } else {
         await row.click({ button: "right" });
-        await page.locator('wa-dropdown-item[value="terminal"]').click();
+        await page
+          .locator("openclaw-catalog-session-menu")
+          .getByRole("menuitem", { name: "Open in terminal", exact: true })
+          .click();
       }
       await page.waitForURL(
         `${suite.server.baseUrl}terminal?catalog=codex&host=gateway%3Alocal&thread=resume-thread`,
