@@ -10,6 +10,7 @@ import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/sy
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -54,6 +55,10 @@ it.for([{ storm: false }, { storm: true }])(
           sessionId: "config-readmission",
           lifecycleRevision: "original",
           permissionMode: "full",
+          // A channel route arms durable restart-recovery source claims.
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "-100001", accountId: "readmission" },
+          }),
           updatedAt: Date.now(),
           sessionStartedAt: Date.now(),
         });
@@ -92,6 +97,8 @@ it.for([{ storm: false }, { storm: true }])(
           completion = enqueueSessionEventForHost("Background exec completed", {
             ...scope,
             source: "exec",
+            // The real exec producer's durable source identity.
+            sourceTurnId: "exec:readmission-process",
             expectedTarget: target,
             abortSignal: signal,
             deliver: false,

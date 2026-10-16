@@ -202,7 +202,7 @@ export function enqueueSessionEventForHost(
   // A policy publication rejected this occurrence's stale-config execution; finish()
   // re-admits it under the current policy when it never started.
   let configPublicationChanged = false;
-  // Queue-owner abandonment (Stop, lifecycle cleanup) stays terminal.
+  // Queue-owner abandonment (lifecycle cleanup) stays terminal.
   let abandoned = false;
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
   let readmittedReceipt: SessionEventReceipt | undefined;
@@ -648,7 +648,9 @@ export function enqueueSessionEventForHost(
               accept();
             },
             onAbandoned: () => {
-              abandoned = true;
+              // A stale-policy rejection before adoption also ends as abandonment;
+              // only abandonment without that rejection (Stop, cleanup) is terminal.
+              abandoned ||= !configPublicationChanged;
               failure ??= "Session event was abandoned before execution";
             },
             onSettled: () => {
