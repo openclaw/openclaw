@@ -1,7 +1,16 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  expect,
+  type MockInstance,
+  test,
+  vi,
+} from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -48,7 +57,7 @@ let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
 const completions = new Map<string, sessionEvents.SessionEventReceipt>();
 const enqueue = sessionEvents.enqueueSessionEventForHost;
-let observe: ReturnType<typeof vi.spyOn>;
+let observe: MockInstance<typeof enqueue>;
 
 beforeAll(async () => {
   state = await createOpenClawTestState({

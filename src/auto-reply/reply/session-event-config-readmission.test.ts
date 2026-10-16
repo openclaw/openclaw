@@ -1,8 +1,17 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,7 +24,8 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
-// mock-isolation: Synthetic model execution; admission, queue and dispatch stay real.
+// mock-isolation: Synthetic model decisions; admission, queue, dispatch and the managed
+// tool surface (including real filesystem writes) stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
 }));
@@ -28,9 +38,92 @@ await Promise.all([
   ),
 ]);
 
-it.for([{ storm: false }, { storm: true }])(
-  "re-admits an accepted deferred event under the current policy (publication storm: $storm)",
-  async ({ storm }, { signal }) => {
+/** Attempts the real managed write tool, as the model would, and reports the final effect. */
+async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
+  const admittedRunContext = expectDefined(
+    await params.preparedRunAdmission?.admit("gateway", params.runId),
+    "ordinary reply admission",
+  );
+  params.onExecutionPhase?.({ phase: "model_call_started" });
+  await params.onExecutionStarted?.();
+  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+  const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      admittedRunContext,
+      runId: params.runId,
+      abortSignal: params.abortSignal,
+      config: params.config,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      permissionMode: params.permissionMode,
+      requireWorkspaceOnly: params.requireWorkspaceOnly,
+      sessionRoot: workspace.sessionPermissionRoot,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      toolExecutionAllow: params.toolExecutionAllow,
+      toolsAllow: params.toolsAllow,
+      trigger: params.trigger,
+      senderIsOwner: params.senderIsOwner,
+    },
+    pluginId: "openclaw",
+  });
+  try {
+    const toolRunContext = buildEmbeddedAttemptToolRunContext({
+      ...params,
+      model:
+        params.provider && params.model
+          ? { provider: params.provider, id: params.model }
+          : undefined,
+    });
+    const construction = resolveEmbeddedAttemptToolConstructionPlan({
+      toolsAllow: toolRunContext.runtimeToolAllowlist,
+    });
+    const tools = applyEmbeddedAttemptToolsAllow(
+      expectDefined(
+        host.capabilities.createToolSurface,
+        "managed tool surface",
+      )({
+        ...toolRunContext,
+        config: params.config,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: workspace.effectiveWorkspace,
+        cwd: workspace.effectiveCwd,
+        sessionPermissionPolicy: workspace.sessionPermissionPolicy,
+        toolConstructionPlan: {
+          ...construction.codingToolConstructionPlan,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      }),
+      construction.runtimeToolAllowlist,
+    );
+    const write = tools.find((tool) => tool.name === "write");
+    if (write) {
+      await write
+        .execute("readmission-write", { path: filePath, content: "written\n" })
+        .catch(() => undefined);
+    }
+  } finally {
+    host.close();
+  }
+}
+
+it.for([
+  { scenario: "published-deny" },
+  { scenario: "retained-ceiling" },
+  { scenario: "allow-control" },
+  { scenario: "revoked-producer" },
+  { scenario: "publication-storm" },
+] as const)(
+  "re-admits an accepted deferred exec completion after a config publication: $scenario",
+  async ({ scenario }, { signal }) => {
     await withOpenClawTestState(
       { label: "session-event-config-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -62,23 +155,26 @@ it.for([{ storm: false }, { storm: true }])(
           updatedAt: Date.now(),
           sessionStartedAt: Date.now(),
         });
+        const filePath = path.join(state.workspaceDir, "readmission.txt");
         const firstStarted = createDeferred();
         const releaseFirst = createDeferred();
-        const runs: Array<{ prompt: string; deny: readonly string[] | undefined }> = [];
+        const prompts: string[] = [];
         runEmbeddedAgentMock
           .mockReset()
           .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-            const admission = expectDefined(params.preparedRunAdmission, "normal reply admission");
-            await admission.admit("gateway", params.runId);
-            params.onExecutionPhase?.({ phase: "model_call_started" });
-            await params.onExecutionStarted?.();
-            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-            runs.push({ prompt: params.prompt, deny: params.config?.tools?.deny });
-            if (runs.length === 1) {
+            prompts.push(params.prompt);
+            if (prompts.length === 1) {
+              const admission = expectDefined(params.preparedRunAdmission, "reply admission");
+              await admission.admit("gateway", params.runId);
+              params.onExecutionPhase?.({ phase: "model_call_started" });
+              await params.onExecutionStarted?.();
+              await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
               firstStarted.resolve();
               await releaseFirst.promise;
+            } else {
+              await attemptRealWrite(params, filePath);
             }
-            return { payloads: [{ text: "Observed" }], meta: { durationMs: 1 } };
+            return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
           });
         const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
         const first = enqueueSessionEventForHost("First admitted work", {
@@ -88,8 +184,9 @@ it.for([{ storm: false }, { storm: true }])(
           abortSignal: signal,
           deliver: false,
         });
-        let publishing = false;
         let publications = 0;
+        let storming = false;
+        let revoked = false;
         let completion: ReturnType<typeof enqueueSessionEventForHost> | undefined;
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
@@ -99,13 +196,15 @@ it.for([{ storm: false }, { storm: true }])(
             source: "exec",
             // The real exec producer's durable source identity.
             sourceTurnId: "exec:readmission-process",
-            expectedTarget: target,
+            // The producing turn's tool ceiling travels with the captured target.
+            expectedTarget:
+              scenario === "retained-ceiling" ? { ...target, toolsAllow: ["read"] } : target,
             abortSignal: signal,
-            deliver: false,
-            // A storm publishes a fresh policy at every liveness check, so each
-            // re-admission is rejected again until the bounded budget is spent.
             assertCurrent: () => {
-              if (publishing) {
+              if (revoked) {
+                throw new Error("Background producer retired");
+              }
+              if (storming) {
                 // Identical values are a no-op publication; each storm step changes policy.
                 setRuntimeConfigSnapshot({
                   ...config,
@@ -116,31 +215,38 @@ it.for([{ storm: false }, { storm: true }])(
           });
           // The active turn accepts the completion as a deferred follow-up.
           await expect(completion.accepted).resolves.toEqual({ ok: true });
-          setRuntimeConfigSnapshot({ ...config, tools: { deny: ["write"] } });
-          publishing = storm;
+          setRuntimeConfigSnapshot({
+            ...config,
+            // Ceiling and control publish a change that still permits write.
+            tools: { deny: scenario === "published-deny" ? ["write"] : ["exec"] },
+          });
+          storming = scenario === "publication-storm";
+          revoked = scenario === "revoked-producer";
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-          if (storm) {
+          if (scenario === "publication-storm" || scenario === "revoked-producer") {
             await expect(completion.settled).resolves.toMatchObject({
               status: "failed",
               executionStarted: false,
             });
-            expect(runs).toHaveLength(1);
+            expect(prompts).toHaveLength(1);
           } else {
             await expect(completion.settled).resolves.toMatchObject({
               status: "completed",
               executionStarted: true,
             });
-            expect(runs).toHaveLength(2);
-            expect(runs[1]?.prompt).toContain("Background exec completed");
-            // The completion turn binds the published policy, never the stale one.
-            expect(runs[1]?.deny).toEqual(["write"]);
+            expect(prompts).toHaveLength(2);
+            expect(prompts[1]).toContain("Background exec completed");
           }
+          // Final effect: only the unrestricted control reaches the filesystem.
+          const written = await fs.readFile(filePath, "utf8").catch(() => undefined);
+          expect(written).toBe(scenario === "allow-control" ? "written\n" : undefined);
           // Settled either way: nothing is left for a later ordinary turn to drain.
           expect(completion.cancel()).toBe(false);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
         } finally {
-          publishing = false;
+          storming = false;
+          revoked = false;
           releaseFirst.resolve();
           await Promise.allSettled([first.settled, completion?.settled]);
           await drainGlobalSingletonLifecycleState("restart");
