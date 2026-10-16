@@ -13,7 +13,7 @@ function finiteMediaTime(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Keeps a refreshed ticket ready without interrupting active media playback. */
+/** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
 export class ChatMediaSourceController {
   private appliedSource = "";
   private appliedIdentity = "";
@@ -29,6 +29,25 @@ export class ChatMediaSourceController {
   } | null = null;
   private playbackSource = "";
   private playbackReadiness: "idle" | "preparing" | "ready" | "unavailable" = "idle";
+
+  private readonly listeners = new Set<() => void>();
+
+  subscribe(notify: () => void): () => void {
+    this.listeners.add(notify);
+    return () => {
+      this.listeners.delete(notify);
+    };
+  }
+
+  private setPlayback(
+    readiness: typeof this.playbackReadiness,
+    source = this.playbackSource,
+  ): void {
+    if (readiness === this.playbackReadiness && source === this.playbackSource) return;
+    this.playbackReadiness = readiness;
+    this.playbackSource = source;
+    for (const notify of this.listeners) notify();
+  }
 
   get currentIdentity(): string {
     return this.appliedIdentity;
@@ -67,8 +86,7 @@ export class ChatMediaSourceController {
     if (playback !== "transcode") {
       this.abortReadiness();
       this.sourceFailed = false;
-      this.playbackReadiness = "ready";
-      this.playbackSource = nextPlaybackSource;
+      this.setPlayback("ready", nextPlaybackSource);
       this.updateSource(media, nextPlaybackSource, nextIdentity);
       return null;
     }
@@ -84,8 +102,7 @@ export class ChatMediaSourceController {
     this.abortReadiness();
     const controller = new AbortController();
     const hasUsableSource = () => this.appliedIdentity === nextIdentity && !this.sourceFailed;
-    this.playbackSource = "";
-    this.playbackReadiness = hasUsableSource() ? "ready" : "preparing";
+    this.setPlayback(hasUsableSource() ? "ready" : "preparing", "");
     const pending = waitForChatMediaPlayback({
       source: nextPlaybackSource,
       authToken: nextAuthToken || null,
@@ -96,15 +113,13 @@ export class ChatMediaSourceController {
       }
       if (result !== "ready") {
         if (hasUsableSource()) {
-          this.playbackSource = this.appliedSource;
-          this.playbackReadiness = "ready";
+          this.setPlayback("ready", this.appliedSource);
         } else {
-          this.playbackReadiness = "unavailable";
+          this.setPlayback("unavailable");
         }
         return;
       }
-      this.playbackSource = nextPlaybackSource;
-      this.playbackReadiness = "ready";
+      this.setPlayback("ready", nextPlaybackSource);
       this.updateSource(media, nextPlaybackSource, nextIdentity);
     });
     this.readinessRequest = { key: readinessKey, controller, promise: pending };
@@ -114,8 +129,7 @@ export class ChatMediaSourceController {
   cancel(): void {
     this.abortReadiness();
     this.cancelPendingResume();
-    this.playbackSource = "";
-    this.playbackReadiness = "idle";
+    this.setPlayback("idle", "");
   }
 
   updateSource(media: HTMLMediaElement, source: string, sourceIdentity: string): void {
@@ -124,7 +138,7 @@ export class ChatMediaSourceController {
     if (!nextSource || !nextIdentity) {
       return;
     }
-    this.playbackReadiness = "ready";
+    this.setPlayback("ready");
     if (this.appliedIdentity && nextIdentity !== this.appliedIdentity) {
       if (!media.paused) {
         media.pause();
@@ -168,8 +182,7 @@ export class ChatMediaSourceController {
       return true;
     }
     this.sourceFailed = true;
-    this.playbackSource = "";
-    this.playbackReadiness = "unavailable";
+    this.setPlayback("unavailable", "");
     return false;
   }
 
@@ -221,7 +234,7 @@ export class ChatMediaSourceController {
     this.pendingIdentity = "";
     this.restore = null;
     this.sourceFailed = false;
-    this.playbackSource = "";
+    this.setPlayback(this.playbackReadiness, "");
     media.removeAttribute("src");
     media.load();
   }

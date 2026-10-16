@@ -84,6 +84,7 @@ export function videoLightboxItem(
       const adopt = reportAfter(() => controller.applyPendingSource(media));
       const ended = reportAfter(() => controller.handleEnded(media));
       const error = reportAfter(() => controller.handleError(media));
+      // The selected lightbox media island owns native playback listeners until disconnect.
       media.addEventListener("loadedmetadata", metadata);
       media.addEventListener("play", adopt);
       media.addEventListener("seeking", adopt);
