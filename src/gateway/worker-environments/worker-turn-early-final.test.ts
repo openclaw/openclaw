@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import {
@@ -28,17 +27,12 @@ it.for(["accepted", "conflict", "failure"] as const)(
     const reconcileRelease = createDeferred();
     const workspaceFile = path.join(worker.root, "accepted.txt");
     await writeFile(workspaceFile, "before reconciliation");
-    let firstClaim: WorkerSessionTurnClaim | undefined;
     let terminalId: string | undefined;
-    let launchCount = 0;
-    let followupWorkspace: string | undefined;
-    const launchTurn: WorkerTurnTunnelHandle["launchTurn"] = async (request) => {
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
-      launchCount += 1;
-      if (launchCount === 1) {
-        firstClaim = request.turnClaim;
-      } else {
-        followupWorkspace = await readFile(workspaceFile, "utf8");
+      const launchCount = launchTurn.mock.calls.length;
+      if (launchCount !== 1) {
+        expect(await readFile(workspaceFile, "utf8")).toBe("accepted worker content");
       }
       const leafId = await worker.appendWorkerReply(
         launchCount === 1 ? "Worker reply" : "Follow-up reply",
@@ -48,11 +42,11 @@ it.for(["accepted", "conflict", "failure"] as const)(
         terminalId = leafId;
       }
       return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
-    };
+    });
     const tunnel = worker.createWorkerTurnTunnel({
       launchTurn,
       reconcileWorkspace: async (request) => {
-        if (launchCount !== 1) {
+        if (launchTurn.mock.calls.length !== 1) {
           return worker.reconcileUnchangedLocalWorkspace(request);
         }
         reconcileEntered.resolve();
@@ -102,6 +96,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
       expect(await withinTest(first, signal)).toMatchObject({
         payloads: [{ text: "Worker reply" }],
       });
+      const firstClaim = launchTurn.mock.calls[0]?.[0].turnClaim;
       assert(firstClaim);
       expect(placements.validateWorkspaceResultClaim(firstClaim)).toBe(true);
       expect((await placements.listPendingWorkspaceResultsAsync())[0]?.claimId).toBe(
@@ -117,7 +112,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
       if (outcome === "accepted") {
         followup = execute(followupInput);
         void followup.catch(() => {});
-        expect(launchCount).toBe(1);
+        expect(launchTurn).toHaveBeenCalledOnce();
         expect(await readFile(workspaceFile, "utf8")).toBe("before reconciliation");
       }
       reconcileRelease.resolve();
@@ -125,7 +120,6 @@ it.for(["accepted", "conflict", "failure"] as const)(
         expect(await withinTest(followup, signal)).toMatchObject({
           payloads: [{ text: "Follow-up reply" }],
         });
-        expect(followupWorkspace).toBe("accepted worker content");
       }
       await withinTest(waitForEmbeddedAgentRunEnd(SESSION_ID, null), signal);
       const pending = await placements.listPendingWorkspaceResultsAsync();

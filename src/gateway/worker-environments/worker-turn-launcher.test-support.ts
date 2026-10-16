@@ -1,10 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
@@ -42,6 +38,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
   WorkerSessionPlacementIdentity,
@@ -76,7 +73,6 @@ export const ENVIRONMENT_ID = "environment-worker-turn";
 export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
-const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
 export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
   CORE_WORKER_LAUNCH_TOOL_NAMES;
@@ -411,48 +407,25 @@ export async function seedReclaimedPlacement() {
 }
 
 export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
+  const { attached } = createDispatchEnvironmentFixtures();
   return {
+    ...attached,
     environmentId: ENVIRONMENT_ID,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
-    nodeSetupId: null,
-    nodeDeviceId: null,
-    sharedHost: false,
+    ownerEpoch: OWNER_EPOCH,
+    attachedSessionIds: [SESSION_ID],
+    leaseId: "lease-worker-turn",
     bootstrapReceipt: {
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: "2026.7.2",
+      ...attached.bootstrapReceipt,
       protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ...attached.bootstrapReceipt.protocolFeatures,
         WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
       ],
       installKind: "bundle",
     },
-    ownerEpoch: OWNER_EPOCH,
-    teardownTerminalState: null,
-    attachedSessionIds: [SESSION_ID],
-    lastError: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    idleSinceAtMs: null,
-    lastActivatedAtMs: null,
-    preparation: null,
-    destroyRequestedAtMs: null,
-    tunnelStatus: "connected",
-    state: "attached",
-    desktop: null,
-    desktopAvailable: false,
-    desktopApps: [],
-    leaseId: "lease-worker-turn",
     sshEndpoint: {
-      host: "worker.example.test",
-      port: 22,
-      user: "worker",
-      hostKey: HOST_KEY,
-      keyRef: { source: "file", provider: "worker-keys", id: "/worker/key" },
+      ...attached.sshEndpoint,
+      keyRef: { ...attached.sshEndpoint.keyRef, id: "/worker/key" },
     },
   };
 }

@@ -74,6 +74,12 @@ const createOperation = () =>
 const unexpectedLocalExecution = async () => {
   throw new Error("unexpected local execution");
 };
+const currentClaim = () => placements.get(SESSION_ID)?.turnClaim;
+const pendingResults = () => placements.listPendingWorkspaceResultsAsync();
+const expectSuccessorAdmission = async () =>
+  expect(waitForReplyRunSuccessorAdmission(SESSION_KEY, null)).resolves.toMatchObject({
+    settled: true,
+  });
 
 function enqueueWorker(params: SessionPlacementTurnParams, session = true) {
   const lane = createLane(params);
@@ -127,7 +133,7 @@ describe("local claim recovery before backend registration", () => {
       const gate = createDeferred();
       const localTask = vi.fn(async () => {
         if (execution === "local") {
-          expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe("child-run");
+          expect(currentClaim()?.runId).toBe("child-run");
         }
         return { meta: { durationMs: 1 } };
       });
@@ -219,7 +225,7 @@ describe("local claim recovery before backend registration", () => {
           (error: unknown) => error,
         );
         await started.promise;
-        expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+        expect(currentClaim()).not.toBeNull();
         await expect(
           abortAndDrainEmbeddedAgentRun({
             sessionId: SESSION_ID,
@@ -229,23 +235,21 @@ describe("local claim recovery before backend registration", () => {
             reason: "stuck_recovery",
           }),
         ).resolves.toMatchObject({ forceCleared: true });
-        await expect(waitForReplyRunSuccessorAdmission(SESSION_KEY, null)).resolves.toMatchObject({
-          settled: true,
-        });
-        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        await expectSuccessorAdmission();
+        expect(currentClaim()).toBeNull();
 
         replacement = provider.executeLocalTurn({ ...params, runId: "replacement" }, async () => {
           replacementStarted.resolve();
           await finishReplacement.promise;
         });
         await replacementStarted.promise;
-        const replacementClaim = placements.get(SESSION_ID)?.turnClaim?.claimId;
+        const replacementClaim = currentClaim()?.claimId;
         resume.resolve();
         expect(await oldOutcome).toMatchObject({
           message: "session placement turn settlement is closed",
         });
         expect(modelStart).toHaveBeenCalledTimes(stage === "terminal result" ? 1 : 0);
-        expect(placements.get(SESSION_ID)?.turnClaim?.claimId).toBe(replacementClaim);
+        expect(currentClaim()?.claimId).toBe(replacementClaim);
       } finally {
         resume.resolve();
         finishReplacement.resolve();
@@ -277,7 +281,7 @@ describe("local claim recovery before backend registration", () => {
           }),
         ).rejects.toThrow("settlement is closed");
         expect(run).not.toHaveBeenCalled();
-        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        expect(currentClaim()).toBeNull();
       } finally {
         operation.complete();
         uninstall();
@@ -309,7 +313,6 @@ describe("worker pre-launch claim recovery", () => {
       }
     };
     let blockSecond = false;
-    let holdSuccessor = true;
     let queuedBlocker: Promise<void> | undefined;
     const launch = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       request.onDispatchReady?.();
@@ -415,7 +418,7 @@ describe("worker pre-launch claim recovery", () => {
       redispatchPlacement,
       resolveWorkspace: async () => {
         workspaceCalls++;
-        if (workspaceCalls === 3 && holdSuccessor) {
+        if (workspaceCalls === 3 && blockSecond) {
           successorEntered.resolve();
           await finishSuccessor.promise;
           throw new Error("successor finished");
@@ -431,7 +434,7 @@ describe("worker pre-launch claim recovery", () => {
               if (blockSecond && stage === "workspace mutation") {
                 await pauseAt("workspace mutation");
                 // The entered writer still owns the exact claim after cancellation.
-                expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe("blocked-second");
+                expect(currentClaim()?.runId).toBe("blocked-second");
               }
               return await task();
             },
@@ -462,7 +465,7 @@ describe("worker pre-launch claim recovery", () => {
       });
       await placements.waitForTurnClaimRelease(SESSION_ID, {});
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(await pendingResults()).toEqual([]);
       blockSecond = true;
       if (stage === "workspace queue") {
         queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
@@ -470,11 +473,9 @@ describe("worker pre-launch claim recovery", () => {
       blocked = enqueueWorker(second);
       const outcome = blocked.catch((error: unknown) => error);
       await entered.promise;
-      const oldClaim = placements.get(SESSION_ID)?.turnClaim;
+      const oldClaim = currentClaim();
       expect(oldClaim?.runId).toBe("blocked-second");
-      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(
-        stage === "pending result" ? 1 : 0,
-      );
+      expect(await pendingResults()).toHaveLength(stage === "pending result" ? 1 : 0);
       const dispatched =
         stage === "dispatch" || stage === "uncertain dispatch" || stage === "pending result";
       expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
@@ -495,7 +496,7 @@ describe("worker pre-launch claim recovery", () => {
       await vi.advanceTimersByTimeAsync(15_100);
       if (stage === "workspace mutation" || stage === "execution-start publication" || dispatched) {
         expect(recovered).toBe(false);
-        expect(placements.get(SESSION_ID)?.turnClaim).toEqual(oldClaim);
+        expect(currentClaim()).toEqual(oldClaim);
         resume.resolve();
       }
       await expect(recovery).resolves.toMatchObject({
@@ -518,11 +519,8 @@ describe("worker pre-launch claim recovery", () => {
         expect(environments.stopTunnel).toHaveBeenCalledOnce();
         expect(destroy).toHaveBeenCalledOnce();
         expect(launch).toHaveBeenCalledTimes(2);
-        await expect(waitForReplyRunSuccessorAdmission(SESSION_KEY, null)).resolves.toMatchObject({
-          settled: true,
-        });
+        await expectSuccessorAdmission();
         blockSecond = false;
-        holdSuccessor = false;
         const third = turn("successor-third");
         await expect(enqueueWorker(third)).resolves.toMatchObject({
           payloads: [{ text: "First turn complete" }],
@@ -539,31 +537,29 @@ describe("worker pre-launch claim recovery", () => {
         return;
       }
       if (stage === "pending result") {
-        expect(placements.get(SESSION_ID)?.turnClaim).toEqual(oldClaim);
-        const pending = (await placements.listPendingWorkspaceResultsAsync())[0]!;
+        expect(currentClaim()).toEqual(oldClaim);
+        const pending = (await pendingResults())[0]!;
         expect(pending.claimId).toBe(oldClaim?.claimId);
         expect(pending.recoveryRequestedAtMs).not.toBeNull();
         expect(environments.destroy).not.toHaveBeenCalled();
         return;
       }
       // Read-only and queued gates remain closed; entered writes/dispatches had to join.
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-      await expect(waitForReplyRunSuccessorAdmission(SESSION_KEY, null)).resolves.toMatchObject({
-        settled: true,
-      });
+      expect(currentClaim()).toBeNull();
+      await expectSuccessorAdmission();
       expect(getCommandLaneSnapshot(resolveEmbeddedSessionLane(SESSION_KEY)).activeCount).toBe(0);
       const third = turn("successor-third");
       successor = enqueueWorker(third);
       void successor.catch(() => {});
       await successorEntered.promise;
-      const replacement = placements.get(SESSION_ID)?.turnClaim;
+      const replacement = currentClaim();
       expect(replacement?.runId).toBe("successor-third");
       resume.resolve();
       expect(await outcome).toBeInstanceOf(Error);
       if (!dispatched) {
         expect(await outcome).toMatchObject({ name: "AbortError" });
       }
-      expect(placements.get(SESSION_ID)?.turnClaim).toEqual(replacement);
+      expect(currentClaim()).toEqual(replacement);
       expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
       expect(environments.destroy).not.toHaveBeenCalled();
       third.preparedRunAdmission.close();
@@ -581,8 +577,15 @@ describe("worker pre-launch claim recovery", () => {
 });
 
 describe("worker turn launcher node-loss continuation", () => {
-  it("retains an interrupted workspace and waits for reconnect before allowing continuation", async () => {
+  it.each([
+    "reconnect",
+    "partial persistence failed",
+    "node never reconnects",
+    "retained workspace and no reconnect",
+  ] as const)("allows continuation only after a settled reconnect: %s", async (mode) => {
     await seedActivePlacement();
+    const reconnects = mode === "reconnect";
+    const runId = reconnects ? "node-loss-reconnect" : "node-loss-unavailable";
     const loss = new WorkerNodeLostError();
     const reconnect = createDeferred();
     const waiting = createDeferred();
@@ -591,109 +594,50 @@ describe("worker turn launcher node-loss continuation", () => {
     const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       interruptedClaim = request.turnClaim;
       request.onDispatchReady?.();
-      throw loss;
-    });
-    const persistAbandonedPartial = vi.fn<
-      NonNullable<WorkerTurnLauncherOptions["persistAbandonedPartial"]>
-    >(async (claim) => {
-      expect(claim.missingToolResultText).toBe(loss.message);
-      order.push("transcript saved");
-    });
-    const environment = {
-      ...attachedEnvironment(),
-      nodeDeviceId: "paired-node",
-      sshEndpoint: null,
-    };
-    const environments = workerTurnEnvironments(
-      createWorkerTurnTunnel({
-        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-        launchTurn,
-      }),
-      {
-        get: () => environment,
-        acknowledgeCredentialDelivery: async () => true,
-        stopTunnel: async () => {
-          order.push("tunnel stopped");
-        },
-      },
-    );
-    const reconcileActivePlacement = vi.fn(async () => {
-      expect(interruptedClaim).toBeDefined();
-      await placements.acceptWorkspaceResult(interruptedClaim!);
-      await placements.completeWorkspaceResultAndReleaseTurn(interruptedClaim!);
-      order.push("workspace settled");
-    });
-    const provider = createProvider({
-      environments,
-      persistAbandonedPartial,
-      reconcileActivePlacement,
-      waitForAdmissionNode: async ({ signal, assertCurrent }) => {
-        expect(signal.aborted).toBe(false);
-        expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-          { runId: "node-loss-reconnect", recoveryRequestedAtMs: expect.any(Number) },
-        ]);
-        waiting.resolve();
-        await reconnect.promise;
-        assertCurrent();
-        order.push("node reconnected");
-      },
-    });
-    const runLocal = vi.fn();
-    const attempt = provider
-      .executeTurn(workerTurnRequest("node-loss-reconnect"), turn("node-loss-reconnect"), runLocal)
-      .catch((error: unknown) => error);
-    try {
-      await awaitGateBeforeSettlement(
-        waiting.promise,
-        attempt,
-        "node loss settled before reconnect admission",
-      );
-      expect(loss.canContinue).toBe(false);
-      expect(reconcileActivePlacement).not.toHaveBeenCalled();
-      reconnect.resolve();
-      expect(await attempt).toBe(loss);
-      expect(loss.canContinue).toBe(true);
-      expect(order).toEqual([
-        "transcript saved",
-        "tunnel stopped",
-        "node reconnected",
-        "workspace settled",
-      ]);
-      expect(launchTurn).toHaveBeenCalledOnce();
-      expect(runLocal).not.toHaveBeenCalled();
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    } finally {
-      reconnect.resolve();
-      await attempt;
-    }
-  });
-
-  it.each([
-    "partial persistence failed",
-    "node never reconnects",
-    "retained workspace and no reconnect",
-  ] as const)("does not allow continuation when %s", async (failure) => {
-    await seedActivePlacement();
-    const loss = new WorkerNodeLostError();
-    const waitForAdmissionNode = vi.fn(async () => {
-      throw new Error("node admission expired");
-    });
-    const reconcileActivePlacement = vi.fn();
-    const destroy = vi.fn(async () => attachedEnvironment());
-    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
-      request.onDispatchReady?.();
-      if (failure !== "retained workspace and no reconnect") {
+      if (!reconnects && mode !== "retained workspace and no reconnect") {
         await placements.markWorkspaceResultPending(request.turnClaim);
       }
       throw loss;
     });
+    const waitForAdmissionNode = vi.fn<
+      NonNullable<WorkerTurnLauncherOptions["waitForAdmissionNode"]>
+    >(async ({ signal, assertCurrent }) => {
+      if (!reconnects) {
+        throw new Error("node admission expired");
+      }
+      expect(signal.aborted).toBe(false);
+      expect(await pendingResults()).toMatchObject([
+        { runId, recoveryRequestedAtMs: expect.any(Number) },
+      ]);
+      waiting.resolve();
+      await reconnect.promise;
+      assertCurrent();
+      order.push("node reconnected");
+    });
+    const reconcileActivePlacement = vi.fn(async () => {
+      if (reconnects) {
+        expect(interruptedClaim).toBeDefined();
+        await placements.acceptWorkspaceResult(interruptedClaim!);
+        await placements.completeWorkspaceResultAndReleaseTurn(interruptedClaim!);
+        order.push("workspace settled");
+      }
+    });
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const nodeEnvironment = {
+      ...attachedEnvironment(),
+      nodeDeviceId: "paired-node",
+      sshEndpoint: null,
+    };
     const provider = createProvider({
       waitForAdmissionNode,
       reconcileActivePlacement,
-      persistAbandonedPartial: async () => {
-        if (failure === "partial persistence failed") {
+      persistAbandonedPartial: async (claim) => {
+        if (mode === "partial persistence failed") {
           throw new Error("transcript unavailable");
+        }
+        if (reconnects) {
+          expect(claim.missingToolResultText).toBe(loss.message);
+          order.push("transcript saved");
         }
       },
       environments: workerTurnEnvironments(
@@ -702,31 +646,60 @@ describe("worker turn launcher node-loss continuation", () => {
           launchTurn,
         }),
         {
-          stopTunnel: async () => {},
-          destroy,
+          get: reconnects ? () => nodeEnvironment : attachedEnvironment,
+          ...(reconnects ? {} : { destroy }),
           acknowledgeCredentialDelivery: async () => true,
+          stopTunnel: async () => {
+            if (reconnects) {
+              order.push("tunnel stopped");
+            }
+          },
         },
       ),
     });
-    await expect(
-      provider.executeTurn(
-        workerTurnRequest("node-loss-unavailable"),
-        turn("node-loss-unavailable"),
-        vi.fn(),
-      ),
-    ).rejects.toBe(loss);
-    expect(loss.canContinue).toBe(false);
-    expect(waitForAdmissionNode).toHaveBeenCalledTimes(
-      failure === "partial persistence failed" ? 0 : 1,
-    );
-    expect(launchTurn).toHaveBeenCalledOnce();
-    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
-    expect(destroy).not.toHaveBeenCalled();
-    if (failure === "retained workspace and no reconnect") {
-      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active" });
-      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-        { recoveryRequestedAtMs: expect.any(Number) },
-      ]);
+    const runLocal = vi.fn();
+    const attempt = provider.executeTurn(workerTurnRequest(runId), turn(runId), runLocal);
+    const outcome = attempt.catch((error: unknown) => error);
+    try {
+      if (!reconnects) {
+        await expect(attempt).rejects.toBe(loss);
+        expect(loss.canContinue).toBe(false);
+        expect(waitForAdmissionNode).toHaveBeenCalledTimes(
+          mode === "partial persistence failed" ? 0 : 1,
+        );
+        expect(await pendingResults()).toHaveLength(1);
+        expect(destroy).not.toHaveBeenCalled();
+        if (mode === "retained workspace and no reconnect") {
+          expect(placements.get(SESSION_ID)).toMatchObject({ state: "active" });
+          expect(await pendingResults()).toMatchObject([
+            { recoveryRequestedAtMs: expect.any(Number) },
+          ]);
+        }
+      } else {
+        await awaitGateBeforeSettlement(
+          waiting.promise,
+          outcome,
+          "node loss settled before reconnect admission",
+        );
+        expect(loss.canContinue).toBe(false);
+        expect(reconcileActivePlacement).not.toHaveBeenCalled();
+        reconnect.resolve();
+        expect(await outcome).toBe(loss);
+        expect(loss.canContinue).toBe(true);
+        expect(order).toEqual([
+          "transcript saved",
+          "tunnel stopped",
+          "node reconnected",
+          "workspace settled",
+        ]);
+        expect(runLocal).not.toHaveBeenCalled();
+        expect(await pendingResults()).toEqual([]);
+        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      }
+      expect(launchTurn).toHaveBeenCalledOnce();
+    } finally {
+      reconnect.resolve();
+      await outcome;
     }
   });
 });

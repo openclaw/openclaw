@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
@@ -20,10 +20,10 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createProviderReplayDispatch } from "./provider-replay.test-support.js";
 import {
   WorkerRuntimeRefreshPendingError,
   type WorkerRuntimeRefreshInFlight,
@@ -143,6 +143,7 @@ async function createBuildRecoveryHarness(
 ) {
   await worker.seedActivePlacement();
   const rejection = options.rejection ?? "admission";
+  const gate = createWorkerSessionPlacementGate(worker.placements);
   let environment = worker.attachedEnvironment();
   let connected = rejection !== "interrupted";
   if (rejection === "interrupted") {
@@ -181,10 +182,9 @@ async function createBuildRecoveryHarness(
   });
   const destroy = vi.fn(async () => environment);
   const environments: worker.WorkerTurnEnvironmentService &
-    Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
+    Parameters<typeof createProviderReplayDispatch>[0]["environments"] = {
     ...worker.unusedEnvironments(),
-    fenceWorkerTurnForRecovery: createWorkerSessionPlacementGate(worker.placements)
-      .fenceWorkerTurnForRecovery,
+    fenceWorkerTurnForRecovery: gate.fenceWorkerTurnForRecovery,
     prepareProjectIntent: unexpected("prepared intent"),
     assertPreparedIntentCurrent: vi.fn(),
     getPreparedCandidates: () => [],
@@ -235,20 +235,13 @@ async function createBuildRecoveryHarness(
     reconcileEnvironment: vi.fn(),
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-  const dispatch = createWorkerPlacementDispatchService({
+  const dispatch = createProviderReplayDispatch({
     initialPlacements: await worker.placements.listAsync(),
     placements: worker.placements,
     environments,
-    runnerAvailability: { read: () => undefined, version: () => 0 },
-    runLocalBarrier: async ({ startDispatch }) => startDispatch(),
     runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: worker.root }),
-    runActivationBarrier: async ({ activate }) => activate(),
-    runMoveBarrier: async ({ begin }) => begin(),
-    resolveMoveDestination: async () => undefined,
-    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
       await reclaim({ kind: "local", path: worker.root }, await begin()),
-    runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     workspaceOperations,
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: worker.root }),
@@ -284,9 +277,7 @@ async function createBuildRecoveryHarness(
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
-          const refresh = await createWorkerSessionPlacementGate(
-            worker.placements,
-          ).prepareWorkerRuntimeRefresh({
+          const refresh = await gate.prepareWorkerRuntimeRefresh({
             sessionId: worker.SESSION_ID,
             environmentId,
             ownerEpoch: worker.OWNER_EPOCH,
@@ -352,486 +343,480 @@ async function createBuildRecoveryHarness(
   };
 }
 
-describe("worker turn launcher build recovery", () => {
-  beforeEach(worker.setupWorkerTurnLauncherTest);
-  afterEach(() => worker.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-  afterEach(() => {
-    resetGatewayWorkAdmission();
-    resetDiagnosticRunActivityForTest();
-  });
+beforeEach(worker.setupWorkerTurnLauncherTest);
+afterEach(() => worker.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  resetDiagnosticRunActivityForTest();
+});
 
-  it("waits for reconnect and settles the exact interrupted claim before the next turn", async () => {
-    const wait = nodeWait();
-    const harness = await createBuildRecoveryHarness({
-      rejection: "interrupted",
-      waitForAdmissionNode: wait.waitForAdmissionNode,
-    });
-    const execution = harness.execute();
-    try {
-      await Promise.race([wait.waiting, execution]);
-      expect(worker.placements.get(worker.SESSION_ID)?.turnClaim?.claimId).toBe(
-        "interrupted-claim",
-      );
-      expect(harness.launchTurn).not.toHaveBeenCalled();
-      wait.reconnect.resolve();
-      await expect(execution).resolves.toMatchObject({
-        payloads: [{ text: replacementReply }],
-      });
-      expect(harness.launchTurn).toHaveBeenCalledOnce();
-      expectCalls(0, harness.redispatchPlacement, harness.runLocal);
-      await expectSinglePersistedInput();
-    } finally {
-      wait.reconnect.resolve();
-      await execution.catch(() => {});
-    }
+it("waits for reconnect and settles the exact interrupted claim before the next turn", async () => {
+  const wait = nodeWait();
+  const harness = await createBuildRecoveryHarness({
+    rejection: "interrupted",
+    waitForAdmissionNode: wait.waitForAdmissionNode,
   });
-
-  async function createRefreshWaitHarness(fence = false) {
-    await worker.seedActivePlacement();
-    const settled = createDeferred();
-    const reachedAdmission = createDeferred();
-    const listeners = new Set<() => void>();
-    let environment = worker.attachedEnvironment();
-    let inFlight = true;
-    let reads = 0;
-    const refresh: WorkerRuntimeRefreshInFlight = {
-      settled: settled.promise,
-      onProgress(listener) {
-        listeners.add(listener);
-        reachedAdmission.resolve();
-        return () => listeners.delete(listener);
-      },
-    };
-    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
-      request.onDispatchReady?.();
-      const leafId = await worker.appendWorkerReply("Ran on the refreshed worker", 51);
-      return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+  const execution = harness.execute();
+  try {
+    await Promise.race([wait.waiting, execution]);
+    expect(worker.placements.get(worker.SESSION_ID)?.turnClaim?.claimId).toBe("interrupted-claim");
+    expect(harness.launchTurn).not.toHaveBeenCalled();
+    wait.reconnect.resolve();
+    await expect(execution).resolves.toMatchObject({
+      payloads: [{ text: replacementReply }],
     });
-    const acquireTurnCredential = vi.fn(async () => {
-      // This boundary also wakes the negative control on the original launcher.
-      reachedAdmission.resolve();
-      return { ...worker.credential(), bundleHash: environment.bootstrapReceipt!.bundleHash };
-    });
-    const environments: worker.WorkerTurnEnvironmentService = {
-      ...worker.unusedEnvironments(),
-      get: () => environment,
-      readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
-      acquireTurnCredential,
-      acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: async () => completedTunnel(launchTurn),
-    };
-    const claimTurn = vi.spyOn(worker.placements, "claimTurn");
-    const provider = worker.createWorkerSessionTurnPlacementProvider({
-      placements: worker.placements,
-      environments,
-    });
-    const input = worker.turn();
-    const onAdmitted = vi.fn();
-    return {
-      acquireTurnCredential,
-      claimTurn,
-      launchTurn,
-      listeners,
-      onAdmitted,
-      reachedAdmission: reachedAdmission.promise,
-      progress() {
-        expectNoClaim();
-        for (const listener of listeners) {
-          listener();
-        }
-      },
-      finishRefresh() {
-        expectNoClaim();
-        environment = {
-          ...environment,
-          bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash: refreshedBundleHash },
-        };
-        refreshPlacementBundle(refreshedBundleHash);
-        inFlight = false;
-        settled.resolve();
-      },
-      cleanup() {
-        inFlight = false;
-        settled.resolve();
-        input.preparedRunAdmission.close();
-      },
-      execute: (signal: AbortSignal) =>
-        provider.executeTurn(
-          worker.workerTurnRequest(input.runId),
-          { ...input, abortSignal: signal },
-          vi.fn(localResult),
-          onAdmitted,
-        ),
-    };
+    expect(harness.launchTurn).toHaveBeenCalledOnce();
+    expectCalls(0, harness.redispatchPlacement, harness.runLocal);
+    await expectSinglePersistedInput();
+  } finally {
+    wait.reconnect.resolve();
+    await execution.catch(() => {});
   }
+});
 
-  it.each(["before claim", "at claim fence", "Stop", "Gateway restart"] as const)(
-    "settles an in-flight runtime refresh wait: %s",
-    async (outcome) => {
-      const fence = outcome === "at claim fence";
-      const harness = await createRefreshWaitHarness(fence);
-      const controller = new AbortController();
-      const execution = harness.execute(controller.signal);
-      const result = execution.catch((error: unknown) => error);
-      try {
-        await Promise.race([harness.reachedAdmission, execution]);
-        if (outcome === "Stop" || outcome === "Gateway restart") {
-          expect(harness.listeners.size).toBe(1);
-          if (outcome === "Stop") {
-            const stopped = new Error("turn stopped during runtime refresh");
-            controller.abort(stopped);
-            expect(await result).toBe(stopped);
-          } else {
-            markGatewayRestartDraining();
-            expect(await result).toBeInstanceOf(GatewayDrainingError);
-            await expect(execution).rejects.toThrow(
-              "Gateway is restarting. Please try again shortly.",
-            );
-          }
-          expectCalls(0, harness.claimTurn);
+async function createRefreshWaitHarness(fence = false) {
+  await worker.seedActivePlacement();
+  const settled = createDeferred();
+  const reachedAdmission = createDeferred();
+  const listeners = new Set<() => void>();
+  let environment = worker.attachedEnvironment();
+  let inFlight = true;
+  let reads = 0;
+  const refresh: WorkerRuntimeRefreshInFlight = {
+    settled: settled.promise,
+    onProgress(listener) {
+      listeners.add(listener);
+      reachedAdmission.resolve();
+      return () => listeners.delete(listener);
+    },
+  };
+  const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+    request.onDispatchReady?.();
+    const leafId = await worker.appendWorkerReply("Ran on the refreshed worker", 51);
+    return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+  });
+  const acquireTurnCredential = vi.fn(async () => {
+    // This boundary also wakes the negative control on the original launcher.
+    reachedAdmission.resolve();
+    return { ...worker.credential(), bundleHash: environment.bootstrapReceipt!.bundleHash };
+  });
+  const environments: worker.WorkerTurnEnvironmentService = {
+    ...worker.unusedEnvironments(),
+    get: () => environment,
+    readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
+    acquireTurnCredential,
+    acknowledgeCredentialDelivery: vi.fn(async () => true),
+    startTunnel: async () => completedTunnel(launchTurn),
+  };
+  const claimTurn = vi.spyOn(worker.placements, "claimTurn");
+  const provider = worker.createWorkerSessionTurnPlacementProvider({
+    placements: worker.placements,
+    environments,
+  });
+  const input = worker.turn();
+  const onAdmitted = vi.fn();
+  return {
+    acquireTurnCredential,
+    claimTurn,
+    launchTurn,
+    listeners,
+    onAdmitted,
+    reachedAdmission: reachedAdmission.promise,
+    progress() {
+      expectNoClaim();
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    finishRefresh() {
+      expectNoClaim();
+      environment = {
+        ...environment,
+        bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash: refreshedBundleHash },
+      };
+      refreshPlacementBundle(refreshedBundleHash);
+      inFlight = false;
+      settled.resolve();
+    },
+    cleanup() {
+      inFlight = false;
+      settled.resolve();
+      input.preparedRunAdmission.close();
+    },
+    execute: (signal: AbortSignal) =>
+      provider.executeTurn(
+        worker.workerTurnRequest(input.runId),
+        { ...input, abortSignal: signal },
+        vi.fn(localResult),
+        onAdmitted,
+      ),
+  };
+}
+
+it.each(["before claim", "at claim fence", "Stop", "Gateway restart"] as const)(
+  "settles an in-flight runtime refresh wait: %s",
+  async (outcome) => {
+    const fence = outcome === "at claim fence";
+    const harness = await createRefreshWaitHarness(fence);
+    const controller = new AbortController();
+    const execution = harness.execute(controller.signal);
+    const result = execution.catch((error: unknown) => error);
+    try {
+      await Promise.race([harness.reachedAdmission, execution]);
+      if (outcome === "Stop" || outcome === "Gateway restart") {
+        expect(harness.listeners.size).toBe(1);
+        if (outcome === "Stop") {
+          const stopped = new Error("turn stopped during runtime refresh");
+          controller.abort(stopped);
+          expect(await result).toBe(stopped);
         } else {
-          expectNoClaim();
-          expectCalls(0, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
-          expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 1 : 0);
-          harness.progress();
-          expect(
-            getDiagnosticSessionActivitySnapshot({
-              sessionId: worker.SESSION_ID,
-              sessionKey: worker.SESSION_KEY,
-            }).lastProgressReason,
-          ).toBe("worker:runtime_refresh");
-          harness.finishRefresh();
-          await expect(execution).resolves.toMatchObject({
-            payloads: [{ text: "Ran on the refreshed worker" }],
-          });
-          await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
-          expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 2 : 1);
-          expectCalls(1, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
-          expect(harness.launchTurn.mock.calls[0]?.[0].plan.admission.handshake.bundleHash).toBe(
-            refreshedBundleHash,
+          markGatewayRestartDraining();
+          expect(await result).toBeInstanceOf(GatewayDrainingError);
+          await expect(execution).rejects.toThrow(
+            "Gateway is restarting. Please try again shortly.",
           );
         }
-        expectNoClaim();
-        if (outcome === "Stop" || outcome === "Gateway restart") {
-          expectCalls(0, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
-        }
-        expect(harness.listeners.size).toBe(0);
-      } finally {
-        controller.abort();
-        await result;
-        harness.cleanup();
-      }
-    },
-  );
-
-  // A runtime refresh holds the environment lock that credential acquisition queues on.
-  // Stuck-session recovery then cancels the admitted turn before that lock is released.
-  async function cancelTurnWhileCredentialQueued() {
-    await worker.seedActivePlacement();
-    const queued = createDeferred();
-    const lockedCredential = createDeferred<ReturnType<typeof worker.credential>>();
-    const startTunnel = vi.fn<worker.WorkerTurnEnvironmentService["startTunnel"]>(async () => {
-      throw new WorkerRuntimeRefreshPendingError(
-        "Worker runtime refresh is waiting for the current turn to finish",
-      );
-    });
-    const provider = worker.createWorkerSessionTurnPlacementProvider({
-      placements: worker.placements,
-      environments: {
-        ...worker.unusedEnvironments(),
-        get: worker.attachedEnvironment,
-        acquireTurnCredential: () => {
-          queued.resolve();
-          return lockedCredential.promise;
-        },
-        startTunnel,
-      },
-    });
-    const input = worker.turn();
-    const execution = provider.executeTurn(
-      worker.workerTurnRequest(input.runId),
-      input,
-      vi.fn(localResult),
-    );
-    await Promise.race([queued.promise, execution]);
-    expect(worker.placements.get(worker.SESSION_ID)?.turnClaim).not.toBeNull();
-    expect(abortEmbeddedAgentRun(worker.SESSION_ID)).toBe(true);
-    return { execution, lockedCredential, startTunnel };
-  }
-
-  it.each(["granted", "refused"] as const)(
-    "settles cancellation before a queued credential is %s",
-    async (outcome) => {
-      const { execution, lockedCredential, startTunnel } = await cancelTurnWhileCredentialQueued();
-      if (outcome === "granted") {
-        lockedCredential.resolve(worker.credential());
+        expectCalls(0, harness.claimTurn);
       } else {
-        lockedCredential.reject(new Error("Worker turn credential claim is not authoritative"));
-      }
-      await expect(execution).rejects.toMatchObject({ name: "AbortError" });
-      expect(startTunnel).not.toHaveBeenCalled();
-      expectNoClaim();
-    },
-  );
-
-  it.each(["backend", "reply"] as const)(
-    "accepts Stop through the %s owner between refresh and retry preparation",
-    async (cancellation) => {
-      const operation = createReplyOperation({
-        sessionId: worker.SESSION_ID,
-        sessionKey: worker.SESSION_KEY,
-        resetTriggered: false,
-      });
-      operation.setPhase("running");
-      const duringRetryPreparation = vi.fn(() => {
-        // The retry now owns cancellation before resolving its workspace.
-        expect(isEmbeddedAgentRunHandleActive(worker.SESSION_ID)).toBe(true);
+        expectNoClaim();
+        expectCalls(0, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
+        expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 1 : 0);
+        harness.progress();
         expect(
-          cancellation === "reply"
-            ? operation.abortByUser()
-            : abortEmbeddedAgentRun(worker.SESSION_ID),
-        ).toBe(true);
-      });
-      const harness = await createBuildRecoveryHarness({
-        rejection: "pending refresh",
-        refreshInPlace: true,
-        replyOperation: operation,
-        duringRetryPreparation,
-      });
-      try {
-        await expect(harness.execute(operation.abortSignal)).rejects.toThrow();
-        expect(duringRetryPreparation).toHaveBeenCalledOnce();
-        // Backend cancellation closes its effective turn signal, not the upstream reply signal.
-        expect(operation.abortSignal.aborted).toBe(cancellation === "reply");
-        expect(harness.launchTurn).not.toHaveBeenCalled();
-        expectNoClaim();
-      } finally {
-        operation.complete();
+          getDiagnosticSessionActivitySnapshot({
+            sessionId: worker.SESSION_ID,
+            sessionKey: worker.SESSION_KEY,
+          }).lastProgressReason,
+        ).toBe("worker:runtime_refresh");
+        harness.finishRefresh();
+        await expect(execution).resolves.toMatchObject({
+          payloads: [{ text: "Ran on the refreshed worker" }],
+        });
+        await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
+        expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 2 : 1);
+        expectCalls(1, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
+        expect(harness.launchTurn.mock.calls[0]?.[0].plan.admission.handshake.bundleHash).toBe(
+          refreshedBundleHash,
+        );
       }
-    },
-  );
-
-  it.each([
-    { rejection: "pending refresh", outcome: "reconnected" },
-    { rejection: "disconnected", outcome: "reconnected" },
-    { rejection: "pending refresh", outcome: "cancelled" },
-    { rejection: "pending refresh", outcome: "backend-cancelled" },
-    { rejection: "pending refresh", outcome: "superseded" },
-  ] as const)(
-    "retains the original submission through $rejection while availability is $outcome",
-    async ({ rejection, outcome }) => {
-      const wait = nodeWait(true);
-      const controller = new AbortController();
-      let current = true;
-      const harness = await createBuildRecoveryHarness({
-        rejection,
-        refreshInPlace: true,
-        waitForAdmissionNode: wait.waitForAdmissionNode,
-      });
-      const before = harness.environments.get(worker.ENVIRONMENT_ID);
-      const execution = harness.execute(controller.signal, () => {
-        if (!current) {
-          throw new Error("original run superseded");
-        }
-      });
-      const result = execution.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        await Promise.race([wait.waiting, execution]);
-        expect(harness.launchTurn).not.toHaveBeenCalled();
-        expect(wait.waitForAdmissionNode).toHaveBeenCalledOnce();
-        if (outcome === "cancelled") {
-          controller.abort(new Error("original turn cancelled"));
-          expect(wait.signal?.aborted).toBe(true);
-        } else if (outcome === "backend-cancelled") {
-          expect(abortEmbeddedAgentRun(worker.SESSION_ID)).toBe(true);
-          expect(wait.signal?.aborted).toBe(true);
-        } else {
-          current = outcome !== "superseded";
-          wait.reconnect.resolve();
-        }
-        const settled = await result;
-        if (outcome === "reconnected") {
-          expect(settled).toHaveProperty("value");
-          await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
-          expect(harness.launchTurn).toHaveBeenCalledOnce();
-          await expectSinglePersistedInput();
-        } else {
-          expect(settled).toHaveProperty("error");
-          expect(harness.launchTurn).not.toHaveBeenCalled();
-          expect(harness.environments.get(worker.ENVIRONMENT_ID)).toEqual(before);
-        }
-        expect(harness.redispatchPlacement).not.toHaveBeenCalled();
-        expectNoClaim();
-      } finally {
-        wait.reconnect.resolve();
-        await result;
+      expectNoClaim();
+      if (outcome === "Stop" || outcome === "Gateway restart") {
+        expectCalls(0, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
       }
-    },
-  );
+      expect(harness.listeners.size).toBe(0);
+    } finally {
+      controller.abort();
+      await result;
+      harness.cleanup();
+    }
+  },
+);
 
-  it("bounds reconnect admission by the caller's timeout", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const wait = nodeWait();
+// A runtime refresh holds the environment lock that credential acquisition queues on.
+// Stuck-session recovery then cancels the admitted turn before that lock is released.
+async function cancelTurnWhileCredentialQueued() {
+  await worker.seedActivePlacement();
+  const queued = createDeferred();
+  const lockedCredential = createDeferred<ReturnType<typeof worker.credential>>();
+  const startTunnel = vi.fn<worker.WorkerTurnEnvironmentService["startTunnel"]>(async () => {
+    throw new WorkerRuntimeRefreshPendingError(
+      "Worker runtime refresh is waiting for the current turn to finish",
+    );
+  });
+  const provider = worker.createWorkerSessionTurnPlacementProvider({
+    placements: worker.placements,
+    environments: {
+      ...worker.unusedEnvironments(),
+      get: worker.attachedEnvironment,
+      acquireTurnCredential: () => {
+        queued.resolve();
+        return lockedCredential.promise;
+      },
+      startTunnel,
+    },
+  });
+  const input = worker.turn();
+  const execution = provider.executeTurn(
+    worker.workerTurnRequest(input.runId),
+    input,
+    vi.fn(localResult),
+  );
+  await Promise.race([queued.promise, execution]);
+  expect(worker.placements.get(worker.SESSION_ID)?.turnClaim).not.toBeNull();
+  expect(abortEmbeddedAgentRun(worker.SESSION_ID)).toBe(true);
+  return { execution, lockedCredential, startTunnel };
+}
+
+it.each(["granted", "refused"] as const)(
+  "settles cancellation before a queued credential is %s",
+  async (outcome) => {
+    const { execution, lockedCredential, startTunnel } = await cancelTurnWhileCredentialQueued();
+    if (outcome === "granted") {
+      lockedCredential.resolve(worker.credential());
+    } else {
+      lockedCredential.reject(new Error("Worker turn credential claim is not authoritative"));
+    }
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(startTunnel).not.toHaveBeenCalled();
+    expectNoClaim();
+  },
+);
+
+it.each(["backend", "reply"] as const)(
+  "accepts Stop through the %s owner between refresh and retry preparation",
+  async (cancellation) => {
+    const operation = createReplyOperation({
+      sessionId: worker.SESSION_ID,
+      sessionKey: worker.SESSION_KEY,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const duringRetryPreparation = vi.fn(() => {
+      // The retry now owns cancellation before resolving its workspace.
+      expect(isEmbeddedAgentRunHandleActive(worker.SESSION_ID)).toBe(true);
+      expect(
+        cancellation === "reply"
+          ? operation.abortByUser()
+          : abortEmbeddedAgentRun(worker.SESSION_ID),
+      ).toBe(true);
+    });
     const harness = await createBuildRecoveryHarness({
       rejection: "pending refresh",
       refreshInPlace: true,
+      replyOperation: operation,
+      duringRetryPreparation,
+    });
+    try {
+      await expect(harness.execute(operation.abortSignal)).rejects.toThrow();
+      expect(duringRetryPreparation).toHaveBeenCalledOnce();
+      // Backend cancellation closes its effective turn signal, not the upstream reply signal.
+      expect(operation.abortSignal.aborted).toBe(cancellation === "reply");
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expectNoClaim();
+    } finally {
+      operation.complete();
+    }
+  },
+);
+
+it.each([
+  { rejection: "pending refresh", outcome: "reconnected" },
+  { rejection: "disconnected", outcome: "reconnected" },
+  { rejection: "pending refresh", outcome: "cancelled" },
+  { rejection: "pending refresh", outcome: "backend-cancelled" },
+  { rejection: "pending refresh", outcome: "superseded" },
+] as const)(
+  "retains the original submission through $rejection while availability is $outcome",
+  async ({ rejection, outcome }) => {
+    const wait = nodeWait(true);
+    const controller = new AbortController();
+    let current = true;
+    const harness = await createBuildRecoveryHarness({
+      rejection,
+      refreshInPlace: true,
       waitForAdmissionNode: wait.waitForAdmissionNode,
     });
-    const execution = harness.execute();
-    const result = execution.catch((error: unknown) => error);
+    const before = harness.environments.get(worker.ENVIRONMENT_ID);
+    const execution = harness.execute(controller.signal, () => {
+      if (!current) {
+        throw new Error("original run superseded");
+      }
+    });
+    const result = execution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     try {
-      await wait.waiting;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(await result).toBeInstanceOf(Error);
-      expectCalls(0, harness.launchTurn, harness.redispatchPlacement);
+      await Promise.race([wait.waiting, execution]);
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expect(wait.waitForAdmissionNode).toHaveBeenCalledOnce();
+      if (outcome === "cancelled") {
+        controller.abort(new Error("original turn cancelled"));
+        expect(wait.signal?.aborted).toBe(true);
+      } else if (outcome === "backend-cancelled") {
+        expect(abortEmbeddedAgentRun(worker.SESSION_ID)).toBe(true);
+        expect(wait.signal?.aborted).toBe(true);
+      } else {
+        current = outcome !== "superseded";
+        wait.reconnect.resolve();
+      }
+      const settled = await result;
+      if (outcome === "reconnected") {
+        expect(settled).toHaveProperty("value");
+        await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
+        expect(harness.launchTurn).toHaveBeenCalledOnce();
+        await expectSinglePersistedInput();
+      } else {
+        expect(settled).toHaveProperty("error");
+        expect(harness.launchTurn).not.toHaveBeenCalled();
+        expect(harness.environments.get(worker.ENVIRONMENT_ID)).toEqual(before);
+      }
+      expect(harness.redispatchPlacement).not.toHaveBeenCalled();
       expectNoClaim();
     } finally {
       wait.reconnect.resolve();
       await result;
-      vi.useRealTimers();
     }
+  },
+);
+
+it("bounds reconnect admission by the caller's timeout", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const wait = nodeWait();
+  const harness = await createBuildRecoveryHarness({
+    rejection: "pending refresh",
+    refreshInPlace: true,
+    waitForAdmissionNode: wait.waitForAdmissionNode,
   });
+  const execution = harness.execute();
+  const result = execution.catch((error: unknown) => error);
+  try {
+    await wait.waiting;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await result).toBeInstanceOf(Error);
+    expectCalls(0, harness.launchTurn, harness.redispatchPlacement);
+    expectNoClaim();
+  } finally {
+    wait.reconnect.resolve();
+    await result;
+    vi.useRealTimers();
+  }
+});
 
-  it.each([
-    { rejection: "admission", refreshInPlace: true },
-    { rejection: "pending refresh", refreshInPlace: true },
-    { rejection: "recorded", refreshInPlace: false },
-    { rejection: "admission", refreshInPlace: false },
-  ] as const)(
-    "continues the same turn after $rejection (refreshInPlace=$refreshInPlace)",
-    async ({ rejection, refreshInPlace }) => {
-      const harness = await createBuildRecoveryHarness({ rejection, refreshInPlace });
-      const before = worker.placements.get(worker.SESSION_ID);
-      const result = await harness.execute(
-        refreshInPlace ? undefined : new AbortController().signal,
-      );
-      expect(result.payloads).toEqual([{ text: replacementReply }]);
-      await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
-      expectCalls(refreshInPlace ? 0 : 1, harness.redispatchPlacement);
-      expectCalls(1, harness.launchTurn, harness.onAdmitted);
-      expect(harness.launchTurn.mock.calls[0]?.[0].turnClaim.claimId).not.toBe(
-        harness.originalClaimIds[0],
-      );
-      expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
-        state: "active",
-        turnClaim: null,
-        ...(refreshInPlace
-          ? {
-              environmentId: before?.environmentId,
-              activeOwnerEpoch: before?.activeOwnerEpoch,
-              generation: before?.generation,
-              workerBundleHash: refreshedBundleHash,
-            }
-          : { terminalReason: null, recoveryError: null }),
-      });
-      if (refreshInPlace) {
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
-      }
-      expect(harness.runLocal).not.toHaveBeenCalled();
-      await expectSinglePersistedInput();
-    },
-  );
-
-  it.each([
-    { outcome: "cancelled", refreshInPlace: false },
-    { outcome: "superseded", refreshInPlace: true },
-    { outcome: "replaced", refreshInPlace: false },
-    { outcome: "replaced", refreshInPlace: true },
-  ] as const)(
-    "does not retry a turn $outcome during reconciliation (refreshInPlace=$refreshInPlace)",
-    async ({ outcome, refreshInPlace }) => {
-      const controller = new AbortController();
-      const closed = new Error("original run closed");
-      let current = true;
-      const harness = await createBuildRecoveryHarness({
-        refreshInPlace,
-        afterReconcile: async () => {
-          if (outcome === "cancelled") {
-            controller.abort(closed);
-          } else if (outcome === "superseded") {
-            current = false;
-          } else {
-            if (refreshInPlace) {
-              await harness.reclaim();
-            }
-            await worker.seedActivePlacement();
-          }
-        },
-      });
-      await expect(
-        harness.execute(controller.signal, () => {
-          if (!current) {
-            throw closed;
-          }
-        }),
-      ).rejects.toThrow(outcome === "replaced" ? STALE_WORKER_BUILD_REASON : closed.message);
-      expectCalls(0, harness.redispatchPlacement, harness.launchTurn);
-      expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
-        state: refreshInPlace || outcome === "replaced" ? "active" : "reclaimed",
-        turnClaim: null,
-      });
-    },
-  );
-
-  it.each([
-    { refreshInPlace: false, rejection: "admission" },
-    { refreshInPlace: true, rejection: "pending refresh" },
-  ] as const)(
-    "attempts build recovery only once after $rejection (refreshInPlace=$refreshInPlace)",
-    async ({ refreshInPlace, rejection }) => {
-      const harness = await createBuildRecoveryHarness({
-        repeated: true,
-        refreshInPlace,
-        rejection,
-      });
-      await expect(harness.execute()).rejects.toThrow(
-        rejection === "pending refresh"
-          ? "Cloud worker runtime update is pending"
-          : STALE_WORKER_BUILD_REASON,
-      );
-      expect(harness.redispatchPlacement).toHaveBeenCalledTimes(refreshInPlace ? 0 : 1);
-      expect(harness.onAdmitted).toHaveBeenCalledOnce();
-      expect(harness.launchTurn).not.toHaveBeenCalled();
-      expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
-        state: refreshInPlace ? "active" : "reclaimed",
-        turnClaim: null,
-      });
-    },
-  );
-
-  it("does not retry a build error after worker handoff", async () => {
-    const waitForAdmissionNode = vi.fn(async () => {});
-    const harness = await createBuildRecoveryHarness({
-      rejection: "handoff",
-      waitForAdmissionNode,
-    });
-    await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
-    expect(harness.redispatchPlacement).not.toHaveBeenCalled();
-    expect(harness.launchTurn).toHaveBeenCalledOnce();
-    expect(waitForAdmissionNode).not.toHaveBeenCalled();
-    expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-    });
-  });
-
-  it("leaves a pending result fenced for its recovery owner instead of replacing the worker", async () => {
-    const harness = await createBuildRecoveryHarness({ pendingResult: true });
-    await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
-    expectCalls(0, harness.redispatchPlacement, harness.launchTurn);
-    expect(await worker.placements.listPendingWorkspaceResultsAsync()).toEqual([
-      expect.objectContaining({
-        sessionId: worker.SESSION_ID,
-        recoveryRequestedAtMs: expect.any(Number),
-      }),
-    ]);
+it.each([
+  { rejection: "admission", refreshInPlace: true },
+  { rejection: "pending refresh", refreshInPlace: true },
+  { rejection: "recorded", refreshInPlace: false },
+  { rejection: "admission", refreshInPlace: false },
+] as const)(
+  "continues the same turn after $rejection (refreshInPlace=$refreshInPlace)",
+  async ({ rejection, refreshInPlace }) => {
+    const harness = await createBuildRecoveryHarness({ rejection, refreshInPlace });
+    const before = worker.placements.get(worker.SESSION_ID);
+    const result = await harness.execute(refreshInPlace ? undefined : new AbortController().signal);
+    expect(result.payloads).toEqual([{ text: replacementReply }]);
+    await waitForEmbeddedAgentRunEnd(worker.SESSION_ID, null);
+    expectCalls(refreshInPlace ? 0 : 1, harness.redispatchPlacement);
+    expectCalls(1, harness.launchTurn, harness.onAdmitted);
+    expect(harness.launchTurn.mock.calls[0]?.[0].turnClaim.claimId).not.toBe(
+      harness.originalClaimIds[0],
+    );
     expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
       state: "active",
-      turnClaim: { claimId: harness.originalClaimIds[0] },
+      turnClaim: null,
+      ...(refreshInPlace
+        ? {
+            environmentId: before?.environmentId,
+            activeOwnerEpoch: before?.activeOwnerEpoch,
+            generation: before?.generation,
+            workerBundleHash: refreshedBundleHash,
+          }
+        : { terminalReason: null, recoveryError: null }),
     });
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    if (refreshInPlace) {
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    }
+    expect(harness.runLocal).not.toHaveBeenCalled();
+    await expectSinglePersistedInput();
+  },
+);
+
+it.each([
+  { outcome: "cancelled", refreshInPlace: false },
+  { outcome: "superseded", refreshInPlace: true },
+  { outcome: "replaced", refreshInPlace: false },
+  { outcome: "replaced", refreshInPlace: true },
+] as const)(
+  "does not retry a turn $outcome during reconciliation (refreshInPlace=$refreshInPlace)",
+  async ({ outcome, refreshInPlace }) => {
+    const controller = new AbortController();
+    const closed = new Error("original run closed");
+    let current = true;
+    const harness = await createBuildRecoveryHarness({
+      refreshInPlace,
+      afterReconcile: async () => {
+        if (outcome === "cancelled") {
+          controller.abort(closed);
+        } else if (outcome === "superseded") {
+          current = false;
+        } else {
+          if (refreshInPlace) {
+            await harness.reclaim();
+          }
+          await worker.seedActivePlacement();
+        }
+      },
+    });
+    await expect(
+      harness.execute(controller.signal, () => {
+        if (!current) {
+          throw closed;
+        }
+      }),
+    ).rejects.toThrow(outcome === "replaced" ? STALE_WORKER_BUILD_REASON : closed.message);
+    expectCalls(0, harness.redispatchPlacement, harness.launchTurn);
+    expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
+      state: refreshInPlace || outcome === "replaced" ? "active" : "reclaimed",
+      turnClaim: null,
+    });
+  },
+);
+
+it.each([
+  { refreshInPlace: false, rejection: "admission" },
+  { refreshInPlace: true, rejection: "pending refresh" },
+] as const)(
+  "attempts build recovery only once after $rejection (refreshInPlace=$refreshInPlace)",
+  async ({ refreshInPlace, rejection }) => {
+    const harness = await createBuildRecoveryHarness({
+      repeated: true,
+      refreshInPlace,
+      rejection,
+    });
+    await expect(harness.execute()).rejects.toThrow(
+      rejection === "pending refresh"
+        ? "Cloud worker runtime update is pending"
+        : STALE_WORKER_BUILD_REASON,
+    );
+    expect(harness.redispatchPlacement).toHaveBeenCalledTimes(refreshInPlace ? 0 : 1);
+    expect(harness.onAdmitted).toHaveBeenCalledOnce();
+    expect(harness.launchTurn).not.toHaveBeenCalled();
+    expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
+      state: refreshInPlace ? "active" : "reclaimed",
+      turnClaim: null,
+    });
+  },
+);
+
+it("does not retry a build error after worker handoff", async () => {
+  const waitForAdmissionNode = vi.fn(async () => {});
+  const harness = await createBuildRecoveryHarness({
+    rejection: "handoff",
+    waitForAdmissionNode,
   });
+  await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
+  expect(harness.redispatchPlacement).not.toHaveBeenCalled();
+  expect(harness.launchTurn).toHaveBeenCalledOnce();
+  expect(waitForAdmissionNode).not.toHaveBeenCalled();
+  expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
+    state: "failed",
+    turnClaim: null,
+  });
+});
+
+it("leaves a pending result fenced for its recovery owner instead of replacing the worker", async () => {
+  const harness = await createBuildRecoveryHarness({ pendingResult: true });
+  await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
+  expectCalls(0, harness.redispatchPlacement, harness.launchTurn);
+  expect(await worker.placements.listPendingWorkspaceResultsAsync()).toEqual([
+    expect.objectContaining({
+      sessionId: worker.SESSION_ID,
+      recoveryRequestedAtMs: expect.any(Number),
+    }),
+  ]);
+  expect(worker.placements.get(worker.SESSION_ID)).toMatchObject({
+    state: "active",
+    turnClaim: { claimId: harness.originalClaimIds[0] },
+  });
+  expect(harness.environments.destroy).not.toHaveBeenCalled();
 });
