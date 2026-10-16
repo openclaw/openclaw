@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { describe, expect } from "vitest";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 
-const it = createCommandTest();
+const it = createCommandTest().extend<{ f: Awaited<ReturnType<typeof fixture>> }>({
+  f: async ({ command }, use) => {
+    await command.lifetime.run(async () => use(await fixture(command)));
+  },
+});
 const scripts = join(process.cwd(), "scripts");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 type Capture = "empty" | "populated" | "symlink";
@@ -36,17 +40,9 @@ async function fixture(command: CommandFixture) {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TEMPLATE_DIR: home,
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "core.hooksPath",
-    GIT_CONFIG_VALUE_0: "/dev/null",
-    GIT_CONFIG_KEY_1: "commit.gpgSign",
-    GIT_CONFIG_VALUE_1: "false",
+    GIT_CONFIG_PARAMETERS: "'core.hooksPath=/dev/null' 'commit.gpgSign=false'",
     GIT_ALLOW_PROTOCOL: "file",
     GIT_TERMINAL_PROMPT: "0",
-    GIT_AUTHOR_NAME: "Evidence Fixture",
-    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-    GIT_COMMITTER_NAME: "Evidence Fixture",
-    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     FIXTURE_REPO: repo,
     FIXTURE_ROOT: root,
     FIXTURE_SCRIPTS: scripts,
@@ -59,6 +55,8 @@ async function fixture(command: CommandFixture) {
     return result.stdout.trim();
   };
   await git(["init", "-q", "-b", "main"]);
+  await git(["config", "user.name", "Evidence Fixture"]);
+  await git(["config", "user.email", "fixture@example.invalid"]);
   writeFileSync(join(repo, ".gitignore"), ".local/\nnode_modules/\n");
   writeFileSync(join(repo, "tracked.txt"), "original\n");
   await git(["add", ".gitignore", "tracked.txt"]);
@@ -107,21 +105,16 @@ source "$FIXTURE_SCRIPTS/pr-lib/operation-lock.sh"
 source "$FIXTURE_SCRIPTS/pr-lib/common.sh"
 source "$FIXTURE_SCRIPTS/pr-lib/merge-outcome.sh"
 test "$(repo_root)" = "$FIXTURE_REPO"
+unexpected_gh() { echo "Unexpected GitHub call: $*" >&2; exit 97; }
 pr_gh() {
-  if [ "$#" = 7 ] && [ "$1 $2" = 'pr view' ] && [ "$4 $5 $6 $7" = '--json state --jq .state' ]; then
-    git show-ref --verify --quiet "refs/openclaw/pr-operation-locks/$3" || exit 97
-    printf '%s\\n' "$*" >> "$FIXTURE_ROOT/gh-calls"
-    printf '%s\\n' "$FIXTURE_STATE"
-  else
-    echo "Unexpected GitHub call: $*" >&2; exit 97
-  fi
+  [ "$#" = 7 ] && [ "$1 $2" = 'pr view' ] && [ "$4 $5 $6 $7" = '--json state --jq .state' ] || unexpected_gh "$@"
+  git show-ref --verify --quiet "refs/openclaw/pr-operation-locks/$3" || exit 97
+  printf '%s\\n' "$*" >> "$FIXTURE_ROOT/gh-calls"
+  printf '%s\\n' "$FIXTURE_STATE"
 }
 pr_gh_plain() {
-  if [ "$*" = 'writer-login' ]; then
-    printf 'fixture-user\\n'
-  else
-    echo "Unexpected direct GitHub call: $*" >&2; exit 97
-  fi
+  [ "$*" = 'writer-login' ] || unexpected_gh "$@"
+  printf 'fixture-user\\n'
 }
 trash() {
   case "$1" in "$FIXTURE_REPO"/.worktrees/pr-*|.worktrees/pr-*) ;; *) exit 97 ;; esac
@@ -195,21 +188,6 @@ function evidence(dir: string, captureName = "merge-output.log") {
   };
 }
 
-type EvidenceFixture = Awaited<ReturnType<typeof fixture>>;
-type Scenario = (f: EvidenceFixture, command: CommandFixture) => Promise<void>;
-
-function scenario(body: Scenario) {
-  return ({ command }: { command: CommandFixture }) =>
-    command.lifetime.run(async () => body(await fixture(command), command));
-}
-
-function scenarioFor<T>(
-  body: (value: T, f: EvidenceFixture, command: CommandFixture) => Promise<void>,
-) {
-  return (value: T, context: { command: CommandFixture }) =>
-    scenario((f, command) => body(value, f, command))(context);
-}
-
 async function preserve(...readers: Array<() => unknown>) {
   const snapshot = () => Promise.all(readers.map((read) => read()));
   const before = await snapshot();
@@ -217,32 +195,29 @@ async function preserve(...readers: Array<() => unknown>) {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
-  it(
-    "scopes dry-run and removal without observing siblings",
-    scenario(async (f) => {
-      const selected = await f.add(910001);
-      const sibling = await f.add(910002);
-      const unchanged = await preserve(f.branches, f.worktrees);
-      const dry = await f.run(["gc_pr_worktrees true 910001"], "MERGED");
-      expect(dry.status, dry.output).toBe(0);
-      expect(dry.output).toContain("would remove .worktrees/pr-910001");
-      expect(dry.output).not.toContain("pr-910002");
-      await unchanged();
-      const actual = await f.run(["gc_pr_worktrees false 910001"], "MERGED");
-      expect(actual.status, actual.output).toBe(0);
-      expect(existsSync(selected)).toBe(false);
-      expect(existsSync(sibling)).toBe(true);
-      expect(await f.worktrees()).toContain(`worktree ${sibling}\n`);
-      for (const branch of ["temp/pr-910002", "pr-910002", "pr-910002-prep"]) {
-        expect(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
-      }
-      expect(readFileSync(join(f.root, "gh-calls"), "utf8")).not.toContain("910002");
-    }),
-  );
+  it("scopes dry-run and removal without observing siblings", async ({ f }) => {
+    const selected = await f.add(910001);
+    const sibling = await f.add(910002);
+    const unchanged = await preserve(f.branches, f.worktrees);
+    const dry = await f.run(["gc_pr_worktrees true 910001"], "MERGED");
+    expect(dry.status, dry.output).toBe(0);
+    expect(dry.output).toContain("would remove .worktrees/pr-910001");
+    expect(dry.output).not.toContain("pr-910002");
+    await unchanged();
+    const actual = await f.run(["gc_pr_worktrees false 910001"], "MERGED");
+    expect(actual.status, actual.output).toBe(0);
+    expect(existsSync(selected)).toBe(false);
+    expect(existsSync(sibling)).toBe(true);
+    expect(await f.worktrees()).toContain(`worktree ${sibling}\n`);
+    for (const branch of ["temp/pr-910002", "pr-910002", "pr-910002-prep"]) {
+      expect(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
+    }
+    expect(readFileSync(join(f.root, "gh-calls"), "utf8")).not.toContain("910002");
+  });
 
   it.for(["", ".local/nested"])(
     "defers removal while the parent session holds cwd %s, then removes after release",
-    scenarioFor<string>(async (subdirectory, f, command) => {
+    async (subdirectory, { f, command }) => {
       const dir = await f.add(910001);
       const cwd = join(dir, subdirectory);
       mkdirSync(cwd, { recursive: true });
@@ -290,37 +265,34 @@ process.stdout.write(JSON.stringify({
       });
       expect(existsSync(dir)).toBe(false);
       expect(await f.worktrees()).not.toContain(`worktree ${dir}\n`);
-    }),
+    },
   );
 
-  it(
-    "retains dirty work and local branches",
-    scenario(async (f) => {
-      const file = "unpublished.txt";
-      const dir = await f.add(910001);
-      writeFileSync(join(dir, file), "unpublished work\n");
-      const unchanged = await preserve(f.branches, f.worktrees);
-      const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
-      expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
-      await unchanged();
-      const result = await f.run(["gc_pr_worktrees false"], "MERGED");
-      expect(result.status, result.output).toBe(0);
-      expect(existsSync(join(dir, file)), result.output).toBe(true);
-      expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
-      await unchanged();
-      expect(result.output).toContain("cleanup incomplete");
-    }),
-  );
+  it("retains dirty work and local branches", async ({ f }) => {
+    const file = "unpublished.txt";
+    const dir = await f.add(910001);
+    writeFileSync(join(dir, file), "unpublished work\n");
+    const unchanged = await preserve(f.branches, f.worktrees);
+    const dry = await f.run(["gc_pr_worktrees true"], "MERGED");
+    expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
+    await unchanged();
+    const result = await f.run(["gc_pr_worktrees false"], "MERGED");
+    expect(result.status, result.output).toBe(0);
+    expect(existsSync(join(dir, file)), result.output).toBe(true);
+    expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
+    await unchanged();
+    expect(result.output).toContain("cleanup incomplete");
+  });
 
   it.for(["intent", "advanced", "configured"])(
     "deletes only published or completed-receipt branch tips (%s)",
-    scenarioFor<string>(async (receipt, f) => {
+    async (receipt, { f }) => {
       await f.add(910001);
       const tree = await f.git(["rev-parse", "HEAD^{tree}"]);
       const prepared = await f.git(["commit-tree", tree, "-p", f.head], "Reviewed source\n");
       await f.record(910001, receipt === "intent" ? "intent" : "complete", prepared);
       const tip =
-        receipt === "advanced" || receipt === "configured"
+        receipt !== "intent"
           ? await f.git(["commit-tree", tree, "-p", prepared], "Unpublished follow-up\n")
           : prepared;
       await f.git(["update-ref", "refs/heads/pr-910001-prep", tip]);
@@ -336,12 +308,12 @@ process.stdout.write(JSON.stringify({
       expect(await f.outcomes()).toBe(outcomes);
       expect(await f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
       expect(result.output).toContain("cleanup incomplete");
-    }),
+    },
   );
 
   it.for(["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"])(
     "preserves registered captures during dry-run and actual GC for %s",
-    scenarioFor<string>(async (captureName, f) => {
+    async (captureName, { f }) => {
       const protectedDirs: string[] = [];
       for (const [index, shape] of (["empty", "populated", "symlink"] as const).entries()) {
         protectedDirs.push(await f.add(910001 + index, shape, true, captureName));
@@ -379,12 +351,12 @@ process.stdout.write(JSON.stringify({
         await f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/"]),
       ).toBe("");
       expect(existsSync(join(f.root, "trash"))).toBe(false);
-    }),
+    },
   );
 
   it.for(["entry", "removal"])(
     "refuses %s without changing worktree evidence or branches",
-    scenarioFor<string>(async (operation, f) => {
+    async (operation, { f }) => {
       const dir = await f.add(910001, operation === "entry" ? "empty" : "populated");
       if (operation === "entry") {
         const gitdir = readFileSync(join(dir, ".git"), "utf8").trim().slice(8);
@@ -410,12 +382,12 @@ process.stdout.write(JSON.stringify({
         expect(await f.outcomes()).toBe("");
       }
       expect(existsSync(join(f.root, "trash"))).toBe(false);
-    }),
+    },
   );
 
   it.for(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree", "orphan"])(
     "refuses GC with %s outcome",
-    scenarioFor<string>(async (fault, f) => {
+    async (fault, { f }) => {
       const dir = await f.add(910001, "populated", fault !== "orphan");
       const localHead =
         fault === "local-tree"
@@ -461,6 +433,6 @@ process.stdout.write(JSON.stringify({
         expect(result.output).toContain("No merged/closed PR worktrees removed.");
         expect(result.output).toContain("reconcile the earlier request manually");
       }
-    }),
+    },
   );
 });

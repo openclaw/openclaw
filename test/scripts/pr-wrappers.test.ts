@@ -34,6 +34,9 @@ import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.te
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const fixtureTemplates = new Map<string, ReturnType<typeof createMismatchedWrapperTemplate>>();
+const outcomeOid = "a".repeat(40);
+const selectedHead = "b".repeat(40);
+const otherHead = "c".repeat(40);
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
@@ -346,9 +349,9 @@ function makeMismatchedWrapperRepo({
     write(path: string, contents: string, cwd = canonical) {
       writeFileSync(join(cwd, path), contents);
     },
-    commit(paths: string[], message: string, push = false, cwd = canonical) {
+    commit(paths: string[], push = false, cwd = canonical) {
       git(cwd, ["add", ...paths]);
-      git(cwd, ["commit", "-m", message]);
+      git(cwd, ["commit", "-m", "test: fixture change"]);
       if (push) {
         git(cwd, ["push", "origin", "main"]);
       }
@@ -439,68 +442,56 @@ describe("scripts/pr wrappers", () => {
     const fixture = makeMismatchedWrapperRepo();
     const recovery = (...args: string[]) => [
       "123",
-      "a".repeat(40),
+      outcomeOid,
       "--confirmed-operator-recovery",
       ...args,
     ];
     for (const args of [
-      ["123", "a".repeat(40)],
+      ["123", outcomeOid],
       ["123", "", "--confirmed-operator-recovery"],
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
-      ["123", "a".repeat(40), "--confirmed-no-running-tools"],
+      ["123", outcomeOid, "--confirmed-no-running-tools"],
       recovery("--auto-merge"),
       recovery("--cancel-auto", "--cancel-auto"),
-      recovery("--observed-head", "b".repeat(40)),
+      recovery("--observed-head", selectedHead),
       ...[
         [],
         [""],
         ["HEAD"],
         ["B".repeat(40)],
-        ["b".repeat(40), "--observed-head", "c".repeat(40)],
-        ["b".repeat(40), "--merged-head", "c".repeat(40)],
-        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
-        ["b".repeat(40), "--auto-merge"],
-        ["b".repeat(40), "--body-file", "message.md"],
-        ["b".repeat(40), "--legacy-refusal", "proof"],
-        ["b".repeat(40), "--pre-dispatch-refusal", "proof"],
-        ["b".repeat(40), "--admin-evidence", "proof", "--confirmed-operator-admin"],
+        [selectedHead, "--observed-head", otherHead],
+        [selectedHead, "--merged-head", otherHead],
+        [selectedHead, "--replacement-head", otherHead],
+        [selectedHead, "--auto-merge"],
+        [selectedHead, "--body-file", "message.md"],
+        [selectedHead, "--legacy-refusal", "proof"],
+        [selectedHead, "--pre-dispatch-refusal", "proof"],
+        [selectedHead, "--admin-evidence", "proof", "--confirmed-operator-admin"],
       ].map((suffix) => recovery("--cancel-auto", "--observed-head").concat(suffix)),
       recovery("--cancel-auto", "--body-file", "message.md"),
-      recovery("--cancel-auto", "--replacement-head", "b".repeat(40)),
+      recovery("--cancel-auto", "--replacement-head", selectedHead),
       ...[
         [],
         [""],
         ["HEAD"],
         ["a".repeat(39)],
         ["A".repeat(40)],
-        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
-        ["b".repeat(40), "--confirmed-operator-recovery"],
+        [selectedHead, "--replacement-head", otherHead],
+        [selectedHead, "--confirmed-operator-recovery"],
       ].map((suffix) => recovery("--replacement-head").concat(suffix)),
-      [
-        "123",
-        "a".repeat(40),
-        "--replacement-head",
-        "b".repeat(40),
-        "--confirmed-operator-recovery",
-      ],
-      ["123", "a".repeat(40), "--replacement-head", "b".repeat(40)],
-      [
-        "0123",
-        "a".repeat(40),
-        "--confirmed-operator-recovery",
-        "--replacement-head",
-        "b".repeat(40),
-      ],
+      ["123", outcomeOid, "--replacement-head", selectedHead, "--confirmed-operator-recovery"],
+      ["123", outcomeOid, "--replacement-head", selectedHead],
+      ["0123", outcomeOid, "--confirmed-operator-recovery", "--replacement-head", selectedHead],
       ...[
         [],
         ["HEAD"],
         ["B".repeat(40)],
-        ["b".repeat(40), "--merged-head", "c".repeat(40)],
-        ["b".repeat(40), "--cancel-auto"],
-        ["b".repeat(40), "--auto-merge"],
-        ["b".repeat(40), "--replacement-head", "c".repeat(40)],
-        ["b".repeat(40), "--body-file", "message.md"],
-        ["b".repeat(40), "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
+        [selectedHead, "--merged-head", otherHead],
+        [selectedHead, "--cancel-auto"],
+        [selectedHead, "--auto-merge"],
+        [selectedHead, "--replacement-head", otherHead],
+        [selectedHead, "--body-file", "message.md"],
+        [selectedHead, "--admin-evidence", "proof.json", "--confirmed-operator-admin"],
       ].map((suffix) => recovery("--merged-head").concat(suffix)),
     ]) {
       const result = runWrapper(fixture, ["merge-recover", ...args], "canonical");
@@ -537,8 +528,6 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
-  const outcomeOid = "a".repeat(40);
-  const selectedHead = "b".repeat(40);
   const recoveryArgs = ["merge-recover", "123", outcomeOid, "--confirmed-operator-recovery"];
   const dispatchFields = {
     pr: "123",
@@ -638,7 +627,7 @@ describe("scripts/pr wrappers", () => {
         "scripts/pr-lib/merge.sh",
         `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
       );
-      const oid = "a".repeat(40);
+      const oid = outcomeOid;
       for (const args of [
         ["123", oid],
         ["123", "HEAD", "--confirmed-operator-completion"],
@@ -668,7 +657,7 @@ describe("scripts/pr wrappers", () => {
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
-      ["merge-recover", "123", "a".repeat(40), "--body-file", "one"],
+      ["merge-recover", "123", outcomeOid, "--body-file", "one"],
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],
@@ -688,7 +677,7 @@ describe("scripts/pr wrappers", () => {
           "proof",
         ],
       ].map((flags) =>
-        ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery"].concat(flags),
+        ["merge-recover", "123", outcomeOid, "--confirmed-operator-recovery"].concat(flags),
       ),
     ]) {
       const result = runWrapper(fixture, args, "canonical");
@@ -703,19 +692,16 @@ describe("scripts/pr wrappers", () => {
     const args = [
       "merge-recover",
       "123",
-      "a".repeat(40),
+      outcomeOid,
       "--confirmed-operator-recovery",
       `--${flag}`,
       "proof",
     ];
     const missing = runWrapper(fixture, args, "canonical", { cwd: caller });
     expect(missing.status, missing.stdout + missing.stderr).toBe(0);
-    const result = runWrapper(
-      fixture,
-      [...args, "--replacement-head", "b".repeat(40)],
-      "canonical",
-      { cwd: caller },
-    );
+    const result = runWrapper(fixture, [...args, "--replacement-head", selectedHead], "canonical", {
+      cwd: caller,
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
       expectedDispatch({
@@ -745,23 +731,40 @@ describe("scripts/pr wrappers", () => {
     expect(envResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
   });
 
-  it("routes mismatched prepare-run to the canonical wrapper despite opt-in", () => {
-    const command = "prepare-run";
-    const fixture = makeMismatchedWrapperRepo();
-    seedReadyReview(fixture);
-    const result = runWrapper(fixture, ["--dev-wrapper", command, "123"], "linked");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
-    );
-    expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
-    // The stubbed gh reports a non-main base: reaching this gate proves the
-    // canonical wrapper ran instead of the mismatched local one.
-    expect(result.stderr).toContain(
-      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-    );
-    expect(result.stdout).not.toContain("local wrapper executed");
-  });
+  it.each([
+    { command: "prepare-run", parked: false },
+    ...["prepare-run", "prepare-baseline-refresh", "prepare-baseline-successor"].map((command) => ({
+      command,
+      parked: true,
+    })),
+  ])(
+    "routes mismatched $command through the trusted wrapper (parked=$parked)",
+    ({ command, parked }) => {
+      const fixture = makeMismatchedWrapperRepo();
+      seedReadyReview(fixture);
+      if (parked) {
+        parkCanonicalOffAnchor(fixture);
+      }
+      const result = runWrapper(fixture, [...(parked ? [] : ["--dev-wrapper"]), command, "123"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        parked
+          ? "running wrapper code materialized from the refs/remotes/origin/main trust anchor"
+          : anchorSubstitutionNotice(fixture.canonical),
+      );
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
+      if (parked) {
+        expect(result.stderr).not.toContain("Refusing to silently substitute");
+      } else {
+        expect(result.stderr).toContain(
+          `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
+        );
+        expect(result.stdout).not.toContain("local wrapper executed");
+      }
+    },
+  );
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -772,7 +775,7 @@ describe("scripts/pr wrappers", () => {
 
     // main's wrapper then advances and the canonical checkout tracks it.
     fixture.write("scripts/pr-lib/gates.sh", 'ci_dispatch() { echo "canonical v2 executed"; }\n');
-    fixture.commit(["scripts/pr-lib/gates.sh"], "test: wrapper v2", true);
+    fixture.commit(["scripts/pr-lib/gates.sh"], true);
 
     const result = spawnSync(join(stale, "scripts", "pr"), ["ci-dispatch", "123"], {
       cwd: stale,
@@ -794,7 +797,7 @@ describe("scripts/pr wrappers", () => {
       "scripts/pr-lib/gates.sh",
       'ci_dispatch() { echo "parked canonical executed"; }\n',
     );
-    fixture.commit(["scripts/pr-lib/gates.sh"], "test: parked canonical wrapper");
+    fixture.commit(["scripts/pr-lib/gates.sh"]);
   }
 
   itPosix("preserves selected shell and Node Git across a legacy extracted wrapper handoff", () => {
@@ -813,7 +816,7 @@ describe("scripts/pr wrappers", () => {
         "",
       ].join("\n"),
     );
-    fixture.commit(["scripts/pr"], "test: legacy Git handoff", true);
+    fixture.commit(["scripts/pr"], true);
     parkCanonicalOffAnchor(fixture);
 
     const selected = join(fixture.root, "custom-git");
@@ -877,11 +880,7 @@ describe("scripts/pr wrappers", () => {
       helper,
       readScript(helper).replace("../lib/record-shared.mjs", "../lib/anchor-review-record.mjs"),
     );
-    fixture.commit(
-      [inventory, dependency, "scripts/pr-lib/review-artifacts.mjs"],
-      "test: anchor-only review dependency",
-      true,
-    );
+    fixture.commit([inventory, dependency, "scripts/pr-lib/review-artifacts.mjs"], true);
   }
 
   function makeToolingRootFixture() {
@@ -1118,7 +1117,7 @@ echo "canonical wrapper executed";`,
     for (const name of names) {
       writeFileSync(join(fixture.canonical, directory, name), "anchored path bytes\n");
     }
-    fixture.commit(["--", directory], "test: anchored path spellings", true);
+    fixture.commit(["--", directory], true);
     parkCanonicalOffAnchor(fixture);
     const result = runWrapper(fixture, ["ci-dispatch", "123"]);
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
@@ -1169,8 +1168,16 @@ fi
     "omitted required inventory component",
     "leaf symlink",
     "parent symlink",
+    "tampered",
+    "missing",
   ])("refuses anchor extraction on %s", (failure) => {
-    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const sourceFault = failure === "tampered" || failure === "missing";
+    const fixture = makeMismatchedWrapperRepo(
+      sourceFault ? { realModules: true } : { toolingOnly: true },
+    );
+    if (sourceFault) {
+      advanceAnchorReviewDependency(fixture);
+    }
     parkCanonicalOffAnchor(fixture);
     const git = join(fixture.bin, "git");
     writeFileSync(
@@ -1241,12 +1248,17 @@ fi
 case "$OPENCLAW_TEST_FAILURE" in
   'leaf symlink') linked_path=scripts/lib/plain-gh.mjs ;;
   'parent symlink') linked_path=scripts/lib ;;
+  'tampered'|'missing') linked_path=scripts/lib/anchor-review-record.mjs ;;
   *) exit 0 ;;
 esac
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-C" ]; then
-    mv "$2/$linked_path" "$OPENCLAW_TEST_LINK_TARGET" || exit
-    ln -s "$OPENCLAW_TEST_LINK_TARGET" "$2/$linked_path"
+    case "$OPENCLAW_TEST_FAILURE" in
+      missing) rm "$2/$linked_path" ;;
+      tampered) printf '\\n// tampered\\n' >> "$2/$linked_path" ;;
+      *) mv "$2/$linked_path" "$OPENCLAW_TEST_LINK_TARGET" || exit
+         ln -s "$OPENCLAW_TEST_LINK_TARGET" "$2/$linked_path" ;;
+    esac
     exit
   fi
   shift
@@ -1271,12 +1283,14 @@ exit 99
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain("Refusing to silently substitute");
     expect(result.stderr).not.toContain("running wrapper code materialized from");
-    expect(
-      result.stderr
-        .split("\n")
-        .find((line) => line.startsWith("differing wrapper components vs origin/main:")),
-    ).toBe("differing wrapper components vs origin/main: scripts/pr-lib");
-    expect(existsSync(readerLog)).toBe(failure !== "producer failure");
+    if (!sourceFault) {
+      expect(
+        result.stderr
+          .split("\n")
+          .find((line) => line.startsWith("differing wrapper components vs origin/main:")),
+      ).toBe("differing wrapper components vs origin/main: scripts/pr-lib");
+      expect(existsSync(readerLog)).toBe(failure !== "producer failure");
+    }
     expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
   });
 
@@ -1287,7 +1301,7 @@ exit 99
       "scripts/pr-lib/gates.sh",
       `ci_dispatch() { node "$(review_artifacts_helper_path)" template "$1" "${REVIEWED_HEAD}"; }\n`,
     );
-    fixture.commit(["scripts/pr-lib/gates.sh"], "test: real anchor helper dispatch", true);
+    fixture.commit(["scripts/pr-lib/gates.sh"], true);
     parkCanonicalOffAnchor(fixture);
     const temporaryAlias = join(fixture.root, "temporary-alias");
     symlinkSync(fixture.root, temporaryAlias, "dir");
@@ -1427,7 +1441,7 @@ exit 99
 
       const plan = {
         version: 1,
-        baseSha: "a".repeat(40),
+        baseSha: outcomeOid,
         headSha: REVIEWED_HEAD,
         changedPaths: [{ path: "docs/example.md", status: "M" }],
         targets: [],
@@ -1456,10 +1470,10 @@ exit 99
         'import { value } from "../../src/anchor-value.js";\nvoid value;\n',
         fixture.linked,
       );
-      fixture.commit(["src", "test/probe"], "test: candidate import graph", false, fixture.linked);
+      fixture.commit(["src", "test/probe"], false, fixture.linked);
       const base = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
       fixture.write("src/anchor-value.ts", "export const value = 2;\n", fixture.linked);
-      fixture.commit(["src/anchor-value.ts"], "test: candidate change", false, fixture.linked);
+      fixture.commit(["src/anchor-value.ts"], false, fixture.linked);
       const head = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
       const planned = spawnSync(
         nodeExecPath,
@@ -1477,71 +1491,6 @@ exit 99
         changedPaths: [{ path: "src/anchor-value.ts", status: "M" }],
         targets: ["test/probe/anchor.test.ts"],
       });
-    },
-  );
-
-  itPosix.each(
-    ["scripts/lib/anchor-review-record.mjs"].flatMap((resource) =>
-      ["tampered", "missing"].map((fault) => ({ resource, fault })),
-    ),
-  )(
-    "refuses an extracted anchor with a $fault source/resource $resource",
-    ({ resource, fault }) => {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
-      advanceAnchorReviewDependency(fixture);
-      parkCanonicalOffAnchor(fixture);
-      const tar = join(fixture.bin, "tar");
-      writeFileSync(
-        tar,
-        `#!/bin/sh
-"$OPENCLAW_TEST_TAR" "$@" || exit
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-C" ]; then
-    if [ "$OPENCLAW_TEST_FAULT" = missing ]; then
-      rm "$2/$OPENCLAW_TEST_FAULT_PATH"
-    else
-      printf '\\n// tampered\\n' >> "$2/$OPENCLAW_TEST_FAULT_PATH"
-    fi
-    exit
-  fi
-  shift
-done
-exit 99
-`,
-      );
-      chmodSync(tar, 0o755);
-      const result = runWrapper(fixture, ["unknown-command"], "linked", {
-        env: {
-          ...fixture.env,
-          OPENCLAW_TEST_TAR: resolveCommand("tar"),
-          OPENCLAW_TEST_FAULT: fault,
-          OPENCLAW_TEST_FAULT_PATH: resource,
-        },
-      });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(result.stderr).toContain("Refusing to silently substitute");
-      expect(result.stderr).not.toContain("running wrapper code materialized from");
-      expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
-    },
-  );
-
-  it.each(["prepare-run", "prepare-baseline-refresh", "prepare-baseline-successor"])(
-    "routes mismatched %s through the materialized anchor",
-    (command) => {
-      const fixture = makeMismatchedWrapperRepo();
-      seedReadyReview(fixture);
-      parkCanonicalOffAnchor(fixture);
-      const result = runWrapper(fixture, [command, "123"]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
-      );
-      // The stubbed gh reports a non-main base: reaching this gate proves the
-      // materialized anchor wrapper ran the landing subcommand.
-      expect(result.stderr).toContain(
-        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-      );
-      expect(result.stderr).not.toContain("Refusing to silently substitute");
     },
   );
 
@@ -1568,19 +1517,14 @@ exit 99
       }),
       fixture.linked,
     );
-    fixture.commit(
-      ["caller-dependency.mts", "tsconfig.json"],
-      "test: caller-owned dependency aliases",
-      false,
-      fixture.linked,
-    );
+    fixture.commit(["caller-dependency.mts", "tsconfig.json"], false, fixture.linked);
     const recordPath = "packages/normalization-core/src/record-coerce.ts";
     fixture.write(
       recordPath,
       `throw new Error("caller workspace normalization executed");\n${readScript(recordPath)}`,
       fixture.linked,
     );
-    fixture.commit([recordPath], "test: caller-owned normalization", false, fixture.linked);
+    fixture.commit([recordPath], false, fixture.linked);
     parkCanonicalOffAnchor(fixture);
     const result = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
       env: { ...fixture.env, TMPDIR: fixture.root },
@@ -1645,7 +1589,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       } else {
         rmSync(join(fixture.canonical, "scripts/pr-lib/wrapper-components.txt"));
       }
-      fixture.commit(["-u", "scripts/pr", "scripts/pr-lib"], "test: legacy anchor wrapper", true);
+      fixture.commit(["-u", "scripts/pr", "scripts/pr-lib"], true);
       fixture.git(fixture.linked, ["fetch", "origin", "main"]);
       parkCanonicalOffAnchor(fixture);
       const result = runWrapper(fixture, ["ci-dispatch", "123"], "linked");
@@ -1667,7 +1611,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       }
       fixture.git(fixture.canonical, ["checkout", "-b", "parked"]);
       fixture.write("scripts/pr", '#!/bin/sh\necho "stale canonical wrapper executed"\nexit 91\n');
-      fixture.commit(["scripts/pr"], "test: stale canonical wrapper");
+      fixture.commit(["scripts/pr"]);
       const recorder = join(fixture.bin, "node");
       writeFileSync(recorder, '#!/bin/sh\nprintf \'%s\\0\' "$PWD" "$@"\nexit 73\n');
       chmodSync(recorder, 0o755);

@@ -65,6 +65,16 @@ function expectSeed(f: ReturnType<typeof coldFixture>, pr = 42) {
   return worktree;
 }
 
+function nativeCheckout(f: ReturnType<typeof coldFixture>, parent?: string) {
+  const result = f.reviewInit();
+  expect(result.stderr).toContain("PR source checkout: Git checkout.");
+  expectSeed(f);
+  expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
+  f.expectUnlocked();
+  f.expectNoTemplates(parent);
+  return result;
+}
+
 function nextPr(f: ReturnType<typeof coldFixture>, pr: number, route?: string) {
   f.configure({
     metadata: {
@@ -96,12 +106,8 @@ describePosix("native PR source provisioning", () => {
   it("keeps disabled-acceleration seed, private checkpoint, and cleanup custody", () => {
     fs.writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, '{"worktreeAcceleration":false}\n');
     const shared = f.canonicalGit("rev-parse", "refs/remotes/origin/main");
-    f.reviewInit();
-    expectSeed(f);
-    expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
+    nativeCheckout(f);
     expect(f.canonicalGit("rev-parse", "refs/remotes/origin/main")).toBe(shared);
-    f.expectUnlocked();
-    f.expectNoTemplates();
   });
 
   it("preserves a symlinked parent through native Git with acceleration enabled", () => {
@@ -129,38 +135,27 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     fs.rmdirSync(parent);
     fs.mkdirSync(physicalParent);
     fs.symlinkSync(physicalParent, parent, "dir");
-    const result = f.reviewInit();
-    expect(result.stderr).toContain("PR source checkout: Git checkout.");
+    nativeCheckout(f, physicalParent);
     expect(fs.readFileSync(guardReceipt, "utf8")).toMatch(/^[1-9]\d*\n$/);
-    expectSeed(f);
     expect(f.git(f.worktree, "rev-parse", "--show-toplevel")).toBe(join(physicalParent, "pr-42"));
-    expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.main);
-    f.expectUnlocked();
-    f.expectNoTemplates(physicalParent);
   });
 
-  it.runIf(process.platform === "linux")(
-    "keeps native Git provisioning on an unsupported source filesystem",
-    async (context) => {
-      // A clone-capable fixture volume cannot supply this acceptance cell.
-      const backend = await detectWorktreeFilesystemBackend(f.canonical, {
-        commitGuard() {},
-      });
-      if (backend) {
-        context.skip();
-        return;
-      }
-      const result = f.reviewInit();
-      expect(result.stderr).toContain("PR source checkout: Git checkout.");
-      expectSeed(f);
-      f.expectMainTree();
-      expect(fs.existsSync(join(f.worktree, "scripts", "pr"))).toBe(true);
-      f.expectNoTemplates();
-    },
-  );
+  it.runIf(process.platform === "linux")("uses Git on unsupported filesystems", async (context) => {
+    // A clone-capable fixture volume cannot supply this acceptance cell.
+    const backend = await detectWorktreeFilesystemBackend(f.canonical, {
+      commitGuard() {},
+    });
+    if (backend) {
+      context.skip();
+      return;
+    }
+    nativeCheckout(f);
+    f.expectMainTree();
+    expect(fs.existsSync(join(f.worktree, "scripts", "pr"))).toBe(true);
+  });
 
   it.each(["count", "parameters"] as const)(
-    "preserves command-scoped safe.directory through cold provisioning (%s transport)",
+    "preserves safe.directory from %s transport",
     (transport) => {
       // Local upload-pack drops client command-scope config; trust only its bare remote.
       f.env.GIT_CONFIG_GLOBAL = join(f.root, "gitconfig");
@@ -184,69 +179,67 @@ if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
     },
   );
 
-  it.each([
-    "default",
-    "absolute",
-    "relative",
-    "command-scoped",
-    "parameter-scoped",
-    "branch",
-  ] as const)("executes the %s checkout hook once and preserves its tracked edit", (policy) => {
-    const hooks =
-      policy === "default" ? join(f.canonical, ".git", "hooks") : join(f.root, "configured-hooks");
-    const receipt = join(f.root, "configured-hook.txt");
-    if (policy !== "default") {
-      fs.mkdirSync(hooks);
-    }
-    const hook = join(hooks, "post-checkout");
-    fs.writeFileSync(
-      hook,
-      `#!/bin/sh
+  it.each(["default", "absolute", "relative", "command", "parameter", "branch"] as const)(
+    "executes the %s checkout hook once and preserves its edit",
+    (policy) => {
+      const hooks =
+        policy === "default"
+          ? join(f.canonical, ".git", "hooks")
+          : join(f.root, "configured-hooks");
+      const receipt = join(f.root, "configured-hook.txt");
+      if (policy !== "default") {
+        fs.mkdirSync(hooks);
+      }
+      const hook = join(hooks, "post-checkout");
+      fs.writeFileSync(
+        hook,
+        `#!/bin/sh
 printf '%s\\t%s\\t%s\\t%s\\n' "$PWD" "$1" "$2" "$3" >> "${receipt}"
 printf 'hook-owned edit\\n' > src/subject.ts
 `,
-    );
-    fs.chmodSync(hook, 0o755);
-    if (policy === "default") {
-      f.git(f.canonical, "config", "--unset", "core.hooksPath");
-    } else if (policy === "branch") {
-      const config = join(f.root, "branch.gitconfig");
-      fs.writeFileSync(config, `[core]\n\thooksPath = ${JSON.stringify(hooks)}\n`);
-      f.git(f.canonical, "config", "includeIf.onbranch:temp/pr-*.path", config);
-      // Detached canonical HEAD cannot reveal the destination's branch-only policy.
-      expect(f.git(f.canonical, "config", "--get", "core.hooksPath")).toBe("/dev/null");
-    } else if (policy === "command-scoped") {
-      f.env.GIT_CONFIG_COUNT = "1";
-      f.env.GIT_CONFIG_KEY_0 = "core.hooksPath";
-      f.env.GIT_CONFIG_VALUE_0 = hooks;
-    } else if (policy === "parameter-scoped") {
-      f.env.GIT_CONFIG_PARAMETERS = `'core.hooksPath=${hooks}'`;
-    } else {
-      // Relative hooks resolve from the checkout in which the hook runs,
-      // not from the canonical repository where provisioning begins.
-      f.git(
-        f.canonical,
-        "config",
-        "core.hooksPath",
-        policy === "relative" ? relative(f.worktree, hooks) : hooks,
       );
-    }
-    const result = f.reviewInit(false);
-    // Relative and branch-only policy activates after entering the new checkout.
-    expect(result.stderr).toContain(
-      policy === "relative" || policy === "branch"
-        ? "the journaled transition did not complete cleanly"
-        : "foreign state blocks a new transition",
-    );
-    expectSeed(f);
-    expect(fs.readFileSync(receipt, "utf8")).toBe(
-      `${f.worktree}\t${"0".repeat(40)}\t${f.main}\t1\n`,
-    );
-    expect(f.subject()).toBe("hook-owned edit\n");
-    f.expectNoTemplates();
-    expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
-    f.expectUnlocked();
-  });
+      fs.chmodSync(hook, 0o755);
+      if (policy === "default") {
+        f.git(f.canonical, "config", "--unset", "core.hooksPath");
+      } else if (policy === "branch") {
+        const config = join(f.root, "branch.gitconfig");
+        fs.writeFileSync(config, `[core]\n\thooksPath = ${JSON.stringify(hooks)}\n`);
+        f.git(f.canonical, "config", "includeIf.onbranch:temp/pr-*.path", config);
+        // Detached canonical HEAD cannot reveal the destination's branch-only policy.
+        expect(f.git(f.canonical, "config", "--get", "core.hooksPath")).toBe("/dev/null");
+      } else if (policy === "command") {
+        f.env.GIT_CONFIG_COUNT = "1";
+        f.env.GIT_CONFIG_KEY_0 = "core.hooksPath";
+        f.env.GIT_CONFIG_VALUE_0 = hooks;
+      } else if (policy === "parameter") {
+        f.env.GIT_CONFIG_PARAMETERS = `'core.hooksPath=${hooks}'`;
+      } else {
+        // Relative hooks resolve from the checkout in which the hook runs,
+        // not from the canonical repository where provisioning begins.
+        f.git(
+          f.canonical,
+          "config",
+          "core.hooksPath",
+          policy === "relative" ? relative(f.worktree, hooks) : hooks,
+        );
+      }
+      const result = f.reviewInit(false);
+      // Relative and branch-only policy activates after entering the new checkout.
+      expect(result.stderr).toContain(
+        policy === "relative" || policy === "branch"
+          ? "the journaled transition did not complete cleanly"
+          : "foreign state blocks a new transition",
+      );
+      expectSeed(f);
+      expect(fs.readFileSync(receipt, "utf8")).toBe(
+        `${f.worktree}\t${"0".repeat(40)}\t${f.main}\t1\n`,
+      );
+      expect(f.subject()).toBe("hook-owned edit\n");
+      f.expectNoTemplates();
+      expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
+      f.expectUnlocked();
+    },
+  );
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
     const monitor = join(f.root, "fsmonitor");
@@ -255,12 +248,9 @@ printf 'hook-owned edit\\n' > src/subject.ts
     fs.writeFileSync(monitor, `#!/bin/sh\nprintf '%s\\n' "$PWD" >> "${receipt}"\nexit 1\n`);
     fs.chmodSync(monitor, 0o755);
     f.git(f.canonical, "config", "core.fsmonitor", monitor);
-    const result = f.reviewInit();
-    expect(result.stderr).toContain("PR source checkout: Git checkout.");
+    nativeCheckout(f);
     expect(fs.readFileSync(receipt, "utf8").trim().split("\n")).toContain(f.worktree);
-    expectSeed(f);
     expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitor);
-    f.expectNoTemplates();
   });
 
   it("preserves the caller branch and initialized checkout after a nonzero hook exit", () => {

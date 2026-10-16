@@ -38,9 +38,7 @@ if (fault === 'rejected') {
   throw new Error('Expected Git to refuse a branch already owned by a sibling');
 }
 if (command >= 0) {
-  const register = [...args];
-  register.splice(command + 2, 0, '--no-checkout');
-  run(register);
+  run(args.toSpliced(command + 2, 0, '--no-checkout'));
 }
 mkdirSync(join(destination, 'src'), { recursive: true });
 writeFileSync(join(destination, 'src', 'file-0.txt'), 'checkout progress\\n');
@@ -85,6 +83,7 @@ progressing = awaitRelease('checkout-release', 'FIXTURE_CHECKOUT_READY:', () => 
     `import childProcess from 'node:child_process';
 import { readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { createInterface } from 'node:readline';
 const external = ${fault === "external-cancel"};
 const allocatorPid = ${JSON.stringify(join(f.root, "allocator.pid"))};
 function captureTimers(tracked) {
@@ -104,23 +103,10 @@ function captureTimers(tracked) {
     return cancel(timer);
   };
   const fire = (timer, deadline) => {
-    cancel(timer);
-    timers.delete(timer);
+    globalThis.clearTimeout(timer);
     deadline.callback(...deadline.args);
   };
   return { timers, fire };
-}
-function readLines(stream, consume) {
-  let output = '';
-  stream.on('data', chunk => {
-    output += chunk.toString();
-    let newline;
-    while ((newline = output.indexOf('\\n')) >= 0) {
-      const line = output.slice(0, newline);
-      output = output.slice(newline + 1);
-      consume(line);
-    }
-  });
 }
 if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
   const spawn = childProcess.spawn;
@@ -128,7 +114,7 @@ if (external && process.argv[1]?.endsWith('/process-group-runner.mjs')) {
   childProcess.spawn = (command, args, options) => {
     const child = spawn(command, args, options);
     let sideEffects = 0;
-    readLines(child.stdio[3], line => {
+    createInterface({ input: child.stdio[3] }).on('line', line => {
       if (line === 'phase\\tside-effects-started' && ++sideEffects === 2) {
         // The production consumer runs synchronously after this observer.
         queueMicrotask(() => process.kill(Number(readFileSync(allocatorPid, 'utf8')), 'SIGUSR2'));
@@ -221,7 +207,7 @@ if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
       checkoutChild = undefined;
       process.off('SIGUSR2', releaseCleanup);
     });
-    readLines(child.stderr, line => {
+    createInterface({ input: child.stderr }).on('line', line => {
         const ready = /^FIXTURE_CHECKOUT_READY:(\\d+)$/.exec(line);
         if (ready) {
           const deadlines = [...timers].filter(([, value]) => value.milliseconds >= 300000);
