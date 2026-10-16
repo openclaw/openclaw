@@ -12,7 +12,6 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
   preflightWorkerWorkspace: workspace.preflight,
 }));
 
-import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   GatewayDrainingError,
@@ -37,6 +36,7 @@ import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-
 import {
   REQUEST as FIXTURE_REQUEST,
   seedActivePlacement,
+  seedProvisioningPlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -159,7 +159,8 @@ describe("dispatch Stop before provider allocation", () => {
         targetOwner.resolveWorkerPlacementSessionTarget,
       );
       const sourceEntry = moveDestinationMocks.resolveCanonicalSession();
-      const storePath = moveDestinationMocks.resolveGatewaySessionTarget().storePath;
+      const sessionTarget = moveDestinationMocks.resolveGatewaySessionTarget();
+      const { storePath } = sessionTarget;
       await upsertSessionEntryCore(
         { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey, storePath },
         {
@@ -170,20 +171,6 @@ describe("dispatch Stop before provider allocation", () => {
             repoRoot: support.testState.root,
           },
         },
-      );
-      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
-        "./session-utils-store-worker.js",
-      );
-      const config = { ...support.testState.config, session: { store: storePath } };
-      setRuntimeConfigSnapshot(config, config);
-      moveDestinationMocks.getRuntimeConfig.mockReturnValue(config);
-      const sessionTarget = await targetReader.resolveGatewaySessionStoreTargetInWorker({
-        cfg: config,
-        key: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      });
-      moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(
-        targetReader.resolveGatewaySessionStoreTargetInWorker,
       );
       runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
         actual.createWorkerPlacementDispatchService({
@@ -667,14 +654,7 @@ describe("dispatch Stop before provider allocation", () => {
       const environments = support.createService(support.createProvider({ provision, destroy }));
       const environment = await support.seedBootstrapping("environment-refused-recovery");
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const requested = await placements.startDispatch(REQUEST);
-      await placements.transition({
-        sessionId: REQUEST.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: requested.generation,
-        patch: { environmentId: environment.environmentId },
-      });
+      await seedProvisioningPlacement(placements, environment.environmentId, "remote-exec");
       const entry = {
         sessionId: reason === "replaced" ? "replacement-session" : REQUEST.sessionId,
         lifecycleRevision: "original",

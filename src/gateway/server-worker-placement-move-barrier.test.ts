@@ -49,16 +49,14 @@ import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
-import {
-  createWorkerPlacementMoveService,
-  type WorkerPlacementMoveBarrier,
-} from "./worker-environments/placement-move-service.js";
+import type { WorkerPlacementMoveBarrier } from "./worker-environments/placement-move-service.js";
 
 const session = {
   sessionId: "session-move-source",
   sessionKey: "agent:main:move-source",
   agentId: "main",
 };
+const researchSession = { sessionKey: "global", sessionId: "research-global", agentId: "research" };
 const sessionRuntime = {
   managedWorktrees: { findLiveByOwner: async () => undefined },
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -78,19 +76,15 @@ const abandonmentErrors = {
   "rotated-claim": { message: "worker turn changed", order: persistedClaim },
 };
 
-async function withMoveSession(
-  run: (
-    target: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>,
-  ) => Promise<void>,
-) {
+type MoveTarget = Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>;
+async function withMoveSession(run: (target: MoveTarget) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await run(
-      await resolveGatewaySessionStoreTargetInWorker({
-        cfg: {},
-        key: session.sessionKey,
-        agentId: session.agentId,
-      }),
-    );
+    const target = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: {},
+      key: session.sessionKey,
+      agentId: session.agentId,
+    });
+    await run(target);
   });
 }
 
@@ -142,9 +136,7 @@ describe("worker placement move destination", () => {
     "$action preserves another agent's lane commands under the global key ($authority authority)",
     async ({ action, authority }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const sessionKey = "global";
-        const sessionId = "research-global";
-        const agentId = "research";
+        const { sessionKey, sessionId, agentId } = researchSession;
         let committed = false;
         const assertAuthority = () => {
           if (committed && authority === "revoked after commit") {
@@ -183,7 +175,7 @@ describe("worker placement move destination", () => {
           }),
           enqueueCommandInLane(lane, async () => "legacy-main"),
           enqueueCommandInLane(lane, async () => "research", {
-            sessionTarget: { agentId, sessionKey, sessionId },
+            sessionTarget: researchSession,
           }),
         ];
         const results = Promise.allSettled(queued);
@@ -223,16 +215,14 @@ describe("worker placement move destination", () => {
           if (action === "required") {
             await runWorkerPlacementHandoff(
               options,
-              { sessionId, sessionKey, agentId, action: "dispatch", requiredProfile: "dedicated" },
+              { ...researchSession, action: "dispatch", requiredProfile: "dedicated" },
               sessionRuntime,
               async () => commit().placement,
             );
           } else if (action === "dispatch") {
             await expect(
               createGatewayWorkerPlacementLocalDispatchBarrier(options)({
-                sessionId,
-                sessionKey,
-                agentId,
+                ...researchSession,
                 executionMode: "remote-exec",
                 authorize: assertAuthority,
                 startDispatch: async () => commit().placement,
@@ -243,9 +233,7 @@ describe("worker placement move destination", () => {
               ...options,
               loadSessionRuntime,
             })({
-              sessionId,
-              sessionKey,
-              agentId,
+              ...researchSession,
               sourceDisposition: action,
               authorize: assertAuthority,
               begin: async () => commit(),
@@ -496,11 +484,7 @@ describe("worker placement move destination", () => {
           warn: vi.fn(),
         });
         const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
-          | {
-              runMoveBarrier: Parameters<
-                typeof createWorkerPlacementMoveService
-              >[0]["runMoveBarrier"];
-            }
+          | { runMoveBarrier: WorkerPlacementMoveBarrier }
           | undefined;
         if (!dispatchOptions) {
           throw new Error("worker placement move barrier was not captured");

@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -34,8 +33,7 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
-const roots: string[] = [];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 function resolveFixtureTarget(storePath: string): typeof resolveGatewaySessionStoreTargetInWorker {
   return (params) =>
     resolveGatewaySessionStoreTargetInWorker({
@@ -66,6 +64,15 @@ function expectAdmissions(report: Awaited<ReturnType<typeof scenario>>) {
     explicitNewAdmissionAccepted: true,
   });
 }
+function cleanupAdmission(
+  runId: string,
+  result: Awaited<Awaited<ReturnType<typeof admitWorkerStopChat>>["promise"]> | undefined,
+) {
+  if (result?.ok) {
+    result.value.cleanupAdmittedRun();
+    clearAgentRunContext(runId, result.value.lifecycleGeneration);
+  }
+}
 function expectPartial(events: unknown[], text: string, runId: string) {
   expect(events).toEqual([
     expect.objectContaining({
@@ -81,7 +88,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
 
 async function scenario(
@@ -97,8 +104,7 @@ async function scenario(
     pendingMove = false,
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-"));
-  roots.push(root);
+  const root = tempDirs.make("worker-stop-");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
   const readProjection = placements.readProjection.bind(placements);
@@ -426,17 +432,11 @@ async function scenario(
   const environment = harness.environments.get(active.environmentId!);
   expect(environment?.state).toBe("destroyed");
   expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyFailure ? 2 : 1);
-  if (oldResult.ok) {
-    oldResult.value.cleanupAdmittedRun();
-    clearAgentRunContext(oldRunId, oldResult.value.lifecycleGeneration);
-  }
+  cleanupAdmission(oldRunId, oldResult);
   const freshRunId = name + "-explicit-after-stop";
   const fresh = await admit(freshRunId);
   const freshResult = await fresh.promise;
-  if (freshResult.ok) {
-    freshResult.value.cleanupAdmittedRun();
-    clearAgentRunContext(freshRunId, freshResult.value.lifecycleGeneration);
-  }
+  cleanupAdmission(freshRunId, freshResult);
   const persistedPartials = pendingMove
     ? (await loadTranscriptEvents({ storePath, ...REQUEST })).filter(
         (event) =>
@@ -463,10 +463,7 @@ async function scenario(
     destroyedDuringInspection,
   };
   context.chatRunState.clear();
-  if (running?.ok) {
-    running.value.cleanupAdmittedRun();
-    clearAgentRunContext(name + "-running", running.value.lifecycleGeneration);
-  }
+  cleanupAdmission(name + "-running", running);
   return report;
 }
 
@@ -572,8 +569,7 @@ it("Stop preserves RPC cancellation and buffered output while Move waits behind 
 it.each(["missing", "local"] as const)(
   "Stop records RPC cancellation for local chat before unrelated inspection completes (%s placement)",
   async (state) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-local-"));
-    roots.push(root);
+    const root = tempDirs.make("worker-stop-local-");
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
     const storePath = path.join(root, "sessions.sqlite");
@@ -682,8 +678,7 @@ it.each(["missing", "local"] as const)(
       cancellationLoad.resolve();
       release.resolve();
       await Promise.all([sweep, dispatch, stopping]);
-      admitted.value.cleanupAdmittedRun();
-      clearAgentRunContext(runId, admitted.value.lifecycleGeneration);
+      cleanupAdmission(runId, admitted);
     }
     expect(await dispatch).toBe("cancelled");
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();

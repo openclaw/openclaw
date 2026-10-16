@@ -33,7 +33,7 @@ afterEach(async () => {
 async function makeSession(sessionId: string) {
   const identity = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId };
   const storePath = path.join(tempDirs.make(`worker-${sessionId}-`), "sessions.sqlite");
-  const entry = { sessionId: identity.sessionId, lifecycleRevision: "original", updatedAt: 1 };
+  const entry = { sessionId, lifecycleRevision: "original", updatedAt: 1 };
   const scope = { ...identity, storePath };
   await replaceSessionEntry(scope, entry);
   const target = {
@@ -126,102 +126,95 @@ it.each(["replacement", "database-close"] as const)(
 );
 
 it.each([
-  "displayName",
-  "participants",
-  "transcript",
-  "unknown",
-  "lifecycleRevision",
-  "deviceFolder",
-  "replacement-before-read",
-  "partial-participants",
-  "unknown-participants",
-  "retained-participants",
-  "owner-generation",
-  "category-generation",
-  "member-generation",
-] as const)("reconciles a %s publication during worker source acquisition", async (field) => {
-  const { identity, scope, target } = await makeSession("acquiring");
-  const publish = (facts: SessionRowFacts) =>
-    sessionChanges.emit({ ...scope, scope: "session-entry", facts });
-  const originalRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
-  const read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
-  read.mockImplementationOnce(async (input, assertCurrent, consume, ...rest) => {
-    if (field === "replacement-before-read") {
-      await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "replacement" }));
+  ["displayName", true],
+  ["participants", true],
+  ["transcript", true],
+  ["unknown", false],
+  ["lifecycleRevision", false],
+  ["deviceFolder", false],
+  ["replacement-before-read", false],
+  ["partial-participants", true],
+  ["unknown-participants", false],
+  ["retained-participants", false],
+  ["owner-generation", false],
+  ["category-generation", false],
+  ["member-generation", false],
+] as const)(
+  "reconciles a %s publication during worker source acquisition",
+  async (field, accepted) => {
+    const { identity, scope, target } = await makeSession("acquiring");
+    const publish = (facts: SessionRowFacts) =>
+      sessionChanges.emit({ ...scope, scope: "session-entry", facts });
+    const originalRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
+    const read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
+    read.mockImplementationOnce(async (input, assertCurrent, consume, ...rest) => {
+      if (field === "replacement-before-read") {
+        await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "replacement" }));
+      }
+      return originalRead(
+        input,
+        assertCurrent,
+        async (result, owner) => {
+          // The UI can publish metadata while dispatch is acquiring its exact row.
+          if (field.endsWith("-participants")) {
+            publish({
+              kind: "participants",
+              ...(field !== "unknown-participants" ? { projection: { participantCount: 1 } } : {}),
+            });
+          } else if (field.endsWith("-generation")) {
+            publish(
+              field === "owner-generation"
+                ? {
+                    kind: "owner",
+                    sessionId: scope.sessionId,
+                    lifecycleRevision: "replacement",
+                    owner: undefined,
+                  }
+                : field === "category-generation"
+                  ? { kind: "category", sessionId: "replacement", category: null }
+                  : { kind: "member", sessionId: "replacement", identityId: "user", present: true },
+            );
+          } else if (field === "transcript" || field === "unknown") {
+            sessionChanges.emit({
+              ...scope,
+              scope: field === "transcript" ? "transcript" : "session-entry",
+              ...(field === "transcript"
+                ? { facts: { kind: "unchanged" as const } }
+                : { factsInvalidated: true as const }),
+            });
+          } else if (field !== "replacement-before-read") {
+            await patchSessionEntryCore(scope, () =>
+              field === "deviceFolder"
+                ? { deviceFolder: { deviceId: "device", path: "/replacement" } }
+                : field === "participants"
+                  ? { participantCount: 1 }
+                  : { [field]: "changed" },
+            );
+          }
+          return consume(result, owner);
+        },
+        ...rest,
+      );
+    });
+    const run = vi.fn(async (source: { assertCurrent: () => unknown }) => source.assertCurrent());
+    try {
+      const operation = withGatewayWorkerSessionAdmission(
+        {
+          identity,
+          retainEntryFields:
+            field === "retained-participants" ? ["participantCount"] : ["deviceFolder"],
+          target,
+        },
+        run,
+      );
+      if (accepted) {
+        await expect(operation).resolves.toMatchObject({ sessionId: identity.sessionId });
+      } else {
+        await expect(operation).rejects.toThrow("changed during admission");
+      }
+      expect(run).toHaveBeenCalledTimes(accepted ? 1 : 0);
+    } finally {
+      read.mockRestore();
     }
-    return originalRead(
-      input,
-      assertCurrent,
-      async (result, owner) => {
-        // The UI can publish metadata while dispatch is acquiring its exact row.
-        if (
-          field === "partial-participants" ||
-          field === "unknown-participants" ||
-          field === "retained-participants"
-        ) {
-          publish({
-            kind: "participants",
-            ...(field !== "unknown-participants" ? { projection: { participantCount: 1 } } : {}),
-          });
-        } else if (field.endsWith("-generation")) {
-          publish(
-            field === "owner-generation"
-              ? {
-                  kind: "owner",
-                  sessionId: scope.sessionId,
-                  lifecycleRevision: "replacement",
-                  owner: undefined,
-                }
-              : field === "category-generation"
-                ? { kind: "category", sessionId: "replacement", category: null }
-                : { kind: "member", sessionId: "replacement", identityId: "user", present: true },
-          );
-        } else if (field === "transcript" || field === "unknown") {
-          sessionChanges.emit({
-            ...scope,
-            scope: field === "transcript" ? "transcript" : "session-entry",
-            ...(field === "transcript"
-              ? { facts: { kind: "unchanged" as const } }
-              : { factsInvalidated: true as const }),
-          });
-        } else if (field !== "replacement-before-read") {
-          await patchSessionEntryCore(scope, () =>
-            field === "deviceFolder"
-              ? { deviceFolder: { deviceId: "device", path: "/replacement" } }
-              : field === "participants"
-                ? { participantCount: 1 }
-                : { [field]: "changed" },
-          );
-        }
-        return consume(result, owner);
-      },
-      ...rest,
-    );
-  });
-  const run = vi.fn(async (source: { assertCurrent: () => unknown }) => source.assertCurrent());
-  try {
-    const operation = withGatewayWorkerSessionAdmission(
-      {
-        identity,
-        retainEntryFields:
-          field === "retained-participants" ? ["participantCount"] : ["deviceFolder"],
-        target,
-      },
-      run,
-    );
-    if (
-      field === "displayName" ||
-      field === "participants" ||
-      field === "partial-participants" ||
-      field === "transcript"
-    ) {
-      await expect(operation).resolves.toMatchObject({ sessionId: identity.sessionId });
-      expect(run).toHaveBeenCalledOnce();
-    } else {
-      await expect(operation).rejects.toThrow("changed during admission");
-      expect(run).not.toHaveBeenCalled();
-    }
-  } finally {
-    read.mockRestore();
-  }
-});
+  },
+);

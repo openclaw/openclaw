@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -29,7 +28,7 @@ import { createHarness } from "./worker-environments/placement-dispatch-test-har
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
-const roots: string[] = [];
+const tempDirs = createTempDirTracker();
 function waitFor(gate: Promise<unknown>, operation: Promise<unknown>) {
   return Promise.race([
     gate,
@@ -55,15 +54,14 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
 
 async function cancellationLoadFixture(
   options: NonNullable<Parameters<typeof createHarness>[2]> = {},
   beforeCancellation?: () => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-advance-"));
-  roots.push(root);
+  const root = tempDirs.make("worker-stop-advance-");
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const placements = createWorkerSessionPlacementStore({ database });
   const storePath = path.join(root, "sessions.sqlite");
@@ -493,39 +491,29 @@ it.each([
 ])(
   "$action retains captured dispatch authority across cancellation loading ($advance)",
   async ({ advance, action }) => {
-    const {
-      placements,
-      entry,
-      storePath,
-      context,
-      loading,
-      loaded,
-      cancellationStarted,
-      harness,
-      coordinated,
-      armCancellation,
-      waitForCancellationStart,
-    } = await cancellationLoadFixture(advance === "failed" ? { failAt: "sync" } : {});
+    const f = await cancellationLoadFixture(advance === "failed" ? { failAt: "sync" } : {});
     const provisioning = createDeferredCore();
     const provisioned = createDeferredCore();
     const attaching = createDeferredCore();
     const attached = createDeferredCore();
     let dispatchSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async ({ signal }) => {
-      dispatchSignal = signal;
-      provisioning.resolve();
-      await provisioned.promise;
-      return harness.ready;
-    });
+    vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(
+      async ({ signal }) => {
+        dispatchSignal = signal;
+        provisioning.resolve();
+        await provisioned.promise;
+        return f.harness.ready;
+      },
+    );
     if (advance === "syncing") {
-      const attach = harness.environments.attachSession;
-      harness.environments.attachSession = vi.fn(async (request) => {
+      const attach = f.harness.environments.attachSession;
+      f.harness.environments.attachSession = vi.fn(async (request) => {
         attaching.resolve();
         await attached.promise;
         return await attach(request);
       });
     }
-    const dispatch = coordinated
+    const dispatch = f.coordinated
       .dispatch(REQUEST, (placement) => {
         if (advance === "observer" && placement.state === "active") {
           placement.generation += 100;
@@ -533,7 +521,7 @@ it.each([
       })
       .catch((error: unknown) => error);
     await provisioning.promise;
-    armCancellation();
+    f.armCancellation();
     const stopping = Promise.resolve()
       .then(async () => {
         if (action === "archive") {
@@ -542,76 +530,76 @@ it.each([
               ...REQUEST,
               action,
               context: {
-                workerSessionPlacementService: placements,
-                workerPlacementDispatchService: coordinated,
-                workerEnvironmentService: harness.environments,
+                workerSessionPlacementService: f.placements,
+                workerPlacementDispatchService: f.coordinated,
+                workerEnvironmentService: f.harness.environments,
               },
             })
           ).stop();
         }
-        return await coordinated.reclaim(REQUEST);
+        return await f.coordinated.reclaim(REQUEST);
       })
       .catch((error: unknown) => error);
     try {
-      await waitFor(loading.promise, stopping);
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+      await waitFor(f.loading.promise, stopping);
+      expect(f.placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
       expect(dispatchSignal?.aborted).toBe(false);
       provisioned.resolve();
       if (advance === "syncing") {
         await attaching.promise;
-        expect(placements.get(REQUEST.sessionId)?.state).toBe("syncing");
+        expect(f.placements.get(REQUEST.sessionId)?.state).toBe("syncing");
       } else {
         await dispatch;
-        expect(placements.get(REQUEST.sessionId)?.state).toBe(
+        expect(f.placements.get(REQUEST.sessionId)?.state).toBe(
           advance === "failed" ? "failed" : "active",
         );
       }
       if (advance === "replacement") {
-        const current = placements.get(REQUEST.sessionId);
+        const current = f.placements.get(REQUEST.sessionId);
         if (current?.state !== "active") {
           throw new Error("Replacement fixture requires a completed active dispatch");
         }
-        await placements.startDrain({
+        await f.placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
           expectedGeneration: current.generation,
         });
       } else if (advance === "incarnation") {
-        entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath }, entry);
+        f.entry.lifecycleRevision = "replacement";
+        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
       }
-      loaded.resolve();
+      f.loaded.resolve();
       if (advance !== "replacement" && advance !== "incarnation") {
-        await waitForCancellationStart(stopping);
+        await f.waitForCancellationStart(stopping);
       }
       if (advance === "syncing") {
         expect(dispatchSignal?.aborted).toBe(true);
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
       }
       attached.resolve();
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
         expect(result).toBeInstanceOf(Error);
-        expect(cancellationStarted).not.toHaveBeenCalled();
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(f.cancellationStarted).not.toHaveBeenCalled();
+        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
       } else {
         if (action === "archive") {
           expect(result).toBeUndefined();
         }
-        expect(action === "archive" ? placements.get(REQUEST.sessionId) : result).toMatchObject({
+        expect(action === "archive" ? f.placements.get(REQUEST.sessionId) : result).toMatchObject({
           state: advance === "completed" || advance === "observer" ? "reclaimed" : "local",
         });
-        expect(cancellationStarted).toHaveBeenCalled();
-        expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
-        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+        expect(f.cancellationStarted).toHaveBeenCalled();
+        expect(f.harness.environments.get(f.harness.ready.environmentId)?.state).toBe("destroyed");
+        expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       }
     } finally {
-      loaded.resolve();
+      f.loaded.resolve();
       provisioned.resolve();
       attached.resolve();
       await Promise.all([dispatch, stopping]);
-      context.chatRunState.clear();
+      f.context.chatRunState.clear();
     }
   },
 );
