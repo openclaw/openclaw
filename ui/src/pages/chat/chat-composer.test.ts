@@ -516,10 +516,8 @@ describe("renderChatComposer controls", () => {
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
-    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
-      "wa-dropdown.chat-talk-input-picker",
-    );
-    expect(dropdown?.open).toBe(true);
+    const dropdown = container.querySelector<HTMLElement>(".chat-talk-input-picker");
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     await vi.waitFor(() =>
       expect(
         container.querySelector(
@@ -530,7 +528,7 @@ describe("renderChatComposer controls", () => {
 
     document.dispatchEvent(dictationPointer("pointerup", 10));
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(dropdown?.open).toBe(true);
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));

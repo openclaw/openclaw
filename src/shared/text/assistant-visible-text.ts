@@ -1,7 +1,15 @@
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import {
+  projectPlainTextToolCallBlocks,
+  stripPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/index.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
+import {
+  findCodeRegions,
+  isInsideCode,
+  projectLinesOutsideCode,
+  stripLinesOutsideCode,
+} from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
@@ -314,54 +322,64 @@ function createAssistantTraceProjector() {
   let active = false;
   const resetLine = () => traceLineHeads.map((parts) => ({ parts, part: 0, offset: 0 }));
   let candidates = resetLine();
-  return createConditionalTextProjector(stripAssistantInternalTraceLines, (input) => {
-    if (active) {
-      return true;
-    }
-    const appended = input.delta ?? input.text;
-    for (let at = 0; at < appended.length; at++) {
-      const char = appended.charAt(at).toLowerCase();
-      if (char === "\n") {
-        candidates = resetLine();
-        continue;
-      }
-      const whitespace = /\s/.test(char);
-      candidates = candidates.filter((candidate) => {
-        if (candidate.offset === 0 && whitespace) {
-          return true;
-        }
-        if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
-          return false;
-        }
-        candidate.offset++;
-        if (candidate.offset === candidate.parts[candidate.part]?.length) {
-          candidate.part++;
-          candidate.offset = 0;
-          active ||= candidate.part === candidate.parts.length;
-        }
-        return true;
-      });
-      // The canonical transform owns code protection and corrections after activation.
+  return createConditionalTextProjector(
+    stripAssistantInternalTraceLines,
+    (input) => {
       if (active) {
         return true;
       }
-      if (candidates.length === 0) {
-        const newline = appended.indexOf("\n", at + 1);
-        if (newline === -1) {
-          break;
+      const appended = input.delta ?? input.text;
+      for (let at = 0; at < appended.length; at++) {
+        const char = appended.charAt(at).toLowerCase();
+        if (char === "\n") {
+          candidates = resetLine();
+          continue;
         }
-        at = newline - 1;
+        const whitespace = /\s/.test(char);
+        candidates = candidates.filter((candidate) => {
+          if (candidate.offset === 0 && whitespace) {
+            return true;
+          }
+          if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
+            return false;
+          }
+          candidate.offset++;
+          if (candidate.offset === candidate.parts[candidate.part]?.length) {
+            candidate.part++;
+            candidate.offset = 0;
+            active ||= candidate.part === candidate.parts.length;
+          }
+          return true;
+        });
+        // The canonical transform owns code protection and corrections after activation.
+        if (active) {
+          return true;
+        }
+        if (candidates.length === 0) {
+          const newline = appended.indexOf("\n", at + 1);
+          if (newline === -1) {
+            break;
+          }
+          at = newline - 1;
+        }
       }
-    }
-    return false;
-  });
+      return false;
+    },
+    (text, retainStart) =>
+      projectLinesOutsideCode(
+        text,
+        (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()),
+        retainStart,
+      ),
+  );
 }
 
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
+  checkpoint: (text, settleBefore) =>
+    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions, settleBefore }),
   activationTokens: ["{", "<parameter=", "<function=", "to="],
-  ignoreBlockCode: true,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(

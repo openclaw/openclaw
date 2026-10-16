@@ -33,6 +33,7 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -459,7 +460,10 @@ export function registerDeliveryRetryOwnerTests({
         expect(params.roundOneReply).toBe("A=alpha");
       }
       expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-      expect(readLifecycleRun(entry).completion?.resultText).toBe("A=alpha");
+      expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
+        "A=alpha",
+      );
       expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);

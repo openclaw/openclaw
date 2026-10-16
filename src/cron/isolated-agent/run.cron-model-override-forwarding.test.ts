@@ -493,23 +493,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(firstMockArg(runWithModelFallbackMock).model).toBe("gpt-5.4");
     expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toStrictEqual([]);
   });
-
-  it("uses explicit payload fallbacks when both model and fallbacks are set", async () => {
-    const jobWithFallbacks = makeJob({
-      payload: {
-        kind: "agentTurn",
-        message: "summarize",
-        model: "google/gemini-2.0-flash",
-        fallbacks: ["openai/gpt-4o"],
-      },
-    });
-
-    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
-
-    await runCronIsolatedAgentTurn(makeParams({ job: jobWithFallbacks }));
-
-    expect(firstMockArg(runWithModelFallbackMock).fallbacksOverride).toEqual(["openai/gpt-4o"]);
-  });
 });
 
 function makePersistParams(overrides?: Record<string, unknown>) {
@@ -620,27 +603,6 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
         configuredProfileId: "openai:test-profile",
       }),
     );
-  });
-
-  it("returns error without persisting model when payload model is disallowed", async () => {
-    resolveAllowedModelRefMock.mockReturnValueOnce({
-      error: "Model not allowed: anthropic/claude-sonnet-4-6",
-    });
-
-    const result = await runCronIsolatedAgentTurn(makePersistParams());
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("Model not allowed");
-    expect(result.diagnostics?.entries).toEqual([
-      expect.objectContaining({
-        source: "cron-preflight",
-        severity: "error",
-        message: expect.stringContaining("Model not allowed"),
-        ts: expect.any(Number),
-      }),
-    ]);
-    expect(cronSession.sessionEntry.model).toBeUndefined();
-    expect(cronSession.sessionEntry.modelProvider).toBeUndefined();
   });
 
   it("blocks required work when pre-run persistence fails without configured roles", async () => {

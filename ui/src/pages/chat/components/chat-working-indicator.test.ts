@@ -1,13 +1,11 @@
-import { html } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
-import {
-  ChatWorkingIndicator,
-  type ChatWorkingIndicatorOptions,
-} from "./chat-working-indicator.tsx";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+
+type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
 function mountIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
@@ -50,10 +48,10 @@ describe("ChatWorkingIndicator", () => {
       { outputTokens: 4_100 },
     );
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
-    draw({
-      outputTokens: 4_100,
-      subagentActivity: html`<div class="task-first-probe">Backend implementation</div>`,
-    });
+    const activity = document.createElement("div");
+    activity.className = "task-first-probe";
+    activity.textContent = "Backend implementation";
+    draw({ outputTokens: 4_100, subagentActivity: activity });
     const task = container.querySelector(".task-first-probe");
     const status = container.querySelector(".chat-working-indicator");
     expect(task).not.toBeNull();

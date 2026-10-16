@@ -1,4 +1,4 @@
-import { createMemo, Show, type Accessor } from "solid-js";
+import { createMemo, type Accessor } from "solid-js";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
@@ -35,7 +35,7 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
@@ -225,7 +225,7 @@ function resolveCatalogTriggerStatus(
 
 function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
-  effort?: ChatEffortPickerParams;
+  effort: ChatEffortPickerParams;
 }> {
   return createMemo(() => {
     const catalog = prepareChatModelCatalog(props.modelCatalog);
@@ -545,13 +545,10 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const effortDisabled =
       commonDisabled ||
       effortMutationDisabled ||
+      !hasResolvableModel ||
       (thinking.options.length === 0 && fastMode.disabled);
-    // Floating UI deliberately tracks a live anchor. Keep the eventual effort
-    // control in layout while catalog state is transient (and until an open model
-    // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
-    const reserveEffortPicker =
-      !hasResolvableModel && (catalogLoadingWithoutSnapshot || props.modelPickerOpen === true);
-    const showEffortPicker = hasResolvableModel || reserveEffortPicker;
+    // CSS keeps the empty effort slot beside an open picker until its catalog resolves.
+    const reserveEffortPicker = !hasResolvableModel;
     return {
       model: {
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
@@ -602,25 +599,23 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       },
-      effort: showEffortPicker
-        ? {
-            disabled: effortDisabled,
-            disabledReason: props.effortMutationDisabledReason,
-            fastMode: {
-              ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-            },
-            sessionKey: props.sessionKey,
-            thinkingDisabled,
-            thinking,
-            onFastModeSelect: async (next, targetSessionKey) =>
-              props.onFastModeSelect?.(next, targetSessionKey),
-            onRequestUpdate: props.onRequestUpdate,
-            onThinkingSelect: async (next, targetSessionKey) =>
-              props.onThinkingSelect?.(next, targetSessionKey),
-            reserved: reserveEffortPicker,
-          }
-        : undefined,
+      effort: {
+        disabled: effortDisabled,
+        disabledReason: props.effortMutationDisabledReason,
+        fastMode: {
+          ...fastMode,
+          disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+        },
+        sessionKey: props.sessionKey,
+        thinkingDisabled,
+        thinking,
+        onFastModeSelect: async (next, targetSessionKey) =>
+          props.onFastModeSelect?.(next, targetSessionKey),
+        onRequestUpdate: props.onRequestUpdate,
+        onThinkingSelect: async (next, targetSessionKey) =>
+          props.onThinkingSelect?.(next, targetSessionKey),
+        reserved: reserveEffortPicker,
+      },
     };
   });
 }
@@ -630,11 +625,11 @@ export function ChatModelControls(props: ChatModelControlsProps) {
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <Show when={controls().effort}>{(effort) => <ChatEffortPicker {...effort()} />}</Show>
+      <ChatEffortPicker {...controls().effort} />
     </div>
   );
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
-  return solidTemplate(ChatModelControls, props);
+  return solidContent(ChatModelControls, props);
 }

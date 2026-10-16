@@ -1,3 +1,4 @@
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -12,13 +13,14 @@ import {
   filterNativeModelCatalogScopes,
   selectPreparedModelCatalogInventory,
 } from "./prepared-model-runtime.catalog-publication.js";
+import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import type {
   PreparedModelCatalogInventory,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 
-function preparedProviderCatalogSource(
+export function preparedProviderCatalogSource(
   facts: PreparedModelRuntimeAgentFacts,
   generation: PreparedModelRuntimePluginGeneration,
   provider: string,
@@ -76,24 +78,24 @@ export function prepareRetainedProviderCatalog(
   params: PreparedModelRuntimeCatalogAccessParams,
   normalizeProvider: (provider: string) => string,
   eligibleProviders: readonly string[],
-  pluginFingerprint: string,
-  nativeSource: string,
 ) {
   const facts = params.agentFacts;
+  const inventoryKey = preparedModelInventoryKey(facts.input);
+  const nativeSource = fingerprintPreparedRuntimeFacts({
+    runtimePluginSelections: facts.input.runtimePluginSelections,
+    config: params.nativeConfigFingerprint,
+    configuredModelRefs: facts.configuredModelRefs,
+  });
+  const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
+    params.pluginGeneration.pluginMetadataSnapshot.index,
+  );
   const inventory = params.inventoryOwner.catalogInventory;
-  const providerSource = (provider: string) =>
-    preparedProviderCatalogSource(
-      params.agentFacts,
-      params.pluginGeneration,
-      provider,
-      normalizeProvider,
-    );
   // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
   // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
     [...new Set([...eligibleProviders, ...(inventory?.providers.keys() ?? [])])].map((provider) => [
       provider,
-      providerSource(provider),
+      preparedProviderCatalogSource(facts, params.pluginGeneration, provider, normalizeProvider),
     ]),
   );
   const previousAuth = inventory && getPreparedModelFullCatalogAuth(inventory.catalog);
@@ -149,19 +151,33 @@ export function prepareRetainedProviderCatalog(
   const unretainedProviders = [...(inventory?.providers.keys() ?? [])].filter(
     (provider) => !retainedProviders.has(provider),
   );
-  /** Providers a changed-only pass reacquires: changed source or credentials, or dropped rows. */
-  const listChangedProviders = (
-    published: PreparedModelCatalogInventory | undefined,
-    candidates: readonly string[] = [
-      ...Object.keys(facts.credentials),
-      ...unretainedProviders.filter((provider) => !published?.providers.has(provider)),
-    ],
-  ) =>
-    [...new Set(candidates.map(normalizeProvider))].filter(
-      (provider) =>
-        published?.providers.get(provider)?.source !== providerSources.get(provider) ||
-        published?.providers.get(provider)?.credentials !==
-          preparedProviderCatalogCredentials(facts, provider, normalizeProvider),
-    );
-  return { providerSource, retainedInventory, listChangedProviders };
+  // Only prepared facts escape; callbacks here would retain the previous inventory.
+  return {
+    retainedInventory,
+    providerSources,
+    unretainedProviders,
+    inventoryKey,
+    nativeSource,
+    pluginFingerprint,
+  };
+}
+
+/** Providers whose source or credentials changed, including dropped discovery-only rows. */
+export function listChangedPreparedCatalogProviders(
+  facts: PreparedModelRuntimeAgentFacts,
+  normalizeProvider: (provider: string) => string,
+  providerSources: ReadonlyMap<string, string>,
+  unretainedProviders: readonly string[],
+  inventory: PreparedModelCatalogInventory | undefined,
+  candidates: readonly string[] = [
+    ...Object.keys(facts.credentials),
+    ...unretainedProviders.filter((provider) => !inventory?.providers.has(provider)),
+  ],
+): string[] {
+  return [...new Set(candidates.map(normalizeProvider))].filter(
+    (provider) =>
+      inventory?.providers.get(provider)?.source !== providerSources.get(provider) ||
+      inventory?.providers.get(provider)?.credentials !==
+        preparedProviderCatalogCredentials(facts, provider, normalizeProvider),
+  );
 }

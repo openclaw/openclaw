@@ -74,9 +74,12 @@ async function createDockerExecBackend() {
   });
   return createDockerSandboxBackend({
     sessionKey: "agent:coder:main",
-    scopeKey: "agent:coder:main",
+    scopeKey: `agent:coder:workspace:${"a".repeat(32)}`,
     workspaceDir: "/workspace",
     agentWorkspaceDir: "/workspace",
+    readOnlyResourceMounts: [
+      { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+    ],
     cfg: resolveSandboxConfigForAgent(createConfig()),
   });
 }
@@ -237,30 +240,6 @@ describe("docker sandbox backend manager", () => {
       ]);
     },
   );
-
-  it("forwards the canonical scope key to container provisioning", async () => {
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
-      containerName: "sandbox-container",
-      containerId: "a".repeat(64),
-    });
-    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
-    const readOnlyResourceMounts = [
-      { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
-    ];
-
-    await createDockerSandboxBackend({
-      sessionKey: "agent:poly:msteams:channel-1",
-      scopeKey,
-      workspaceDir: "/tmp/customer/workspace",
-      agentWorkspaceDir: "/tmp/customer/workspace",
-      readOnlyResourceMounts,
-      cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
-    });
-
-    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKey, readOnlyResourceMounts }),
-    );
-  });
 
   it("captures image-volume masks once for the filesystem bridge after provisioning", async () => {
     dockerMocks.execContainer
@@ -531,6 +510,9 @@ describe("docker sandbox backend manager", () => {
     );
     expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
     expect(execSpec.stdinMode).toBe("pipe-closed");
+    expect(execSpec.argv.at(-1)).toBe("true");
+    const envFile = execSpec.argv[execSpec.argv.indexOf("--env-file") + 1];
+    expect(fs.readFileSync(envFile!, "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
     await backend.finalizeExec?.({
       status: "completed",
       exitCode: 0,
@@ -541,8 +523,16 @@ describe("docker sandbox backend manager", () => {
 
   it("delivers exec environment outside process arguments and cleans it after finalization", async () => {
     const sentinel = "synthetic-container-exec-transport-value";
-    const requestedPath = "/synthetic/bin:/synthetic/system/bin";
+    const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const backend = await createDockerExecBackend();
+    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeKey: `agent:coder:workspace:${"a".repeat(32)}`,
+        readOnlyResourceMounts: [
+          { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
+        ],
+      }),
+    );
 
     const execSpec = await backend.buildExecSpec({
       command: "printf ready",
@@ -713,46 +703,6 @@ process.stdout.write(JSON.stringify({
       }
     },
   );
-
-  it.each([
-    {
-      description: "never interpolates shell metacharacters from PATH into the command",
-      requestedPath: "$(touch /tmp/openclaw-path-injection)",
-      expectedCommand:
-        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
-    },
-    {
-      description: "does not add a PATH export when PATH is absent",
-      requestedPath: undefined,
-      expectedCommand: "echo hello",
-    },
-  ])("$description", async ({ requestedPath, expectedCommand }) => {
-    const backend = await createDockerExecBackend();
-    const execSpec = await backend.buildExecSpec({
-      command: "echo hello",
-      env: { HOME: "/synthetic/home", ...(requestedPath ? { PATH: requestedPath } : {}) },
-      usePty: false,
-    });
-
-    try {
-      expect(execSpec.argv.at(-1)).toBe(expectedCommand);
-      const envFile = execSpec.argv[execSpec.argv.indexOf("--env-file") + 1];
-      const envFileContent = fs.readFileSync(envFile!, "utf8");
-      if (requestedPath) {
-        expect(execSpec.argv.join(" ")).not.toContain(requestedPath);
-        expect(envFileContent).toContain(`OPENCLAW_PREPEND_PATH=${requestedPath}\n`);
-      } else {
-        expect(envFileContent).not.toContain("OPENCLAW_PREPEND_PATH=");
-      }
-    } finally {
-      await backend.finalizeExec?.({
-        status: "completed",
-        exitCode: 0,
-        timedOut: false,
-        token: execSpec.finalizeToken,
-      });
-    }
-  });
 
   it.each([
     { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:bookworm-slim" },

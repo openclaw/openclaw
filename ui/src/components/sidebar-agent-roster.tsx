@@ -5,7 +5,6 @@ import {
   flush,
   For,
   onCleanup,
-  onSettled,
   Show,
   untrack,
 } from "solid-js";
@@ -13,12 +12,11 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { projectRosterActivity } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
@@ -84,46 +82,42 @@ function useRoster(props: RosterProps) {
       equality: "revision",
     }),
   );
-  const host = () => hostProjection().read();
+  const presented = () => props.active;
+  const host = createParkedProjection(() => hostProjection().read(), presented);
   const context = createMemo(() => host().sessionDataContext ?? application);
   const store = createMemo(() => rosterActivityStore(context()));
-  const projection = createMemo(() => projectRosterActivity(store()));
   const gateway = createMemo(() => projectGateway(context().gateway));
-  const snapshot = createMemo(() => (props.active ? projection().read() : store().snapshot));
-  const [avatarRevision, setAvatarRevision] = createSignal(0, { ownedWrite: true });
-  const avatars = new IdentityAvatarController(() => setAvatarRevision((value) => value + 1));
-  onSettled(() => {
-    avatars.hostConnected();
-    return () => avatars.hostDisconnected();
-  });
-  const cards = createMemo(() => {
-    const cached = cachedRosterCards(host());
-    if (cached) {
-      return avatars.withActiveRoutes(() => cached);
+  const snapshot = createParkedProjection(() => {
+    host();
+    return store().snapshot;
+  }, presented);
+  const cached = createMemo(() => cachedRosterCards(host()));
+  const cards = createParkedProjection(() => {
+    if (cached()) {
+      return cached()!;
     }
-    avatarRevision();
-    const currentCards = snapshot().cards;
     const currentContext = context();
-    return avatars.withActiveRoutes(() =>
-      currentCards.map((card) =>
-        Object.assign({}, card, {
-          avatar: card.avatar ? avatars.resolve(card.avatar) : null,
-          target: sessionNavigationTarget({
-            context: currentContext,
-            face: "chat",
-            sessionKey: card.mainKey,
-            agentId: card.id,
-          }),
+    return snapshot().cards.map((card) =>
+      Object.assign({}, card, {
+        target: sessionNavigationTarget({
+          context: currentContext,
+          face: "chat",
+          sessionKey: card.mainKey,
+          agentId: card.id,
         }),
-      ),
+      }),
     );
-  });
+  }, presented);
   return { host, context, store, snapshot, gateway, cards };
 }
 
 export function SidebarAgentRoster(props: RosterProps) {
   const roster = useRoster(props);
-  const settingsScope = () => roster.gateway().read().connection.gatewayUrl;
+  const presented = () => props.active;
+  const parkedSections = createParkedProjection(() => props.sections, presented);
+  const empty = createParkedProjection(() => props.empty, presented);
+  const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
+  const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(
     new Set(
       untrack(() => props.host.sidebarSnapshot?.collapsedAgentIds) ??
@@ -147,13 +141,17 @@ export function SidebarAgentRoster(props: RosterProps) {
     },
   );
   createEffect(roster.store, (store) => () => store.setInvolvingMe(false));
-  // Roster publications invalidate the parent, which reads the live store directly.
   createEffect(
-    () => ({ snapshot: roster.snapshot(), collapsed: collapsed() }),
-    ({ collapsed: collapsedIds }) => {
+    () => ({ active: presented(), collapsed: collapsed() }),
+    ({ active, collapsed: collapsedIds }) => {
+      if (!active) {
+        return;
+      }
       const host = props.host;
-      host.rosterCollapsedAgentIds = collapsedIds;
-      host.sessionData.requestSessionDataUpdate();
+      if (host.rosterCollapsedAgentIds !== collapsedIds) {
+        host.rosterCollapsedAgentIds = collapsedIds;
+        host.sessionData.requestSessionDataUpdate();
+      }
     },
   );
   createEffect(
@@ -204,7 +202,7 @@ export function SidebarAgentRoster(props: RosterProps) {
               onCleanup(() => removeMenuPreparation?.());
               const runVisibility = sessionRunVisibility;
               const sections = () =>
-                props.sections.filter((section) => section.id.startsWith(`agent:${card().id}:`));
+                parkedSections().filter((section) => section.id.startsWith(`agent:${card().id}:`));
               const mainKey = () => roster.host().selectedAgentMainSessionKey(card().id);
               const mainRow = () => roster.host().mainSessionRow(card().id);
               const home = () => {
@@ -215,7 +213,10 @@ export function SidebarAgentRoster(props: RosterProps) {
                 home()?.childLoadParentKeys?.length
                   ? home()!.childLoadParentKeys!
                   : [mainRow()?.key ?? mainKey()];
-              const main = () => roster.host().visibleHomeSession(card().id);
+              const main = createParkedProjection(
+                () => roster.host().visibleHomeSession(card().id),
+                presented,
+              );
               const isCollapsed = () => collapsed().has(card().id);
               const hasSessions = () =>
                 sections().some((section) => section.rows.length > 0) ||
@@ -319,7 +320,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                         get agentId() {
                           return card().id;
                         },
-                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                        class: "sidebar-agent-roster__action sidebar-agent-roster__new",
                         get label() {
                           return `${t("agentChip.newConversation")}: ${card().name}`;
                         },
@@ -427,8 +428,8 @@ export function SidebarAgentRoster(props: RosterProps) {
           </For>
           {renderPersonalSessionEmpty(
             roster.host(),
-            props.empty,
-            roster.gateway().read().snapshot.phase === "connected" &&
+            empty(),
+            gatewaySnapshot().snapshot.phase === "connected" &&
               roster.snapshot().result !== null &&
               !roster.snapshot().loading &&
               !error() &&

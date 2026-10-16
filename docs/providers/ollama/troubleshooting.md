@@ -104,7 +104,7 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
-  <Accordion title="Model outputs tool JSON as text">
+  <Accordion title="Model outputs tool calls as text">
     Usually the provider is in OpenAI-compatible mode, or the model cannot
     handle tool schemas. Prefer native mode:
 
@@ -125,8 +125,9 @@ sidebarTitle: "Troubleshooting"
     `compat.supportsTools: false` on that model entry and retest.
 
     When a reply consists of a structured tool-call attempt naming an available
-    tool, OpenClaw asks the model once to call the tool natively when recovery
-    is safe. Earlier side effects can prevent that retry. A repeated text call
+    tool, including wrapped XML, ReAct `Action`/`Action Input`, and legacy
+    `[TOOL_CALL]` blocks, OpenClaw asks the model once to call the tool natively
+    when recovery is safe. Earlier side effects can prevent that retry. A repeated text call
     fails visibly instead of reporting success. Text calls are never executed
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
@@ -135,9 +136,10 @@ sidebarTitle: "Troubleshooting"
 
   <Accordion title="Repeated tool errors stop the turn">
     With `tools.toolSearch` unset, embedded runs using native local Ollama expose
-    policy-approved `web_search` and `web_fetch` directly. Explicit Tool Search
-    settings keep their configured behavior. Direct exposure does not enable a
-    denied tool or configure a web-search provider.
+    policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
+    directly. Other optional tools remain deferred. Explicit Tool Search settings
+    keep their configured behavior. Direct exposure does not enable a denied
+    tool, enable memory, or configure a web-search provider.
 
     OpenClaw stops after three consecutive identical failures for the same tool
     and arguments, including repeated unknown tool IDs. This protection is always
@@ -236,6 +238,12 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
+
+  </Accordion>
+
+  <Accordion title="Ollama still aborts or hangs on this host">
+    If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
+    as the local server.
 
   </Accordion>
 </AccordionGroup>

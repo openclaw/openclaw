@@ -1,7 +1,11 @@
 import type { Worker } from "node:worker_threads";
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import type { captureStateDatabaseAccess } from "./gateway-state-owner.js";
+import type {
+  captureStateDatabaseAccess,
+  StateDatabaseSchemaLease,
+} from "./gateway-state-owner.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import type { SqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
@@ -37,6 +41,7 @@ export type Job = {
   observation: WorkerRequestObservation;
   signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
+  cleanupAccess?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
@@ -59,6 +64,7 @@ export type Job = {
 };
 export type Slot = {
   custody: SqliteWorkerSlotCustody;
+  databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
@@ -92,6 +98,7 @@ export type Actor = {
   openDispatch: DispatchState;
   initialized: boolean;
   backendClosed: boolean;
+  deliveredStateContext?: SqliteWorkerStateContext;
   cleanupState?: "pending" | "complete";
   closing?: Promise<void>;
   retirementRequested?: boolean;
@@ -111,6 +118,7 @@ export type OperationScope = {
 export type EnqueueOptions = {
   requestClass?: string;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
+  cleanupAccess?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
   createAdmission?: SqliteWorkerAdmissionFactory;
   signal?: AbortSignal;
   dispatchState?: DispatchState;
@@ -151,6 +159,7 @@ export type PreparedSqliteWorkerOpen = {
   expectedIdentity?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
+  cleanupAccess?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
   retainCleanup?: (cleanup: SqliteWorkerAdmissionCleanup) => void;
   onNativeStopped?: (
     stopped: Promise<void>,
@@ -176,6 +185,7 @@ export type SqliteWorkerAdmissionCleanup = {
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
   | "maintenanceScope"
+  | "cleanupAccess"
   | "retainCleanup"
   | "createAdmission"
   | "stateDatabasePath"

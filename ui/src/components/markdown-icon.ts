@@ -1,8 +1,8 @@
 import type { IconAttributes, IconNode } from "./icon-data-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 
-/** Markdown enhancements own DOM islands rather than component render roots. */
-export function createMarkdownIcon(name: IconName, ownerDocument: Document): SVGSVGElement {
+/** Imperative DOM islands own these nodes without a component render root. */
+export function createIconElement(name: IconName, ownerDocument: Document): SVGSVGElement {
   const data = iconData[name];
   const svg = ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
   const setAttributes = (element: SVGElement, attributes: IconAttributes) => {

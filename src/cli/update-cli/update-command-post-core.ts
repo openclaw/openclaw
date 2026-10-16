@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -308,7 +309,13 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (!delegated && params.opts.acceptCapabilities) {
     // Same-version artifacts can expose different CLI options. Keep consent in
     // the current process when the installed target cannot receive it.
-    const { stdout } = await runExec(nodeRunner, [entryPath, "update", "--help"], {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath,
+      execArgv: [],
+      args: ["update", "--help"],
+    });
+    const { stdout } = await runExec(invocation.command, invocation.args, {
       baseEnv,
       logOutput: false,
       timeoutMs: params.timeoutMs,
@@ -507,7 +514,13 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       tentativePluginIndex = undefined;
       return { resumed: true, pluginUpdate: result };
     }
-    const child = spawn(nodeRunner, argv, {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath,
+      execArgv: [],
+      args: argv.slice(1),
+    });
+    const child = spawn(invocation.command, invocation.args, {
       cwd: params.root,
       stdio: childStdio,
       env: childEnv,

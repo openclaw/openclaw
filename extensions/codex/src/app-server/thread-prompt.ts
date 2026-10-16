@@ -155,5 +155,5 @@ export function buildDeveloperInstructions(
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
-  return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+  return sections.filter((section) => section?.trim()).join("\n\n");
 }

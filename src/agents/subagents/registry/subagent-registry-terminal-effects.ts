@@ -12,10 +12,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
-import {
-  buildSafeLifecycleErrorMeta,
-  maskLifecycleIdentifier,
-} from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
@@ -99,8 +96,8 @@ export async function completeTerminalEffects(
   };
   const warnMeta = (error: unknown) => ({
     error: buildSafeLifecycleErrorMeta(error),
-    runId: maskLifecycleIdentifier(completeParams.runId, "run"),
-    childSessionKey: maskLifecycleIdentifier(entry.childSessionKey, "session"),
+    runId: completeParams.runId,
+    childSessionKey: entry.childSessionKey,
   });
   sessionSuperseded ||= context.newerGenerationOwnsSession(entry);
   if (sessionSuperseded) {
@@ -118,7 +115,8 @@ export async function completeTerminalEffects(
   }
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
-  if (!suppressSessionEffects) {
+  // Duplicate receipts drain cleanup without replaying best-effort timing writes.
+  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted === true)) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -365,8 +363,8 @@ export async function completeTerminalEffects(
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
               sessionId,
-              runId: maskLifecycleIdentifier(cleanupEntry.runId, "run"),
-              childSessionKey: maskLifecycleIdentifier(cleanupEntry.childSessionKey, "session"),
+              runId: cleanupEntry.runId,
+              childSessionKey: cleanupEntry.childSessionKey,
             });
           },
         });

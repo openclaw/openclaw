@@ -394,7 +394,7 @@ const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  if (actor) {
+  if (actor?.transcript.complete) {
     return {
       ...projectSessionTranscriptFacts(actor),
       contextMetadata: projectSessionActorContextMetadata(actor),

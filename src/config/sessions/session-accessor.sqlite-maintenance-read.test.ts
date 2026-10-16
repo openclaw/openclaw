@@ -174,12 +174,14 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
               ).resolves.toEqual({ lastMessagePreview: "Synthetic backfill preview" });
             } else if (overlap === "usage rollup") {
               await expect(
-                usage!.writeRollup({
-                  rollupId: "synthetic-rollup",
-                  valueJson: Buffer.from('{"totalTokens":1}'),
-                  blob: null,
-                  updatedAt,
-                }),
+                usage!.writeRollup([
+                  {
+                    rollupId: "synthetic-rollup",
+                    valueJson: Buffer.from('{"totalTokens":1}'),
+                    blob: null,
+                    updatedAt,
+                  },
+                ]),
               ).resolves.toBe(true);
             } else {
               const inserting = overlap === "new entry";

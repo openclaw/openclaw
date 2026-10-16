@@ -4,20 +4,14 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
-type CoreRequest = {
-  client: GatewayBrowserClient;
-  agentId: string;
-  reason: ModelProviderRefreshReason;
-};
-
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
+  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
   onCatalogComplete: (result: ModelCatalogResult) => void;
 };
 
@@ -59,6 +53,7 @@ export class ModelProviderCoreLoader {
   catalogError: string | null = null;
   retryProvider: string | undefined;
   private request: AbortController | null = null;
+  private publicationPending = false;
 
   constructor(
     private readonly host: ControllerHost,
@@ -114,6 +109,7 @@ export class ModelProviderCoreLoader {
     } finally {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
+        this.refreshPendingPublication(client, agentId);
         this.host.requestUpdate();
       }
     }
@@ -126,9 +122,10 @@ export class ModelProviderCoreLoader {
     target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
-      // Catalog changes during an existing read are best effort until the next refresh.
+      this.publicationPending = true;
       return;
     }
+    this.publicationPending = false;
     this.request?.abort();
     const request = new AbortController();
     this.request = request;
@@ -151,7 +148,7 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.active = false;
         this.retryProvider = target && data.error ? target.providerId : undefined;
-        this.options.onComplete({ client, agentId, reason, data });
+        this.options.onComplete({ client, data });
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.
@@ -159,12 +156,20 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.request = null;
         this.active = false;
+        this.refreshPendingPublication(client, agentId);
         this.host.requestUpdate();
       }
     }
   }
 
+  private refreshPendingPublication(client: GatewayBrowserClient, agentId: string): void {
+    if (this.publicationPending && !this.active && !this.catalogLoading) {
+      void this.refresh(client, agentId, "publication");
+    }
+  }
+
   invalidate(): void {
+    this.publicationPending = false;
     this.resetCatalog();
     this.retryProvider = undefined;
     this.active = false;

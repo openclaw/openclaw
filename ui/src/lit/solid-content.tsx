@@ -6,6 +6,7 @@ import {
   createComponent,
   createContext,
   createEffect,
+  createMemo,
   createRoot,
   createSignal,
   flush,
@@ -19,6 +20,7 @@ import {
 } from "solid-js";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
+export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
 
 /** Render opaque plugin SDK templates with their event receiver. */
 export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
@@ -51,7 +53,7 @@ function unmountLitContent(container: HTMLElement | DocumentFragment): void {
 }
 
 /** A top-level Lit caller settles now; nested Solid work settles with its owner. */
-export function flushLegacyContent(): void {
+function flushLegacyContent(): void {
   if (!getOwner() && !currentLitRoots) {
     flush();
   }
@@ -228,18 +230,52 @@ class SolidContent extends AsyncDirective {
     }
     const owner = this.owner ?? getOwner();
     const view = () => {
-      // A legacy host can publish props during its parent's Solid commit.
-      const [props, setProps] = createSignal(this.props, { ownedWrite: true });
+      // Legacy hosts can reuse mutable props and publish during a parent's Solid commit.
+      const [props, setProps] = createSignal(this.props, { ownedWrite: true, equals: false });
       const [presented, setPresented] = createSignal(this.isConnected, { ownedWrite: true });
       this.updateProps = (next) => setProps(() => next);
       this.updatePresented = setPresented;
+      const projectionOwner = getOwner();
+      const values = new Map<PropertyKey, Accessor<unknown>>();
+      const presence = new Map<PropertyKey, Accessor<boolean>>();
+      const value = (key: PropertyKey) => {
+        let projection = values.get(key);
+        if (!projection) {
+          projection = runWithOwner(projectionOwner, () =>
+            createMemo(() => Reflect.get(props(), key), {
+              // Legacy callers mutate nested objects and getter closures in place.
+              equals: (previous, next) =>
+                (next === null || (typeof next !== "object" && typeof next !== "function")) &&
+                Object.is(previous, next),
+            }),
+          );
+          values.set(key, projection);
+        }
+        return projection();
+      };
+      const has = (key: PropertyKey) => {
+        let projection = presence.get(key);
+        if (!projection) {
+          projection = runWithOwner(projectionOwner, () =>
+            createMemo(() => Reflect.has(props(), key)),
+          );
+          presence.set(key, projection);
+        }
+        return projection();
+      };
+      const keys = createMemo(() => Reflect.ownKeys(props()), {
+        equals: (previous, next) =>
+          previous.length === next.length && previous.every((key, index) => key === next[index]),
+      });
+      // Unrelated props must not rewrite native input values or selection.
       const liveProps = new Proxy<Record<string, unknown>>(
         {},
         {
-          get: (_target, key: string) => props()[key],
-          has: (_target, key: string) => key in props(),
-          ownKeys: () => Reflect.ownKeys(props()),
-          getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+          get: (_target, key) => value(key),
+          has: (_target, key) => has(key),
+          ownKeys: () => keys(),
+          getOwnPropertyDescriptor: (_target, key) =>
+            has(key) ? { configurable: true, enumerable: true, value: value(key) } : undefined,
         },
       );
       return (

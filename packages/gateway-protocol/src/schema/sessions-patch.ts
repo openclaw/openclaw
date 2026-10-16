@@ -6,6 +6,7 @@ import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPatchSchema } from "./sessions-communication.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
@@ -25,7 +26,7 @@ const SessionsPatchMutationProperties = {
   color: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** User-defined organization bucket ("category", not chat-group); null clears it. */
   category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
-  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  boardFace: Type.Optional(stringLiteralUnion(["chat", "dashboard"])),
   /** Shared dashboard default; null restores the built-in split view. */
   boardPresentation: Type.Optional(
     Type.Union([Type.Literal("split"), Type.Literal("expanded"), Type.Null()]),

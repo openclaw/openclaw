@@ -62,6 +62,47 @@ type CapturedNativePolicy = {
   reads: PreparedToolAuthorityRead[];
   assertCompatibility?: () => void;
 };
+
+async function captureNativePolicies(
+  preparations: readonly NativePreparedPolicy[],
+  assertCurrent?: () => void,
+): Promise<CapturedNativePolicy[]> {
+  const policies: CapturedNativePolicy[] = [];
+  for (const preparation of preparations) {
+    assertCurrent?.();
+    try {
+      policies.push({ preparation, ...(await capturePreparedToolAuthorityReads(preparation)) });
+    } catch (error) {
+      if (preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  return policies;
+}
+
+function assertLegacyNativePolicies(policies: readonly CapturedNativePolicy[]): void {
+  const survivors: CapturedNativePolicy[] = [];
+  for (const policy of policies) {
+    try {
+      policy.preparation.assertCurrent();
+      survivors.push(policy);
+    } catch (error) {
+      if (policy.preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  // A late compatibility refusal rejects the whole undispatched batch.
+  for (const policy of survivors) {
+    assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
+  }
+  // Refusal callbacks can revoke earlier survivors before the effect.
+  for (const policy of survivors) {
+    policy.preparation.assertCurrent();
+  }
+}
+
 export type NativeSessionBindingAuthority = {
   readonly lineage: readonly NativeSessionBindingLineage[];
   /** Prepared authorities include lineage; legacy authorities check it through withCurrent. */
@@ -125,36 +166,11 @@ export function createPreparedNativeSessionBindingAuthority(params: {
     },
     async withPreparedCurrent(consume, preparations) {
       assertCurrent();
-      const policies: CapturedNativePolicy[] = [];
-      for (const preparation of preparations) {
-        try {
-          policies.push({ preparation, ...(await capturePreparedToolAuthorityReads(preparation)) });
-        } catch (error) {
-          if (preparation.onRefused?.(error) !== "discarded") {
-            throw error;
-          }
-        }
-      }
+      const policies = await captureNativePolicies(preparations);
       if (policies.some((policy) => policy.assertCompatibility)) {
         // Shipped policy callbacks can read SQLite and cannot run inside a worker grant.
         return withSessionEntriesFromStoresInWorker([], () => {
-          const survivors: CapturedNativePolicy[] = [];
-          for (const policy of policies) {
-            try {
-              policy.preparation.assertCurrent();
-              survivors.push(policy);
-            } catch (error) {
-              if (policy.preparation.onRefused?.(error) !== "discarded") {
-                throw error;
-              }
-            }
-          }
-          for (const policy of survivors) {
-            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
-          }
-          for (const policy of survivors) {
-            policy.preparation.assertCurrent();
-          }
+          assertLegacyNativePolicies(policies);
           assertLegacyCurrent();
           return consume();
         });
@@ -356,20 +372,7 @@ export function createNativeSessionBindingAuthority(
           }
         };
       });
-      const policies: CapturedNativePolicy[] = [];
-      for (const preparation of preparations) {
-        assertCurrent();
-        try {
-          policies.push({
-            preparation,
-            ...(await capturePreparedToolAuthorityReads(preparation)),
-          });
-        } catch (error) {
-          if (preparation.onRefused?.(error) !== "discarded") {
-            throw error;
-          }
-        }
-      }
+      const policies = await captureNativePolicies(preparations, assertCurrent);
       for (const check of sources) {
         check();
       }
@@ -377,24 +380,7 @@ export function createNativeSessionBindingAuthority(
         // Released synchronous policies may read this same database. Keep their
         // complete final check outside worker grants, with no await before the effect.
         return withSessionEntriesFromStoresInWorker([], () => {
-          const survivors: CapturedNativePolicy[] = [];
-          for (const policy of policies) {
-            try {
-              policy.preparation.assertCurrent();
-              survivors.push(policy);
-            } catch (error) {
-              if (policy.preparation.onRefused?.(error) !== "discarded") {
-                throw error;
-              }
-            }
-          }
-          // A late compatibility refusal rejects the whole undispatched batch.
-          for (const policy of survivors) {
-            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
-          }
-          for (const policy of survivors) {
-            policy.preparation.assertCurrent();
-          }
+          assertLegacyNativePolicies(policies);
           for (const check of sources) {
             check();
           }

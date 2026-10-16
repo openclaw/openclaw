@@ -24,6 +24,7 @@ type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
 type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
+type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
@@ -45,6 +46,7 @@ export class GatewayRpcDiagnostics {
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
     sessionsList?: SessionsListAttribution,
+    cronList?: CronListAttribution,
   ) {
     this.queueWaitMs = queueWaitMs;
     this.emit({
@@ -53,6 +55,7 @@ export class GatewayRpcDiagnostics {
       phase: "received",
       ...(modelsList && { modelsList }),
       ...(sessionsList && { sessionsList }),
+      ...(cronList && { cronList }),
     });
   }
 
@@ -164,7 +167,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc")
+  return areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventInterest("gateway.rpc", true)
     ? performance.now()
     : undefined;
 }
@@ -195,7 +199,10 @@ export function createGatewayRpcDiagnostics(
     params: unknown;
   },
 ): GatewayRpcDiagnostics | undefined {
-  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc")) {
+  if (
+    !areDiagnosticsEnabledForProcess() ||
+    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  ) {
     return undefined;
   }
   // Only catalog-owned names become dimensions, never arbitrary request values.
@@ -262,5 +269,21 @@ export function createGatewayRpcDiagnostics(
                   : "general",
     };
   }
-  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList, sessionsList);
+  let cronList: CronListAttribution;
+  if (method === "cron.list" && listRequest) {
+    const params = asOptionalRecord(listRequest.params);
+    cronList = {
+      clientKind: listRequest.clientKind,
+      source: listRequest.source,
+      scope:
+        params?.sessionKey !== undefined
+          ? "session"
+          : params?.agentId !== undefined
+            ? "agent"
+            : "global",
+      compact: params?.compact === true,
+      page: typeof params?.offset === "number" && params.offset > 0 ? "append" : "first",
+    };
+  }
+  return new GatewayRpcDiagnostics(label, undefined, undefined, modelsList, sessionsList, cronList);
 }

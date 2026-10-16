@@ -3,7 +3,7 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
+import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
 
 let restoreDialogPolyfill: () => void;
 
@@ -154,4 +154,52 @@ describe("showConfirmDialog", () => {
     findButton("Cancel").click();
     await expect(first).resolves.toBe(false);
   });
+
+  it.each([
+    { button: "This session", result: "confirm" },
+    { button: "All sessions", result: "alternative" },
+    { button: "Cancel", result: null },
+  ] as const)("resolves the choice $result", async ({ button, result }) => {
+    const pending = showConfirmChoiceDialog({
+      title: "Archive session?",
+      message: "Choose which sessions to archive.",
+      confirmLabel: "This session",
+      alternativeLabel: "All sessions",
+    });
+    await getRenderedModalDialog(document.body);
+    expect([...document.body.querySelectorAll("button")].map((item) => item.textContent)).toEqual([
+      "This session",
+      "All sessions",
+      "Cancel",
+    ]);
+    expect(findButton("This session").classList.contains("primary")).toBe(true);
+    expect(findButton("All sessions").className).toBe("btn");
+    expect(findButton("Cancel").hasAttribute("autofocus")).toBe(true);
+    findButton(button).click();
+    await expect(pending).resolves.toBe(result);
+  });
+
+  it.each(["abort", "dismiss"])(
+    "cancels a choice on %s and shares reentrancy protection",
+    async (action) => {
+      const controller = new AbortController();
+      const pending = showConfirmChoiceDialog({
+        message: "Choose",
+        alternativeLabel: "Alternative",
+        signal: controller.signal,
+      });
+      const { modal } = await getRenderedModalDialog(document.body);
+      await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
+      await expect(
+        showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
+      ).resolves.toBeNull();
+      if (action === "abort") {
+        controller.abort();
+      } else {
+        modal.dispatchEvent(new CustomEvent("modal-cancel"));
+      }
+      await expect(pending).resolves.toBeNull();
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 });

@@ -9,6 +9,13 @@ export type DiagnosticGatewayRpcFields = {
 } & (
   | {
       phase: "received";
+      cronList?: {
+        clientKind: GatewayClientId;
+        source: "wire" | "internal";
+        scope: "global" | "agent" | "session";
+        compact: boolean;
+        page: "first" | "append";
+      };
       sessionsList?: {
         clientKind: GatewayClientId;
         source: "wire" | "internal";

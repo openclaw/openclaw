@@ -60,31 +60,37 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
-// Retained for public synchronous SDK calls through 2026-12-31.
-function resolveOpenAIRealtimeVoiceConfig(
-  {
-    cfg,
-    rawConfig,
-    agentId,
-    surface,
-    autoRespondToAudio,
-    requiredCapabilities,
-  }: RealtimeVoiceProviderResolveConfigContext,
-  context: OpenAIRealtimeHost,
-): OpenAIRealtimeVoiceProviderConfig {
+function prepareOpenAIRealtimeVoiceConfig({
+  rawConfig,
+  surface,
+  autoRespondToAudio,
+  requiredCapabilities,
+}: RealtimeVoiceProviderResolveConfigContext): OpenAIRealtimeVoiceProviderConfig {
   const config = normalizeProviderConfig(rawConfig);
-  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
-    return config;
-  }
   // Live delegates natively; GA still owns manually triggered replies and video.
   if (
-    config.baseUrl ||
-    config.azureEndpoint ||
-    config.azureDeployment ||
-    autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
+    !config.model &&
+    (surface === "browser-session" || surface === "gateway-relay") &&
+    (config.baseUrl ||
+      config.azureEndpoint ||
+      config.azureDeployment ||
+      autoRespondToAudio === false ||
+      requiredCapabilities?.supportsVideoFrames === true)
   ) {
     return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
+  }
+  return config;
+}
+
+// Retained for public synchronous SDK calls through 2026-12-31.
+function resolveOpenAIRealtimeVoiceConfig(
+  params: RealtimeVoiceProviderResolveConfigContext,
+  context: OpenAIRealtimeHost,
+): OpenAIRealtimeVoiceProviderConfig {
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
+    return config;
   }
   const platformConfigured = hasOpenAIRealtimePlatformAuthInput(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -98,29 +104,13 @@ function resolveOpenAIRealtimeVoiceConfig(
 }
 
 async function resolveOpenAIRealtimeVoiceConfigAsync(
-  {
-    cfg,
-    rawConfig,
-    agentId,
-    surface,
-    autoRespondToAudio,
-    requiredCapabilities,
-  }: RealtimeVoiceProviderResolveConfigContext,
+  params: RealtimeVoiceProviderResolveConfigContext,
   context: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeVoiceProviderConfig> {
-  const config = normalizeProviderConfig(rawConfig);
+  const { cfg, agentId, surface } = params;
+  const config = prepareOpenAIRealtimeVoiceConfig(params);
   if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
     return config;
-  }
-  // Live delegates natively; GA still owns manually triggered replies and video.
-  if (
-    config.baseUrl ||
-    config.azureEndpoint ||
-    config.azureDeployment ||
-    autoRespondToAudio === false ||
-    requiredCapabilities?.supportsVideoFrames === true
-  ) {
-    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
   }
   const platformConfigured = await hasOpenAIRealtimePlatformAuthInputAsync(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -373,7 +363,7 @@ async function createOpenAIRealtimeBrowserSession(
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
-    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
+    ...(clientSecret.expiresAt !== undefined ? { expiresAt: clientSecret.expiresAt } : {}),
   };
 }
 

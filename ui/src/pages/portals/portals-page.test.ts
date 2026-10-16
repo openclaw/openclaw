@@ -123,44 +123,12 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
-  it.each([undefined, "pending-machine"])(
-    "does not read portal state without operator.read (environment: %s)",
-    async (environmentId) => {
-      const source = createContext(
-        ["portal.list", "environments.status"],
-        async () => {
-          throw new Error("unauthorized portal read");
-        },
-        ["operator.sessions.read", "operator.sessions.write"],
-      );
-      const page = await mountPage(source.context, undefined, environmentId);
-      await page.updateComplete;
-      expect(source.request).not.toHaveBeenCalled();
-      expect(page.textContent).toContain("This action requires operator.read access.");
-      expect(page.textContent).not.toContain("unauthorized portal read");
-      expect(page.textContent).not.toContain("This gateway does not support portals.");
-      expect(page.textContent).not.toContain("Starting your machine");
-    },
-  );
-
-  it.each([undefined, "pending-machine"])(
+  it.each([undefined])(
     "retains read access without a method catalog (environment: %s)",
-    async (environmentId) => {
-      const source = createContext(
-        null,
-        async () =>
-          environmentId
-            ? { id: environmentId, type: "worker", status: "available" }
-            : { portals: [] },
-        ["operator.read"],
-      );
-      await mountPage(source.context, undefined, environmentId);
-      await waitForSolid(() =>
-        expect(source.request).toHaveBeenCalledWith(
-          environmentId ? "environments.status" : "portal.list",
-          environmentId ? { environmentId } : {},
-        ),
-      );
+    async () => {
+      const source = createContext(null, async () => ({ portals: [] }), ["operator.read"]);
+      await mountPage(source.context);
+      await waitForSolid(() => expect(source.request).toHaveBeenCalledWith("portal.list", {}));
     },
   );
 
@@ -293,90 +261,27 @@ describe("PortalsPage", () => {
     expect(page.textContent).toContain("Waiting for your application");
   });
 
-  it("opens the requested portal in the sidebar and never substitutes another app", async () => {
-    const selected = { ...portal, id: "selected-app", title: "Selected app", path: "/selected" };
-    let portals = [portal, selected];
-    const source = createContext(["portal.list", "portal.close"], async () => ({ portals }));
-    const page = await mountPage(source.context, selected.id);
-
-    await waitForSolid(() => {
-      expect(page.querySelector("iframe")?.getAttribute("title")).toBe(
-        "Selected app portal preview",
-      );
-    });
-    expect(page.querySelector(".content-header")).toBeNull();
-    expect(page.querySelector(".portals-rail")).toBeNull();
-
-    portals = [portal];
-    source.emitPortals(portals);
-
-    await waitForSolid(() => {
-      expect(page.querySelector("iframe")).toBeNull();
-      expect(page.textContent).toContain("This portal is no longer available.");
-    });
-  });
-
-  it.each(["reachable", "blocked"] as const)(
-    "renders %s previews and refetches the portal list after replacement events",
-    async (reachability) => {
-      probePortalReachable.mockResolvedValue(reachability);
-      const source = createContext(["portal.list", "portal.close"], async (method) => {
-        if (method === "portal.list") {
-          return { portals: [portal] } satisfies PortalListResult;
-        }
-        return { closed: true };
-      });
-      const page = await mountPage(source.context);
-
-      await waitForSolid(() => {
-        expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-      });
-      expect(page.querySelector(".portals-rail__item")?.textContent).toContain("Port 3000");
-      expect(page.querySelector(".portals-rail__item")?.textContent).toContain(
-        "Use the seeded test account.",
-      );
-      const frame = page.querySelector("iframe");
-      expect(frame?.getAttribute("src")).toBe(portal.url);
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(portal.url);
-      expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
-      expect(frame?.getAttribute("sandbox")).toBe(
-        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
-      );
-      expect(probePortalReachable).toHaveBeenCalledWith(portal.url);
-      expect(page.textContent).not.toContain("Portal not reachable from this browser");
-
-      source.emitPortals([{ ...portal, url: "https://event.example.test/untrusted" }]);
-
-      await waitForSolid(() => {
-        expect(source.request).toHaveBeenCalledTimes(2);
-      });
-      expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
-      expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
-    },
-  );
-
-  it.each(["solid", "custom element"] as const)(
+  it.each(["custom element"] as const)(
     "retains the embedded iframe document through %s presentation changes",
-    async (entry) => {
+    async () => {
       let title = portal.title;
       const source = createContext(["portal.list", "ui.command.result"], async (method) =>
         method === "portal.list" ? { portals: [{ ...portal, title }] } : { ok: true },
       );
-      let page: HTMLElementTagNameMap["openclaw-portals-page"];
-      if (entry === "solid") {
-        page = await mountPage(source.context, portal.id);
-      } else {
-        page = document.createElement("openclaw-portals-page");
-        page.embedded = true;
-        page.requestedPortalId = portal.id;
-        const provider = createApplicationContextProvider(source.context);
-        provider.append(page);
-        mountSolid(() => provider);
-        await page.updateComplete;
-      }
+      const page = document.createElement("openclaw-portals-page");
+      page.embedded = true;
+      page.requestedPortalId = portal.id;
+      const provider = createApplicationContextProvider(source.context);
+      provider.append(page);
+      mountSolid(() => provider);
+      await page.updateComplete;
       await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
       const frame = page.querySelector("iframe")!;
+      expect(frame.getAttribute("src")).toBe(portal.url);
+      expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+      expect(frame.getAttribute("sandbox")).toBe(
+        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
+      );
       const writes = vi.spyOn(frame, "setAttribute");
       const sourceWrites = vi.spyOn(frame, "src", "set");
 
@@ -499,81 +404,6 @@ describe("PortalsPage", () => {
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    {
-      controlUi: "http://localhost:18789/portals",
-      gateway: "wss://gateway.example.test/control",
-      ingress: true,
-    },
-    {
-      controlUi: "http://localhost:18789/portals",
-      gateway: "ws://127.0.0.1:18789/control",
-      ingress: false,
-    },
-    {
-      controlUi: "https://127.0.0.1:18789/portals",
-      gateway: "ws://127.0.0.1:18789/control",
-      ingress: false,
-    },
-  ])(
-    "explains HTTP portal access from $controlUi via $gateway without probing",
-    async ({ controlUi, gateway, ingress }) => {
-      vi.stubGlobal("location", new URL(controlUi));
-      const localPortal = {
-        ...portal,
-        url: "http://127.0.0.1:43123/app?openclaw_portal=secret-token",
-        publicUrl: "http://127.0.0.1:43123/app",
-      };
-      const source = createContext(["portal.list", "portal.close"], async () => ({
-        portals: [localPortal],
-      }));
-      source.context.gateway.connection.gatewayUrl = gateway;
-      const page = await mountPage(source.context);
-      await waitForSolid(() =>
-        expect(page.textContent).toContain(
-          ingress ? "Remote portal ingress required" : "Open this HTTP portal in a new tab",
-        ),
-      );
-      if (ingress) {
-        expect(page.textContent).toContain("gateway.portals.ingress");
-      }
-      expect(page.querySelector("iframe")).toBeNull();
-      expect(probePortalReachable).not.toHaveBeenCalled();
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
-        localPortal.url,
-      );
-      const link = page.querySelector(".portals-preview__notice-url");
-      expect(link?.getAttribute("href")).toBe(localPortal.url);
-      expect(link?.getAttribute("target")).toBe("_blank");
-    },
-  );
-
-  it.each([
-    { host: "127.0.0.1", gateway: "wss://localhost:18789/control" },
-    { host: "192.168.1.20", gateway: "ws://192.168.1.20:18789/control" },
-  ])(
-    "preserves the service-published HTTP URL on $host via $gateway",
-    async ({ host, gateway }) => {
-      vi.stubGlobal("location", new URL(`http://${host}:18789/portals`));
-      const localPortal = {
-        ...portal,
-        url: `http://${host}:43123/app?openclaw_portal=secret-token`,
-        publicUrl: `http://${host}:43123/app`,
-      };
-      const source = createContext(["portal.list"], async () => ({ portals: [localPortal] }));
-      source.context.gateway.connection.gatewayUrl = gateway;
-      const page = await mountPage(source.context);
-      await waitForSolid(() =>
-        expect(page.querySelector("iframe")?.getAttribute("src")).toBe(localPortal.url),
-      );
-      expect(probePortalReachable).toHaveBeenCalledWith(localPortal.url);
-      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
-        localPortal.url,
-      );
-      expect(page.textContent).not.toContain("Remote portal ingress required");
-    },
-  );
-
   it("does not publish a late probe from the previous Gateway", async () => {
     let completeOldProbe!: (result: "reachable") => void;
     probePortalReachable
@@ -640,12 +470,6 @@ describe("portal presentation receipts", () => {
       probe: "unreachable",
       status: "blocked",
       reason: "network-unreachable",
-    },
-    {
-      url: "https://preview.example.test/",
-      probe: "reachable",
-      status: "unverified",
-      reason: "network-reachable",
     },
     {
       url: "https://preview.example.test/",

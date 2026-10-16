@@ -21,6 +21,7 @@ type SystemNoticeKind = {
   // (skill instructions, continuation summaries) the label stays visible while
   // the payload opens on demand.
   collapsedBody?: true;
+  showTimestamp?: true;
   // Injected mid-run context does not begin a new operator turn; kinds that do
   // start a turn omit this field.
   startsTurn?: false;
@@ -59,8 +60,19 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
   },
 };
 
+const pluginSteeringNotice: SystemNoticeKind = {
+  icon: "cpu",
+  labelKey: "chat.systemNotice.pluginSteering.label",
+  collapsedBody: true,
+  showTimestamp: true,
+  startsTurn: false,
+};
+
 export function resolveSystemNoticeKind(
   sourceTool: string | undefined,
 ): SystemNoticeKind | undefined {
+  if (sourceTool?.startsWith("plugin:") && sourceTool.length > "plugin:".length) {
+    return pluginSteeringNotice;
+  }
   return sourceTool === undefined ? undefined : systemNoticeKinds[sourceTool];
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.entry.js";
@@ -10,6 +11,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import type { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type {
   WorkerTaskPoolOptions,
@@ -23,6 +25,7 @@ import {
 import * as registry from "../state/openclaw-agent-db-registry-listing.js";
 import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -151,6 +154,67 @@ function isEvidenceReply(reply: unknown): boolean {
     reply.value.kind === "session-identity-evidence"
   );
 }
+
+it.for(["discovery", "identity"] as const)(
+  "cancels placement evidence during %s admission without abandoning its writer",
+  async (phase, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const subject = await placement();
+      await upsertSessionEntryCore(subject, { sessionId: subject.sessionId, updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const databasePath = database.path;
+      await closeOpenClawAgentDatabasesAsync();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const interrupted = new Error("placement evidence stopped");
+      let writerSettled = false;
+      let writer: Promise<void> | undefined;
+      const holdWriter = () => {
+        entered.resolve();
+        return release.promise.then(() => {
+          writerSettled = true;
+        });
+      };
+      if (phase === "discovery") {
+        writer = runWithSqliteDatabaseAdmissionTurn([], holdWriter, [path.dirname(databasePath)]);
+        await withinTest(entered.promise, signal);
+      } else {
+        boundary.afterReply = async (reply) => {
+          if (
+            isRecord(reply) &&
+            reply.ok === true &&
+            isRecord(reply.value) &&
+            reply.value.kind === "session-target-inventory"
+          ) {
+            boundary.afterReply = undefined;
+            writer = runOpenClawAgentWriteAdmission(
+              { agentId: "main", path: databasePath },
+              holdWriter,
+            );
+            await entered.promise;
+          }
+        };
+      }
+      const pending = createWorkerPlacementSessionEvidenceResolver([subject], controller.signal);
+      void pending.catch(() => {});
+      try {
+        await withinTest(entered.promise, signal);
+        controller.abort(interrupted);
+        await expect(withinTest(pending, signal)).rejects.toBe(interrupted);
+        expect(writerSettled).toBe(false);
+      } finally {
+        boundary.afterReply = undefined;
+        release.resolve();
+        await Promise.allSettled([writer, pending]);
+      }
+      expect(writerSettled).toBe(true);
+      const resolve = await createWorkerPlacementSessionEvidenceResolver([subject]);
+      expect(await resolve(subject)).toBe("current");
+    });
+  },
+);
 
 it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",

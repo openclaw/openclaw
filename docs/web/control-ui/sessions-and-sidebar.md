@@ -120,6 +120,9 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
+A temporary selected row appears in the sidebar immediately, clearing the previous
+chat’s highlight without changing the saved session until creation is accepted.
+The temporary row has no session actions; a failed creation restores the draft.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is
@@ -175,6 +178,10 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
+While a name is pending, the sidebar and chat header show a gently waving blob
+instead of “New session.” A ready name replaces it immediately; if naming ends
+without a name, the ordinary fallback label returns. Reduced-motion preferences
+keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
@@ -424,6 +431,8 @@ An older list response preserves newer session names and run status already load
 Loaded persistent child-session rows stay visible while an expanded or selected parent fetches updated child data after a session-list refresh. Child loads preserve newer names and run status already observed in other session lists. A selected child also adopts its refreshed name and run status as soon as its details arrive, including while its ancestors are still loading. Its ancestor path refreshes when the session is replaced or its parent changes, including in filtered lists. Collapsed, unselected parents drop stale child snapshots on refresh and reload when reopened; the selected session's ancestry stays available. A loading placeholder appears only when the parent has no loaded child rows yet. Child-load errors remain visible until you choose **Retry** or collapse and reopen the parent. In **Active**, archived children stop contributing to the parent’s child count. A completed child load also removes links to absent children after a reload; unloaded or failed child reads keep their discovery controls.
 
 **Archived** hides active sessions even when their conversation remains open. In **Active**, a directly opened archived session can retain its selected row. Archiving a visible session hides its row immediately while keeping its conversation open. Repeated archive actions stay disabled while the Gateway confirms the request. Confirmation offers **Undo**, including when you leave the Sessions page before the archive finishes or navigate away from the archived chat while the notification remains visible. Undo targets the original conversation and expires on a Gateway reconnect. If the request fails, the row returns with an error explaining what prevented archiving. Confirmed archive and restore changes remain applied to loaded rows if the follow-up refresh fails. If archiving already removed a row from every loaded list, Undo needs a successful refresh to show it again. The refresh error is shown separately; it does not undo a successful archive or restore. Refresh the session list to recover missing rows.
+
+Archiving a session with live nested sessions opens **Archive session?** from the sidebar, chat header, or Sessions page. Choose **Archive this session** to archive only the parent and move its nested sessions to the top level, or **Archive N sessions** to archive the whole tree with Undo. Sessions already moved to the top level or a separate group are not included. The dialog warns when the selection contains active work; sessions without nested sessions keep their existing active-work confirmation.
 
 **Snooze** hides an eligible session from the **Active** sidebar until its wake time,
 until you send it a message, or until an agent run completes on it. The session

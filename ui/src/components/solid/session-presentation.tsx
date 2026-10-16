@@ -305,6 +305,36 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
   );
 }
 
+export function summarizeTeamSessionSlots(
+  rows: readonly SidebarRecentSession[],
+  includeChildren: boolean,
+) {
+  const attention = summarizeSidebarSessionAttention(
+    rows.flatMap((row) =>
+      includeChildren
+        ? [row.attention]
+        : [
+            row.ownAttention ?? row.attention,
+            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+          ],
+    ),
+  );
+  let active = 0;
+  let queued = 0;
+  let unread = 0;
+  let failed = false;
+  for (const row of rows) {
+    const children = includeChildren ? row : row.subagentSummary;
+    const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
+    active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
+    queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
+    unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
+    failed ||=
+      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+  }
+  return { attention, active, queued, unread, failed };
+}
+
 export type TeamSessionSlotsProps = {
   rows: readonly SidebarRecentSession[];
   includeChildren: boolean;
@@ -314,35 +344,7 @@ export type TeamSessionSlotsProps = {
 };
 
 export function TeamSessionSlots(props: TeamSessionSlotsProps) {
-  const summary = createMemo(() => {
-    const attention = summarizeSidebarSessionAttention(
-      props.rows.flatMap((row) =>
-        props.includeChildren
-          ? [row.attention]
-          : [
-              row.ownAttention ?? row.attention,
-              ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
-            ],
-      ),
-    );
-    let active = 0,
-      queued = 0,
-      unread = 0,
-      failed = false;
-    for (const row of props.rows) {
-      const children = props.includeChildren ? row : row.subagentSummary;
-      const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
-      active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
-      queued +=
-        Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
-      unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-      failed ||=
-        row.status === "failed" ||
-        row.status === "timeout" ||
-        (children?.failedChildCount ?? 0) > 0;
-    }
-    return { attention, active, queued, unread, failed };
-  });
+  const summary = createMemo(() => summarizeTeamSessionSlots(props.rows, props.includeChildren));
   const idleChild = createMemo(() =>
     props.rows.length === 1 &&
     props.rows[0]?.isChild &&

@@ -62,12 +62,8 @@ import type {
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
-import type {
-  SessionEntryReadScope,
-  SessionTranscriptReadScope,
-} from "./session-accessor.types.js";
+import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
@@ -222,14 +218,6 @@ type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput 
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-export type SessionDiagnosticTextWorkerInput = {
-  kind: "session-diagnostic-text";
-  database: { agentId: string; path: string };
-  scope: SessionEntryReadScope & { agentId: string; databaseAgentId: string; sessionId: string };
-  continuation?: CanonicalSessionReaderContinuation;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
 type SessionStoreSummaryWorkerInput = {
   kind: "session-store-summary";
   database: { agentId: string; path: string };
@@ -340,7 +328,6 @@ export type SessionHistoryWorkerInput =
   | SessionEntryReadWorkerInput
   | SessionRuntimeTargetWorkerInput
   | SessionEntryCurrentWorkerInput
-  | SessionDiagnosticTextWorkerInput
   | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -477,11 +464,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-entry-read": SessionEntryReadWorkerResult;
     "session-runtime-target": SessionRuntimeTargetWorkerResult;
     "session-entry-current": SessionEntryCurrentWorkerResult;
-    "session-diagnostic-text": {
-      kind: "session-diagnostic-text";
-      text: string | undefined;
-      source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
-    };
     "session-exact-entries": SessionExactEntriesWorkerResult;
     "session-row-facts": SessionRowFactsWorkerResult;
     "session-store-target":
@@ -602,7 +584,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readActivitySummarySource: SessionHistoryReader<"session-activity-summary-source", "source">;
     readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
     readProjectionStatus: CancellableSessionHistoryReader<"projection-status">;
-    readIdentityEvidence: SessionHistoryReader<"session-identity-evidence", "evidence">;
+    readIdentityEvidence: CancellableSessionHistoryReader<"session-identity-evidence", "evidence">;
     readExactEntries: (
       input: SessionExactEntriesWorkerRequest,
       signal?: AbortSignal,
@@ -623,7 +605,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
         Pick<SessionEntryReadWorkerResult, "source" | "facts">
     >;
     readEntryCurrent: SessionHistoryReader<"session-entry-current", "entry">;
-    readDiagnosticText: SessionHistoryReader<"session-diagnostic-text", "text">;
     readMembers: SessionHistoryReader<"session-members">;
     readSuggestions: SessionHistoryReader<"session-suggestions", "suggestions">;
     readReactions: SessionHistoryReader<"session-reactions", "reactions">;

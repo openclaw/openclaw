@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
   resolveAuthenticatedDeviceTokenIdentity,
+  resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
@@ -23,10 +25,12 @@ import {
 import {
   getPairedDevice,
   getPendingDevicePairing,
+  recordPairedDeviceAccess,
   listDevicePairing,
   listDevicePairingReadOnly,
   requestDevicePairing,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -333,6 +337,106 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
       .run("[]", "refreshed");
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
+});
+
+test.each(["metadata", "presence"] as const)(
+  "publishes a device's %s update without loading unrelated paired rows",
+  async (kind) => {
+    await listDevicePairing(baseDir);
+    const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    const device = await getPairedDevice("paired-rich", baseDir);
+    const generation = resolveNodePairingGeneration(device);
+    expect(originalBinding).not.toBeNull();
+    if (!generation) {
+      throw new Error("expected fixture node generation");
+    }
+    const unavailable = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
+    try {
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "synthetic unavailable pairing read",
+      );
+    } finally {
+      unavailable.mockRestore();
+    }
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "Device pairing authority requires a current worker publication",
+    );
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+      .run("synthetic-unreadable-json", "paired-minimal");
+    try {
+      const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
+      await expect(
+        kind === "metadata"
+          ? updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)
+          : updatePairedDevicePresence(" paired-rich ", patch, generation, baseDir),
+      ).resolves.toBe(true);
+      expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+      expect(await getPairedDevice("paired-rich", baseDir)).toMatchObject(patch);
+      expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
+    } finally {
+      database.db
+        .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+        .run("paired-minimal");
+    }
+  },
+);
+
+test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const unavailable = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockRejectedValue(new Error("reader busy"));
+  try {
+    const rows = await Promise.all(
+      Array.from({ length: 160 }, () => getPairedDevice("paired-rich", baseDir)),
+    );
+    expect(rows).toEqual(Array.from({ length: 160 }, () => device));
+    rows[0]!.tokens!.operator!.revokedAtMs = 123;
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.revokedAtMs,
+    ).toBeUndefined();
+    await updatePairedDeviceMetadata("paired-rich", { displayName: "Committed" }, baseDir);
+    expect((await getPairedDevice("paired-rich", baseDir))?.displayName).toBe("Committed");
+  } finally {
+    unavailable.mockRestore();
+  }
+});
+
+test("coalesces reconnect presence without rewriting recent last-seen or replacement approvals", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  if (!device) {
+    throw new Error("expected paired fixture");
+  }
+  const patch = { lastSeenAtMs: 100_000, lastSeenReason: "connect" };
+  await Promise.all(
+    Array.from({ length: 160 }, () =>
+      recordPairedDeviceAccess(device.deviceId, patch, device, baseDir),
+    ),
+  );
+  const before = readDevicePairingStoreStateFromDatabase(database.db);
+  expect(before.pairedByDeviceId[device.deviceId]).toMatchObject(patch);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, lastSeenAtMs: 100_001, lastSeenReason: "device-token-auth" },
+    device,
+    baseDir,
+  );
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(before);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, displayName: "Changed", lastSeenAtMs: 100_002 },
+    device,
+    baseDir,
+  );
+  expect((await getPairedDevice(device.deviceId, baseDir))?.displayName).toBe("Changed");
+  const replacement = readDevicePairingStoreStateFromDatabase(database.db);
+  replacement.pairedByDeviceId[device.deviceId]!.publicKey = "replacement-key";
+  persistDevicePairingStoreState(replacement, baseDir, "paired");
+  await recordPairedDeviceAccess(device.deviceId, { platform: "stale-platform" }, device, baseDir);
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(replacement);
 });
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(

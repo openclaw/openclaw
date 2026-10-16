@@ -434,6 +434,7 @@ describe("dreaming view", () => {
       closePreviewButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
     ).toBe(closePreviewButton?.closest("openclaw-modal-actions"));
     closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(viewState.wikiPreview).toBeNull();
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });
@@ -570,6 +571,7 @@ describe("dreaming view", () => {
       closePreviewButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
     ).toBe(closePreviewButton?.closest("openclaw-modal-actions"));
     closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(viewState.wikiPreview).toBeNull();
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });

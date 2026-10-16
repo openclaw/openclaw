@@ -30,7 +30,7 @@ import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.t
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { resolveCollapsedToolDetail } from "./chat-tool-cards.ts";
+import { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 function messageVideoSlots(
   projection: Pick<

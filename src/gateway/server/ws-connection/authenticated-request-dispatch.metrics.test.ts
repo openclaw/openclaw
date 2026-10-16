@@ -32,7 +32,7 @@ import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
-import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
+import { captureGatewayRpcReceivedAt, createGatewayRpcDiagnostics } from "./request-diagnostics.js";
 import { GatewayRequestStartTimeoutError } from "./request-start.js";
 // Compile the real router before timed cases; family preparation remains controlled below.
 import "../../server-methods.js";
@@ -98,6 +98,41 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it.each([
+    {
+      clientKind: "openclaw-control-ui",
+      params: { sessionKey: "private-session", agentId: "private-agent", compact: true },
+      shape: { scope: "session", compact: true, page: "first" },
+    },
+    {
+      clientKind: "openclaw-macos",
+      params: { agentId: "private-agent", offset: 50 },
+      shape: { scope: "agent", compact: false, page: "append" },
+    },
+    {
+      clientKind: "gateway-client",
+      params: { compact: "private-invalid", offset: "private-invalid", query: "private-query" },
+      shape: { scope: "global", compact: false, page: "first" },
+    },
+  ])("attributes cron list receipt without private values ($clientKind)", async (query) => {
+    const fixture = createRequest(({ respond }) => respond(true, {}), "cron.list");
+    const client = createOperatorWsClient({
+      clientInfo: { id: query.clientKind, mode: "backend" },
+    });
+    await fixture.dispatcher.dispatch(
+      { type: "req", id: "private-request", method: "cron.list", params: query.params },
+      client,
+    );
+    await fixture.finished;
+    expect(fixture.events.filter((event) => event.phase === "received")).toEqual([
+      expect.objectContaining({
+        method: "cron.list",
+        cronList: { clientKind: query.clientKind, source: "wire", ...query.shape },
+      }),
+    ]);
+    expect(JSON.stringify(fixture.events)).not.toContain("private-");
+  });
+
   it.each([
     {
       clientKind: "openclaw-control-ui",
@@ -761,39 +796,48 @@ describe("authenticated Gateway RPC diagnostics", () => {
     expect(JSON.stringify(fixture.events)).not.toContain("synthetic handler failure");
   });
 
-  it("takes no clocks or registry lookups when diagnostics are disabled or uninterested", () => {
-    const clock = vi.spyOn(performance, "now");
-    const memory = vi.spyOn(process, "memoryUsage");
-    const registry = vi.fn();
-    expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
-    const stopPublic = onDiagnosticEvent(() => {});
-    onTestFinished(stopPublic);
-    expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
-    stopPublic();
-    const unsubscribe = onInternalDiagnosticEvent(() => {}, { include: ["gateway.rpc"] });
-    setDiagnosticsEnabledForProcess(false);
-    expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
-    const readParams = vi.fn();
-    expect(
-      createGatewayRpcDiagnostics(
-        "sessions.list",
-        registry,
-        {},
-        {
-          clientKind: "openclaw-control-ui",
-          source: "wire",
-          get params() {
-            return readParams();
+  it.each(["disabled", "trusted-filtered"] as const)(
+    "takes no clocks or registry lookups when diagnostics are %s or uninterested",
+    (mode) => {
+      const clock = vi.spyOn(performance, "now");
+      const memory = vi.spyOn(process, "memoryUsage");
+      const registry = vi.fn();
+      expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
+      const stopPublic = onDiagnosticEvent(() => {});
+      onTestFinished(stopPublic);
+      expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
+      stopPublic();
+      const unsubscribe = onInternalDiagnosticEvent(() => {}, {
+        include: ["gateway.rpc"],
+        ...(mode === "trusted-filtered" ? { includeTrusted: [] } : {}),
+      });
+      if (mode === "disabled") {
+        setDiagnosticsEnabledForProcess(false);
+      }
+      expect(captureGatewayRpcReceivedAt()).toBeUndefined();
+      expect(createGatewayRpcDiagnostics("health", registry, {})).toBeUndefined();
+      const readParams = vi.fn();
+      expect(
+        createGatewayRpcDiagnostics(
+          "sessions.list",
+          registry,
+          {},
+          {
+            clientKind: "openclaw-control-ui",
+            source: "wire",
+            get params() {
+              return readParams();
+            },
           },
-        },
-      ),
-    ).toBeUndefined();
-    expect(readParams).not.toHaveBeenCalled();
-    unsubscribe();
-    expect(clock).not.toHaveBeenCalled();
-    expect(memory).not.toHaveBeenCalled();
-    expect(registry).not.toHaveBeenCalled();
-  });
+        ),
+      ).toBeUndefined();
+      expect(readParams).not.toHaveBeenCalled();
+      unsubscribe();
+      expect(clock).not.toHaveBeenCalled();
+      expect(memory).not.toHaveBeenCalled();
+      expect(registry).not.toHaveBeenCalled();
+    },
+  );
 
   it("labels registered methods exactly and folds arbitrary names across registry replacement", async () => {
     const { events } = observeRequests();

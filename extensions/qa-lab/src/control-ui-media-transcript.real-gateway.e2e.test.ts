@@ -377,7 +377,8 @@ suite.define(() => {
             executablePath: process.execPath,
             argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
             cwd: process.cwd(),
-            usePackagedPlugins: true,
+            // Repository fixtures stage auth directly; package repair has separate coverage.
+            usePackagedPlugins: false,
           },
           providerMode: "mock-openai",
           primaryModel: "mock-openai/gpt-5.6-luna",
@@ -439,6 +440,7 @@ suite.define(() => {
             });
             reportPhase("composer-ready");
             const composer = page.locator(".agent-chat__composer-combobox textarea");
+            const stop = page.getByRole("button", { name: "Stop generating", exact: true });
             await composer.fill("Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
             await page.getByRole("button", { name: "Send message" }).click();
             reportPhase("powerpoint-request-sent");
@@ -457,6 +459,8 @@ suite.define(() => {
             });
             reportPhase("powerpoint-history-read");
 
+            // Persisted replies can precede the browser's terminal event.
+            await stop.waitFor({ state: "hidden" });
             await composer.fill("Reply exactly `Session healthy`");
             await page.getByRole("button", { name: "Send message" }).click();
             reportPhase("success-replay-request-sent");
@@ -480,6 +484,7 @@ suite.define(() => {
             let failureCardVisible = firstCardText.includes("Not sent");
             let failurePathHealthy = false;
             if (successPathHealthy) {
+              await stop.waitFor({ state: "hidden" });
               await composer.fill("Reply exactly `Missing file\nMEDIA:./missing-proof.txt`");
               await page.getByRole("button", { name: "Send message" }).click();
               reportPhase("missing-file-request-sent");
@@ -489,6 +494,7 @@ suite.define(() => {
               await failureCard.waitFor();
               failureCardVisible = ((await failureCard.textContent()) ?? "").includes("Not sent");
               reportPhase("missing-file-card-visible");
+              await stop.waitFor({ state: "hidden" });
               await composer.fill("Reply exactly `Session recovered`");
               await page.getByRole("button", { name: "Send message" }).click();
               reportPhase("failure-replay-request-sent");

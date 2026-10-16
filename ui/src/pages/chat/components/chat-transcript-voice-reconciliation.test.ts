@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
-import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -16,23 +16,22 @@ function voiceProjection(props: ChatThreadProps) {
   const controller = createTestTranscript(props.paneId);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => {
-    render(nothing, container);
+    render(null, container);
     controller.hostDisconnected();
   });
   return () => {
     controller.renderSession(props.sessionKey, (session) => {
       const renderRows = vi.spyOn(session, "render");
       try {
-        projectChatTranscript(props, session).renderRows();
+        render(renderChatThread(props, controller), container);
+        controller.hostConnected();
+        controller.hostUpdated();
+        flush();
         expect(renderRows).toHaveBeenCalledOnce();
-        const voice = renderRows.mock.calls[0]![0].find(
-          (row) => row.kind === "content" && row.key === "realtime-talk",
-        );
-        render(voice?.kind === "content" ? voice.content : nothing, container);
       } finally {
         renderRows.mockRestore();
       }
-      return html``;
+      return null;
     });
     return [...container.querySelectorAll(".agent-chat__voice-turn-text")].map(
       (turn) => turn.textContent,

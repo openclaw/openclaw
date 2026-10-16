@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ProgressCardSchema } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
 import { SessionRowSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -63,6 +64,9 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
 const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
   "key",
   "kind",
+  "label",
+  "displayName",
+  "derivedTitle",
   "classification",
   "participants",
   "expandedParticipants",
@@ -148,7 +152,10 @@ function createSnapshotRecord(
   let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
-    const json = JSON.stringify(pending.snapshot);
+    // Pairing credentials stay in the live projection, never the browser's disk cache.
+    const json = JSON.stringify(pending.snapshot, (_key, value: unknown) =>
+      removePairingQrContent(value),
+    );
     snapshot = JSON.parse(json);
     weight = json.length;
   } catch {
@@ -431,8 +438,15 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       await resetSessionSnapshotDatabase();
       return null;
     }
-    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));
-    return record.snapshot;
+    let snapshot = record.snapshot;
+    const messages = snapshot.messages.map(removePairingQrContent);
+    if (messages.some((message, index) => message !== snapshot.messages[index])) {
+      snapshot = { ...snapshot, messages };
+      // Older writers persisted live QR credentials; repair through the normal write owner.
+      this.write(sessionKey, snapshot);
+    }
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
+    return snapshot;
   }
 
   async loadSavedAtIndex(): Promise<void> {

@@ -113,6 +113,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
+        modelProvider: "acme-cli",
         liveTest: {
           defaultModelRef: "acme-cli/acme-large",
           defaultImageProbe: false,
@@ -169,6 +170,13 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     The backend id must match the manifest `cliBackends` entry. The registered
     adapter is authoritative plugin code; OpenClaw config selects the backend
     but does not rewrite its command contract.
+
+    Set `modelProvider` to the canonical model provider whose models the CLI
+    executes. It can match the backend id, as above, or a separate provider id.
+    Omitting it or supplying a blank value emits a warning during runtime or
+    setup-only registration: direct CLI references still work, but no
+    provider-to-runtime binding is created. OpenClaw does not infer this field
+    from `id`.
 
   </Step>
 </Steps>

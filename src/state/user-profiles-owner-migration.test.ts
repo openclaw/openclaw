@@ -8,7 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import { syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { repairMergedGatewayOwnerProfile } from "./user-profiles-owner-migration.js";

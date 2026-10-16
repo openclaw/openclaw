@@ -36,6 +36,7 @@ function createDraftStreamHarness(
     send?: DraftSendFn;
     edit?: DraftEditFn;
     eventScope?: DraftStreamParams["eventScope"];
+    identity?: DraftStreamParams["identity"];
     remove?: DraftRemoveFn;
     warn?: DraftWarnFn;
   } = {},
@@ -53,6 +54,7 @@ function createDraftStreamHarness(
     throttleMs: 250,
     maxChars: params.maxChars,
     eventScope: params.eventScope,
+    identity: params.identity,
     resolveThreadTs: params.threadTs ? () => params.threadTs : undefined,
     send,
     edit,
@@ -95,9 +97,11 @@ describe("createSlackDraftStream", () => {
       teamId: "T_TEST",
       client,
     };
-    const { stream, send, edit, remove } = createDraftStreamHarness({ eventScope });
+    const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
+    const text = "a".repeat(4205);
+    const { stream, send, edit, remove, warn } = createDraftStreamHarness({ eventScope, identity });
 
-    stream.update("hello");
+    stream.update(text);
     await stream.flush();
     stream.update("hello world");
     await stream.flush();
@@ -105,9 +109,11 @@ describe("createSlackDraftStream", () => {
 
     expect(send).toHaveBeenCalledWith(
       "channel:C123",
-      "hello",
-      expect.objectContaining({ eventScope }),
+      text,
+      expect.objectContaining({ eventScope, identity, token: "xoxb-test" }),
     );
+    expect(send).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
     expect(edit).toHaveBeenCalledWith(
       "C123",
       "111.222",
@@ -115,29 +121,6 @@ describe("createSlackDraftStream", () => {
       expect.objectContaining({ client }),
     );
     expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
-  });
-
-  it("forwards identity to the initial send call", async () => {
-    const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
-    const send = vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
-    const stream = createSlackDraftStream({
-      target: "channel:C123",
-      cfg: TEST_CFG,
-      token: "xoxb-test",
-      throttleMs: 250,
-      identity,
-      send,
-      edit: vi.fn<DraftEditFn>(async () => {}),
-      remove: vi.fn<DraftRemoveFn>(async () => {}),
-    });
-
-    stream.update("hello");
-    await stream.flush();
-
-    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
-    expect(sendCall?.[0]).toBe("channel:C123");
-    expect(sendCall?.[1]).toBe("hello");
-    expect((sendCall?.[2] as { identity?: unknown } | undefined)?.identity).toEqual(identity);
   });
 
   it("does not send duplicate text", async () => {
@@ -404,21 +387,6 @@ describe("createSlackDraftStream", () => {
     expect(send).not.toHaveBeenCalled();
     expect(edit).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a 4205-character preview with the default max chars", async () => {
-    const { stream, send, warn } = createDraftStreamHarness();
-    const text = "a".repeat(4205);
-
-    stream.update(text);
-    await stream.flush();
-
-    expect(send).toHaveBeenCalledTimes(1);
-    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
-    expect(sendCall?.[0]).toBe("channel:C123");
-    expect(sendCall?.[1]).toBe(text);
-    expect((sendCall?.[2] as { token?: string } | undefined)?.token).toBe("xoxb-test");
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("keeps mention-safe rendered text through the supplied edit owner", async () => {

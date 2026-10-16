@@ -60,6 +60,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
   "node-runtime-env.mjs",
+  "cli-invocation.mjs",
   "cli-root-options.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
@@ -594,12 +595,12 @@ export async function prepareNodeBootstrapArtifact(
   }
   await using handle = await fs.open(tarballPath, "r");
   const { digest: tarballSha256 } = await sha256File(handle);
-  return Object.freeze({
+  return {
     tarballPath,
     tarballSha256,
     tarballBytes,
     openclawVersion: packageJson.version,
     buildId,
-    enabledPluginIds: Object.freeze(plugins.map(({ id }) => id).toSorted()),
-  });
+    enabledPluginIds: plugins.map(({ id }) => id).toSorted(),
+  };
 }

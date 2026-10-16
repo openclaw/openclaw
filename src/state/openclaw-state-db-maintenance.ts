@@ -49,6 +49,7 @@ import {
   migratePortableIdentityColumnsV22,
   STATE_CURSOR_TABLES_V22,
 } from "./openclaw-state-db-schema-v22-columns.js";
+import { migrateTaskRunIndexesV24 } from "./openclaw-state-db-schema-v24-indexes.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -160,7 +161,7 @@ const STATE_V5_ADDITIVE_TABLES = [
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
 const STATE_MIGRATION_VERSIONS = [
-  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
 ] as const;
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
@@ -445,6 +446,13 @@ const stateMeetingChronologyMigration = {
   migrate: migrateMeetingTranscriptStartTime,
   applied: "Persisted normalized meeting transcript start times",
 };
+const stateTaskIndexMigration = {
+  version: 24,
+  tables: ["task_runs"],
+  columns: [],
+  migrate: migrateTaskRunIndexesV24,
+  applied: "Replaced retained task indexes with ordered cron history indexes (v24)",
+};
 
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
@@ -474,17 +482,20 @@ export const versionedStateMigrations: ReadonlyArray<{
     migrate: migrateCronDeliveryAttemptState,
     applied: "Recorded cron completion delivery attempt uncertainty (v20)",
   },
+  stateTaskIndexMigration,
 ];
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
 export function migrateBoundedStateSchema(
   db: DatabaseSync,
   previousVersion: number,
+  options: { versionMigrationOnly?: boolean } = {},
 ): string[] | undefined {
   const migrations = [
     statePredicateColumnMigration,
     statePortableIdentityMigration,
     stateMeetingChronologyMigration,
+    stateTaskIndexMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -500,24 +511,25 @@ export function migrateBoundedStateSchema(
   );
   // Older binaries can leave same-version repairs pending alongside a version change.
   if (
-    tableExists(db, "cron_run_logs") ||
-    collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
-      ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-      allowedMissingColumns: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
-        ...pending.flatMap((migration) => migration.columns),
-      ],
-      allowedMissingIndexes: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
-        ...indexes.map((index) => index.name),
-      ],
-      excludedIndexes: [
-        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
-        // v22 replaces these historical expression indexes during its column backfill.
-        "idx_acp_sessions_resume_agent",
-        "idx_acp_sessions_resume_acpx",
-      ],
-    }).length > 0
+    !options.versionMigrationOnly &&
+    (tableExists(db, "cron_run_logs") ||
+      collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
+        ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+        allowedMissingColumns: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
+          ...pending.flatMap((migration) => migration.columns),
+        ],
+        allowedMissingIndexes: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
+          ...indexes.map((index) => index.name),
+        ],
+        excludedIndexes: [
+          ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
+          // v22 replaces these historical expression indexes during its column backfill.
+          "idx_acp_sessions_resume_agent",
+          "idx_acp_sessions_resume_acpx",
+        ],
+      }).length > 0)
   ) {
     return undefined;
   }

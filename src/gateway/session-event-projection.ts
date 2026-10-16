@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
@@ -17,6 +18,7 @@ export function prepareSessionEventProjection(
     ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
+    controlUiOnly?: boolean;
   },
 ): PrepareSessionEventProjection {
   return (event, payload, eventScope, connection) => {
@@ -97,6 +99,10 @@ export function prepareSessionEventProjection(
     let accessRevision = readGatewayAccessRevision();
     let runProjector = connection.getRunProjector();
     return (client) => {
+      // Check before audience payload/encoding caches: equal sharing scopes do not imply equal UI.
+      if (prepared?.controlUiOnly && client.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
+        return undefined;
+      }
       if (!connection.isCurrentProjection(projection) || !projection.isCurrent(record)) {
         return undefined;
       }

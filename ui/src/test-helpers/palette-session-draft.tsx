@@ -2,8 +2,8 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { ControllerHost } from "../lib/subscriptions-controller.ts";
 import type { SolidController } from "../lit/solid-controller-host.ts";
-import { ControllerHost } from "../lit/subscriptions-controller.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import {
   PaletteSessionAttachments,

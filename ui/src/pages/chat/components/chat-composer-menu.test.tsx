@@ -250,7 +250,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
         open: open(),
         view: "root",
         toolOverrides: null,
-        rootToggles: [toggle],
+        rootToggles: [{ ...toggle, icon: "pencil" }],
         onOpenChange: setOpen,
         onViewChange: vi.fn(),
       }}
@@ -259,9 +259,10 @@ it("retains attachment choices while the native menu closes and reopens", async 
   const trigger = view.container.querySelector<HTMLButtonElement>(
     ".agent-chat__input-btn--attach",
   )!;
-  const choice = view.container.querySelector<HTMLElement>('[data-value="test-toggle"]')!;
   trigger.click();
   await waitForSolid(() => expect(open()).toBe(true));
+  const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
+  expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
   flush();
   setOpen(true);

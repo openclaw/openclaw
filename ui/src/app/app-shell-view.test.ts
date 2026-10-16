@@ -1,13 +1,18 @@
 /* @vitest-environment jsdom */
 
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
+import { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
 import { connectLegacyApplicationContext } from "./app-root-lit.ts";
 import { renderApplicationShell } from "./app-shell-view.tsx";
@@ -34,6 +39,74 @@ async function mountShell() {
   flush();
   return { owner, runtime, view };
 }
+
+it("reserves session geometry before page mount and clears it on other routes", async () => {
+  const { owner, view } = await mountShell();
+  const content = view.container.querySelector("main.content")!;
+  expect(content.classList.contains("content--workbench")).toBe(true);
+  expect(content.querySelector("openclaw-chat-pane")).toBeNull();
+  for (const routeId of [
+    "new-session",
+    "systems",
+    "dashboard",
+    "connection",
+    undefined,
+    "chat",
+  ] as const) {
+    owner.routeState = { routeId, routeFailed: routeId === undefined };
+    owner.invalidate();
+    flush();
+    expect(content.classList.contains("content--workbench"), String(routeId)).toBe(
+      routeId === "chat" || routeId === "dashboard",
+    );
+  }
+  owner.routeState = { routeId: "chat", routeFailed: true };
+  owner.invalidate();
+  flush();
+  expect(content.classList.contains("content--workbench")).toBe(false);
+});
+
+it("preserves notice padding when a session route resolves without a chat pane", async () => {
+  const { owner, view } = await mountShell();
+  const content = view.container.querySelector("main.content")!;
+  const router = createRouter<"chat", ChatRouteData, unknown, ChatRouteData>({
+    routes: [
+      definePage({ id: "chat", path: "/chat", component: () => ({}), loader: (data) => data }),
+    ],
+  });
+  const unsubscribe = router.subscribeSelector(
+    selectShellRouteState,
+    (state) => {
+      owner.routeState = state;
+      owner.invalidate();
+    },
+    equalShellRouteState,
+  );
+  onTestFinished(() => {
+    unsubscribe();
+    router.stop();
+  });
+  const session = { kind: "session", sessionKey: "agent:main:main", face: "chat" } as const;
+  await router.navigate("chat", session);
+  const notices: ChatRouteData[] = [
+    { kind: "ambiguous", shortId: "abc123", candidates: [], truncated: false, face: "chat" },
+    { kind: "route-error", message: "Session unavailable", face: "chat" },
+    {
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat",
+      sessionsHref: "/sessions",
+    },
+  ];
+  for (const notice of notices) {
+    await router.revalidate(notice);
+    flush();
+    expect(content.classList.contains("content--workbench"), notice.kind).toBe(false);
+    await router.revalidate(session);
+    flush();
+    expect(content.classList.contains("content--workbench")).toBe(true);
+  }
+});
 
 it("keeps one sidebar and outlet while navigation moves between desktop and drawer", async () => {
   let mobile = false;
@@ -69,6 +142,113 @@ it("keeps one sidebar and outlet while navigation moves between desktop and draw
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
   expect(view.container.querySelector("openclaw-router-outlet")).toBe(outlet);
+});
+
+it("keeps the mobile New Session action live across selection and access changes", async () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true })),
+  );
+  const { owner, runtime, view } = await mountShell();
+  owner.routeState = { routeId: "sessions" };
+  const context = runtime.context;
+  vi.spyOn(context.theme, "settings", "get").mockReturnValue({
+    ...context.theme.settings,
+    sidebarAgentsMode: "chip",
+  });
+  const connected = {
+    ...context.gateway.snapshot,
+    phase: "connected" as const,
+    client: new GatewayBrowserClient({ url: "ws://gateway.example.test" }),
+    hello: {
+      type: "hello-ok" as const,
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.sessions.write"] },
+      features: { methods: ["sessions.create"] },
+    },
+  };
+  const snapshot = vi.spyOn(context.gateway, "snapshot", "get").mockReturnValue(connected);
+  const selection = vi.spyOn(context.agentSelection, "state", "get");
+  selection.mockReturnValue({ ...context.agentSelection.state, selectedId: "writer" });
+  const navigate = vi.spyOn(context, "navigate").mockImplementation(() => undefined);
+  owner.invalidate();
+  flush();
+  const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+  await topbar.updateComplete;
+  const action = view.container.querySelector<HTMLAnchorElement>(".header-new-session")!;
+  expect(action.getAttribute("href")).toBe("/new?agent=writer");
+  action.focus();
+
+  selection.mockReturnValue({ ...context.agentSelection.state, selectedId: "reviewer" });
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(view.container.querySelector(".header-new-session")).toBe(action);
+  expect(document.activeElement).toBe(action);
+  expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
+  action.click();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=reviewer" });
+  navigate.mockClear();
+
+  // The synchronous permission owner wins even before the next render commits.
+  snapshot.mockReturnValue({ ...connected, phase: "stopped" });
+  action.click();
+  expect(navigate).not.toHaveBeenCalled();
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(action.hasAttribute("href")).toBe(false);
+  expect(action.getAttribute("aria-disabled")).toBe("true");
+
+  snapshot.mockReturnValue(connected);
+  owner.invalidate();
+  flush();
+  await topbar.updateComplete;
+  expect(view.container.querySelector(".header-new-session")).toBe(action);
+  expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
+  expect(action.hasAttribute("aria-disabled")).toBe(false);
+});
+
+it("keeps the focused gateway retry button across shell and error updates", async () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({ matches: true })),
+  );
+  const { owner, runtime, view } = await mountShell();
+  const disconnected = {
+    ...runtime.context.gateway.snapshot,
+    phase: "offline" as const,
+    offlineStable: true,
+    lastError: "Gateway unavailable",
+  };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+  snapshot.mockReturnValue(disconnected);
+  owner.invalidate();
+  flush();
+
+  const retry = view.getByRole("button", { name: "Disconnected — Retry now" });
+  retry.focus();
+  expect(document.activeElement).toBe(retry);
+
+  snapshot.mockReturnValue({ ...disconnected, lastError: "Connection refused" });
+  owner.navResizing = true;
+  owner.invalidate();
+  flush();
+
+  expect(view.getByRole("button", { name: "Disconnected — Retry now" })).toBe(retry);
+  expect(document.activeElement).toBe(retry);
+  const tooltip = view.container.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>(
+    ".shell-connection-status openclaw-tooltip",
+  );
+  expect(tooltip?.content).toBe("Connection refused");
+
+  snapshot.mockReturnValue({ ...disconnected, phase: "connecting" });
+  owner.invalidate();
+  flush();
+  expect(view.container.querySelector(".shell-connection-status")?.textContent).toContain(
+    "Connecting…",
+  );
+  expect(view.queryByRole("button", { name: "Disconnected — Retry now" })).toBeNull();
 });
 
 it("restores the delegated shell after a pending update and can select another workspace", async () => {
