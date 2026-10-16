@@ -22,6 +22,8 @@ function guard(buildId: string, at = Date.now()) {
   return JSON.stringify({ buildId, at });
 }
 
+const httpResponse = (status: number) => new Response(null, { status });
+
 function stubDocumentFetch(...responses: Response[]) {
   const fetchMock = vi.fn<typeof fetch>(async () => {
     const response = responses.shift();
@@ -30,6 +32,23 @@ function stubDocumentFetch(...responses: Response[]) {
     }
     return response;
   });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function holdDocumentProbe() {
+  const probe = deferred<Response>();
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => probe.promise);
+
+  vi.stubGlobal("fetch", fetchMock);
+  return { probe, fetchMock };
+}
+
+function failThenReachable() {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(httpResponse(503))
+    .mockResolvedValue(httpResponse(200));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -87,12 +106,32 @@ function dispatchPreloadError(payload: unknown) {
   window.dispatchEvent(event);
 }
 
+function scheduleRecovery(buildId?: string) {
+  return scheduleStaleChunkReload({ storage, reload, ...(buildId ? { buildId } : {}) });
+}
+function retryRecovery(timeoutMs?: number) {
+  return retryStaleChunkReloadWhenReachable({
+    storage,
+    reload,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+}
+
+let reload: ReturnType<typeof vi.fn>;
+let storage: Storage;
+const cleanups: (() => void)[] = [];
+
 beforeEach(() => {
+  reload = vi.fn();
+  storage = memoryStorage();
   vi.useFakeTimers({ now: 1_000 });
   vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
   // Removing the stylesheet banner leaves its document recovery waiting for browser events.
   cancelStaleChunkRecovery();
   await vi.advanceTimersByTimeAsync(0);
@@ -106,11 +145,10 @@ afterEach(async () => {
 
 describe("isStaleChunkImportError", () => {
   it.each([false, true])(
-    "leaves route recovery to its retry owner (persistent failure: %s)",
+    "routes import retries before reloading: persistent=%s",
     async (persistent) => {
       const replace = stubDocumentNavigation();
-      const uninstall = installStaleChunkReloadListener();
-      const reload = vi.fn();
+      cleanups.push(installStaleChunkReloadListener());
       const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
       vi.stubGlobal("fetch", probe);
       const failImport = async () => {
@@ -126,24 +164,20 @@ describe("isStaleChunkImportError", () => {
         expect(isStaleChunkImportError(error)).toBe(true);
         return scheduleStaleChunkReload({ reload, storage: memoryStorage() });
       });
-      try {
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(reload).not.toHaveBeenCalled();
-        expect(replace).not.toHaveBeenCalled();
-        expect(load).toHaveBeenCalledOnce();
-        probe.mockResolvedValue(new Response(null, { status: 200 }));
-        window.dispatchEvent(new Event("online"));
-        await vi.advanceTimersByTimeAsync(1);
-        await expect(completion).resolves.toBe(persistent ? true : "loaded");
-        expect(load).toHaveBeenCalledTimes(2);
-        expect(reload).toHaveBeenCalledTimes(persistent ? 1 : 0);
-        expect(replace).not.toHaveBeenCalled();
-      } finally {
-        uninstall();
-      }
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(reload).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(load).toHaveBeenCalledOnce();
+      probe.mockResolvedValue(httpResponse(200));
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(completion).resolves.toBe(persistent ? true : "loaded");
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(reload).toHaveBeenCalledTimes(persistent ? 1 : 0);
+      expect(replace).not.toHaveBeenCalled();
     },
   );
-  it("does not retry a failed CSS preload without its styles after reachability returns", async () => {
+  it("does not retry a failed CSS preload", async () => {
     const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
     vi.stubGlobal("fetch", probe);
     const failure = new Error("Unable to preload CSS for /assets/route-AbCd1234.css");
@@ -152,7 +186,7 @@ describe("isStaleChunkImportError", () => {
     const rejected = expect(pending).rejects.toBe(failure);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(load).toHaveBeenCalledOnce();
-    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    probe.mockResolvedValue(httpResponse(200));
     window.dispatchEvent(new Event("online"));
     await vi.advanceTimersByTimeAsync(0);
     await rejected;
@@ -170,7 +204,7 @@ describe("isStaleChunkImportError", () => {
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await vi.advanceTimersByTimeAsync(0);
     controller.abort();
-    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    probe.mockResolvedValue(httpResponse(200));
     window.dispatchEvent(new Event("online"));
     await vi.advanceTimersByTimeAsync(0);
     await rejected;
@@ -184,56 +218,51 @@ describe("isStaleChunkImportError", () => {
 });
 
 describe("document reload ownership", () => {
-  it.each(["automatic", "manual"])(
-    "checks live owners before and after the %s document probe",
-    async (mode) => {
-      const response = deferred<Response>();
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockImplementationOnce(() => response.promise)
-        .mockResolvedValue(new Response(null, { status: 200 }));
-      vi.stubGlobal("fetch", fetchMock);
-      const reload = vi.fn();
-      const storage = memoryStorage();
-      let allowed = false;
-      const onBlocked = vi.fn();
-      const release = registerControlUiReloadGuard(() => allowed, onBlocked);
-      const attempt = () =>
-        mode === "automatic"
-          ? scheduleStaleChunkReload({ storage, reload })
-          : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
-      try {
-        await expect(attempt()).resolves.toBe(false);
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 1 : 0);
+  it.each(["automatic", "manual"])("rechecks %s reload authority after probing", async (mode) => {
+    const response = deferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => response.promise)
+      .mockResolvedValue(httpResponse(200));
+    vi.stubGlobal("fetch", fetchMock);
 
-        allowed = true;
-        const pending = attempt();
-        expect(fetchMock).toHaveBeenCalledOnce();
-        allowed = false;
-        response.resolve(new Response(null, { status: 200 }));
-        await expect(pending).resolves.toBe(false);
-        expect(reload).not.toHaveBeenCalled();
-        expect(storage.getItem(GUARD_KEY)).toBeNull();
-        expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 2 : 0);
+    let allowed = false;
+    const onBlocked = vi.fn();
+    const release = registerControlUiReloadGuard(() => allowed, onBlocked);
+    const attempt = () =>
+      mode === "automatic"
+        ? scheduleRecovery()
+        : retryStaleChunkReloadWhenReachable({ storage, reload, timeoutMs: 0 });
+    try {
+      await expect(attempt()).resolves.toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 1 : 0);
 
-        release();
-        vi.advanceTimersByTime(6_000);
-        await expect(attempt()).resolves.toBe(true);
-        expect(reload).toHaveBeenCalledOnce();
-      } finally {
-        release();
-      }
-    },
-  );
+      allowed = true;
+      const pending = attempt();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      allowed = false;
+      response.resolve(httpResponse(200));
+      await expect(pending).resolves.toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      expect(storage.getItem(GUARD_KEY)).toBeNull();
+      expect(onBlocked).toHaveBeenCalledTimes(mode === "manual" ? 2 : 0);
+
+      release();
+      vi.advanceTimersByTime(6_000);
+      await expect(attempt()).resolves.toBe(true);
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
 
   it("does not release another owner's reload protection", async () => {
     const firstBlocked = vi.fn();
     const secondBlocked = vi.fn();
     const releaseFirst = registerControlUiReloadGuard(() => false, firstBlocked);
     const releaseSecond = registerControlUiReloadGuard(() => false, secondBlocked);
-    const probe = stubDocumentFetch(new Response(null, { status: 200 }));
-    const reload = vi.fn();
+    const probe = stubDocumentFetch(httpResponse(200));
     const retry = () => retryStaleChunkReloadWhenReachable({ reload, storage: memoryStorage() });
     try {
       releaseFirst();
@@ -255,12 +284,10 @@ describe("scheduleStaleChunkReload", () => {
   it.each([{ draw: 0.25, delayMs: 500 }])(
     "spreads build recovery once per target: %j",
     async ({ draw, delayMs }) => {
-      vi.useFakeTimers();
       vi.mocked(Math.random).mockReturnValue(draw);
-      const reload = vi.fn();
-      const storage = memoryStorage();
-      const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-      const recover = () => scheduleStaleChunkReload({ buildId: "new-build", storage, reload });
+
+      const fetchMock = stubDocumentFetch(httpResponse(200));
+      const recover = () => scheduleRecovery("new-build");
       const first = recover();
       expect(fetchMock).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(100);
@@ -278,12 +305,11 @@ describe("scheduleStaleChunkReload", () => {
   );
 
   it.each(["online", "visible"])("wakes a pending recovery when %s", async (signal) => {
-    const reload = vi.fn();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(httpResponse(503));
     vi.stubGlobal("fetch", fetchMock);
     const pending = scheduleStaleChunkReload({ storage: memoryStorage(), reload });
     await vi.advanceTimersByTimeAsync(60_000);
-    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValue(httpResponse(200));
     if (signal === "online") {
       window.dispatchEvent(new Event("online"));
     } else {
@@ -296,42 +322,32 @@ describe("scheduleStaleChunkReload", () => {
   });
 
   it("retires a generic wait when a newer build takes over", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    const fetchMock = stubDocumentFetch(
-      new Response(null, { status: 503 }),
-      new Response(null, { status: 200 }),
-    );
-    const older = scheduleStaleChunkReload({ storage, reload });
+    const fetchMock = stubDocumentFetch(httpResponse(503), httpResponse(200));
+    const older = scheduleRecovery();
     await vi.advanceTimersByTimeAsync(0);
-    await expect(scheduleStaleChunkReload({ buildId: "new-build", storage, reload })).resolves.toBe(
-      true,
-    );
+    await expect(scheduleRecovery("new-build")).resolves.toBe(true);
     await expect(older).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("never schedules another automatic reload in a document already being replaced", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    const probe = stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(true);
+  it("never reloads a replacing document twice", async () => {
+    const probe = stubDocumentFetch(httpResponse(200));
+    await expect(scheduleRecovery()).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(29_999);
-    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(false);
+    await expect(scheduleRecovery()).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(scheduleStaleChunkReload({ storage, reload })).resolves.toBe(false);
+    await expect(scheduleRecovery()).resolves.toBe(false);
     expect(probe).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledOnce();
   });
 
   it("defers recovery in a reloaded document until the loop guard expires", async () => {
-    const reload = vi.fn();
     // A fresh document inherits only the persisted guard from the reload that created it.
-    const storage = memoryStorage({ [GUARD_KEY]: guard(CONTROL_UI_BUILD_INFO.buildId) });
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const pending = scheduleStaleChunkReload({ storage, reload });
+    storage = memoryStorage({ [GUARD_KEY]: guard(CONTROL_UI_BUILD_INFO.buildId) });
+    const fetchMock = stubDocumentFetch(httpResponse(200));
+    const pending = scheduleRecovery();
     await vi.advanceTimersByTimeAsync(29_999);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
@@ -340,11 +356,8 @@ describe("scheduleStaleChunkReload", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("does not replace an active Gateway build target with a generic chunk failure", async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    stubDocumentFetch(new Response(null, { status: 503 }), new Response(null, { status: 200 }));
+  it("keeps targeted recovery over generic failure", async () => {
+    stubDocumentFetch(httpResponse(503), httpResponse(200));
     const targeted = scheduleStaleChunkReload({
       buildId: "gateway-target",
       storage,
@@ -358,32 +371,20 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe(guard("gateway-target"));
   });
 
-  it("never lets a persisted build guard suppress recovery for a newer build", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage({ [GUARD_KEY]: guard("build-a") });
-    stubDocumentFetch(new Response(null, { status: 200 }));
-    const guardedRecovery = scheduleStaleChunkReload({
-      buildId: "build-a",
-      storage,
-      reload,
-    });
+  it("does not guard a newer build", async () => {
+    storage = memoryStorage({ [GUARD_KEY]: guard("build-a") });
+    stubDocumentFetch(httpResponse(200));
+    const guardedRecovery = scheduleRecovery("build-a");
     await vi.advanceTimersByTimeAsync(0);
     expect(reload).not.toHaveBeenCalled();
-    await expect(
-      scheduleStaleChunkReload({
-        buildId: "build-b",
-        storage,
-        reload,
-      }),
-    ).resolves.toBe(true);
+    await expect(scheduleRecovery("build-b")).resolves.toBe(true);
     await expect(guardedRecovery).resolves.toBe(false);
     expect(reload).toHaveBeenCalledTimes(1);
     expect(storage.getItem(GUARD_KEY)).toBe(guard("build-b"));
   });
 
   it("does not auto-reload when the guard cannot be persisted", async () => {
-    const reload = vi.fn();
-    stubDocumentFetch(new Response(null, { status: 200 }), new Response(null, { status: 200 }));
+    stubDocumentFetch(httpResponse(200), httpResponse(200));
     await expect(
       scheduleStaleChunkReload({
         storage: null,
@@ -405,69 +406,50 @@ describe("scheduleStaleChunkReload", () => {
   });
 
   it("applies an in-memory cooldown after bounded recovery expires", async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(httpResponse(503));
     vi.stubGlobal("fetch", fetchMock);
-    const pending = scheduleStaleChunkReload({ buildId: "build-a", storage, reload });
+    const pending = scheduleRecovery("build-a");
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
     expect(storage.getItem(GUARD_KEY)).toBeNull();
     const attempts = fetchMock.mock.calls.length;
     expect(attempts).toBeGreaterThan(1);
-    await expect(scheduleStaleChunkReload({ buildId: "build-a", storage, reload })).resolves.toBe(
-      false,
-    );
+    await expect(scheduleRecovery("build-a")).resolves.toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(attempts);
 
     await vi.advanceTimersByTimeAsync(5_000);
-    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ buildId: "build-a", storage, reload })).resolves.toBe(
-      true,
-    );
+    fetchMock.mockResolvedValue(httpResponse(200));
+    await expect(scheduleRecovery("build-a")).resolves.toBe(true);
     expect(reload).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
   });
 
   it("probes a newer build immediately after an older build exhausted recovery", async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(httpResponse(503));
     vi.stubGlobal("fetch", fetchMock);
-    const older = scheduleStaleChunkReload({ buildId: "build-a", storage, reload });
+    const older = scheduleRecovery("build-a");
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(older).resolves.toBe(false);
     const attempts = fetchMock.mock.calls.length;
-    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
-    await expect(scheduleStaleChunkReload({ buildId: "build-b", storage, reload })).resolves.toBe(
-      true,
-    );
+    fetchMock.mockResolvedValue(httpResponse(200));
+    await expect(scheduleRecovery("build-b")).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(attempts + 1);
     expect(reload).toHaveBeenCalledOnce();
     expect(storage.getItem(GUARD_KEY)).toBe(guard("build-b"));
   });
 
   it.each([false, true])(
-    "reprobes a newer build after its joined older-build probe fails (replacement: %s)",
+    "reprobes a newer build on failure: replacement=%s",
     async (replaceOwner) => {
-      vi.useFakeTimers();
       const olderProbe = deferred<Response>();
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockImplementationOnce(async () => olderProbe.promise)
-        .mockResolvedValueOnce(new Response(null, { status: 200 }));
+        .mockResolvedValueOnce(httpResponse(200));
       vi.stubGlobal("fetch", fetchMock);
-      const reload = vi.fn();
-      const storage = memoryStorage();
 
-      const olderBuild = scheduleStaleChunkReload({
-        buildId: "build-a",
-        storage,
-        reload,
-      });
+      const olderBuild = scheduleRecovery("build-a");
       let ownsNewerBuild = true;
       const newerBuild = scheduleStaleChunkReload({
         buildId: "build-b",
@@ -478,11 +460,11 @@ describe("scheduleStaleChunkReload", () => {
       const results = [olderBuild, newerBuild];
       if (replaceOwner) {
         ownsNewerBuild = false;
-        results.push(scheduleStaleChunkReload({ buildId: "build-b", storage, reload }));
+        results.push(scheduleRecovery("build-b"));
       }
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      olderProbe.resolve(new Response(null, { status: 503 }));
+      olderProbe.resolve(httpResponse(503));
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(Promise.all(results)).resolves.toEqual(
         replaceOwner ? [false, false, true] : [false, true],
@@ -495,25 +477,13 @@ describe("scheduleStaleChunkReload", () => {
   );
 
   it("reloads only the newest build after a shared document probe succeeds", async () => {
-    const sharedProbe = deferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>(async () => sharedProbe.promise);
-    vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
-    const storage = memoryStorage();
+    const { probe: sharedProbe, fetchMock } = holdDocumentProbe();
 
-    const olderBuild = scheduleStaleChunkReload({
-      buildId: "build-a",
-      storage,
-      reload,
-    });
-    const newerBuild = scheduleStaleChunkReload({
-      buildId: "build-b",
-      storage,
-      reload,
-    });
+    const olderBuild = scheduleRecovery("build-a");
+    const newerBuild = scheduleRecovery("build-b");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    sharedProbe.resolve(new Response(null, { status: 200 }));
+    sharedProbe.resolve(httpResponse(200));
     await expect(Promise.all([olderBuild, newerBuild])).resolves.toEqual([false, true]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -521,12 +491,8 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe(guard("build-b"));
   });
 
-  it("keeps target state isolated by storage while sharing document probes", async () => {
-    vi.useFakeTimers();
-    const sharedProbe = deferred<Response>();
-    const fetchMock = vi.fn<typeof fetch>(async () => sharedProbe.promise);
-    vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
+  it("isolates storage targets sharing a probe", async () => {
+    const { probe: sharedProbe, fetchMock } = holdDocumentProbe();
     const firstStorage = memoryStorage();
     const secondStorage = memoryStorage();
 
@@ -542,10 +508,10 @@ describe("scheduleStaleChunkReload", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    sharedProbe.resolve(new Response(null, { status: 503 }));
+    sharedProbe.resolve(httpResponse(503));
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
-    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
+    fetchMock.mockResolvedValueOnce(httpResponse(200));
     await expect(
       retryStaleChunkReloadWhenReachable({
         reload,
@@ -558,14 +524,9 @@ describe("scheduleStaleChunkReload", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves the automatic target when a manual retry joins its probe", async () => {
-    const sharedProbe = deferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => sharedProbe.promise),
-    );
-    const reload = vi.fn();
-    const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
+  it("keeps automatic target on manual join", async () => {
+    const { probe: sharedProbe } = holdDocumentProbe();
+    storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
 
     const automatic = scheduleStaleChunkReload({
       buildId: "target-build",
@@ -577,21 +538,16 @@ describe("scheduleStaleChunkReload", () => {
       storage,
       timeoutMs: 0,
     });
-    sharedProbe.resolve(new Response(null, { status: 200 }));
+    sharedProbe.resolve(httpResponse(200));
 
     await expect(Promise.all([automatic, manual])).resolves.toEqual([true, false]);
     expect(reload).toHaveBeenCalledExactlyOnceWith("automatic");
     expect(storage.getItem(GUARD_KEY)).toBe(guard("target-build"));
   });
 
-  it("preserves the automatic target when it joins a manual probe", async () => {
-    const sharedProbe = deferred<Response>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => sharedProbe.promise),
-    );
-    const reload = vi.fn();
-    const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
+  it("keeps automatic target when joining manual", async () => {
+    const { probe: sharedProbe } = holdDocumentProbe();
+    storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
 
     const manual = retryStaleChunkReloadWhenReachable({
       reload: () => reload("manual"),
@@ -603,7 +559,7 @@ describe("scheduleStaleChunkReload", () => {
       storage,
       reload: () => reload("automatic"),
     });
-    sharedProbe.resolve(new Response(null, { status: 200 }));
+    sharedProbe.resolve(httpResponse(200));
 
     await expect(Promise.all([manual, automatic])).resolves.toEqual([true, false]);
     expect(reload).toHaveBeenCalledTimes(1);
@@ -619,8 +575,6 @@ describe("scheduleStaleChunkReload", () => {
   });
 
   it("settles and aborts a hanging document probe after its deadline", async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
     const fetchMock = stubHangingDocumentFetch();
     const retry = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 0 });
 
@@ -636,22 +590,14 @@ describe("scheduleStaleChunkReload", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("stops automatic probes after a manual refresh succeeds during its retry delay", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 503 }))
-      .mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
-    const storage = memoryStorage();
+  it("stops automatic retries after manual success", async () => {
+    const fetchMock = failThenReachable();
 
-    const automatic = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
+    const automatic = scheduleRecovery("gateway-target");
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledOnce();
     const reloadedAt = Date.now();
-    await expect(
-      retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 }),
-    ).resolves.toBe(true);
+    await expect(retryRecovery(0)).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(automatic).resolves.toBe(false);
 
@@ -660,44 +606,36 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe(guard("gateway-target", reloadedAt));
   });
 
-  it("lets a dismissed surface retire generic recovery but not a Gateway build target", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 503 }))
-      .mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
-    const storage = memoryStorage();
+  it("dismisses only generic recovery", async () => {
+    failThenReachable();
 
-    const generic = scheduleStaleChunkReload({ storage, reload });
+    const generic = scheduleRecovery();
     await vi.advanceTimersByTimeAsync(0);
     cancelStaleChunkRecovery(storage);
     await expect(generic).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reload).not.toHaveBeenCalled();
 
-    const targeted = scheduleStaleChunkReload({ buildId: "gateway-target", storage, reload });
+    const targeted = scheduleRecovery("gateway-target");
     cancelStaleChunkRecovery(storage);
     await expect(targeted).resolves.toBe(true);
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("starts fresh recovery for a surface that fails right after a dismissal", async () => {
+  it("rearms during a dismissed probe", async () => {
     const heldProbe = deferred<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockImplementationOnce(async () => heldProbe.promise)
-      .mockResolvedValue(new Response(null, { status: 200 }));
+      .mockResolvedValue(httpResponse(200));
     vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
-    const storage = memoryStorage();
 
-    const dismissed = scheduleStaleChunkReload({ storage, reload });
+    const dismissed = scheduleRecovery();
     await vi.advanceTimersByTimeAsync(0);
     cancelStaleChunkRecovery(storage);
     // The next failure arrives while the aborted probe is still in flight.
-    const rearmed = scheduleStaleChunkReload({ storage, reload });
-    heldProbe.resolve(new Response(null, { status: 503 }));
+    const rearmed = scheduleRecovery();
+    heldProbe.resolve(httpResponse(503));
     await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
 
     await expect(dismissed).resolves.toBe(false);
@@ -706,16 +644,10 @@ describe("scheduleStaleChunkReload", () => {
   });
 
   it("keeps automatic recovery running after a failed manual retry", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 503 }))
-      .mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const reload = vi.fn();
-    const storage = memoryStorage();
+    failThenReachable();
 
-    const automatic = scheduleStaleChunkReload({ storage, reload });
-    const manual = retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 });
+    const automatic = scheduleRecovery();
+    const manual = retryRecovery(0);
     await expect(manual).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -781,11 +713,10 @@ describe("retryStaleChunkReloadWhenReachable", () => {
       const response = deferred<Response>();
       const probe = vi.fn<typeof fetch>(() => response.promise);
       vi.stubGlobal("fetch", probe);
-      const reload = vi.fn();
       let current = retirement === "during";
       const pending = retryStaleChunkReloadWhenReachable({ canReload: () => current, reload });
       current = false;
-      response.resolve(new Response(null, { status: 200 }));
+      response.resolve(httpResponse(200));
       await expect(pending).resolves.toBe(false);
       expect(reload).not.toHaveBeenCalled();
       expect(probe).toHaveBeenCalledTimes(retirement === "during" ? 1 : 0);
@@ -794,15 +725,14 @@ describe("retryStaleChunkReloadWhenReachable", () => {
 
   it("admits one reload when retries complete together", async () => {
     const reachable = deferred<Response>();
-    const reload = vi.fn();
-    const storage = memoryStorage({ [GUARD_KEY]: "replacement-build" });
+    storage = memoryStorage({ [GUARD_KEY]: "replacement-build" });
     const probe = vi.fn<typeof fetch>(() => reachable.promise);
     vi.stubGlobal("fetch", probe);
     const retries = [
       retryStaleChunkReloadWhenReachable({ reload, storage }),
       retryStaleChunkReloadWhenReachable({ reload, storage }),
     ];
-    reachable.resolve(new Response(null, { status: 200 }));
+    reachable.resolve(httpResponse(200));
     await expect(Promise.all(retries)).resolves.toEqual([true, false]);
     expect(probe).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledTimes(1);
@@ -811,20 +741,16 @@ describe("retryStaleChunkReloadWhenReachable", () => {
 });
 
 describe("installStaleChunkReloadListener", () => {
-  it("recovers caught lazy-surface failures when the document is reachable, not evaluation errors", async () => {
+  it("recovers lazy imports, not evaluation errors", async () => {
     const replace = stubDocumentNavigation();
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installStaleChunkReloadListener();
-    try {
-      dispatchPreloadError(new Error("boom in module evaluation"));
-      expect(fetchMock).not.toHaveBeenCalled();
-      dispatchPreloadError(new Error("Importing a module script failed."));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
+    const fetchMock = stubDocumentFetch(httpResponse(200));
+    cleanups.push(installStaleChunkReloadListener());
+    dispatchPreloadError(new Error("boom in module evaluation"));
+    expect(fetchMock).not.toHaveBeenCalled();
+    dispatchPreloadError(new Error("Importing a module script failed."));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 
@@ -848,47 +774,35 @@ describe("installMissingStylesheetRecovery", () => {
       const replace = stubDocumentNavigation();
       setReadyState("loading");
       const probe = stubDocumentFetch();
-      const uninstall = installMissingStylesheetRecovery();
-      try {
-        dispatchStylesheetError(href);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(probe).not.toHaveBeenCalled();
-        expect(replace).not.toHaveBeenCalled();
-        expect(document.querySelector('[role="alert"]')).toBeNull();
-      } finally {
-        uninstall();
-      }
+      cleanups.push(installMissingStylesheetRecovery());
+      dispatchStylesheetError(href);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(probe).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="alert"]')).toBeNull();
     },
   );
 
-  it("does nothing when the stylesheet sentinel is present and removes listeners", () => {
+  it("ignores errors with the CSS sentinel present", () => {
     stubDocumentNavigation();
     setReadyState("complete");
     document.documentElement.style.setProperty("--openclaw-css-ok", "1");
     const fetchMock = stubDocumentFetch();
-    const uninstall = installMissingStylesheetRecovery();
-    try {
-      window.dispatchEvent(new Event("load"));
-      dispatchStylesheetError();
-      expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      uninstall();
-    }
+    cleanups.push(installMissingStylesheetRecovery());
+    window.dispatchEvent(new Event("load"));
+    dispatchStylesheetError();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("schedules recovery when the sentinel is missing at load", async () => {
     const replace = stubDocumentNavigation();
     setReadyState("loading");
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installMissingStylesheetRecovery();
-    try {
-      window.dispatchEvent(new Event("load"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
+    const fetchMock = stubDocumentFetch(httpResponse(200));
+    cleanups.push(installMissingStylesheetRecovery());
+    window.dispatchEvent(new Event("load"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("shows a reload banner when automatic recovery is unavailable", async () => {
@@ -903,49 +817,38 @@ describe("installMissingStylesheetRecovery", () => {
       return key;
     });
     setReadyState("complete");
-    const fetchMock = stubDocumentFetch(
-      new Response(null, { status: 503 }),
-      new Response(null, { status: 503 }),
-    );
-    const uninstall = installMissingStylesheetRecovery();
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(document.querySelector('[role="alert"]')).not.toBeNull();
-      const banner = document.querySelector<HTMLElement>('[role="alert"]');
-      const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
-      expect(banner?.textContent).toContain("Localized stylesheet failure");
-      expect(reloadButton?.textContent).toBe("Localized reload");
-      expect(translate).toHaveBeenCalledWith("lazyView.stylesFailed", undefined);
-      expect(translate).toHaveBeenCalledWith("common.reload", undefined);
-      reloadButton?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(banner?.isConnected).toBe(true);
-    } finally {
-      uninstall();
-    }
+    const fetchMock = stubDocumentFetch(httpResponse(503), httpResponse(503));
+    cleanups.push(installMissingStylesheetRecovery());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    const banner = document.querySelector<HTMLElement>('[role="alert"]');
+    const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
+    expect(banner?.textContent).toContain("Localized stylesheet failure");
+    expect(reloadButton?.textContent).toBe("Localized reload");
+    expect(translate).toHaveBeenCalledWith("lazyView.stylesFailed", undefined);
+    expect(translate).toHaveBeenCalledWith("common.reload", undefined);
+    reloadButton?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(banner?.isConnected).toBe(true);
   });
 
-  it("detects at most once when the resource error and load paths both fire", async () => {
+  it("deduplicates resource and load failures", async () => {
     const replace = stubDocumentNavigation();
     setReadyState("loading");
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installMissingStylesheetRecovery();
-    try {
-      dispatchStylesheetError();
-      window.dispatchEvent(new Event("load"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
+    const fetchMock = stubDocumentFetch(httpResponse(200));
+    cleanups.push(installMissingStylesheetRecovery());
+    dispatchStylesheetError();
+    window.dispatchEvent(new Event("load"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("uninstall removes the banner and listeners", async () => {
     stubDocumentNavigation();
     const readyState = setReadyState("loading");
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 503 }));
+    const fetchMock = stubDocumentFetch(httpResponse(503));
     const uninstallListeners = installMissingStylesheetRecovery();
     uninstallListeners();
     dispatchStylesheetError();
@@ -954,26 +857,23 @@ describe("installMissingStylesheetRecovery", () => {
 
     readyState.mockReturnValue("complete");
     const uninstall = installMissingStylesheetRecovery();
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(document.querySelector('[role="alert"]')).not.toBeNull();
-      uninstall();
-      expect(document.querySelector('[role="alert"]')).toBeNull();
-      dispatchStylesheetError();
-      window.dispatchEvent(new Event("load"));
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
+
+    cleanups.push(uninstall);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    uninstall();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    dispatchStylesheetError();
+    window.dispatchEvent(new Event("load"));
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 
 describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
-  it("resolves at the remaining deadline even when a fetch does not settle on abort", async () => {
+  it("bounds probes that ignore abort", async () => {
     const response = deferred<Response>();
     const probe = vi.fn<typeof fetch>(() => response.promise);
     vi.stubGlobal("fetch", probe);
-    const reload = vi.fn();
     const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
     try {
       await vi.advanceTimersByTimeAsync(4_999);
@@ -982,15 +882,14 @@ describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
       await expect(pending).resolves.toBe(false);
       expect(reload).not.toHaveBeenCalled();
     } finally {
-      response.resolve(new Response(null, { status: 503 }));
+      response.resolve(httpResponse(503));
       await vi.advanceTimersByTimeAsync(0);
     }
   });
 });
 
-it("never starts another probe once the wait carried past the deadline", async () => {
-  const reload = vi.fn();
-  const probe = stubDocumentFetch(new Response(null, { status: 503 }));
+it("honors deadlines after tab suspension", async () => {
+  const probe = stubDocumentFetch(httpResponse(503));
   const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
   await vi.advanceTimersByTimeAsync(0);
   // Wall time can move ahead while the tab is suspended, before its scheduled retry runs.

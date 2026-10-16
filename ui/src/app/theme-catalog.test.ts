@@ -43,6 +43,11 @@ const definition = createThemeDefinitionFixture({
   dark: createThemePaletteFixture({ background: "#111122" }),
 });
 
+function paletteWithBackground(background: string) {
+  return createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background }) });
+}
+const waitForTheme = (id: string) => vi.waitFor(() => expect(themeId()).toBe(id));
+
 function selfProfile(id: string): UsersSelfResult {
   return {
     profile: {
@@ -81,6 +86,25 @@ function builtinCatalog(themes: readonly ThemeDescriptor[] = [descriptor]): Them
   };
 }
 
+const cleanups: (() => void)[] = [];
+function createThemeHarness() {
+  const fixture = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), fixture.gateway);
+  fixture.gateway.start();
+  cleanups.push(() => {
+    applicationTheme.dispose();
+    fixture.gateway.stop();
+  });
+  return { ...fixture, applicationTheme };
+}
+function expectPalette(background: string) {
+  expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
+    `--bg: ${background};`,
+  );
+}
+const waitForPalette = (background: string) => vi.waitFor(() => expectPalette(background));
+const themeId = () => document.documentElement.dataset.themeId;
+
 beforeEach((testContext) => {
   const existingFontLinks = new Set(document.querySelectorAll('link[id^="openclaw-typeface-"]'));
   testContext.onTestFinished(() => {
@@ -95,6 +119,9 @@ beforeEach((testContext) => {
   patchSettings({ theme: descriptor.id, themeMode: "light" });
 });
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
   localStorage.clear();
   document.getElementById("openclaw-custom-theme")?.remove();
   document.documentElement.removeAttribute("style");
@@ -146,11 +173,11 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
     expect(renderMark).toHaveBeenCalledTimes(1);
     expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
     const palette = document.getElementById("openclaw-theme-palette-knot")!;
-    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
+    expect(themeId()).toBe(descriptor.id);
     palette.dispatchEvent(new Event("load"));
     flush();
     expect(renderMark).toHaveBeenCalledTimes(2);
-    expect(document.documentElement.dataset.themeId).toBe("knot");
+    expect(themeId()).toBe("knot");
     expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
     expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
   } finally {
@@ -186,11 +213,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "profile-alias" } }] },
   });
   try {
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
+    await waitForTheme(descriptor.id);
     expect(document.documentElement.dataset.themeMode).toBe("dark");
-    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-      "--bg: #111122;",
-    );
+    expectPalette("#111122");
     expect(applicationTheme.catalog?.themes).toContainEqual(descriptor);
     expect(applicationTheme.branding.mascot).toBe("claw");
 
@@ -208,11 +233,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
         keys: ["ui.theme"],
       }),
     );
-    await vi.waitFor(() =>
-      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-        "--bg: #221133;",
-      ),
-    );
+    await waitForPalette("#221133");
     expect(applicationTheme.branding).toEqual({
       ...resolveThemeBranding({ mascot: "none" }),
       mascot: "none",
@@ -254,11 +275,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     });
     response.theme = { ...descriptor, artwork };
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
-    await vi.waitFor(() =>
-      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-        "--bg: #332244;",
-      ),
-    );
+    await waitForPalette("#332244");
     expect(applicationTheme.branding.artwork).toEqual(artwork);
     expect(applicationTheme.branding).toMatchObject({
       brandName: "Northstar",
@@ -277,7 +294,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       current: { ...response.current, id: "claw", requestedId: descriptor.id },
     };
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe("claw"));
+    await waitForTheme("claw");
     expect(applicationTheme.settings.theme).toBe(descriptor.id);
     expect(applicationTheme.catalog?.unavailableId).toBe(descriptor.id);
     expect(applicationTheme.branding.mascot).toBe("claw");
@@ -288,7 +305,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
 
     response = catalog();
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
+    await waitForTheme(descriptor.id);
     expect(clients).toHaveLength(1);
     expect(current().stopped).toBe(0);
   } finally {
@@ -299,9 +316,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
 });
 
 it("retries a failed selected palette only after an explicit catalog retry", async () => {
-  const { gateway, current } = createGatewayStoreTestStore();
-  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-  gateway.start();
+  const { current, applicationTheme } = createThemeHarness();
   let paletteReads = 0;
   current().request.mockImplementation(async (method) => {
     if (method === "themes.list") {
@@ -317,26 +332,19 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
     throw new Error(`Unexpected request ${method}`);
   });
   current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-  try {
-    await vi.waitFor(() =>
-      expect(applicationTheme.catalog?.error).toBe("Theme palette temporarily unavailable"),
-    );
-    expect(document.documentElement.dataset.themeId).toBe("claw");
-    patchSettings({ textScale: 110 });
-    expect(applicationTheme.resolvedMode).toBe("light");
-    expect(paletteReads).toBe(1);
+  await vi.waitFor(() =>
+    expect(applicationTheme.catalog?.error).toBe("Theme palette temporarily unavailable"),
+  );
+  expect(themeId()).toBe("claw");
+  patchSettings({ textScale: 110 });
+  expect(applicationTheme.resolvedMode).toBe("light");
+  expect(paletteReads).toBe(1);
 
-    expectDefined(applicationTheme.retryCatalog, "theme catalog retry")();
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
-    expect(applicationTheme.catalog?.error).toBeNull();
-    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-      "--bg: #111122;",
-    );
-    expect(paletteReads).toBe(2);
-  } finally {
-    applicationTheme.dispose();
-    gateway.stop();
-  }
+  expectDefined(applicationTheme.retryCatalog, "theme catalog retry")();
+  await waitForTheme(descriptor.id);
+  expect(applicationTheme.catalog?.error).toBeNull();
+  expectPalette("#111122");
+  expect(paletteReads).toBe(2);
 });
 
 it("does not report a previous palette failure after a local theme switch", async () => {
@@ -352,9 +360,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
   });
   const selected = builtinCatalog([descriptor, replacement]);
   const retired = createDeferred<ThemesGetResult>();
-  const { gateway, current } = createGatewayStoreTestStore();
-  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-  gateway.start();
+  const { current, applicationTheme } = createThemeHarness();
   let paletteReads = 0;
   current().request.mockImplementation((method, params) => {
     if (method === "themes.list") {
@@ -380,35 +386,26 @@ it("does not report a previous palette failure after a local theme switch", asyn
     auth: { role: "operator", scopes: ["operator.read"] },
     snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "read-only" } }] },
   });
-  try {
-    await vi.waitFor(() =>
-      expect(current().request).toHaveBeenCalledWith("themes.get", { id: descriptor.id }),
-    );
-    patchSettings({ theme: replacement.id });
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(replacement.id));
-    expect(applicationTheme.settings.theme).toBe(replacement.id);
-    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-      "--bg: #332211;",
-    );
+  await vi.waitFor(() =>
+    expect(current().request).toHaveBeenCalledWith("themes.get", { id: descriptor.id }),
+  );
+  patchSettings({ theme: replacement.id });
+  await waitForTheme(replacement.id);
+  expect(applicationTheme.settings.theme).toBe(replacement.id);
+  expectPalette("#332211");
 
-    retired.reject(new Error("Previous palette is unavailable"));
-    await retired.promise.catch(() => undefined);
-    expect(document.documentElement.dataset.themeId).toBe(replacement.id);
-    expect(applicationTheme.catalog?.error).toBeNull();
-    expect(paletteReads).toBe(2);
-  } finally {
-    applicationTheme.dispose();
-    gateway.stop();
-  }
+  retired.reject(new Error("Previous palette is unavailable"));
+  await retired.promise.catch(() => undefined);
+  expect(themeId()).toBe(replacement.id);
+  expect(applicationTheme.catalog?.error).toBeNull();
+  expect(paletteReads).toBe(2);
 });
 
 it("keeps a local palette selected during catalog refresh and reloads later versions", async () => {
   patchSettings({ theme: "claw" });
   const response = builtinCatalog();
   const refreshing = createDeferred<ThemesListResult>();
-  const { gateway, current } = createGatewayStoreTestStore();
-  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-  gateway.start();
+  const { current, applicationTheme } = createThemeHarness();
   let lists = 0;
   let palette = definition;
   let paletteResponse: Promise<ThemesGetResult> | undefined;
@@ -428,66 +425,45 @@ it("keeps a local palette selected during catalog refresh and reloads later vers
     return Promise.reject(new Error(`Unexpected request ${method}`));
   });
   current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-  try {
-    await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
-    await vi.waitFor(() => expect(lists).toBe(2));
-    patchSettings({ theme: descriptor.id });
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
+  await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
+  current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+  await vi.waitFor(() => expect(lists).toBe(2));
+  patchSettings({ theme: descriptor.id });
+  await waitForTheme(descriptor.id);
 
-    refreshing.resolve(response);
-    await refreshing.promise;
-    await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
-    expect(applicationTheme.settings.theme).toBe(descriptor.id);
+  refreshing.resolve(response);
+  await refreshing.promise;
+  await waitForTheme(descriptor.id);
+  expect(applicationTheme.settings.theme).toBe(descriptor.id);
 
-    palette = createThemeDefinitionFixture({
-      dark: createThemePaletteFixture({ background: "#442244" }),
-    });
-    const delayed = createDeferred<ThemesGetResult>();
-    paletteResponse = delayed.promise;
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(2));
-    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
-    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-      "--bg: #111122;",
-    );
-    delayed.resolve({ ...catalog(palette), current: response.current });
-    await delayed.promise;
-    await vi.waitFor(() =>
-      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-        "--bg: #442244;",
-      ),
-    );
+  palette = paletteWithBackground("#442244");
+  const delayed = createDeferred<ThemesGetResult>();
+  paletteResponse = delayed.promise;
+  current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 2 }));
+  await vi.waitFor(() => expect(paletteReads).toBe(2));
+  expect(themeId()).toBe(descriptor.id);
+  expectPalette("#111122");
+  delayed.resolve({ ...catalog(palette), current: response.current });
+  await delayed.promise;
+  await waitForPalette("#442244");
 
-    const failed = createDeferred<ThemesGetResult>();
-    paletteResponse = failed.promise;
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
-    await vi.waitFor(() => expect(paletteReads).toBe(3));
-    failed.reject(new Error("Palette refresh temporarily failed"));
-    await failed.promise.catch(() => undefined);
-    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
-    expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-      "--bg: #442244;",
-    );
-    expect(applicationTheme.catalog?.error).toBe("Palette refresh temporarily failed");
-    patchSettings({ textScale: 110 });
-    expect(paletteReads).toBe(3);
+  const failed = createDeferred<ThemesGetResult>();
+  paletteResponse = failed.promise;
+  current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
+  await vi.waitFor(() => expect(paletteReads).toBe(3));
+  failed.reject(new Error("Palette refresh temporarily failed"));
+  await failed.promise.catch(() => undefined);
+  expect(themeId()).toBe(descriptor.id);
+  expectPalette("#442244");
+  expect(applicationTheme.catalog?.error).toBe("Palette refresh temporarily failed");
+  patchSettings({ textScale: 110 });
+  expect(paletteReads).toBe(3);
 
-    paletteResponse = undefined;
-    palette = createThemeDefinitionFixture({
-      dark: createThemePaletteFixture({ background: "#553355" }),
-    });
-    expectDefined(applicationTheme.retryCatalog, "theme catalog retry")();
-    await vi.waitFor(() =>
-      expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-        "--bg: #553355;",
-      ),
-    );
-    expect(applicationTheme.catalog?.error).toBeNull();
-  } finally {
-    applicationTheme.dispose();
-    gateway.stop();
-  }
+  paletteResponse = undefined;
+  palette = paletteWithBackground("#553355");
+  expectDefined(applicationTheme.retryCatalog, "theme catalog retry")();
+  await waitForPalette("#553355");
+  expect(applicationTheme.catalog?.error).toBeNull();
 });
 
 it.each([
@@ -510,9 +486,7 @@ it.each([
     }
     const response = builtinCatalog([personal]);
     const retired = createDeferred<ThemesGetResult | ThemesListResult>();
-    const { gateway, current } = createGatewayStoreTestStore();
-    const applicationTheme = createApplicationTheme(loadSettings(), gateway);
-    gateway.start();
+    const { gateway, current, applicationTheme } = createThemeHarness();
     current().request.mockImplementation((method) =>
       method === "users.self"
         ? Promise.resolve(selfProfile("first"))
@@ -526,63 +500,50 @@ it.each([
       snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
     });
     current().opts.onHello?.(hello());
-    try {
-      await vi.waitFor(() =>
-        expect(current().request).toHaveBeenCalledWith(
-          palette ? "themes.get" : "themes.list",
-          palette ? { id: personal.id } : {},
-        ),
+    await vi.waitFor(() =>
+      expect(current().request).toHaveBeenCalledWith(
+        palette ? "themes.get" : "themes.list",
+        palette ? { id: personal.id } : {},
+      ),
+    );
+    if (boundary === "client") {
+      gateway.connect();
+    }
+    const nextCatalog: ThemesListResult = palette
+      ? {
+          ...response,
+          theme: personal,
+          definition: paletteWithBackground("#443355"),
+          current: { ...response.current, id: personal.id },
+        }
+      : builtinCatalog([]);
+    current().request.mockImplementation(async (method) =>
+      method === "users.self"
+        ? selfProfile(boundary === "profile" ? "second" : "first")
+        : nextCatalog,
+    );
+    if (boundary === "profile") {
+      current().opts.onEvent?.(
+        createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
       );
-      if (boundary === "client") {
-        gateway.connect();
-      }
-      const nextCatalog: ThemesListResult = palette
-        ? {
-            ...response,
-            theme: personal,
-            definition: createThemeDefinitionFixture({
-              dark: createThemePaletteFixture({ background: "#443355" }),
-            }),
-            current: { ...response.current, id: personal.id },
-          }
-        : builtinCatalog([]);
-      current().request.mockImplementation(async (method) =>
-        method === "users.self"
-          ? selfProfile(boundary === "profile" ? "second" : "first")
-          : nextCatalog,
+    } else {
+      current().opts.onHello?.(hello());
+    }
+    if (palette) {
+      await waitForPalette("#443355");
+    } else {
+      await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
+    }
+    retired.resolve(palette ? { ...response, theme: personal, definition } : catalog());
+    await retired.promise;
+    if (palette) {
+      expectPalette("#443355");
+      expect(applicationTheme.catalog?.error).toBeNull();
+    } else {
+      expect(themeId()).toBe("claw");
+      expect(applicationTheme.catalog?.themes.some((theme) => theme.id === descriptor.id)).toBe(
+        false,
       );
-      if (boundary === "profile") {
-        current().opts.onEvent?.(
-          createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
-        );
-      } else {
-        current().opts.onHello?.(hello());
-      }
-      if (palette) {
-        await vi.waitFor(() =>
-          expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-            "--bg: #443355;",
-          ),
-        );
-      } else {
-        await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
-      }
-      retired.resolve(palette ? { ...response, theme: personal, definition } : catalog());
-      await retired.promise;
-      if (palette) {
-        expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
-          "--bg: #443355;",
-        );
-        expect(applicationTheme.catalog?.error).toBeNull();
-      } else {
-        expect(document.documentElement.dataset.themeId).toBe("claw");
-        expect(applicationTheme.catalog?.themes.some((theme) => theme.id === descriptor.id)).toBe(
-          false,
-        );
-      }
-    } finally {
-      applicationTheme.dispose();
-      gateway.stop();
     }
   },
 );
@@ -602,7 +563,7 @@ it.each(["Appearance discovery", "profile selection"] as const)(
       await vi.dynamicImportSettled();
       expect(current().request).not.toHaveBeenCalled();
       expect(published).not.toHaveBeenCalled();
-      expect(document.documentElement.dataset.themeId).toBe("claw");
+      expect(themeId()).toBe("claw");
 
       if (trigger === "Appearance discovery") {
         expect(applicationTheme.catalog).toBeUndefined();
@@ -614,9 +575,7 @@ it.each(["Appearance discovery", "profile selection"] as const)(
         expect(current().request).toHaveBeenCalledExactlyOnceWith("themes.list", {}),
       );
       if (trigger === "profile selection") {
-        await vi.waitFor(() =>
-          expect(document.documentElement.dataset.themeId).toBe(descriptor.id),
-        );
+        await waitForTheme(descriptor.id);
       }
       await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toContainEqual(descriptor));
       expect(current().request).toHaveBeenCalledOnce();
