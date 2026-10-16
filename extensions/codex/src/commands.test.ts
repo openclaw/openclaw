@@ -32,13 +32,14 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
-import type { CodexControlRequestOptions, SafeCodexControlRequestFn } from "./command-rpc.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createContext,
   createCodexRuntimeContextOverrides,
   createDeps,
+  dispatchCodexCommandForTest as handleCodexCommand,
+  type SafeCodexControlRequestFn,
   createThreadResumeResponse,
   holdCodexThreadQueue,
   expectedDiagnosticsTargetBlock,
@@ -93,8 +94,6 @@ function nodeExecContext(
     ...overrides,
   };
 }
-
-const handleCodexCommand = dispatchCodexCommand;
 
 function createResumeControlRequest(
   response:

@@ -175,7 +175,7 @@ describe("registered GitHub readers", () => {
     expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "GitHub request is no longer active. Try again.",
-      retryable: true,
+      retryable: false,
     });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),

@@ -160,7 +160,7 @@ describe("showInputDialog", () => {
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
-  it.each(["synchronous"])(
+  it.each(["synchronous", "asynchronous"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
       const submit = vi
@@ -184,6 +184,7 @@ describe("showInputDialog", () => {
       expect(dialogInput().disabled).toBe(false);
       expect(dialogInput().value).toBe("Client work");
       expect(findButton("Create group").disabled).toBe(false);
+      expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
       await closed;

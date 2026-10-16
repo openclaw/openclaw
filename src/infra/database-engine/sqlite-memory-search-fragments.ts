@@ -137,12 +137,14 @@ export function matchesSqliteMemorySearchFragment(
     views: catalog.views,
     tables: catalog.tables
       .filter((table) => ownsName(table.name))
-      // eslint-disable-next-line oxc/no-map-spread -- Canonicalizing identifiers must not mutate the supplied catalog.
       .map((table) => {
         const name = rename(table.name);
         return {
-          ...table,
           name,
+          strict: table.strict,
+          withoutRowid: table.withoutRowid,
+          foreignKeys: table.foreignKeys,
+          triggers: table.triggers,
           // Native extension declarations quote only the shadow-table identifier; preserve all other text.
           sql:
             table === parent

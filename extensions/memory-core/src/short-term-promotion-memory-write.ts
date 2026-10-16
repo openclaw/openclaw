@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
@@ -79,14 +80,23 @@ export async function resolveMemoryWritePath(
 }
 
 export async function readMemoryContent(filePath: string, workspaceDir?: string): Promise<string> {
-  return await (
-    workspaceDir ? readWorkspaceText(workspaceDir, filePath) : fs.readFile(filePath, "utf-8")
+  const bytes = await (
+    workspaceDir ? readWorkspaceFile(workspaceDir, filePath) : fs.readFile(filePath)
   ).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
+    if (extractErrorCode(error) === "ENOENT") {
+      return null;
     }
     throw error;
   });
+  if (bytes === null) {
+    return "";
+  }
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Memory file is not valid UTF-8: ${filePath}. The file was left unchanged; convert a copy to UTF-8 before retrying.`,
+    );
+  }
+  return bytes.toString("utf8");
 }
 
 export function isAtomicReplacePermissionError(error: unknown): boolean {

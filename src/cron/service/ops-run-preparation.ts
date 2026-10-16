@@ -146,7 +146,7 @@ export async function inspectManualRunPreflight(
   // Classify source retirement before the generic service-generation fence.
   opts?.commitGuard?.();
   source.assertCurrent();
-  await ensureLoaded(state, { forceReload: true });
+  await ensureLoaded(state);
   opts?.commitGuard?.();
   source.assertCurrent();
   if (state.stopped) {

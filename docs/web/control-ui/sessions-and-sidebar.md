@@ -17,8 +17,10 @@ On phones, swipe right across the chat to open navigation. A deliberate swipe op
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on device** in the workspace picker. Enter an
-absolute path on that device. The option appears only when the connected session
-host advertises support; **Auto** cannot select an existing device folder.
+absolute path on that device, or, as an admin, choose **Browse folders on**
+_device_ and pick a folder from that device. The option appears only when the
+connected session host advertises support; **Auto** cannot select an existing
+device folder.
 The session stays bound to that device and displays its folder path. Files stay
 on the device rather than being copied to or reconciled with the Gateway. See
 [session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).

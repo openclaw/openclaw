@@ -73,100 +73,96 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         entries: { default: { workspace } },
       },
     };
-    return { context, scope, workspace, manager, cfg };
+    const dispatch = (
+      emit: Parameters<typeof dispatchProgressTurn>[0],
+      options: Partial<NonNullable<Parameters<typeof dispatchProgressTurn>[1]>> = {},
+    ) =>
+      dispatchProgressTurn(emit, {
+        context,
+        mode: "off",
+        toolProgress: false,
+        finalReply: { text: recoveredAnswer },
+        ...options,
+      });
+    return { context, scope, workspace, manager, cfg, dispatch };
   }
 
-  it("retries the saved transcript-correlated final without rerunning the model", async () => {
-    const { context, manager } = await transcriptCase("ambiguous-transcript-final");
-    let modelRuns = 0;
-    let preparations = 0;
-    installHook((event) => {
-      if (event.kind !== "final") {
-        return;
+  it.each([
+    { name: "retries a transcript-correlated final", controls: undefined },
+    {
+      name: "does not replay Telegram controls",
+      controls: {
+        telegram: { buttons: [[{ text: "Continue", callback_data: "continue" }]] },
+      },
+    },
+    { name: "does not replay other channel controls", controls: { other: { action: "send" } } },
+  ])("$name without rerunning the model", async ({ controls }) => {
+    const { manager, dispatch } = await transcriptCase("ambiguous-transcript-final");
+    let modelRuns = 0,
+      preparations = 0,
+      attempts = 0;
+    installHook(({ kind, payload }) => {
+      if (kind !== "final") {
+        return undefined;
       }
       preparations += 1;
-      expect(event.payload.channelData?.telegram).toEqual({
+      const channelData = payload.channelData;
+      const telegram = channelData?.telegram;
+      if (controls) {
+        return {
+          payload: {
+            ...payload,
+            channelData: {
+              ...channelData,
+              ...controls,
+              telegram: { ...(isRecord(telegram) ? telegram : {}), ...controls.telegram },
+            },
+          },
+        };
+      }
+      expect(telegram).toEqual({
         promptContextSource: {
           transcriptMessageId: expect.any(String),
           deliverySignature: expect.any(String),
         },
       });
+      return undefined;
     });
-    let attempts = 0;
     http.respondToCall = (call) => {
-      if (
-        call.method === "sendMessage" &&
-        call.fields.text === recoveredAnswer &&
-        ++attempts === 1
-      ) {
+      if (call.method !== "sendMessage" || call.fields.text !== recoveredAnswer) {
+        return;
+      }
+      attempts += 1;
+      if (controls || attempts === 1) {
         throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
       }
     };
-    await dispatchProgressTurn(
+    await dispatch(
       async () => {
         modelRuns += 1;
         manager.appendMessage(assistant(recoveredAnswer));
         manager.flushPendingPersistence();
       },
-      { context, mode: "off", toolProgress: false, finalReply: { text: recoveredAnswer } },
+      {
+        allowErrors: Boolean(controls),
+      },
     );
     expect(modelRuns).toBe(1);
-    expect(preparations).toBe(1);
-    expect(
-      calls.filter((call) => call.method === "sendMessage").map((call) => call.fields.text),
-    ).toEqual([recoveredAnswer, recoveredAnswer]);
-    expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
-    expect([...visibleMessages.values()]).toEqual([recoveredAnswer]);
-  });
-
-  it.each([
-    { telegram: { buttons: [[{ text: "Continue", callback_data: "continue" }]] } },
-    { other: { action: "send" } },
-  ])("does not replay a final carrying channel controls (%j)", async (controls) => {
-    const { context, manager } = await transcriptCase("ambiguous-controlled-final");
-    installHook((event) => {
-      if (event.kind !== "final") {
-        return undefined;
-      }
-      const channelData = event.payload.channelData;
-      const telegram = channelData?.telegram;
-      return {
-        payload: {
-          ...event.payload,
-          channelData: {
-            ...channelData,
-            ...controls,
-            telegram: { ...(isRecord(telegram) ? telegram : {}), ...controls.telegram },
-          },
-        },
-      };
-    });
-    let attempts = 0;
-    http.respondToCall = (call) => {
-      if (call.method === "sendMessage" && call.fields.text === recoveredAnswer) {
-        attempts += 1;
-        throw Object.assign(new Error("socket closed after request"), { code: "ECONNRESET" });
-      }
-    };
-    await dispatchProgressTurn(
-      async () => {
-        manager.appendMessage(assistant(recoveredAnswer));
-        manager.flushPendingPersistence();
-      },
-      {
-        context,
-        mode: "off",
-        toolProgress: false,
-        allowErrors: true,
-        finalReply: { text: recoveredAnswer },
-      },
-    );
-    expect(attempts).toBe(1);
-    expect(sends().some((call) => call.fields.text === recoveredAnswer)).toBe(false);
+    if (controls) {
+      expect(attempts).toBe(1);
+      expect(sends().some((call) => call.fields.text === recoveredAnswer)).toBe(false);
+    } else {
+      expect(preparations).toBe(1);
+      expect(
+        calls.filter((call) => call.method === "sendMessage").map((call) => call.fields.text),
+      ).toEqual([recoveredAnswer, recoveredAnswer]);
+      expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
+      expect([...visibleMessages.values()]).toEqual([recoveredAnswer]);
+    }
   });
 
   it("recovers the latest scoped answer without reopening an accepted first target", async () => {
-    const { context, manager } = await transcriptCase("latest-queued-answer");
+    const { context, manager, dispatch } = await transcriptCase("latest-queued-answer");
     const first = "The first queued answer remains visible in the conversation.";
     const { replyPayloads } = await buildReplyPayloads({
       payloads: [first, recoveredAnswer].map((text) => ({ text: "[[reply_to_current]]" + text })),
@@ -179,25 +175,19 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       replyToChannel: "telegram",
       currentMessageId: String(context.msg.message_id),
     });
-    installHook((event) =>
-      event.kind === "final" && event.payload.text === recoveredAnswer
-        ? { payload: { ...event.payload, text: shortened } }
+    installHook(({ kind, payload }) =>
+      kind === "final" && payload.text === recoveredAnswer
+        ? { payload: { ...payload, text: shortened } }
         : undefined,
     );
-    await dispatchProgressTurn(
+    await dispatch(
       async () => {
         manager.appendMessage(assistant("[[reply_to_current]]" + first));
         manager.appendMessage(user("Now answer the queued follow-up."));
         manager.appendMessage(assistant("[[reply_to_current]]" + recoveredAnswer));
         manager.flushPendingPersistence();
       },
-      {
-        context,
-        mode: "off",
-        toolProgress: false,
-        replyToMode: "first",
-        finalReply: replyPayloads,
-      },
+      { replyToMode: "first", finalReply: replyPayloads },
     );
     expect(sends().map((call) => call.fields.text)).toEqual([first, recoveredAnswer]);
     expect(sends().map((call) => replyId(call.fields))).toEqual([context.msg.message_id, null]);
@@ -205,10 +195,10 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
   });
 
   it("rejects stale and other-session transcript recovery", async () => {
-    const { context, manager, scope, workspace } = await transcriptCase("stale-answer");
+    const { manager, scope, workspace, dispatch } = await transcriptCase("stale-answer");
     manager.appendMessage(assistant(recoveredAnswer + "\n[[reply_to:42]]", Date.now() - 60_000));
     manager.flushPendingPersistence();
-    await dispatchProgressTurn(
+    await dispatch(
       async () => {
         const otherScope = {
           ...scope,
@@ -222,7 +212,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         other.appendMessage(assistant(recoveredAnswer + "\n[[reply_to:99]]"));
         other.flushPendingPersistence();
       },
-      { context, mode: "off", toolProgress: false, finalReply: { text: shortened } },
+      { finalReply: { text: shortened } },
     );
     expect(sends().map((call) => call.fields.text)).toEqual([shortened]);
     expect(sends()[0]?.fields.reply_parameters).toBeUndefined();
@@ -230,7 +220,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
   });
 
   it("keeps preceding media scoped while a longer answer preview is active", async () => {
-    const { context, workspace, manager, cfg } = await transcriptCase("active-answer-recovery");
+    const { workspace, manager, cfg, dispatch } = await transcriptCase("active-answer-recovery");
     const document = path.join(workspace, "earlier-answer.txt");
     await fs.writeFile(document, "Attachment belonging only to the earlier answer.\n");
     const payload = setReplyPayloadMetadata(
@@ -238,7 +228,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       { precedingInputAnswer: true },
     );
     let previewId: number | undefined;
-    await dispatchProgressTurn(
+    await dispatch(
       async (options) => {
         manager.appendMessage(assistant(shortened));
         manager.appendMessage(user("Continue with the complete latest answer."));
@@ -251,10 +241,8 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         previewId = [...visibleMessages.keys()][0];
       },
       {
-        context,
         cfg,
         mode: "partial",
-        toolProgress: false,
         finalReply: [payload, { text: recoveredAnswer }],
       },
     );
@@ -266,21 +254,22 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
   });
 
   it("deduplicates only accepted source aliases after a partial block and recovered final", async () => {
-    const { context, workspace, manager, cfg } = await transcriptCase("accepted-media-aliases");
+    const { context, workspace, manager, cfg, dispatch } =
+      await transcriptCase("accepted-media-aliases");
     const sources = ["A", "B", "C"].map((name) => path.join(workspace, `${name}.txt`));
     await Promise.all(
       sources.map((source, index) => fs.writeFile(source, `Document ${["A", "B", "C"][index]}\n`)),
     );
-    installHook((event) => {
-      if (event.kind === "block") {
-        if (event.payload.text === recoveredAnswer) {
+    installHook(({ kind, payload }) => {
+      if (kind === "block") {
+        if (payload.text === recoveredAnswer) {
           return { cancel: true };
         }
-        const media = collectReplyMediaEntries(event.payload);
+        const media = collectReplyMediaEntries(payload);
         const selected = [media[1]!, media[0]!];
         return {
           payload: {
-            ...event.payload,
+            ...payload,
             mediaUrl: undefined,
             mediaUrls: selected.map(({ url }) => url),
             attachments: selected.map(({ attachment }) => attachment ?? {}),
@@ -289,7 +278,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       }
       return {
         payload: {
-          ...event.payload,
+          ...payload,
           text: shortened,
           replyToId: undefined,
           replyToCurrent: undefined,
@@ -302,7 +291,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       call.method === "sendDocument" && ++documents === 2
         ? { error_code: 400, description: "Bad Request: DOCUMENT_INVALID" }
         : undefined;
-    await dispatchProgressTurn(
+    await dispatch(
       async (options) => {
         await options?.onBlockReply?.({ text: "Initial documents.", mediaUrls: sources });
         await waitForBotApiCall((call) => call.method === "sendDocument");
@@ -317,10 +306,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         manager.flushPendingPersistence();
       },
       {
-        context,
         cfg,
-        mode: "off",
-        toolProgress: false,
         allowErrors: true,
         finalReply: { text: recoveredAnswer, mediaUrls: sources.slice(0, 2), mediaUrl: sources[2] },
       },

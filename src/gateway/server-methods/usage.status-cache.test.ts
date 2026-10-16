@@ -214,6 +214,33 @@ describe("usage.status provider usage cache", () => {
     expect(retained).toEqual(timeout ? first : usageSummary(61_000, 20));
     expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
   });
+  it("refreshes each provider set once per TTL when page reads interleave", async () => {
+    // models.authStatus polls refreshable credentials only; usage.status polls every descriptor.
+    mocks.listDescriptors.mockReturnValue([
+      providerDescriptor,
+      { provider: "anthropic", displayName: "Anthropic" },
+    ]);
+    const readAuthStatusUsage = async () =>
+      readProviderUsageStaleWhileRevalidate({
+        ...(await getProviderUsageRuntimeSnapshot({ config })),
+        providerIds: ["openai"],
+        now,
+      });
+    for (let load = 0; load < 3; load += 1) {
+      const scope = new AsyncWorkScope();
+      await Promise.all([
+        scope.track(readAuthStatusUsage),
+        scope.track(() => runUsageStatus(refreshingCapableClient)),
+      ]);
+      await scope.drain();
+      now += 1_000;
+    }
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+    expect((await readAuthStatusUsage()).get("openai")).toBeDefined();
+    await expect(runCapableUsageStatus()).resolves.toMatchObject(visibleProvider);
+    expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
     await runUsageStatus();
     const usage = readProviderUsageStaleWhileRevalidate({

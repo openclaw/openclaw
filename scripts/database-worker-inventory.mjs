@@ -968,6 +968,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
+        operations: ["writePersonalGitHubSecret"],
+        guard: "value === null",
+        evidence:
+          "Only user-github-connections.kernel.ts mergeUserGitHubConnection passes null, through user-profiles-merge.ts in user-profile-writes.worker.ts. Native personal cancel/disconnect pass serialized records and retain the shared upsert path.",
+      },
+      {
+        tier: "W",
         operations: ["listHiddenGitHubSecretsInDatabase"],
         evidence:
           "Only githubSecrets.list in secret-store-github-handoff.worker.ts selects hidden record listings; native SDK compatibility uses exact read/delete operations only.",
@@ -2637,6 +2644,12 @@ const reviewedOperations = new Map([
     "src/infra/exec-approvals-sqlite.ts",
     [
       {
+        tier: "T2",
+        operations: ["assertExecApprovalsMutationAllowed", "writeExecApprovalsConfigRow"],
+        evidence:
+          "Runtime policy writes and mutation guards run in exec-approvals-mutation.worker.ts, exec-approvals-authorization.worker.ts, exec-approvals-retirement.worker.ts and operator-approval-store.transitions.worker.ts via mintMcpToolGrantLocked. Native callers are updateExecApprovalsForMaintenance via exec-approvals-generated-migration.ts (Doctor), and state-migrations.exec-approvals{,-canonical}.ts. The shared synchronous policy reader remains T1.",
+      },
+      {
         tier: "W",
         operations: ["deleteExecApprovalsConfigRow"],
         evidence:
@@ -2983,6 +2996,12 @@ const reviewedOperations = new Map([
     "src/state/config-machine-state-write.ts",
     [
       {
+        tier: "T3",
+        operations: ["updateConfigMachineState", "updateConfigMachineStateInDatabase"],
+        evidence:
+          "Native updates serve CLI hook install/update via hooks/install-record-transaction.ts, onboarding via commands/onboard-guided.ts, Doctor auth and retired/config-state migrations. Other updates execute in existing state, node-config, model-catalog, TUI, push-web, telemetry and promotions workers. Shared writeConfigMachineState/upsertConfigMachineState retain their native auth-profile callers.",
+      },
+      {
         tier: "W",
         operations: ["deleteConfigMachineState"],
         evidence:
@@ -3157,6 +3176,12 @@ const reviewedOperations = new Map([
   [
     "src/state/user-profiles-internal.ts",
     [
+      {
+        tier: "T3",
+        operations: ["selectProfileDisplayEntries"],
+        evidence:
+          "Profile authority/snapshot reads and catalog publication run in profile/channel/enterprise workers. The native publication caller is user-profiles-owner-migration.ts repairMergedGatewayOwnerProfile via Doctor repair-sequencing.ts; preview-warnings.ts inspects without publishing. Shared selectResolvedUserProfile retains native SDK callers.",
+      },
       {
         tier: "W",
         operations: [

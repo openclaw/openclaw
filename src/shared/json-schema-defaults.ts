@@ -691,8 +691,8 @@ function applyObjectApplicatorDefaults(
       currentResourceRoot,
       currentResourceBaseId,
     );
+  const maxIterations = countSchemaNodes(schema);
   const settlePropertiesAndDependencies = () => {
-    const maxIterations = countSchemaNodes(schema);
     for (let index = 0; index < maxIterations; index++) {
       const before = JSON.stringify(value);
       const properties = isRecord(schema.properties) ? schema.properties : {};
@@ -821,7 +821,7 @@ function applySchemaDefaults(
     }
   }
 
-  const composedSchemas = [...(Array.isArray(schema.allOf) ? schema.allOf : [])];
+  const composedSchemas = Array.isArray(schema.allOf) ? schema.allOf : [];
   for (const branch of composedSchemas) {
     nextValue = applyChild(branch, nextValue);
   }

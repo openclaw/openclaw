@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -17,7 +18,7 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
       recursive: true,
       mode: fs.constants.COPYFILE_FICLONE,
     });
-    for (const filename of ["cli-invocation.mjs", "node-host-launcher.mjs"]) {
+    for (const filename of vitestWorkerRuntimeAssets) {
       await fs.promises.copyFile(path.join(preparedRoot, filename), path.join(root, filename));
     }
     const dependencies = path.resolve("node_modules");

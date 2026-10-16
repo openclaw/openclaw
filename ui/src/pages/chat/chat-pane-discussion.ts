@@ -39,7 +39,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
         return;
       }
       this.sessionDiscussionStates.set(sessionKey, info.state);
-      this.requestUpdate();
+      this.invalidate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
     } finally {

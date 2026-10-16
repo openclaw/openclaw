@@ -38,7 +38,7 @@ export function createHostChannelInboundEventContextBuilder<
     });
     const result = buildContext(params);
     const bindEvidence = (built: Built) => {
-      if (owner?.channelId === params.channel && owner.isLive()) {
+      if (owner?.channelId === params.channel) {
         bindChannelParticipantInput({
           context: built,
           channelId: params.channel,
