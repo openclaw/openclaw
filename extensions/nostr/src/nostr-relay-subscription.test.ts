@@ -102,4 +102,56 @@ describe("Nostr relay subscriptions", () => {
     expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
     await group.close("test complete");
   });
+
+  it("resubscribes a relay whose subscription closes unexpectedly", async () => {
+    vi.useFakeTimers();
+    const { group, handlers, onClose, subscribeMany } = createHarness();
+
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    expect(onClose).toHaveBeenCalledWith("wss://two.example", ["relay connection failed"]);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(subscribeMany).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(subscribeMany).toHaveBeenCalledTimes(3);
+    expect(subscribeMany.mock.calls[2]?.[0]).toEqual(["wss://two.example"]);
+    await group.close("test complete");
+  });
+
+  it("resubscribes from the newest live event that relay delivered", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(2_000_000);
+    const { group, handlers, subscribeMany } = createHarness();
+    handlers[0]?.oneose?.();
+    handlers[1]?.onevent?.({ created_at: 1_900 } as Event); // stored, may be out of order
+    handlers[1]?.oneose?.();
+    await Promise.resolve();
+
+    handlers[1]?.onevent?.({ created_at: 1_500 } as Event);
+    handlers[0]?.onevent?.({ created_at: 9_999_999 } as Event); // far future, clamped to now
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay connection failed" }]);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const resubscribed = new Map(
+      subscribeMany.mock.calls.slice(2).map(([relays, filter]) => [relays[0], filter]),
+    );
+    expect(resubscribed.get("wss://two.example")).toEqual({ kinds: [4], since: 1_500 });
+    expect(resubscribed.get("wss://one.example")).toEqual({ kinds: [4], since: 2_000 });
+    // Every subscription owns its filter, so nostr-tools refires cannot leak `since` across relays.
+    expect(subscribeMany.mock.calls[0]?.[1]).toEqual({ kinds: [4] });
+    expect(subscribeMany.mock.calls[0]?.[1]).not.toBe(subscribeMany.mock.calls[1]?.[1]);
+    await group.close("test complete");
+  });
+
+  it("does not resubscribe once the group is closing", async () => {
+    vi.useFakeTimers();
+    const { group, handlers, subscribeMany } = createHarness();
+
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    await group.close("closed by caller");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(subscribeMany).toHaveBeenCalledTimes(2);
+  });
 });

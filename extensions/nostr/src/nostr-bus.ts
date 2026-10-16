@@ -527,7 +527,10 @@ export async function startNostrBus(options: NostrBusOptions) {
       onClose: (relay, reasons) => {
         metrics.emit("relay.message.closed", 1, { relay });
         options.onDisconnect?.(relay);
-        onError?.(new Error(`Subscription closed: ${reasons.join(", ")}`), "subscription");
+        onError?.(
+          new Error(`Subscription closed: ${reasons.join(", ")}; resubscribing`),
+          "subscription",
+        );
       },
     });
     relaySubscriptions.start();
