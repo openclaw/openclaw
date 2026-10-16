@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
@@ -28,12 +28,8 @@ export async function mountRoster(
   }
   const sessions = createTestSessionCapability(harness.gateway);
   await sessions.refresh({ agentId: "main", force: true });
-  return {
-    ...(await mountSidebar(harness.gateway, sessions, "panel", agents)),
-    harness,
-    sessions,
-    client,
-  };
+  const mounted = await mountSidebar(harness.gateway, sessions, "panel", agents);
+  return { ...mounted, data: mounted.sidebar.sessionData, harness, sessions, client };
 }
 
 export async function mountSelectedRoster(
@@ -51,7 +47,25 @@ export async function mountSelectedRoster(
   const sessions = createSessionCapability(gateway, selection);
   const context = { ...createContext(gateway, sessions, agentsList), agentSelection: selection };
   const mounted = await mountSidebarContext(context, "panel", "sessions");
-  return { ...mounted, selection, sessions };
+  return { ...mounted, data: mounted.sidebar.sessionData, selection, sessions };
+}
+
+export function sessionRow<T extends Partial<GatewaySessionRow>>(
+  key: string,
+  sessionId: string,
+  fields: T,
+) {
+  return { key, sessionId, kind: "direct" as const, ...fields };
+}
+
+export const human = (id: string, label: string) => ({ type: "human" as const, id, label });
+
+export function disposeRoster(roster: {
+  provider: { remove(): void };
+  sessions: { dispose(): void };
+}) {
+  roster.provider.remove();
+  roster.sessions.dispose();
 }
 
 export function rowElement(sidebar: SidebarLifecycleState, key: string) {
