@@ -176,7 +176,7 @@ describe("sessions.github.publish", () => {
     );
   });
 
-  it.each(["fresh", "wrong-key", "ordinary"])(
+  it.each(["fresh", "wrong-key", "existing", "lookup-failed", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -186,7 +186,12 @@ describe("sessions.github.publish", () => {
         }
         rejectGitHubPublicationSelection("GitHub publication identity changed.", {
           idempotencyKey: mode === "wrong-key" ? "another-invocation" : key,
-          hasRequest: () => false,
+          hasRequest: () => {
+            if (mode === "lookup-failed") {
+              throw new Error("Receipt lookup unavailable.");
+            }
+            return mode === "existing";
+          },
         });
       });
       const respond = await invoke({ idempotencyKey: key });
@@ -203,12 +208,20 @@ describe("sessions.github.publish", () => {
   it.each(["admitted", "unprepared"] as const)(
     "preserves %s operator authority through the registered publication handler",
     async (source) => {
-      const staff = {
-        scopes: ["operator.read", "operator.write"],
-        agents: ["main"],
-        sessions: { others: "write" as const },
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            definitions: {
+              staff: {
+                scopes: ["operator.read", "operator.write"],
+                agents: ["main"],
+                sessions: { others: "write" },
+              },
+            },
+            default: "staff",
+          },
+        },
       };
-      const config = { gateway: { roles: { definitions: { staff }, default: "staff" } } };
       await withRealSessions(config, async () => {
         const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
         const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");

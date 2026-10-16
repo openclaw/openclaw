@@ -12,6 +12,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
@@ -190,9 +191,7 @@ function toolCall(id: string, name: string, args: Record<string, unknown>) {
   return { type: "toolCall" as const, id: `call_${id}|fc_${id}`, name, arguments: args };
 }
 
-function replayRequest(
-  input: ResponseCreateParamsStreaming["input"],
-): ResponseCreateParamsStreaming {
+function replayRequest(input: OpenAIResponsesRequestParams["input"]): OpenAIResponsesRequestParams {
   return { model: nativeOpenAIModel.id, stream: true, input };
 }
 

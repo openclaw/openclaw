@@ -29,7 +29,7 @@ const originalExitCode = process.exitCode;
 
 function mockDoctorReport(report: Partial<Pick<PluginStatusReport, "plugins" | "diagnostics">>) {
   withDiagnostics.mockImplementation(async (_params, formatReport) =>
-    formatReport({ ...createEmptyPluginRegistry(), ...report }),
+    formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted", ...report }),
   );
 }
 
@@ -199,7 +199,7 @@ describe("plugins cli list", () => {
     const finish = createDeferredCore();
     process.exitCode = 7;
     withDiagnostics.mockImplementation(async (_params, formatReport) => {
-      const text = formatReport(createEmptyPluginRegistry());
+      const text = formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
       entered.resolve();
       await finish.promise;
       return text;
@@ -226,7 +226,7 @@ describe("plugins cli list", () => {
       });
     } else {
       withDiagnostics.mockImplementation(async (_params, formatReport) => {
-        formatReport(createEmptyPluginRegistry());
+        formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" });
         throw failure;
       });
     }

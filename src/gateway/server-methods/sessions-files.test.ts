@@ -193,7 +193,7 @@ describe("sessions.files RPC handlers", () => {
     mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
     mockVisibleMessages([]);
 
-    expect(expectOkPayload(await listFiles())).toEqual({
+    expect(await files.ok("list")).toEqual({
       sessionKey,
       files: [],
     });

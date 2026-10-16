@@ -696,7 +696,12 @@ it("shares invocation-wide install-policy acknowledgement across bulk plugin and
   expect(hookAcknowledgement).toBe(pluginAcknowledgement);
   for (const targetName of ["openclaw-codex-app-server", "demo-hooks"]) {
     await expect(
-      pluginAcknowledgement({ targetName, targetType: "plugin", requestMode: "update" }),
+      pluginAcknowledgement({
+        targetName,
+        targetType: "plugin",
+        requestMode: "update",
+        reason: "Test install-policy warning",
+      }),
     ).resolves.toEqual({ status: "approved" });
   }
 });
@@ -819,4 +824,3 @@ it("fails a blocked ClawHub update without persisting replacement state", async 
   expect(writeInstallRecords).not.toHaveBeenCalled();
   expect(logs.at(-1)).toContain(message);
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
