@@ -576,6 +576,35 @@ describe("memory storage migration", () => {
     expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 12 });
   });
 
+  it("waits a full interval after slow authority renewal while preserving converted embeddings", () => {
+    const db = legacyDatabase();
+    db.exec(`INSERT INTO memory_embedding_cache
+      (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES
+      ('provider', 'model', 'provider-key', 'second', '[2,3]', 2, 122),
+      ('provider', 'model', 'provider-key', 'third', '[4,5]', 2, 123)`);
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const renewAuthority = vi.fn(() => {
+      clock += 1_100;
+    });
+    try {
+      migrateMemoryIndexStorage(db, { renewAuthority });
+      expect(renewAuthority).toHaveBeenCalledTimes(1);
+      expect(
+        db.prepare("SELECT hash, embedding FROM memory_embedding_cache ORDER BY hash").all(),
+      ).toEqual([
+        { hash: "h", embedding: encodeMemoryEmbedding([1 + Number.EPSILON, 0.1]) },
+        { hash: "second", embedding: encodeMemoryEmbedding([2, 3]) },
+        { hash: "third", embedding: encodeMemoryEmbedding([4, 5]) },
+      ]);
+      expect(db.prepare("SELECT embedding FROM memory_index_chunks").get()).toEqual({
+        embedding: encodeMemoryEmbedding([1 + Number.EPSILON, 0.1]),
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("renews long synchronous conversion work periodically and releases the callback afterward", () => {
     const db = legacyDatabase();
     const insert =
