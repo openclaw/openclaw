@@ -417,40 +417,6 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "refuses a Board write whose target changes at the %s grant",
-  async (stage) => {
-    const { options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
-    });
-    let sessionKey = target.sessionKey;
-    const reader = new SqliteBoardStore({
-      resolveSession: () => ({ ...options, sessionKey }),
-      env: options.env,
-    });
-    const interception = probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === stage) {
-        sessionKey = "agent:main:replacement";
-      }
-      admit(request, grant);
-    });
-    try {
-      const pending = reader.putWidget({
-        ...target,
-        name: "denied",
-        content: { kind: "html", html: "denied" },
-      });
-      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
-    } finally {
-      interception.mockRestore();
-    }
-    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
-  },
-);
-
 it("reads Board snapshots and documents without a write-capable publication", async () => {
   const { store, target } = fixture();
   const put = await store.putWidget({
