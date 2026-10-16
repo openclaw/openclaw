@@ -21,7 +21,7 @@ openclaw-sidebar-agent-roster {
   font-weight: 600;
 }
 
-.sidebar-agent-roster__header:hover,
+.sidebar-agent-roster__header:is(:hover, :focus-within),
 .sidebar-agent-roster__header--current {
   background: var(--bg-hover);
 }
@@ -158,6 +158,9 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__action {
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   padding: 4px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -167,6 +170,11 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__action:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+.sidebar-agent-roster__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .sidebar-agent-roster__link svg,
@@ -220,11 +228,10 @@ openclaw-sidebar-agent-roster {
 }
 .sidebar-agent-roster__actions {
   grid-area: 1 / 3;
-  justify-self: end;
+  place-self: center end;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--team-slot-gap);
   opacity: 0;
   pointer-events: none;
 }

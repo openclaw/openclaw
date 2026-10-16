@@ -29,7 +29,6 @@ import { SidebarPinnedAgent } from "./sidebar-pinned-agent.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import {
   TeamSessionSlots,
   type TeamSessionSlotsProps,
@@ -334,7 +333,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                 ),
                 runVisibility,
               });
-              const access = () => roster.host().readNewSessionAccess();
               const collapseLabel = () =>
                 t(isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent", {
                   agent: card().name,
@@ -383,7 +381,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                       data-agent-id={card().id}
                       href={card().target.href}
                       aria-current={active() ? "page" : undefined}
-                      title={t("agentsHome.openChat")}
                       onClick={(event: MouseEvent) => {
                         if (shouldHandleNavigationClick(event)) {
                           event.preventDefault();
@@ -413,34 +410,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       </Show>
                     </span>
-                    <span
-                      class="sidebar-agent-roster__actions"
-                      onKeyDown={(event: KeyboardEvent) => {
-                        if (event.key === " " && event.target instanceof HTMLAnchorElement) {
-                          event.preventDefault();
-                          event.target.click();
-                        }
-                      }}
-                    >
-                      {renderNewSessionLink({
-                        get basePath() {
-                          return roster.host().basePath;
-                        },
-                        get agentId() {
-                          return card().id;
-                        },
-                        class: "sidebar-agent-roster__action sidebar-agent-roster__new",
-                        get label() {
-                          return `${t("agentChip.newConversation")}: ${card().name}`;
-                        },
-                        get disabledReason() {
-                          const currentAccess = access();
-                          return currentAccess.allowed ? undefined : currentAccess.reason;
-                        },
-                        onOpen: (id, target) => roster.host().requestOpenNewSession(id, target),
-                      })}
-                      {agentMenu(card)}
-                    </span>
+                    <span class="sidebar-agent-roster__actions">{agentMenu(card)}</span>
                   </div>
                   <Show when={!isCollapsed()}>
                     <For each={homeLoadKeys()}>

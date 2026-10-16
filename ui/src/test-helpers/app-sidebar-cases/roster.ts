@@ -244,7 +244,7 @@ describe("AppSidebar agent roster", () => {
       await vi.waitFor(() =>
         expect(sessionKeys(group)).toEqual([`agent:${id}:pinned`, `agent:${id}:recent`]),
       );
-      expect(group?.querySelector(`a[href="/new?agent=${id}"]`)).not.toBeNull();
+      expect(group?.querySelector(`a[href="/new?agent=${id}"]`)).toBeNull();
       expect(group?.querySelector(".sidebar-agent-roster__row")?.getAttribute("href")).toBe(
         `/chat/${id}`,
       );
@@ -325,6 +325,11 @@ describe("AppSidebar agent roster", () => {
       const agentMenu = sidebar.querySelector(
         '[data-agent-group="main"] .sidebar-agent-roster__menu',
       )!;
+      const header = agentMenu.closest(".sidebar-agent-roster__header")!;
+      const row = header.querySelector<HTMLAnchorElement>("a")!;
+      expect(row.hasAttribute("title")).toBe(false);
+      expect([...header.querySelectorAll("a")]).toEqual([row]);
+      expect(header.querySelectorAll(".sidebar-agent-roster__actions button")).toHaveLength(1);
       const agentTrigger = agentMenu.querySelector<HTMLButtonElement>(".oc-menu-trigger")!;
       const agentSurface = agentMenu.querySelector<HTMLElement>('[role="menu"]')!;
       if (input === "keyboard") {
