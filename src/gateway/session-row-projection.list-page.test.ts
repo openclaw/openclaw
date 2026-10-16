@@ -438,7 +438,7 @@ it.each([
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const selected = createDeferredCore();
       const resume = createDeferredCore();
-      let pending: ReturnType<(typeof sessionReadHandlers)[string]>;
+      let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
       try {
         await projection.ensureMaterialized();
         const select = listWorker.selectSessionListPageInWorker;
@@ -543,7 +543,7 @@ it("reselects active rows and facets when a run retires during worker selection"
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const selected = createDeferredCore();
     const resume = createDeferredCore();
-    let pending: ReturnType<(typeof sessionReadHandlers)[string]>;
+    let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
     try {
       await projection.ensureMaterialized();
       const select = listWorker.selectSessionListPageInWorker;

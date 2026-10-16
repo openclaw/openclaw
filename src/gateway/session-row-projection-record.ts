@@ -21,7 +21,11 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import { captureSessionRowPresentation, renderSessionRowRecord } from "./session-row-render.js";
+import {
+  captureSessionRowPresentation,
+  renderSessionRowRecord,
+  type SnapshotOptions,
+} from "./session-row-render.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -174,13 +178,6 @@ export type Query = {
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
-export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
-  includeDerivedTitles?: boolean;
-  includeLastMessage?: boolean;
-  active?: boolean;
-  subagentRuns?: SessionListRowContext["subagentRuns"];
-  preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
-};
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>

@@ -61,6 +61,7 @@ export type SessionListWorkerRequest = {
 export type SessionListWorkerResult = {
   selection: Omit<SessionEntrySelection, "entries" | "ownerSessionProfiles">;
   queries: Lookup[];
+  archivedRowIds: string[];
   keys: string[];
   storePath: string;
 };

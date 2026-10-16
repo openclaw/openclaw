@@ -42,6 +42,10 @@ type PresentationOptions = SessionRowPresentationOptions;
 
 type CapturedSessionRowPresentation = {
   row: GatewaySessionRow | null;
+  modelCache?: {
+    views: Map<string, Readonly<GatewaySessionRow>>;
+    signature: string;
+  };
   work?: {
     input: PreparedSessionRowRender;
     publish: (row: GatewaySessionRow, encoded: string) => GatewaySessionRow;
@@ -547,12 +551,14 @@ export function prepareProjectedSessionPresentation(
         viewerFacts,
         canEnsure,
       ]);
+    const modelCache = views && signature !== undefined ? { views, signature } : undefined;
     const cached = signature === undefined ? undefined : views?.get(signature);
     if (cached) {
-      return { row: projectModels(cached, views, signature) };
+      return { row: cached, modelCache };
     }
     return {
       row: null,
+      modelCache,
       work: {
         input: {
           ...captureSessionRowPresentation(record, preparedRowContext, {
@@ -572,24 +578,37 @@ export function prepareProjectedSessionPresentation(
         },
         publish(row, encoded) {
           if (signature !== undefined) {
+            // Concurrent captures can finish after the same immutable view was published.
+            const existing = views?.get(signature);
+            if (existing) {
+              return existing;
+            }
             // Structured cloning drops freezing; the receiving owner restores immutability.
             const snapshot = freezeJsonSnapshot(row);
             encodings.set(snapshot, encoded);
             views?.set(signature, snapshot);
-            return projectModels(snapshot, views, signature);
+            return snapshot;
           }
-          return projectModels(row, views, signature);
+          return row;
         },
       },
     };
   };
+  const projectCapturedModels = (
+    row: GatewaySessionRow,
+    captured?: Pick<CapturedSessionRowPresentation, "modelCache">,
+  ) => projectModels(row, captured?.modelCache?.views, captured?.modelCache?.signature);
   const present = (record: records.MaterializedRow, options: PresentationOptions) => {
     const captured = captureRecord(record, options);
-    if (!captured.work) {
-      return captured.row;
+    let row = captured.row;
+    if (captured.work) {
+      const rendered = renderPreparedSessionRow(captured.work.input, {
+        ...preparedRowContext,
+        now,
+      });
+      row = captured.work.publish(rendered, publicationRows ? JSON.stringify(rendered) : "");
     }
-    const row = renderPreparedSessionRow(captured.work.input, { ...preparedRowContext, now });
-    return captured.work.publish(row, publicationRows ? JSON.stringify(row) : "");
+    return row ? projectCapturedModels(row, captured) : null;
   };
   return {
     get audienceKey() {
@@ -600,7 +619,7 @@ export function prepareProjectedSessionPresentation(
       ]);
     },
     rowContext: preparedRowContext,
-    projectModels: (row: GatewaySessionRow) => projectModels(row, undefined, undefined),
+    projectModels: projectCapturedModels,
     capture(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);
       return {

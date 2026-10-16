@@ -9,7 +9,6 @@ import { gatewayClientSessionCreator } from "./server-methods/gateway-client-ide
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
-import { resolveSessionListSearchModelIdentity } from "./session-list-filters.js";
 import type {
   SessionListWorkerChange,
   SessionListWorkerRequest,
@@ -21,21 +20,16 @@ import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { identity, selectionRow, type SelectionRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import type { PreparedSessionRowRender } from "./session-row-render.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { prepareProjectedSessionList } from "./session-utils-list.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
+type SessionListWorkerWireUpdate = Omit<SessionListWorkerUpdate, "reset"> & { reset?: string };
+
 export type SessionListWorkerCommand =
-  | { kind: "select"; update: SessionListWorkerUpdate; request: SessionListWorkerRequest }
+  | { kind: "select"; update: SessionListWorkerWireUpdate; request: SessionListWorkerRequest }
   | {
       kind: "render";
       rows: PreparedSessionRowRender[];
       now: number;
-      context: {
-        subagentRuns: ReturnType<SessionListRowContext["subagentRuns"]["snapshot"]>;
-        projectedAgentRuns: SessionListRowContext["projectedAgentRuns"];
-        projectedSubagentActivity: SessionListRowContext["projectedSubagentActivity"];
-      };
     };
 export type SessionListWorkerReply =
   | { kind: "reset" }
@@ -82,7 +76,6 @@ function createListWorker(projection: SessionRowProjection) {
   return {
     async render(
       rows: PreparedSessionRowRender[],
-      rowContext: SessionListRowContext,
       now: number,
     ): Promise<{ row: GatewaySessionRow; encoded: string }[] | undefined> {
       if (rows.length === 0) {
@@ -95,11 +88,6 @@ function createListWorker(projection: SessionRowProjection) {
             kind: "render",
             rows,
             now,
-            context: {
-              subagentRuns: rowContext.subagentRuns.snapshot(),
-              projectedAgentRuns: rowContext.projectedAgentRuns,
-              projectedSubagentActivity: rowContext.projectedSubagentActivity,
-            },
           },
           { signal: getAsyncWorkSignal(), timeoutMs: 30_000 },
         );
@@ -108,6 +96,10 @@ function createListWorker(projection: SessionRowProjection) {
           return undefined;
         }
         throw error;
+      }
+      if (reply.kind === "reset") {
+        reset = true;
+        return undefined;
       }
       if (reply.kind !== "rows") {
         throw new Error("Unexpected session row worker reply");
@@ -120,6 +112,7 @@ function createListWorker(projection: SessionRowProjection) {
       context?: GatewayRequestContext;
       client?: GatewayClient | null;
       searchIdentities?: { names: ReadonlyMap<string, string> };
+      prepareSearchRows?: (now: number) => SessionListWorkerRequest["searchRows"];
       diagnostics?: SessionListDiagnostics;
     }) {
       const { opts, key, context, client } = params;
@@ -130,16 +123,26 @@ function createListWorker(projection: SessionRowProjection) {
         }
         const state = projectionState();
         const now = Date.now();
-        const projectRun = context
-          ? createVisibleActiveSessionRunProjector(context, state.rowContext.projectedAgentRuns)
-          : undefined;
+        const needsActiveSelection =
+          opts.activeOnly ||
+          opts.includeOwnerSessionCounts ||
+          opts.activityPulseBoundaries ||
+          opts.search?.trim();
+        const projectRun =
+          context && needsActiveSelection
+            ? createVisibleActiveSessionRunProjector(context, state.rowContext.projectedAgentRuns)
+            : undefined;
         const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
-        const update: SessionListWorkerUpdate = {};
+        const update: SessionListWorkerWireUpdate = {};
         if (reset) {
-          update.reset = projection.selectEntries({ sortBy: null }, true).flatMap((row) => {
-            const selected = selectionRow(row);
-            return selected ? [transferableRow(selected)] : [];
-          });
+          // Entries are persisted JSON. Encoding the initial roster avoids a large
+          // synchronous structured clone; maps and live runtime facts keep their native wire form.
+          update.reset = JSON.stringify(
+            projection.selectEntries({ sortBy: null }, true).flatMap((row) => {
+              const selected = selectionRow(row);
+              return selected ? [transferableRow(selected)] : [];
+            }),
+          );
         } else {
           update.changes = [...changes.values()];
         }
@@ -183,33 +186,6 @@ function createListWorker(projection: SessionRowProjection) {
               ),
           ),
         );
-        let searchRows: SessionListWorkerRequest["searchRows"];
-        if (opts.search?.trim()) {
-          // Plugin-owned model policy is not transferable; prepare its display facts here.
-          const { prepared, filters } = prepareProjectedSessionList({
-            projection,
-            opts,
-            key,
-            context,
-            client,
-            now,
-            metadataPrepared: true,
-          });
-          searchRows = new Map(
-            [...prepared.entries("all")].map(([rowKey]) => {
-              const target = prepared.getTarget(rowKey)!;
-              const { selectedModel, rowModelIdentity, thinkingProjection } =
-                prepared.getModelFacts(rowKey);
-              return [
-                identity(target),
-                {
-                  modelFacts: { selectedModel, rowModelIdentity, thinkingProjection },
-                  modelIdentity: resolveSessionListSearchModelIdentity(filters, rowKey),
-                },
-              ];
-            }),
-          );
-        }
         const request: SessionListWorkerRequest = {
           opts,
           now,
@@ -222,7 +198,7 @@ function createListWorker(projection: SessionRowProjection) {
           activeRuns,
           projectActiveRun: projectRun !== undefined,
           identityNames: params.searchIdentities?.names,
-          searchRows,
+          searchRows: params.prepareSearchRows?.(now),
           candidateRowIds:
             key === undefined && !opts.involvingProfileId && opts.spawnedBy
               ? new Set(
@@ -285,8 +261,7 @@ function createListWorker(projection: SessionRowProjection) {
         const { state, audience, command } = captured!;
         return {
           ...reply.page,
-          render: (rows: PreparedSessionRowRender[], rowContext: SessionListRowContext) =>
-            this.render(rows, rowContext, command.request.now),
+          render: (rows: PreparedSessionRowRender[]) => this.render(rows, command.request.now),
           now: command.request.now,
           cfg: state.cfg,
           modelCatalog: state.modelCatalog,

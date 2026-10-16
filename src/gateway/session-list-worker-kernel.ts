@@ -21,6 +21,7 @@ import type {
   SessionListWorkerUpdate,
 } from "./session-list-worker.types.js";
 import { identity } from "./session-row-projection-record.js";
+import { renderPreparedSessionRow, type PreparedSessionRowRender } from "./session-row-render.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
@@ -71,6 +72,13 @@ export function createSessionListWorkerKernel() {
     }
   };
   return {
+    render(inputs: PreparedSessionRowRender[], now: number) {
+      const renderContext = { ...context, subagentRuns: context.subagentRuns.atTime(now), now };
+      return inputs.map((input) => {
+        const row = renderPreparedSessionRow(input, renderContext);
+        return { row, encoded: JSON.stringify(row) };
+      });
+    },
     apply(update: SessionListWorkerUpdate) {
       if (update.reset || update.cfg || update.profiles || update.changes?.length) {
         pages.clear();
@@ -254,13 +262,19 @@ export function createSessionListWorkerKernel() {
         return projectSessionOwnerRunningCounts(filters, selectedPage, candidateKeys);
       });
       const { entries, ownerSessionProfiles: _profiles, ...selection } = result;
+      const archivedRowIds: string[] = [];
+      const queries = entries.map(([key]) => {
+        const row = expectDefined(selected.get(key), "selected session row");
+        if (row.entry.archivedAt !== undefined) {
+          archivedRowIds.push(identity(row));
+        }
+        return { agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath };
+      });
       return {
         selection,
         keys: entries.map(([key]) => key),
-        queries: entries.map(([key]) => {
-          const row = expectDefined(selected.get(key), "selected session row");
-          return { agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath };
-        }),
+        queries,
+        archivedRowIds,
         storePath: scope.path,
       };
     },

@@ -15,7 +15,11 @@ import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-mod
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
-import type { SessionEntrySelection, SessionListFilterParams } from "./session-list-filters.js";
+import {
+  resolveSessionListSearchModelIdentity,
+  type SessionEntrySelection,
+  type SessionListFilterParams,
+} from "./session-list-filters.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { selectSessionEntries } from "./session-list-selection.js";
@@ -26,6 +30,7 @@ import {
   shareSidebarSessionRows,
 } from "./session-row-presentation.js";
 import {
+  identity as rowIdentity,
   selectionRow,
   type Query as SessionRowQuery,
   type SelectionRow as SelectionTarget,
@@ -394,12 +399,45 @@ export async function listProjectedSessions(params: {
         context,
         client,
         searchIdentities,
+        // Plugin-owned model policy stays with the host preparation owner.
+        prepareSearchRows: opts.search?.trim()
+          ? (now) => {
+              const { prepared, filters } = prepareProjectedSessionList({
+                projection,
+                opts,
+                key: exactKey,
+                context,
+                client,
+                now,
+                metadataPrepared: true,
+              });
+              return new Map(
+                [...prepared.entries("all")].map(([rowKey]) => {
+                  const target = prepared.getTarget(rowKey)!;
+                  const { selectedModel, rowModelIdentity, thinkingProjection } =
+                    prepared.getModelFacts(rowKey);
+                  return [
+                    rowIdentity(target),
+                    {
+                      modelFacts: { selectedModel, rowModelIdentity, thinkingProjection },
+                      modelIdentity: resolveSessionListSearchModelIdentity(filters, rowKey),
+                    },
+                  ];
+                }),
+              );
+            }
+          : undefined,
         diagnostics,
       });
       if (!page) {
         await projection.prepareSelection(selectionPreparation);
         continue;
       }
+      // Exact preparation releases its pins before worker rendering; keep this page resident
+      // through publication, including when another archived page changes the cache limit.
+      const archivedRows = projection.retainArchiveRows();
+      using _ = { [Symbol.dispose]: () => archivedRows.release() };
+      archivedRows.update(page.archivedRowIds);
       const capturedPage = await withReadySessionRows(
         projection,
         () => page.queries,
@@ -435,7 +473,6 @@ export async function listProjectedSessions(params: {
             return {
               rows,
               audience: presentation.audienceKey,
-              rowContext: presentation.rowContext,
               sharingRevision: projection.sharingRevision,
             };
           } finally {
@@ -452,7 +489,6 @@ export async function listProjectedSessions(params: {
       }
       const renderedRows = await page.render(
         capturedPage.rows.flatMap((captured) => (captured.work ? [captured.work.input] : [])),
-        capturedPage.rowContext,
       );
       if (!renderedRows) {
         continue;
@@ -468,13 +504,23 @@ export async function listProjectedSessions(params: {
         }
         const resumed = performance.now();
         const { now, selection, cfg, modelCatalog, storePath } = page;
-        const projectRun = context
-          ? createVisibleActiveSessionRunProjector(
-              context,
-              projection.state.rowContext.projectedAgentRuns,
-            )
-          : undefined;
-        const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
+        const prepareCpu = diagnostics?.startSyncCpu();
+        let presentation: ReturnType<ReturnType<typeof prepareSessionRowPublication>>;
+        try {
+          const projectRun = context
+            ? createVisibleActiveSessionRunProjector(
+                context,
+                projection.state.rowContext.projectedAgentRuns,
+              )
+            : undefined;
+          presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
+        } finally {
+          if (diagnostics) {
+            diagnostics.projection.prepareSyncMs += performance.now() - resumed;
+            diagnostics.finishSyncCpu("prepareThreadCpuMs", prepareCpu);
+          }
+        }
+        const preparedAt = performance.now();
         // Worker-selected facets disclose roster facts too; recheck the whole audience.
         if (
           !page.isCurrent(presentation.sharing.cacheKey) ||
@@ -500,7 +546,7 @@ export async function listProjectedSessions(params: {
             if (!shared || !captured.record) {
               continue;
             }
-            const sharedRow = presentation.projectModels(shared);
+            const sharedRow = presentation.projectModels(shared, captured);
             const record = captured.record;
             if ((record.materializedSequence ?? 0) > materializedBefore) {
               materializedRowCount++;
@@ -532,7 +578,7 @@ export async function listProjectedSessions(params: {
             Object.assign(diagnostics.projection, {
               prepareSyncMs: diagnostics.projection.prepareSyncMs,
               rowSyncMs: performance.now() - rowsStarted,
-              yieldWaitMs: resumed - waitStarted - diagnostics.projection.prepareSyncMs,
+              yieldWaitMs: preparedAt - waitStarted - diagnostics.projection.prepareSyncMs,
               yieldCount,
               selectedRowCount: sessions.length,
               dirtyRowCount,

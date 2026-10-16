@@ -38,6 +38,7 @@ import {
   prepareSessionRowTopologySources,
 } from "./session-row-projection-topology.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
+import type { SnapshotOptions } from "./session-row-render.js";
 import * as rowScope from "./session-row-scope.js";
 
 /** Committed publications own invalidation; each admitted physical store is hydrated once. */
@@ -652,13 +653,14 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       projection: (): Parameters<typeof readPreparedSessionRows>[0] => projection,
     }),
     setArchivePageSize: archive.setPageSize,
+    retainArchiveRows: archive.retainRows,
     modelFacts: rowReads.createSessionRowModelFactsReader({
       lookup,
       dirty,
       readSourceEntry,
       state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
     }),
-    present: (record: records.MaterializedRow, options?: records.SnapshotOptions) =>
+    present: (record: records.MaterializedRow, options?: SnapshotOptions) =>
       records.present(record, metadata.current, options),
     ensureMaterialized,
     prepareSelection,
@@ -697,7 +699,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     projectRecentCandidates: recents.candidates,
     listCreatedActors: (): ReturnType<typeof creators.list> =>
       creators.list(() => projection.state.scope({}).paths, matching),
-    snapshot: (query: records.Lookup, options: records.SnapshotOptions = {}) =>
+    snapshot: (query: records.Lookup, options: SnapshotOptions = {}) =>
       records.snapshot(describe(query), metadata.current, options),
     dispose,
   };

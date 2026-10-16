@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
 import * as profiles from "../state/user-profile-list.js";
+import type { UserProfileDisplay } from "../state/user-profiles.types.js";
 import {
   createPreparedSessionProfileIdentities,
   projectSessionParticipant,
@@ -15,7 +16,7 @@ it("projects aliases and scoped dormant references from a complete display snaps
   const hidden = "12345678-2222-2222-2222-222222222222";
   const display = { id: canonical, displayName: " Person ", hasAvatar: true, avatarRevision: "1" };
   const identities = createPreparedSessionProfileIdentities(
-    new Map([
+    new Map<string, UserProfileDisplay>([
       [canonical, display],
       [alias, display],
       [hidden, { id: hidden, displayName: null, hasAvatar: false, avatarRevision: "2" }],

@@ -18,6 +18,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import * as rowRendering from "./session-row-render.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -142,7 +143,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
               cfg,
               read.state.rowContext,
             );
-            const presentations = vi.spyOn(projection, "present");
+            const presentations = vi.spyOn(rowRendering, "renderPreparedSessionRow");
             const message = {
               role: "assistant",
               content: [{ type: "text", text: '"🦞"\n\\\ud800'.repeat(256) }],

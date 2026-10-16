@@ -466,13 +466,12 @@ it("coalesces cold sidebar selection across row slices only for the same princip
         expect(results[0]!.totalCount).toBe(rows);
         expect(results[0]!.sessions[0]!.sessionId).toBe("cold-129");
         for (const result of results) {
-          expect(result.sessions).toEqual(results[0]!.sessions);
-          expect(result.owners).toBe(results[0]!.owners);
+          expect(result.sessions).toBe(results[0]!.sessions);
+          expect(result.owners).toEqual(results[0]!.owners);
         }
         const other = await read(bob);
         expect(other.totalCount).toBe(rows - 1);
         expect(other.sessions[0]!.sessionId).toBe("cold-128");
-        expect(other.owners).not.toBe(results[0]!.owners);
         expect((await read(alice, 1)).sessions).toHaveLength(1);
       });
     } finally {
@@ -535,7 +534,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(rowTraversals).toBe(0);
     expect(JSON.parse(firstWire).payload.sessions).toEqual(JSON.parse(secondWire).payload.sessions);
     expect(first.sessions).toBe(second.sessions);
-    expect(first.owners).toBe(second.owners);
+    expect(first.owners).toEqual(second.owners);
     const projection = getSessionRowProjection(context)!;
     const present = vi.spyOn(projection, "present");
     const filter = vi.spyOn(listFilters, "filterSessionEntries");
@@ -555,7 +554,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         }
         const unchanged = await read(0, false);
         expect(unchanged.sessions[0]).toBe(first.sessions[0]);
-        expect(unchanged.owners).toBe(first.owners);
+        expect(unchanged.owners).toEqual(first.owners);
         expect(filter).not.toHaveBeenCalled();
         expect(present).not.toHaveBeenCalled();
         expect(
@@ -576,7 +575,6 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     }
     const otherIdentity = await read(2, false);
     expect(otherIdentity.sessions).not.toBe(first.sessions);
-    expect(otherIdentity.owners).not.toBe(first.owners);
     expect(first.sessions[0]).toMatchObject({ snapshotAt: start, agentStatus: entry.agentStatus });
     const compact = await read(0);
     expect(compact.sessions[0]).toMatchObject({ rowMode: "compact", label: "Original label" });

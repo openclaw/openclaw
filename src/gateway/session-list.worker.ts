@@ -1,33 +1,26 @@
-import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import { createSessionListWorkerKernel } from "./session-list-worker-kernel.js";
 import type { SessionListWorkerCommand, SessionListWorkerReply } from "./session-list-worker.js";
-import { renderPreparedSessionRow } from "./session-row-render.js";
+import type { SessionListWorkerRow } from "./session-list-worker.types.js";
 
 let kernel: ReturnType<typeof createSessionListWorkerKernel> | undefined;
 serveWorkerTasks<SessionListWorkerReply>(async (input) => {
   // SAFETY: The projection-owned pool is the only sender on this private transport.
   const command = input as SessionListWorkerCommand;
   if (command.kind === "render") {
-    const context = {
-      ...command.context,
-      subagentRuns: buildSubagentRunReadIndexFromRuns(command.context.subagentRuns).atTime(
-        command.now,
-      ),
-    };
-    return {
-      kind: "rows",
-      rows: command.rows.map((rowInput) => {
-        const row = renderPreparedSessionRow(rowInput, { ...context, now: command.now });
-        return { row, encoded: JSON.stringify(row) };
-      }),
-    };
+    return kernel
+      ? { kind: "rows", rows: kernel.render(command.rows, command.now) }
+      : { kind: "reset" };
   }
   const { update, request } = command;
   if (!kernel && !update.reset) {
     return { kind: "reset" };
   }
   kernel ??= createSessionListWorkerKernel();
-  kernel.apply(update);
+  kernel.apply({
+    ...update,
+    reset:
+      update.reset === undefined ? undefined : (JSON.parse(update.reset) as SessionListWorkerRow[]),
+  });
   return { kind: "page", page: kernel.select(request) };
 });

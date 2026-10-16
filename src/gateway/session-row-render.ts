@@ -4,9 +4,11 @@ import {
   SESSION_ROW_DETAIL_FIELDS,
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import type { VisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
-import type { MaterializedRow, SnapshotOptions } from "./session-row-projection-record.js";
+import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
@@ -18,6 +20,16 @@ export type SessionRowRenderContext = Pick<
   SessionListRowContext,
   "subagentRuns" | "projectedAgentRuns" | "projectedSubagentActivity"
 > & { now: number };
+
+export type SnapshotOptions = {
+  now?: number;
+  excludedChildKeys?: ReadonlySet<string>;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  active?: boolean;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  preparedFacts?: ReturnType<ReturnType<typeof readSessionRowFacts>["present"]>;
+};
 
 export type SessionRowPresentationOptions = Omit<
   SnapshotOptions,
@@ -43,7 +55,16 @@ export type PreparedSessionRowRecord = {
 
 /** Capture live host facts once before transferring pure presentation work. */
 export function captureSessionRowPresentation(
-  record: MaterializedRow,
+  record: {
+    key: string;
+    agentId: string;
+    storeTarget: SessionStoreTarget;
+    entry: SessionEntry;
+    materialized: PreparedSessionRow;
+    fallbackModel?: { provider: string; model: string };
+    facts?: ReturnType<typeof readSessionRowFacts>;
+    hasBoard?: boolean;
+  },
   context: SessionListRowContext,
   options: SnapshotOptions = {},
 ): PreparedSessionRowRecord {

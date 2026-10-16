@@ -194,7 +194,11 @@ describe("session list worker selection", () => {
           {
             modelIdentity: { provider: "example", model: "configured-model" },
             modelFacts: {
-              selectedModel: { provider: "example", model: "configured-model" },
+              selectedModel: {
+                provider: "example",
+                model: "configured-model",
+                storedOverrideSource: null,
+              },
               rowModelIdentity: { provider: "example", model: "configured-model" },
               thinkingProjection: {
                 acpMeta: undefined,
