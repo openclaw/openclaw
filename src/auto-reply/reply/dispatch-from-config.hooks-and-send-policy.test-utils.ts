@@ -1725,7 +1725,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.",
+      text: "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.",
       isError: true,
     });
   });

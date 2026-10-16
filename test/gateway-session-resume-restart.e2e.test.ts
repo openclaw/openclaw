@@ -208,7 +208,17 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
                 }
               }
               revokeAttempted.add(name);
-              tool("exec", { command: `printf 'forbidden\\n' > ${name}-effect` });
+              const args = { command: `printf 'forbidden\\n' > ${name}-effect` };
+              if (
+                name === "restricted" &&
+                !tools.includes("exec") &&
+                !tools.includes("dispatch_action")
+              ) {
+                // A provider can still issue a stale call after recovery removes the tool.
+                writeTool(response, "exec", args, callOrdinal);
+              } else {
+                tool("exec", args);
+              }
             } else {
               const results = Array.isArray(body.input)
                 ? body.input.filter(
@@ -217,7 +227,11 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
                 : [];
               expect(results.at(-1)).toMatchObject({
                 output:
-                  name === "revoked" ? "Permission change" : expect.stringContaining("exec denied"),
+                  name === "revoked"
+                    ? "Permission change"
+                    : !tools.includes("exec") && !tools.includes("dispatch_action")
+                      ? "Tool exec not found"
+                      : expect.stringContaining("exec denied"),
               });
               text(final(name));
             }
