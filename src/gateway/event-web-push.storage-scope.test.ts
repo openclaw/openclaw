@@ -33,7 +33,6 @@ type UpsertInput = WebPushWorkerOperations["webPush.upsertWebPushSubscription"][
 const mocks = vi.hoisted(() => ({
   captureContext: vi.fn(),
   executeWorker: vi.fn(),
-  runWorkerOperation: vi.fn(),
   workerUpsert: vi.fn(),
   preparedSend: vi.fn<PreparedSender>(),
   listPairedDevices: vi.fn<() => PairedDevice[] | Promise<PairedDevice[]>>(),
@@ -54,7 +53,16 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.executeWorker,
-  runOpenClawStateWorkerOperation: mocks.runWorkerOperation,
+  runOpenClawStateWorkerOperation: async (
+    captured: OpenClawStateWorkerContext,
+    operation: (scope: { execute: (command: WebPushCommand) => Promise<unknown> }) => unknown,
+  ) =>
+    operation({
+      execute: async (command) =>
+        command.type === "webPush.upsertWebPushSubscription"
+          ? { subscription: mocks.workerUpsert(command.input) }
+          : mocks.executeWorker(captured, command),
+    }),
 }));
 vi.mock("../infra/push-web.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/push-web.js")>()),
@@ -98,21 +106,7 @@ vi.mock("./session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: mocks.prepareSessionFacts,
 }));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.runWorkerOperation.mockImplementation(
-    async (
-      captured: OpenClawStateWorkerContext,
-      operation: (scope: { execute: (command: WebPushCommand) => Promise<unknown> }) => unknown,
-    ) =>
-      operation({
-        execute: async (command) =>
-          command.type === "webPush.upsertWebPushSubscription"
-            ? { subscription: mocks.workerUpsert(command.input) }
-            : mocks.executeWorker(captured, command),
-      }),
-  );
-});
+beforeEach(() => vi.clearAllMocks());
 
 function mockCapturedContext() {
   const stateDir = "/synthetic/webpush-storage-scope";
@@ -143,19 +137,37 @@ function upsertBinding(stateDir: string, userProfileId: string, nowMs: number) {
   });
 }
 
-function boundSubscription(
-  params: UpsertInput,
+function mockStore(
+  reads: Partial<
+    Record<WebPushCommand["type"], (current: BoundWebPushSubscription | undefined) => unknown>
+  >,
+  onUpsert?: (current: BoundWebPushSubscription) => void,
   preferences?: Parameters<typeof normalizeWebPushDevicePreferences>[0],
-): BoundWebPushSubscription {
-  return {
-    subscriptionId: "scope-subscription",
-    endpoint: params.endpoint,
-    keys: { ...params.keys },
-    createdAtMs: 1,
-    updatedAtMs: params.nowMs,
-    ...expectDefined(params.binding, "synthetic browser binding"),
-    devicePreferences: normalizeWebPushDevicePreferences(preferences),
-  };
+) {
+  let current: BoundWebPushSubscription | undefined;
+  mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
+    current = {
+      subscriptionId: params.candidateSubscriptionId,
+      endpoint: params.endpoint,
+      keys: params.keys,
+      createdAtMs: 1,
+      updatedAtMs: params.nowMs,
+      ...expectDefined(params.binding, "synthetic browser binding"),
+      devicePreferences: normalizeWebPushDevicePreferences(preferences),
+    };
+    onUpsert?.(current);
+    return current;
+  });
+  mocks.executeWorker.mockImplementation(
+    async (_context: OpenClawStateWorkerContext, command: WebPushCommand) => {
+      const read = reads[command.type];
+      if (!read) {
+        throw new Error(`unexpected synthetic worker command: ${command.type}`);
+      }
+      return read(current);
+    },
+  );
+  return { current: () => current };
 }
 
 function outcome(promise: Promise<unknown>) {
@@ -167,21 +179,14 @@ function outcome(promise: Promise<unknown>) {
 
 it("orders binding and pairing reads before rebinding without retaining provider work", async () => {
   const stateDir = mockCapturedContext();
+  const scopes = ["operator.read"];
+  const operator = { token: "synthetic-token", role: "operator", scopes, createdAtMs: 1 };
   const pairedDevices: PairedDevice[] = [
     {
       deviceId: "browser-device",
       publicKey: "synthetic-public-key",
-      role: "operator",
-      roles: ["operator"],
-      approvedScopes: ["operator.read"],
-      tokens: {
-        operator: {
-          token: "synthetic-token",
-          role: "operator",
-          scopes: ["operator.read"],
-          createdAtMs: 1,
-        },
-      },
+      approvedScopes: scopes,
+      tokens: { operator },
       createdAtMs: 1,
       approvedAtMs: 1,
     },
@@ -195,39 +200,24 @@ it("orders binding and pairing reads before rebinding without retaining provider
   const selected = createDeferred();
   const releaseReply = createDeferred();
   const providerResult = createDeferred<Awaited<ReturnType<PreparedSender>>>();
-  let current: BoundWebPushSubscription | undefined;
   const mutationSettled = vi.fn();
   const providerSettled = vi.fn();
   const order: string[] = [];
-  const starts: Array<{
-    subscriptions: Parameters<PreparedSender>[0]["subscriptions"];
-    current: BoundWebPushSubscription;
-  }> = [];
-  mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
-    current = boundSubscription(params, { enabled: true, categories: { agentFinished: true } });
-    order.push(`mutation:${current.userProfileId}`);
-    return current;
-  });
-  mocks.executeWorker.mockImplementation(
-    async (_context: OpenClawStateWorkerContext, command: WebPushCommand) => {
-      if (command.type === "webPush.hasBoundWebPushSubscriptions") {
-        return current !== undefined;
-      }
-      if (command.type === "webPush.listBoundWebPushSubscriptions") {
+  const store = mockStore(
+    {
+      "webPush.hasBoundWebPushSubscriptions": (current) => current !== undefined,
+      "webPush.listBoundWebPushSubscriptions": async (current) => {
         const snapshot = structuredClone(expectDefined(current, "SELECT source binding"));
         selected.resolve();
         await releaseReply.promise;
         return [snapshot];
-      }
-      throw new Error(`unexpected synthetic worker command: ${command.type}`);
+      },
     },
+    (current) => order.push(`mutation:${current.userProfileId}`),
+    { enabled: true, categories: { agentFinished: true } },
   );
-  mocks.preparedSend.mockImplementation((params) => {
-    const binding = expectDefined(current, "binding at provider start");
-    starts.push({
-      subscriptions: structuredClone(params.subscriptions),
-      current: structuredClone(binding),
-    });
+  mocks.preparedSend.mockImplementation(() => {
+    const binding = expectDefined(store.current(), "binding at provider start");
     order.push(`send:${binding.userProfileId}`);
     return providerResult.promise;
   });
@@ -247,24 +237,23 @@ it("orders binding and pairing reads before rebinding without retaining provider
   try {
     await nextTurn();
     expect(mutationSettled).not.toHaveBeenCalled();
-    expect(current?.userProfileId).toBe("profile-a");
-    expect(starts).toEqual([]);
+    expect(store.current()?.userProfileId).toBe("profile-a");
+    expect(mocks.preparedSend).not.toHaveBeenCalled();
 
     releaseReply.resolve();
     await pairingSelected.promise;
     await nextTurn();
     expect(mutationSettled).not.toHaveBeenCalled();
-    expect(starts).toEqual([]);
+    expect(mocks.preparedSend).not.toHaveBeenCalled();
     pairingReply.resolve(pairedDevices);
     await nextTurn();
-    expect(starts).toHaveLength(1);
-    expect(starts[0]).toMatchObject({
-      subscriptions: [{ userProfileId: "profile-a" }],
-      current: { userProfileId: "profile-a" },
-    });
+    expect(mocks.preparedSend).toHaveBeenCalledOnce();
+    expect(mocks.preparedSend.mock.calls[0]?.[0].subscriptions).toMatchObject([
+      { userProfileId: "profile-a" },
+    ]);
     expect(mutationSettled).toHaveBeenCalledOnce();
     expect(providerSettled).not.toHaveBeenCalled();
-    expect(current?.userProfileId).toBe("profile-b");
+    expect(store.current()?.userProfileId).toBe("profile-b");
     expect(order).toEqual(["send:profile-a", "mutation:profile-b"]);
   } finally {
     releaseReply.resolve();
@@ -281,11 +270,8 @@ function prepareQueuedRead(readError?: Error) {
   const stateDir = mockCapturedContext();
   const selected = createDeferred();
   const releaseReply = createDeferred();
-  mocks.executeWorker.mockImplementation(
-    async (_context: OpenClawStateWorkerContext, command: WebPushCommand) => {
-      if (command.type !== "webPush.listBoundWebPushSubscriptions") {
-        throw new Error(`unexpected synthetic worker command: ${command.type}`);
-      }
+  mockStore({
+    "webPush.listBoundWebPushSubscriptions": async () => {
       selected.resolve();
       await releaseReply.promise;
       if (readError) {
@@ -293,15 +279,6 @@ function prepareQueuedRead(readError?: Error) {
       }
       return [];
     },
-  );
-  mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
-    return {
-      subscriptionId: params.candidateSubscriptionId,
-      endpoint: params.endpoint,
-      keys: { ...params.keys },
-      createdAtMs: params.nowMs,
-      updatedAtMs: params.nowMs,
-    };
   });
   return { stateDir, selected, releaseReply };
 }
@@ -321,22 +298,10 @@ it("keeps browser storage responsive while notification session facts load", asy
       release: factsReleased,
     };
   });
-  let current: BoundWebPushSubscription;
-  mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
-    current = boundSubscription(params);
-    return current;
+  mockStore({
+    "webPush.listBoundWebPushSubscriptions": (current) => [current],
+    "webPush.findBoundWebPushSubscriptionByEndpoint": (current) => current,
   });
-  mocks.executeWorker.mockImplementation(
-    async (_context: OpenClawStateWorkerContext, command: WebPushCommand) => {
-      if (command.type === "webPush.listBoundWebPushSubscriptions") {
-        return [current];
-      }
-      if (command.type === "webPush.findBoundWebPushSubscriptionByEndpoint") {
-        return current;
-      }
-      throw new Error(`unexpected synthetic worker command: ${command.type}`);
-    },
-  );
   mocks.listPairedDevices.mockReturnValue([]);
   await upsertBinding(stateDir, "profile-a", 1);
   const start = vi.fn(() => provider.promise);
