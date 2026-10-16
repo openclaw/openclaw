@@ -20,6 +20,20 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixDescribe = process.platform === "win32" ? describe.skip : describe;
 const testNodeExecPath = resolveTestNodeExecPath();
 
+function fixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = testRunnerFixtureEnv();
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
+      delete env[key];
+    }
+  }
+  return { ...env, CI: "1", ...overrides };
+}
+
+function linkModules(root: string) {
+  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+}
+
 const entrypoints = [
   { script: "run-vitest.mjs", direct: true, tool: "test" },
   { script: "run-vitest.mjs", direct: false, tool: "test" },
@@ -182,11 +196,7 @@ registerHooks({ load(url, context, nextLoad) {
         const receipt = path.join(root, "receipt.json");
         fs.mkdirSync(path.join(root, "test/scripts"), { recursive: true });
         fs.mkdirSync(path.join(root, "test/vitest"));
-        fs.symlinkSync(
-          path.join(repoRoot, "node_modules"),
-          path.join(root, "node_modules"),
-          "junction",
-        );
+        linkModules(root);
         fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
         fs.writeFileSync(
           path.join(root, target),
@@ -220,14 +230,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
             args.push("--openclaw-trailer-repro");
           }
         }
-        const env = testRunnerFixtureEnv();
-        for (const key of Object.keys(env)) {
-          if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-            delete env[key];
-          }
-        }
-        Object.assign(env, {
-          CI: "1",
+        const env = fixtureEnv({
           NO_COLOR: "1",
           FORCE_COLOR: "0",
           TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
@@ -348,12 +351,7 @@ fs.readFileSync = (file, ...args) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = testRunnerFixtureEnv();
-      for (const key of Object.keys(env)) {
-        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-          delete env[key];
-        }
-      }
+      const env = fixtureEnv();
       const result = spawnSync(
         testNodeExecPath,
         [
@@ -444,12 +442,7 @@ cp.spawn = (bin, args, options) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = testRunnerFixtureEnv();
-      for (const key of Object.keys(env)) {
-        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-          delete env[key];
-        }
-      }
+      const env = fixtureEnv();
       if (outcome === "prebuilt") {
         env.OPENCLAW_E2E_USE_PREBUILT_DIST = "1";
       }
@@ -571,11 +564,7 @@ syncBuiltinESMExports();
     { timeout: 60_000 },
     (outcome) => {
       const root = tempDirs.make("oc-vt-bounded-");
-      fs.symlinkSync(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
+      linkModules(root);
       const configPath = path.join(root, "test/vitest/vitest.e2e.config.ts");
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       const receiptPath = path.join(root, "executed.jsonl");
@@ -600,12 +589,7 @@ it("case ${index}", () => {
 });`,
         );
       }
-      const env = testRunnerFixtureEnv();
-      for (const key of Object.keys(env)) {
-        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-          delete env[key];
-        }
-      }
+      const env = fixtureEnv();
       const result = spawnSync(
         testNodeExecPath,
         [path.join(preparedCli.root, "scripts/run-vitest.mjs"), "run", "--config", configPath],

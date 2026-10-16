@@ -1,4 +1,3 @@
-// Run Vitest Profile tests cover run vitest profile script behavior.
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import os from "node:os";
@@ -24,6 +23,42 @@ describe("scripts/run-vitest-profile", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../..");
   afterEach(() => lifetime.cleanup());
 
+  function createProject(prefix: string) {
+    const root = createTempDir(prefix);
+    fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
+    fs.symlinkSync(
+      path.join(repoRoot, "node_modules"),
+      path.join(root, "node_modules"),
+      "junction",
+    );
+    return root;
+  }
+
+  function profileArgs(root: string, mode: string, ...args: string[]) {
+    return [
+      path.join(repoRoot, "scripts/run-vitest-profile.mts"),
+      mode,
+      "--output-dir",
+      path.join(root, "profiles"),
+      "--",
+      ...args,
+    ];
+  }
+
+  function readDiagnostic(file: string) {
+    try {
+      const fd = fs.openSync(file, "r");
+      try {
+        const bytes = Buffer.alloc(4096);
+        return bytes.subarray(0, fs.readSync(fd, bytes)).toString("utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return "unavailable";
+    }
+  }
+
   async function runProfileProcess(
     args: string[],
     root: string,
@@ -34,7 +69,6 @@ describe("scripts/run-vitest-profile", () => {
       flags: string[];
       ordering: string;
       profiles: string;
-      stages: string;
     },
     observeOutput?: (stdout: string) => void,
   ) {
@@ -46,30 +80,6 @@ describe("scripts/run-vitest-profile", () => {
       }
       reported = true;
       try {
-        let hashOrder: string;
-        try {
-          const fd = fs.openSync(diagnostics.ordering, "r");
-          try {
-            const bytes = Buffer.alloc(4096);
-            hashOrder = bytes.subarray(0, fs.readSync(fd, bytes)).toString("utf8");
-          } finally {
-            fs.closeSync(fd);
-          }
-        } catch {
-          hashOrder = "unavailable";
-        }
-        let profileStages: string;
-        try {
-          const fd = fs.openSync(diagnostics.stages, "r");
-          try {
-            const bytes = Buffer.alloc(4096);
-            profileStages = bytes.subarray(0, fs.readSync(fd, bytes)).toString("utf8");
-          } finally {
-            fs.closeSync(fd);
-          }
-        } catch {
-          profileStages = "unavailable";
-        }
         let cpuProfiles: number | "unavailable";
         try {
           cpuProfiles = fs
@@ -86,8 +96,7 @@ describe("scripts/run-vitest-profile", () => {
               flags: diagnostics.flags,
               aborted: signal.aborted,
               child: inspectChild?.() ?? "not observed",
-              hashOrder,
-              profileStages,
+              hashOrder: readDiagnostic(diagnostics.ordering),
               cpuProfiles,
             },
             (_key, value: unknown) =>
@@ -209,13 +218,7 @@ describe("scripts/run-vitest-profile", () => {
       { signal },
     ) =>
       lifetime.run(async () => {
-        const root = createTempDir("oc-profile-sibling-");
-        fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
-        fs.symlinkSync(
-          path.join(repoRoot, "node_modules"),
-          path.join(root, "node_modules"),
-          "junction",
-        );
+        const root = createProject("oc-profile-sibling-");
         const environment = custom && pool === "threads" ? "jsdom" : "node";
         const outputDir = path.join(root, "profiles with spaces");
         const configPath = path.join(root, "custom.config.ts");
@@ -365,16 +368,10 @@ it("retains the selected execution context", async () => {
 
   it("cancels an admitted profiling workload before releasing its inputs", ({ signal }) =>
     lifetime.run(async () => {
-      const root = createTempDir("oc-profile-cancellation-");
+      const root = createProject("oc-profile-cancellation-");
       const ready = createDeferred();
       const release = path.join(root, "release");
       const config = path.join(root, "vitest.config.mjs");
-      fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}');
-      fs.symlinkSync(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
       fs.writeFileSync(
         config,
         'export default { test: { include: ["workload.test.ts"], pool: "threads", maxWorkers: 1 } };',
@@ -391,17 +388,7 @@ it("holds admitted work until the caller releases it", async () => {
       );
       const controller = new AbortController();
       const completion = runProfileProcess(
-        [
-          path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-          "runner",
-          "--output-dir",
-          path.join(root, "profiles"),
-          "--",
-          "--config",
-          config,
-          "--configLoader",
-          "native",
-        ],
+        profileArgs(root, "runner", "--config", config, "--configLoader", "native"),
         root,
         AbortSignal.any([signal, controller.signal]),
         undefined,
@@ -439,81 +426,25 @@ it("holds admitted work until the caller releases it", async () => {
         const root = createTempDir("oc-profile-help-");
         const ordering = path.join(root, "hash-order.jsonl");
         const drained = path.join(root, "event-loop-drained");
-        const stages = path.join(root, "profile-stages.jsonl");
         const profiles = path.join(root, "profiles");
         const preload = path.join(root, "observe-hash-order.mjs");
         fs.writeFileSync(
           preload,
-          `import childProcess from "node:child_process";
-import crypto from "node:crypto";
+          `import crypto from "node:crypto";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import inspector from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
-import path from "node:path";
 const childEntry = ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile-child.mts"))};
 const role = process.argv[1] === childEntry ? "inner"
   : process.argv[1] === ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile.mts"))} ? "outer" : undefined;
-const recordedStages = new Set();
-function recordStage(stage, code = null, signal = null) {
-  if (!role || recordedStages.has(stage) || recordedStages.size >= 16) return;
-  recordedStages.add(stage);
-  try {
-    fs.appendFileSync(${JSON.stringify(stages)}, JSON.stringify({
-      role, stage,
-      code: Number.isSafeInteger(code) ? code : null,
-      signal: ["SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGHUP", "SIGQUIT", "SIGPIPE", "SIGTRAP", "SIGUSR1", "SIGUSR2", "SIGXCPU", "SIGXFSZ", "SIGSYS"].includes(signal) ? signal : null,
-    }) + "\\n");
-  } catch {
-    // Observation must not change finalization, exit, or the original error.
-  }
-}
-recordStage("preload");
 if (role === "inner") {
   process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "drained"));
 }
-if (role === "inner") process.once("exit", code => recordStage("exit-event", code));
-const spawn = childProcess.spawn;
-childProcess.spawn = function(...args) {
-  const child = Reflect.apply(spawn, this, args);
-  if (role === "outer" && args[0] === process.execPath && args[1]?.[0] === childEntry) {
-    child.once("exit", (code, signal) => recordStage("child-exit", code, signal));
-    child.once("close", (code, signal) => recordStage("child-close", code, signal));
-  }
-  return child;
-};
-const writeFile = fsPromises.writeFile;
-fsPromises.writeFile = function(...args) {
-  const target = args[0];
-  const observe = role === "inner" && typeof target === "string"
-    && path.dirname(target) === ${JSON.stringify(profiles)}
-    && path.basename(target).startsWith("CPU.") && target.endsWith(".cpuprofile");
-  if (observe) recordStage("write-requested");
-  const result = Reflect.apply(writeFile, this, args);
-  if (observe) result.then(
-    () => recordStage("write-resolved"),
-    () => recordStage("write-rejected"),
-  );
-  return result;
-};
 let profiling = false;
 inspector.Session = class extends inspector.Session {
   async post(method, ...params) {
-    if (method === "Profiler.stop") recordStage("stop-requested");
-    try {
-      const result = await super.post(method, ...params);
-      if (method === "Profiler.start") profiling = true;
-      if (method === "Profiler.stop") recordStage("stop-resolved");
-      return result;
-    } catch (error) {
-      if (method === "Profiler.stop") recordStage("stop-rejected");
-      throw error;
-    }
-  }
-  disconnect(...args) {
-    recordStage("disconnect-entered");
-    const result = super.disconnect(...args);
-    recordStage("disconnect-returned");
+    const result = await super.post(method, ...params);
+    if (method === "Profiler.start") profiling = true;
     return result;
   }
 };
@@ -531,20 +462,13 @@ crypto.getHashes = function() {
 };
 syncBuiltinESMExports();`,
         );
-        const args = [
-          path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-          mode,
-          "--output-dir",
-          path.join(root, "profiles"),
-          "--",
-          ...flags,
-        ];
+        const args = profileArgs(root, mode, ...flags);
         const result = await runProfileProcess(
           args,
           root,
           signal,
           { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
-          { mode, flags, ordering, profiles, stages },
+          { mode, flags, ordering, profiles },
         );
         expect(
           fs
@@ -582,18 +506,7 @@ process.on("uncaughtExceptionMonitor", () => fs.writeFileSync(${JSON.stringify(u
 fs.writeFileSync(${JSON.stringify(marker)}, "loaded");
 throw new Error("Invalid CLI options reached config loading");`,
       );
-      const args = [
-        path.join(repoRoot, "scripts/run-vitest-profile.mts"),
-        mode,
-        "--output-dir",
-        path.join(root, "profiles"),
-        "--",
-        "--config",
-        config,
-        "--configLoader",
-        "native",
-        flag,
-      ];
+      const args = profileArgs(root, mode, "--config", config, "--configLoader", "native", flag);
       const result = await runProfileProcess(args, root, signal, {
         NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
       });

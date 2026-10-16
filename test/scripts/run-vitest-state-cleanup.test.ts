@@ -655,80 +655,53 @@ process.exitCode = (await completion).code ?? 1;`,
   },
 );
 
+const config = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+function selection(args: string[], expected: string, defaultConfig?: string) {
+  return { args: ["run", ...args], expected, defaultConfig };
+}
+
 it.each([
-  { args: ["run", "--config", "test/vitest/vitest.unit-fast.config.ts"], expected: "hermetic" },
-  {
-    args: ["run", "--config=test/vitest/vitest.full-core-unit-fast.config.ts"],
-    expected: "hermetic",
-  },
-  { args: ["run", "--project=unit-fast", "--project=unit-fast-isolated"], expected: "hermetic" },
-  { args: ["run", "--project=unit"], expected: "live-aware" },
-  { args: ["run", "--config", "test/vitest/vitest.live.config.ts"], expected: "live-aware" },
-  {
-    args: ["run", "--config", "test/vitest/vitest.package-contract.config.ts"],
-    expected: "live-aware",
-  },
-  {
-    args: ["run", "--config", "test/vitest/vitest.full-core-runtime.config.ts", "--project=*"],
-    expected: "live-aware",
-  },
-  { args: ["run", "--project=unit", "--project=unit-fast"], expected: "mixed" },
-  ...["--silent", "--update", "-u", "--coverage.enabled"].map((option) => ({
-    args: ["run", "--project=unit", option, "--project=unit-fast"],
-    expected: "mixed",
-  })),
-  {
-    args: ["run", "--silent", "--config", "test/vitest/vitest.live.config.ts"],
-    expected: "live-aware",
-  },
-  {
-    args: ["run", "--c=test/vitest/vitest.unit-fast.config.ts"],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "hermetic",
-  },
-  {
-    args: ["run", "--r=custom-root"],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "unknown",
-  },
+  selection(["--config", config("unit-fast")], "hermetic"),
+  selection([`--config=${config("full-core-unit-fast")}`], "hermetic"),
+  selection(["--project=unit-fast", "--project=unit-fast-isolated"], "hermetic"),
+  selection(["--project=unit"], "live-aware"),
+  selection(["--config", config("live")], "live-aware"),
+  selection(["--config", config("package-contract")], "live-aware"),
+  selection(["--config", config("full-core-runtime"), "--project=*"], "live-aware"),
+  selection(["--project=unit", "--project=unit-fast"], "mixed"),
+  ...["--silent", "--update", "-u", "--coverage.enabled"].map((option) =>
+    selection(["--project=unit", option, "--project=unit-fast"], "mixed"),
+  ),
+  selection(["--silent", "--config", config("live")], "live-aware"),
+  selection([`--c=${config("unit-fast")}`], "hermetic", config("unit")),
+  selection(["--r=custom-root"], "unknown", config("unit")),
   ...[
-    ["-uc", "test/vitest/vitest.unit-fast.config.ts"],
-    ["---c=test/vitest/vitest.unit-fast.config.ts"],
-    ["--config=test/vitest/vitest.unit.config.ts", "--c=test/vitest/vitest.unit-fast.config.ts"],
+    ["-uc", config("unit-fast")],
+    [`---c=${config("unit-fast")}`],
+    [`--config=${config("unit")}`, `--c=${config("unit-fast")}`],
     ["--project=unit", "--no-project"],
     ["--project=unit", "--project.1=unit-fast"],
     ["--project=unit", "--project.length=0"],
-    ["--config=test/vitest/vitest.unit.config.ts", "--c.root=custom-root"],
-  ].map((args) => ({
-    args: ["run", ...args],
-    defaultConfig: "test/vitest/vitest.unit.config.ts",
-    expected: "unknown",
-  })),
-  { args: ["run"], expected: "mixed" },
-  { args: ["run", "--config", "test/vitest/vitest.full-agentic.config.ts"], expected: "mixed" },
-  { args: ["run", "--project=unit*"], expected: "unknown" },
-  { args: ["run", "--config", "custom.config.ts"], expected: "unknown" },
-  {
-    args: [
-      "run",
-      "--root",
-      "custom-root",
-      "--config",
-      path.join(repoRoot, "test/vitest/vitest.ui-e2e.config.ts"),
-    ],
-    expected: "unknown",
-  },
-  {
-    args: [
-      "run",
+    [`--config=${config("unit")}`, "--c.root=custom-root"],
+  ].map((args) => selection(args, "unknown", config("unit"))),
+  selection([], "mixed"),
+  selection(["--config", config("full-agentic")], "mixed"),
+  selection(["--project=unit*"], "unknown"),
+  selection(["--config", "custom.config.ts"], "unknown"),
+  selection(
+    ["--root", "custom-root", "--config", path.join(repoRoot, config("ui-e2e"))],
+    "unknown",
+  ),
+  selection(
+    [
       "--root",
       "custom-root",
       "--config",
       path.join(repoRoot, "vitest.config.ts"),
       "--project=unit-fast",
     ],
-    expected: "unknown",
-  },
+    "unknown",
+  ),
 ])(
   "enforces $expected selection before admitting an explicit real-home child: $args",
   async ({ args, expected, defaultConfig }) => {
