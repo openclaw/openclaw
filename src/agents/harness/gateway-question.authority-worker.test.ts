@@ -11,7 +11,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../../gateway/methods/registry.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "../../gateway/server-methods/question.js";
@@ -68,8 +71,9 @@ it.each([
   ),
 ])("rechecks $change authority for $path at the question effect", async ({ path, change }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:question-execution";
-    const policyKey = "agent:policy:question-policy";
+    const sessionKey = "agent:main:question";
+    const policyKey = "agent:policy:question";
+    const id = "caller-policy-question";
     const policyTarget = { agentId: "policy", sessionKey: policyKey };
     const policyEntry = {
       sessionId: "policy-session",
@@ -146,17 +150,10 @@ it.each([
     const resolveQuestion = vi.fn(handlers["question.resolve"]!);
     handlers["question.resolve"] = resolveQuestion;
     context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry(
-        Object.entries(handlers).map(([name, handler]) => ({
-          name,
-          handler,
-          scope: "operator.questions",
-          owner: { kind: "core", area: "questions" },
-        })),
-      );
+      createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(handlers));
     const { id: questionId, ...wireQuestion } = questionItem;
     manager.request({
-      id: "caller-policy-question",
+      id,
       sessionKey,
       timeoutMs: 60_000,
       questions: [{ ...wireQuestion, questionId }],
@@ -164,7 +161,7 @@ it.each([
     const compatibility = path === "legacy-run" || path === "custom-run";
     const question = withAgentQuestionAnswerAuthority(authority, () =>
       registerPendingAgentQuestion({
-        questionId: "caller-policy-question",
+        questionId: id,
         sessionKey,
         questions: [questionItem],
         gatewayCall:
@@ -177,7 +174,7 @@ it.each([
                     callGatewayTool(request.method, request.options, request.params),
                 }
               : undefined,
-        answer: manager.waitAnswer("caller-policy-question", undefined, true),
+        answer: manager.waitAnswer(id, undefined, true),
       }),
     );
     question.attachRegistration(Promise.resolve());
@@ -185,9 +182,8 @@ it.each([
     const resume = createDeferredCore();
     const originalRead = sessionReads.withSessionEntriesFromStoresInWorker;
     let hold = true;
-    const readBatches = vi
-      .spyOn(sessionReads, "withSessionEntriesFromStoresInWorker")
-      .mockImplementation(async (inputs, consume, options) => {
+    vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker").mockImplementation(
+      async (inputs, consume, options) => {
         if (
           hold &&
           !compatibility &&
@@ -199,12 +195,9 @@ it.each([
           await resume.promise;
         }
         return originalRead(inputs, consume, options);
-      });
-    const caller = {
-      senderIsOwner: run.run.senderIsOwner === true,
-      disableTools: run.disableTools === true,
-      traceAuthorized: run.run.traceAuthorized === true,
-    };
+      },
+    );
+    const caller = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
     const preparation = bindWorkerToolPreparation({
       assertCurrent,
       compatAssertCurrent: () => authority.assertCaller(caller),
@@ -237,11 +230,9 @@ it.each([
                   ? async () => {
                       await replaceSessionEntry(policyTarget, {
                         ...policyEntry,
-                        lifecycleRevision:
-                          change === "persist-generation"
-                            ? "replacement-generation"
-                            : "policy-generation",
-                        sandboxMode: change === "persist-generation" ? "off" : undefined,
+                        ...(change === "persist-generation"
+                          ? { lifecycleRevision: "replacement-generation" }
+                          : { sandboxMode: undefined }),
                       });
                     }
                   : undefined,
@@ -257,12 +248,8 @@ it.each([
       if (!compatibility) {
         await awaitGateBeforeSettlement(
           entered.promise,
-          pending.then((accepted) => {
-            throw new Error(
-              `question claim settled before final read: ${JSON.stringify({ accepted, status: manager.observe("caller-policy-question")?.record.status, handlerCalls: resolveQuestion.mock.calls.length, readKeys: readBatches.mock.calls.map(([inputs]) => inputs.map((input) => input.sessionKeys)) })}`,
-            );
-          }),
-          "question did not reach its final session read",
+          pending,
+          "question claim settled before its final session read",
         );
       }
       if (change === "policy") {
@@ -277,7 +264,7 @@ it.each([
         expect(result).toEqual(
           change === "current" ? true : expect.any(QuestionDispatchRefusedError),
         );
-        expect(manager.get("caller-policy-question")?.status).toBe(
+        expect(manager.get(id)?.status).toBe(
           change === "current"
             ? path === "prepared-cancel"
               ? "cancelled"
