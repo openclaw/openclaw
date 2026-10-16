@@ -32,7 +32,7 @@ import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-co
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
-import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
+import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
@@ -198,9 +198,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
         }
       />
       <Show when={!input.props.suggestionComposer}>
-        <LitContent
-          value={renderChatSelectionAnnotations({ ...input.props, disabled: !input.props.canSend })}
-        />
+        <ChatSelectionAnnotations {...input.props} disabled={!input.props.canSend} />
       </Show>
       <LitContent value={input.props.composerRecovery ?? emptyLegacyContent} />
     </div>

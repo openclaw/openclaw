@@ -1,6 +1,6 @@
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../lib/toast-host.ts";
 import {
@@ -8,11 +8,10 @@ import {
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { createComposerContainer } from "../chat-composer.test-support.ts";
-import { renderChat } from "../chat-view-render.test-support.ts";
-import { createChatProps } from "../chat-view.test-helpers.ts";
+import { createChatProps, renderChatPropsInto } from "../chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import "./chat-comment-controller.ts";
-import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
+import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 
 const payloads = new Set<string>();
@@ -78,12 +77,12 @@ async function mountComments(additional: ChatAttachment[] = []) {
         payloads.add(item.id);
       }
       controller.props = { ...props, attachments };
-      render(renderChatSelectionAnnotations(controller.props), composer);
+      view.update(controller.props);
     },
   };
   controller.props = props;
   controller.sessionKey = "agent:main:main";
-  render(renderChatSelectionAnnotations(props), composer);
+  const view = mountSolid(ChatSelectionAnnotations, props, composer);
   const toast = document.createElement("openclaw-toast-host");
   card.append(controller, composer, toast);
   document.body.append(card);
@@ -111,9 +110,6 @@ async function mountComments(additional: ChatAttachment[] = []) {
 describe("comment actions outside the transcript", () => {
   it("keeps an editor across draft renders and retires it when composition is disabled", async () => {
     const container = createComposerContainer();
-    onTestFinished(() => {
-      render(nothing, container);
-    });
     document.body.append(container);
     const attachment: ChatAttachment = {
       id: "rendered-comment",
@@ -127,7 +123,7 @@ describe("comment actions outside the transcript", () => {
       },
     };
     const props = createChatProps({ loading: true, attachments: [attachment] });
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     const controller = container.querySelector<CommentControllerElement>(
       "openclaw-chat-comment-controller",
     )!;
@@ -142,16 +138,16 @@ describe("comment actions outside the transcript", () => {
     expect(editor.value).toBe("In-progress edit");
     editor.value = "A draft that must survive";
 
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     await controller.updateComplete;
     expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
-    render(renderChat({ ...props, draft: "A new draft" }), container);
+    renderChatPropsInto(container, { ...props, draft: "A new draft" });
     await controller.updateComplete;
     expect(editor.value).toBe("A draft that must survive");
     expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
-    render(renderChat({ ...props, canSend: false }), container);
+    renderChatPropsInto(container, { ...props, canSend: false });
     await controller.updateComplete;
     expect(document.querySelector(".chat-annotation-editor")).toBeNull();
   });
