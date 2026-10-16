@@ -29,6 +29,7 @@ import {
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
+import { expectMissing, git, readText, writeFile } from "./service-files.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -70,24 +71,10 @@ function expectCheckoutTimeouts(
   ).toEqual(new Set([120_000, ...networkTimeouts]));
 }
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf8",
-  });
-  return stdout.trim();
-}
-
 async function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = execFile("git", ["-C", cwd, ...args], { encoding: "utf8" }, (error, stdout) => {
-      if (error) {
-        reject(new Error(error.message, { cause: error }));
-      } else {
-        resolve(stdout.trim());
-      }
-    });
-    child.stdin?.end(input);
-  });
+  const command = execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  command.child.stdin?.end(input);
+  return (await command).stdout.trim();
 }
 
 async function addRemote(root: string, repo: string): Promise<string> {
@@ -95,13 +82,6 @@ async function addRemote(root: string, repo: string): Promise<string> {
   await git(repo, "push", "-u", "origin", "main");
   await git(repo, "remote", "set-head", "origin", "-a");
   return path.join(root, "remote.git");
-}
-
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-const writeFile = (directory: string, file: string, data: Parameters<typeof fs.writeFile>[1]) =>
-  fs.writeFile(path.join(directory, file), data);
-async function expectMissing(operation: Promise<unknown>) {
-  await expect(operation).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("ManagedWorktreeService", () => {
@@ -128,6 +108,32 @@ describe("ManagedWorktreeService", () => {
     options: Omit<Parameters<ManagedWorktreeService["create"]>[0], "repoRoot" | "name"> = {},
   ) {
     return service.create({ repoRoot: repo, name, baseRef: "HEAD", ...options });
+  }
+
+  async function commitFiles(files: Record<string, string>, message = "fixture") {
+    for (const [file, contents] of Object.entries(files)) {
+      await writeFile(repo, file, contents);
+    }
+    await git(repo, "add", ...Object.keys(files));
+    await git(repo, "commit", "-m", message);
+    return git(repo, "rev-parse", "HEAD");
+  }
+
+  async function configureIncludes(ignored: string, included = ignored) {
+    await writeFile(repo, ".gitignore", ignored);
+    await writeFile(repo, ".worktreeinclude", included);
+  }
+
+  async function expectNoCheckout(name: string) {
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(name);
+    expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+  }
+
+  function expectOutcome(id: string, outcome: string, removedAt?: number) {
+    expect(getRegistryWorktree(env, id)).toMatchObject({
+      removedAt,
+      runEndCleanup: { outcome, at: now },
+    });
   }
 
   async function materializeDownstreamFixture(
@@ -177,11 +183,8 @@ describe("ManagedWorktreeService", () => {
   it("creates a worktree from a remote-only branch ref returned by the picker", async () => {
     await addRemote(root, repo);
     await git(repo, "checkout", "-b", "remote-only");
-    await writeFile(repo, "remote-only.txt", "remote\n");
-    await git(repo, "add", "remote-only.txt");
-    await git(repo, "commit", "-m", "remote only commit");
+    const remoteCommit = await commitFiles({ "remote-only.txt": "remote\n" });
     await git(repo, "push", "origin", "remote-only");
-    const remoteCommit = await git(repo, "rev-parse", "HEAD");
     await git(repo, "checkout", "main");
     await git(repo, "branch", "-D", "remote-only");
 
@@ -195,77 +198,46 @@ describe("ManagedWorktreeService", () => {
     ).toBe("origin/remote-only");
   });
 
-  it("normalizes dashed refs and revision expressions before creating branches", async () => {
-    const initialCommit = await git(repo, "rev-parse", "HEAD");
-    await writeFile(repo, "history.txt", "second\n");
-    await git(repo, "add", "history.txt");
-    await git(repo, "commit", "-m", "second commit");
-    const secondCommit = await git(repo, "rev-parse", "HEAD");
-    await fs.appendFile(path.join(repo, "history.txt"), "third\n");
-    await git(repo, "add", "history.txt");
-    await git(repo, "commit", "-m", "third commit");
-    const thirdCommit = await git(repo, "rev-parse", "HEAD");
-    await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
-    await git(repo, "reset", "--hard", initialCommit);
-
-    const fromRef = await create("dashed-ref", { baseRef: "--force" });
-    const fromExpression = await create("dashed-expression", { baseRef: "--force~1" });
-
-    expect(fromRef.baseRef).toBe("--force");
-    expect(await git(fromRef.path, "rev-parse", "HEAD")).toBe(thirdCommit);
-    expect(fromExpression.baseRef).toBe("--force~1");
-    expect(await git(fromExpression.path, "rev-parse", "HEAD")).toBe(secondCommit);
-  });
-
-  it("preserves Git's bare-dash previous-checkout shorthand", async () => {
+  it.each([
+    ["dashed ref", "--force", "tip"],
+    ["dashed revision expression", "--force~1", "parent"],
+    ["previous-checkout shorthand", "-", "tip"],
+  ] as const)("creates from a %s", async (_kind, baseRef, target) => {
     await git(repo, "checkout", "-b", "previous");
-    await writeFile(repo, "previous.txt", "previous\n");
-    await git(repo, "add", "previous.txt");
-    await git(repo, "commit", "-m", "previous checkout commit");
-    const previousCommit = await git(repo, "rev-parse", "HEAD");
+    const secondCommit = await commitFiles({ "history.txt": "second\n" });
+    const thirdCommit = await commitFiles({ "history.txt": "second\nthird\n" });
+    await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
     await git(repo, "checkout", "main");
-
-    const created = await create("previous-checkout", { baseRef: "-" });
-
-    expect(created.baseRef).toBe("-");
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(previousCommit);
-  });
-
-  it("rejects ambiguous dashed refs instead of choosing by ref precedence", async () => {
-    const initialCommit = await git(repo, "rev-parse", "HEAD");
-    await writeFile(repo, "tag.txt", "tag\n");
-    await git(repo, "add", "tag.txt");
-    await git(repo, "commit", "-m", "tag candidate");
-    const tagCommit = await git(repo, "rev-parse", "HEAD");
-    await git(repo, "reset", "--hard", initialCommit);
-    await writeFile(repo, "branch.txt", "branch\n");
-    await git(repo, "add", "branch.txt");
-    await git(repo, "commit", "-m", "branch candidate");
-    const branchCommit = await git(repo, "rev-parse", "HEAD");
-    await git(repo, "update-ref", "refs/tags/--ambiguous", tagCommit);
-    await git(repo, "update-ref", "refs/heads/--ambiguous", branchCommit);
-    await git(repo, "config", "core.warnAmbiguousRefs", "false");
-
-    await expect(create("ambiguous-ref", { baseRef: "--ambiguous" })).rejects.toThrow(
-      InvalidWorktreeBaseRefError,
+    const created = await create("normalized-ref", { baseRef });
+    expect(created.baseRef).toBe(baseRef);
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(
+      target === "parent" ? secondCommit : thirdCommit,
     );
-
-    expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
-    expect(await service.list()).toEqual([]);
   });
 
-  it("rejects absent dashed base --orphan without creating worktree state", async () => {
-    const baseRef = "--orphan";
-    const before = await git(repo, "worktree", "list", "--porcelain");
-    const name = baseRef.slice(2);
-
-    await expect(create(name, { baseRef })).rejects.toThrow(InvalidWorktreeBaseRefError);
-
-    expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
-    expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
-    expect(await service.list()).toEqual([]);
-    await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual([]);
-  });
+  it.each(["--ambiguous", "--orphan"])(
+    "rejects invalid dashed base %s without state",
+    async (baseRef) => {
+      if (baseRef === "--ambiguous") {
+        const initialCommit = await git(repo, "rev-parse", "HEAD");
+        const tagCommit = await commitFiles({ "tag.txt": "tag\n" });
+        await git(repo, "reset", "--hard", initialCommit);
+        const branchCommit = await commitFiles({ "branch.txt": "branch\n" });
+        await git(repo, "update-ref", `refs/tags/${baseRef}`, tagCommit);
+        await git(repo, "update-ref", `refs/heads/${baseRef}`, branchCommit);
+        await git(repo, "config", "core.warnAmbiguousRefs", "false");
+      }
+      const name = baseRef.slice(2);
+      const before = await git(repo, "worktree", "list", "--porcelain");
+      await expect(create(name, { baseRef })).rejects.toThrow(InvalidWorktreeBaseRefError);
+      expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
+      expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+      expect(await service.list()).toEqual([]);
+      await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual(
+        [],
+      );
+    },
+  );
 
   it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
     await create("shared-name", { ownerKind: "session", ownerId: "agent:main:dashboard:one" });
@@ -273,7 +245,6 @@ describe("ManagedWorktreeService", () => {
       create("shared-name", { ownerKind: "session", ownerId: "agent:main:dashboard:two" }),
     ).rejects.toThrow(/already in use by session/);
     await expect(create("shared-name")).rejects.toThrow(/already in use by session/);
-    // The rightful owner still reuses its record.
     const reused = await create("shared-name", {
       ownerKind: "session",
       ownerId: "agent:main:dashboard:one",
@@ -339,14 +310,12 @@ describe("ManagedWorktreeService", () => {
         ["refs/remotes/origin/main", remoteCommit],
         [30_000, 60_000],
       );
-      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
-      expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
+      await expectNoCheckout("stale-remote");
     },
   );
 
   it("copies included ignored regular files independently, including large literal-tilde paths and hardlinks, without following symlinks", async () => {
-    await writeFile(repo, ".gitignore", "~/\nlinked\nlinked-dir/\n");
-    await writeFile(repo, ".worktreeinclude", "~/*.txt\nlinked\nlinked-dir/**\n");
+    await configureIncludes("~/\nlinked\nlinked-dir/\n", "~/*.txt\nlinked\nlinked-dir/**\n");
     await fs.mkdir(path.join(repo, "~"));
     const contents = Buffer.alloc(17 * 1024 * 1024, "x");
     await fs.writeFile(path.join(repo, "~", "keep.txt"), contents);
@@ -374,14 +343,13 @@ describe("ManagedWorktreeService", () => {
     expect(
       Buffer.compare(await fs.readFile(path.join(created.path, "~", "linked.txt")), contents),
     ).toBe(0);
-    await expectMissing(fs.stat(path.join(created.path, "~", "skip.bin")));
-    await expectMissing(fs.stat(path.join(created.path, "linked")));
-    await expectMissing(fs.stat(path.join(created.path, "linked-dir", "escape.txt")));
+    for (const file of ["~/skip.bin", "linked", "linked-dir/escape.txt"]) {
+      await expectMissing(fs.stat(path.join(created.path, file)));
+    }
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
-    await writeFile(repo, ".gitignore", "settings.local\n");
-    await writeFile(repo, ".worktreeinclude", "settings.local\n");
+    await configureIncludes("settings.local\n");
     const source = path.join(repo, "settings.local");
     await fs.writeFile(source, "included bytes\n");
     const outside = path.join(root, "outside.txt");
@@ -409,8 +377,10 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {
-    await writeFile(repo, ".gitignore", "ignored.txt\npresent.env\ndeleted.env\n");
-    await writeFile(repo, ".worktreeinclude", "present.env\ndeleted.env\n");
+    await configureIncludes(
+      "ignored.txt\npresent.env\ndeleted.env\n",
+      "present.env\ndeleted.env\n",
+    );
     for (const file of ["assumed.txt", "skipped.txt", "deleted.txt", "tool.sh"]) {
       await writeFile(repo, file, "original\n");
     }
@@ -421,25 +391,13 @@ describe("ManagedWorktreeService", () => {
     for (const file of ["present.env", "deleted.env"]) {
       await writeFile(repo, file, "source value\n");
     }
-    const request = {
-      repoRoot: repo,
-      name: "roundtrip",
-      baseRef: "HEAD",
-      ownerKind: "workboard" as const,
-      ownerId: "card",
-    };
-    const created = await service.create(request);
+    const owner = { ownerKind: "workboard" as const, ownerId: "card" };
+    const created = await create("roundtrip", owner);
     const originalHead = await git(created.path, "rev-parse", "HEAD");
     await git(created.path, "update-index", "--assume-unchanged", "assumed.txt");
     await git(created.path, "update-index", "--skip-worktree", "skipped.txt", "deleted.txt");
-    for (const file of [
-      "README.md",
-      "assumed.txt",
-      "skipped.txt",
-      "untracked.txt",
-      "ignored.txt",
-      "present.env",
-    ]) {
+    const localFiles = ["README.md", "assumed.txt", "skipped.txt", "untracked.txt", "present.env"];
+    for (const file of [...localFiles, "ignored.txt"]) {
       await writeFile(created.path, file, `${file} local\n`);
     }
     await fs.chmod(path.join(created.path, "tool.sh"), 0o644);
@@ -467,27 +425,19 @@ describe("ManagedWorktreeService", () => {
     await writeFile(repo, "present.env", "new source value\n");
     now += IDLE_GC_MS + 1;
     const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
-    const restored = await service.create({ ...request, baseRef: created.branch });
-    expect(restored.id).toBe(created.id);
+    const restored = await create("roundtrip", { ...owner, baseRef: created.branch });
+    expect(restored).toMatchObject({ id: created.id, removedAt: undefined, lastActiveAt: now });
     expectCheckoutTimeouts(commandSpy, [
       originalHead,
       await git(repo, "rev-parse", removed.snapshotRef!),
     ]);
-    expect(restored.removedAt).toBeUndefined();
-    expect(restored.lastActiveAt).toBe(now);
     expect((await service.gc()).removed).toEqual([]);
     expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
     expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
     expect(await git(restored.path, "log", "--format=%s", created.branch)).not.toContain(
       "OpenClaw worktree snapshot",
     );
-    for (const file of [
-      "README.md",
-      "assumed.txt",
-      "skipped.txt",
-      "untracked.txt",
-      "present.env",
-    ]) {
+    for (const file of localFiles) {
       expect(await readText(restored.path, file)).toBe(`${file} local\n`);
     }
     expect((await fs.stat(path.join(restored.path, "present.env"))).mode & 0o7777).toBe(mode);
@@ -504,8 +454,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rejects a snapshot hidden by the shallow clone boundary", async () => {
-    await writeFile(repo, "README.md", "second commit\n");
-    await git(repo, "commit", "-am", "second");
+    await commitFiles({ "README.md": "second commit\n" });
     const remote = await addRemote(root, repo);
     const clone = path.join(root, "shallow");
     await git(root, "clone", "--depth=1", pathToFileURL(remote).href, clone);
@@ -541,10 +490,7 @@ describe("ManagedWorktreeService", () => {
   it.skipIf(process.platform === "win32")(
     "retains a provisioned file replaced with a symlink",
     async () => {
-      await writeFile(repo, ".gitignore", ".env.local\n");
-      await writeFile(repo, ".worktreeinclude", ".env.local\n");
-      await git(repo, "add", ".gitignore", ".worktreeinclude");
-      await git(repo, "commit", "-m", "provisioning");
+      await commitFiles({ ".gitignore": ".env.local\n", ".worktreeinclude": ".env.local\n" });
       const source = path.join(repo, ".env.local");
       await fs.writeFile(source, "source\n");
       await addRemote(root, repo);
@@ -594,8 +540,7 @@ describe("ManagedWorktreeService", () => {
 
       expect(existsSync(closed)).toBe(true);
 
-      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("closed-authority");
-      expect(await git(repo, "branch", "--list", "openclaw/closed-authority")).toBe("");
+      await expectNoCheckout("closed-authority");
       expect(listRegistryWorktrees(env)).toEqual([]);
     });
 
@@ -612,14 +557,9 @@ describe("ManagedWorktreeService", () => {
       }).catch((error: unknown) => error);
       expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
       expect(contention).toMatchObject({ kind: "finalized" });
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
-      });
+      expectOutcome(created.id, "removed-lossless", now);
 
-      // A stale remover that aborted its claim writes retained/failed outcomes with
-      // the live-row condition (recordOutcome); against a finalized row it must be
-      // a no-op instead of replacing the winner's removed-lossless fact.
+      // A finalized row rejects a stale remover's post-abort outcome.
       await updateRegistryWorktree(
         env,
         created.id,
@@ -627,10 +567,7 @@ describe("ManagedWorktreeService", () => {
         { onlyIfLive: true },
       );
 
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
-      });
+      expectOutcome(created.id, "removed-lossless", now);
     });
 
     it("rejects stale lifecycle writes and records a newer post-restore cleanup outcome", async () => {
@@ -643,16 +580,10 @@ describe("ManagedWorktreeService", () => {
       });
 
       const restored = await service.restore({ id: created.id });
-      // The pinned clock still requires a fresh activity stamp after restore.
-      expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
-      // Restore starts a new lifecycle: the stale removal outcome must not show
-      // on the now-live row.
-      expect(restored.runEndCleanup).toBeUndefined();
+      expect(restored).toMatchObject({ lastActiveAt: staleActiveAt + 1, runEndCleanup: undefined });
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
 
-      // A stale remover from the pre-restore lifecycle writes with the activity
-      // stamp it observed (recordOutcome's condition); against the revived row it
-      // must be a no-op instead of stamping a prior-lifecycle outcome.
+      // A revived row rejects the prior lifecycle's activity stamp.
       await updateRegistryWorktree(
         env,
         created.id,
@@ -665,16 +596,12 @@ describe("ManagedWorktreeService", () => {
       await service.acquire(created.id);
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
-      });
+      expectOutcome(created.id, "retained-dirty");
       expect(await readText(restored.path, "untracked.txt")).toBe("retain me\n");
     });
 
     it("retains an ignored nested linked repository at run end", async () => {
-      await writeFile(repo, ".gitignore", "nested/\n");
-      await git(repo, "add", ".gitignore");
-      await git(repo, "commit", "-m", "ignore nested checkout state");
+      await commitFiles({ ".gitignore": "nested/\n" });
       await git(repo, "push", "origin", "main");
 
       const created = await materialize("nested-linked");
@@ -689,10 +616,7 @@ describe("ManagedWorktreeService", () => {
 
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
-      });
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expectOutcome(created.id, "retained-dirty");
       expect(await fs.readFile(localState, "utf8")).toBe("keep nested checkout state\n");
       expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
     });
@@ -720,11 +644,7 @@ describe("ManagedWorktreeService", () => {
 
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
-      const retained = getRegistryWorktree(env, created.id);
-      expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-busy", at: now },
-      });
-      expect(retained?.removedAt).toBeUndefined();
+      expectOutcome(created.id, "retained-busy");
       await fs.access(created.path);
       await lease.release();
     });
@@ -755,7 +675,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   describe("missing-path observations", () => {
-    const completedGcResult = {
+    const completedGcResult = (repoRoot: string, orphansRetired = 0) => ({
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
@@ -767,10 +687,12 @@ describe("ManagedWorktreeService", () => {
       failedCount: 0,
       protectedCount: 0,
       protectionReasons: {},
-      orphansRetired: 0,
+      orphansRetired,
       retiredCheckoutPaths: [],
       limitsSatisfied: true,
-    };
+      packsRemoved: 0,
+      gitMaintenance: { repoRoot, stage: "completed", packsBefore: 0, packsAfter: 0 },
+    });
     async function fixture(name: string, repoRoot = repo) {
       const created = await materializeDownstreamFixture(name, { repoRoot });
       const identity = await service.resolveRepositoryIdentity(repoRoot);
@@ -807,17 +729,7 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({
-        ...completedGcResult,
-        orphansRetired: 1,
-        packsRemoved: 0,
-        gitMaintenance: {
-          repoRoot: created.repoRoot,
-          stage: "completed",
-          packsBefore: 0,
-          packsAfter: 0,
-        },
-      });
+      expect(await service.gc()).toEqual(completedGcResult(created.repoRoot, 1));
       expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
     });
 
@@ -833,8 +745,10 @@ describe("ManagedWorktreeService", () => {
         await expect(gate.sampled.promise).resolves.toBe(false);
         const restored = await service.restore({ id: created.id });
         expect(restored.lastActiveAt).toBeGreaterThan(created.lastActiveAt);
-        expect(restored.repoRoot).toBe(created.repoRoot);
-        expect(restored.repoFingerprint).toBe(created.repoFingerprint);
+        expect(restored).toMatchObject({
+          repoRoot: created.repoRoot,
+          repoFingerprint: created.repoFingerprint,
+        });
         gate.resume.resolve();
         const result = await observing;
         expect(getRegistryWorktree(env, created.id)).toEqual(restored);
@@ -882,16 +796,7 @@ describe("ManagedWorktreeService", () => {
         const result = await observing;
         expect(getRegistryWorktree(env, created.id)).toEqual(rebound);
         expect(await readText(created.path, "README.md")).toBe("retained user changes\n");
-        expect(result).toEqual({
-          ...completedGcResult,
-          packsRemoved: 0,
-          gitMaintenance: {
-            repoRoot: liveIdentity.repoRoot,
-            stage: "completed",
-            packsBefore: 0,
-            packsAfter: 0,
-          },
-        });
+        expect(result).toEqual(completedGcResult(liveIdentity.repoRoot));
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();
