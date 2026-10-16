@@ -1,6 +1,7 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -40,27 +41,37 @@ vi.mock("./status.daemon.js", () => ({
   getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
 }));
 
-function requireProviderUsageCall(): {
-  timeoutMs?: number;
-  config?: unknown;
-  agentDir?: string;
-  providers?: string[];
-  auth?: Array<Record<string, unknown>>;
-} {
-  const call = mocks.loadProviderUsageSummary.mock.calls[0];
-  if (!call) {
-    throw new Error("expected provider usage summary call");
-  }
-  const params = call.at(0);
-  if (!params || typeof params !== "object") {
-    throw new Error("expected provider usage summary params");
-  }
-  return params as {
-    timeoutMs?: number;
-    config?: unknown;
-    agentDir?: string;
-    providers?: string[];
-    auth?: Array<Record<string, unknown>>;
+function usageParams(runtime: "codex" | "openclaw" = "codex") {
+  return {
+    ...createStatusGatewayProbeBudget(3456),
+    config: {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: { "openai/gpt-5.5": { agentRuntime: { id: runtime } } },
+        },
+      },
+    } satisfies OpenClawConfig,
+    agentDir: "/tmp/status-agent",
+  };
+}
+
+function gatewayParams(timeoutMs = 4321) {
+  return {
+    config: { gateway: {} },
+    ...createStatusGatewayProbeBudget(timeoutMs),
+    gatewayReachable: true,
+  };
+}
+
+function anthropicUsage() {
+  return { provider: "anthropic", displayName: "Claude", windows: [], error: "HTTP 429" };
+}
+function openaiUsage(usedPercent?: number) {
+  return {
+    provider: "openai",
+    displayName: "OpenAI",
+    windows: usedPercent === undefined ? [] : [{ label: "5h", usedPercent }],
   };
 }
 
@@ -124,57 +135,17 @@ describe("status-runtime-shared", () => {
           vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
           return {
             updatedAt: 1,
-            providers: [
-              {
-                provider: "anthropic",
-                displayName: "Claude",
-                windows: [],
-                error: "HTTP 429",
-              },
-            ],
+            providers: [anthropicUsage()],
           };
         })
         .mockResolvedValueOnce({
           updatedAt: 2,
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              windows: [{ label: "5h", usedPercent: 9 }],
-            },
-          ],
+          providers: [openaiUsage(9)],
         });
 
-      await expect(
-        resolveStatusUsageSummary({
-          ...createStatusGatewayProbeBudget(3456),
-          config: {
-            agents: {
-              defaults: {
-                model: { primary: "openai/gpt-5.5" },
-                models: {
-                  "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-                },
-              },
-            },
-          },
-          agentDir: "/tmp/status-agent",
-        }),
-      ).resolves.toEqual({
+      await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
         updatedAt: 1,
-        providers: [
-          {
-            provider: "anthropic",
-            displayName: "Claude",
-            windows: [],
-            error: "HTTP 429",
-          },
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [{ label: "5h", usedPercent: 9 }],
-          },
-        ],
+        providers: [anthropicUsage(), openaiUsage(9)],
       });
 
       expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
@@ -197,92 +168,33 @@ describe("status-runtime-shared", () => {
     mocks.loadProviderUsageSummary
       .mockResolvedValueOnce({
         updatedAt: 1,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [{ label: "5h", usedPercent: 22 }],
-          },
-        ],
+        providers: [openaiUsage(22)],
       })
       .mockResolvedValueOnce({
         updatedAt: 2,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [],
-          },
-        ],
+        providers: [openaiUsage()],
       });
 
-    await expect(
-      resolveStatusUsageSummary({
-        ...createStatusGatewayProbeBudget(3456),
-        config: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-              models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/status-agent",
-      }),
-    ).resolves.toEqual({
+    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
       updatedAt: 1,
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 22 }],
-        },
-      ],
+      providers: [openaiUsage(22)],
     });
   });
 
   it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
-    await resolveStatusUsageSummary({
-      ...createStatusGatewayProbeBudget(3456),
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-      agentDir: "/tmp/status-agent",
-    });
+    await resolveStatusUsageSummary(usageParams("openclaw"));
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
-    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+    expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
   });
 
   it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
     mocks.resolveModelAuthLabelAsync.mockReturnValue("api-key (openai:api)");
 
-    await resolveStatusUsageSummary({
-      ...createStatusGatewayProbeBudget(3456),
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5" },
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-            },
-          },
-        },
-      },
-      agentDir: "/tmp/status-agent",
-    });
+    await resolveStatusUsageSummary(usageParams());
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
-    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+    expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
     expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
       provider: "openai",
       acceptedProviderIds: ["openai"],
@@ -349,9 +261,7 @@ describe("status-runtime-shared", () => {
 
   it("passes gateway call overrides through the safe health path", async () => {
     await resolveStatusGatewayHealthSafe({
-      config: { gateway: {} },
-      ...createStatusGatewayProbeBudget(4321),
-      gatewayReachable: true,
+      ...gatewayParams(),
       callOverrides: {
         url: "ws://127.0.0.1:18789",
         token: "tok",
@@ -371,9 +281,7 @@ describe("status-runtime-shared", () => {
   it("requests the typed exporter stability projection", async () => {
     await expect(
       resolveStatusGatewayDiagnosticsSafe({
-        config: { gateway: {} },
-        ...createStatusGatewayProbeBudget(4321),
-        gatewayReachable: true,
+        ...gatewayParams(),
         type: "telemetry.exporter",
       }),
     ).resolves.toEqual({ ok: true, value: { ok: true } });
@@ -389,13 +297,7 @@ describe("status-runtime-shared", () => {
   it("preserves failed gateway diagnostics as a typed result", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("diagnostics probe timed out"));
 
-    await expect(
-      resolveStatusGatewayDiagnosticsSafe({
-        config: { gateway: {} },
-        ...createStatusGatewayProbeBudget(4321),
-        gatewayReachable: true,
-      }),
-    ).resolves.toEqual({
+    await expect(resolveStatusGatewayDiagnosticsSafe(gatewayParams())).resolves.toEqual({
       ok: false,
       error: "Error: diagnostics probe timed out",
     });

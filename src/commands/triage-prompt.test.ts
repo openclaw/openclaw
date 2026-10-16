@@ -2,15 +2,29 @@ import { describe, expect, it } from "vitest";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
 
+function contains(prompt: string, ...fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(prompt).toContain(fragment);
+  }
+}
+
+function excludes(prompt: string, ...fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(prompt).not.toContain(fragment);
+  }
+}
+
 describe("renderTriagePrompt", () => {
   const homeDir = "/home/triage-test";
   const redaction = {
     env: { HOME: homeDir },
     stateDir: `${homeDir}/.openclaw`,
   };
+  const render = (params: Partial<Parameters<typeof renderTriagePrompt>[0]>) =>
+    renderTriagePrompt({ findings: [], bundle: { kind: "skipped" }, redaction, ...params });
 
   it("redacts home and state paths across finding fields and diagnostics handoffs", () => {
-    const prompt = renderTriagePrompt({
+    const prompt = render({
       findings: [
         {
           checkId: `${homeDir}/checks/config`,
@@ -20,14 +34,13 @@ describe("renderTriagePrompt", () => {
         },
       ],
       bundle: { kind: "available", path: `${homeDir}/Downloads/diagnostics.zip` },
-      redaction,
     });
-
-    expect(prompt).toContain(
+    contains(
+      prompt,
       "[error] ~/checks/config: Config: $OPENCLAW_STATE_DIR/openclaw.json needs repair",
+      "Fix: Inspect ~/logs/gateway.log",
+      "Sanitized ZIP: ~/Downloads/diagnostics.zip",
     );
-    expect(prompt).toContain("Fix: Inspect ~/logs/gateway.log");
-    expect(prompt).toContain("Sanitized ZIP: ~/Downloads/diagnostics.zip");
     expect(prompt).not.toContain(homeDir);
   });
 
@@ -39,17 +52,13 @@ describe("renderTriagePrompt", () => {
       fixHint: "修".repeat(4_000),
     }));
 
-    const prompt = renderTriagePrompt({
+    const prompt = render({
       findings,
-      bundle: { kind: "skipped" },
-      redaction,
       updateFailure: { error: "Original update failure: " + "🦞".repeat(4_000) },
     });
 
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(8 * 1024);
     expect(prompt).toContain("Original update failure:");
-    // Every finding is either rendered or explicitly counted as omitted, and the
-    // trailing sections survive because findings are fitted to the byte budget.
     const rendered = prompt.match(/^- \[warning\]/gmu)?.length ?? 0;
     expect(rendered).toBeGreaterThan(0);
     expect(prompt).toContain(
@@ -61,22 +70,15 @@ describe("renderTriagePrompt", () => {
   });
 
   it("preserves deliberate stopped state in the repair goal", () => {
-    const prompt = renderTriagePrompt({
-      findings: [],
-      bundle: { kind: "skipped" },
-      redaction,
+    const prompt = render({
       failure: { kind: "update", phase: "build", error: "build failed", gateway: "preserve" },
     });
-    expect(prompt).toContain("Do not start or restart the Gateway");
-    expect(prompt).toContain("remaining blocker");
+    contains(prompt, "Do not start or restart the Gateway", "remaining blocker");
   });
 
   it("keeps the failed attempt ahead of healthy Doctor results and sanitizes its evidence", () => {
     const secret = "sk-test-update-triage-secret-1234567890";
-    const prompt = renderTriagePrompt({
-      findings: [],
-      bundle: { kind: "skipped" },
-      redaction,
+    const prompt = render({
       updateFailure: {
         result: {
           status: "error",
@@ -94,44 +96,26 @@ describe("renderTriagePrompt", () => {
     });
 
     expect(prompt.indexOf("## Failed update")).toBeLessThan(prompt.indexOf("## Doctor findings"));
-    expect(prompt).toContain("npm install failed");
-    expect(prompt).toContain("2026.8.1");
-    expect(prompt).toContain("2026.9.1");
-    expect(prompt).toContain('"serviceRestartSafe":false');
-    expect(prompt).toContain("No advisory doctor findings were reported.");
-    expect(prompt).not.toContain(secret);
-    expect(prompt).not.toContain(homeDir);
+    contains(prompt, "npm install failed", "2026.8.1", "2026.9.1", '"serviceRestartSafe":false');
+    contains(prompt, "No advisory doctor findings were reported.");
+    excludes(prompt, secret, homeDir);
   });
 
-  it.each<{ label: string; bundle: TriageBundle; currentFailure: boolean }>([
-    {
-      label: "current startup and diagnostics archive",
-      bundle: { kind: "available", path: `${homeDir}/${"修".repeat(2_000)}/diagnostics.zip` },
-      currentFailure: true,
-    },
-    {
-      label: "current startup and diagnostics failure",
-      bundle: { kind: "unavailable", reason: `Export failed: ${"🦞".repeat(2_000)}` },
-      currentFailure: true,
-    },
-  ])("fits complete failure evidence and handoff details: $label", ({ bundle, currentFailure }) => {
+  it.each<TriageBundle>([
+    { kind: "available", path: `${homeDir}/${"修".repeat(2_000)}/diagnostics.zip` },
+    { kind: "unavailable", reason: `Export failed: ${"🦞".repeat(2_000)}` },
+  ])("fits complete failure evidence and handoff details: $kind", (bundle) => {
     const noisy = '\\"'.repeat(1_000);
-    const prompt = renderTriagePrompt({
-      findings: [],
+    const prompt = render({
       bundle,
-      redaction,
-      ...(currentFailure
-        ? {
-            failure: {
-              kind: "gateway-startup" as const,
-              phase: "startup",
-              error: `Current startup failure: token=sk-test-triage-secret-1234567890 ${"🦞".repeat(4_000)}`,
-              installationRoot: `${homeDir}/installation/${"修".repeat(2_000)}`,
-              expectedVersion: "2026.8.31",
-              gateway: "verify-running" as const,
-            },
-          }
-        : {}),
+      failure: {
+        kind: "gateway-startup",
+        phase: "startup",
+        error: `Current startup failure: token=sk-test-triage-secret-1234567890 ${"🦞".repeat(4_000)}`,
+        installationRoot: `${homeDir}/installation/${"修".repeat(2_000)}`,
+        expectedVersion: "2026.8.31",
+        gateway: "verify-running",
+      },
       updateFailure: {
         error: `Original update failure ${noisy}`,
         result: {
@@ -186,30 +170,19 @@ describe("renderTriagePrompt", () => {
     expect(recorded.omittedDetails).toBeGreaterThan(0);
     expect(Buffer.byteLength(details)).toBeLessThanOrEqual(4 * 1024);
     expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(8 * 1024);
-    if (currentFailure) {
-      expect(prompt.indexOf("## Triggering failure")).toBeLessThan(
-        prompt.indexOf("## Failed update"),
-      );
-      expect(prompt).toContain("- Kind: gateway-startup");
-      expect(prompt).toContain("- Phase: startup");
-      expect(prompt).toContain("Current startup failure:");
-      expect(prompt).not.toContain("sk-test-triage-secret-1234567890");
-      expect(prompt).toContain("- Installation: ~/installation/");
-      expect(prompt).toContain("- Expected version: 2026.8.31");
-    }
-    expect(prompt).toContain("## Diagnostics bundle");
-    expect(prompt).toContain("## Privacy");
-    expect(prompt).toContain("local paths are relative to `~` or `$OPENCLAW_STATE_DIR`.");
-    expect(prompt).not.toContain("Prompt truncated");
-    expect(prompt).not.toContain("\uFFFD");
+    expect(prompt.indexOf("## Triggering failure")).toBeLessThan(
+      prompt.indexOf("## Failed update"),
+    );
+    contains(prompt, "- Kind: gateway-startup", "- Phase: startup", "Current startup failure:");
+    contains(prompt, "- Installation: ~/installation/", "- Expected version: 2026.8.31");
+    contains(prompt, "## Diagnostics bundle", "## Privacy");
+    contains(prompt, "local paths are relative to `~` or `$OPENCLAW_STATE_DIR`.");
+    excludes(prompt, "sk-test-triage-secret-1234567890", "Prompt truncated", "\uFFFD");
   });
 
-  it.each([
-    {
-      bundle: { kind: "deferred" as const },
-      text: "Diagnostics export deferred to the repair agent during update recovery.",
-    },
-  ])("explains absent diagnostics archives: $text", ({ bundle, text }) => {
-    expect(renderTriagePrompt({ findings: [], bundle, redaction })).toContain(text);
+  it("explains deferred diagnostics archives", () => {
+    expect(render({ bundle: { kind: "deferred" } })).toContain(
+      "Diagnostics export deferred to the repair agent during update recovery.",
+    );
   });
 });

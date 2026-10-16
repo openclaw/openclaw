@@ -1,4 +1,3 @@
-// Status overview row tests cover status-all overview values, update metadata, and display rows.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import * as memoryStatus from "../memory-host-sdk/status.js";
@@ -59,7 +58,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
   });
 
-  it.each(["default"])("preserves service inspection failures in %s output", (mode) => {
+  it("preserves service inspection failures in default output", () => {
     const params = createStatusCommandOverviewRowsParams();
     const service = {
       label: "LaunchAgent",
@@ -77,15 +76,7 @@ describe("status-overview-rows", () => {
         runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
       },
     };
-    const rows =
-      mode === "default"
-        ? buildStatusCommandOverviewRows({ ...params, surface })
-        : buildStatusAllOverviewRows({
-            ...params,
-            surface,
-            configPath: "/tmp/openclaw.json",
-            secretDiagnosticsCount: 0,
-          });
+    const rows = buildStatusCommandOverviewRows({ ...params, surface });
 
     expect(findRowValue(rows, "Gateway service")).toBe(
       "LaunchAgent unknown (inspection failed: permission denied token=***)",
@@ -95,42 +86,30 @@ describe("status-overview-rows", () => {
     );
   });
 
-  it.each<{
-    label: string;
-    doNotTrack?: string;
-    noAutoUpdate?: string;
-    checkOnStart?: boolean;
-    expected: string;
-  }>([
-    {
-      label: "explicitly enabled",
-      expected: "ok(enabled · anonymous feature stats)",
-    },
-    {
-      label: "blocked by a trimmed DO_NOT_TRACK value",
-      doNotTrack: " TRUE ",
-      expected: "muted(disabled (DO_NOT_TRACK))",
-    },
-  ])(
-    "shows telemetry state when $label",
-    ({ doNotTrack, noAutoUpdate, checkOnStart = true, expected }) => {
-      const params = createStatusCommandOverviewRowsParams();
-      const rows = buildStatusCommandOverviewRows({
-        ...params,
-        env: {
-          ...params.env,
-          DO_NOT_TRACK: doNotTrack,
-          OPENCLAW_NO_AUTO_UPDATE: noAutoUpdate,
+  it.each([
+    [undefined, "ok(enabled · anonymous feature stats)"],
+    [" TRUE ", "muted(disabled (DO_NOT_TRACK))"],
+  ])("shows telemetry state for DO_NOT_TRACK=%s", (doNotTrack, expected) => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows({
+      ...params,
+      env: {
+        ...params.env,
+        DO_NOT_TRACK: doNotTrack,
+        OPENCLAW_NO_AUTO_UPDATE: undefined,
+      },
+      surface: {
+        ...params.surface,
+        cfg: {
+          ...params.surface.cfg,
+          telemetry: { enabled: true },
+          update: { checkOnStart: true },
         },
-        surface: {
-          ...params.surface,
-          cfg: { ...params.surface.cfg, telemetry: { enabled: true }, update: { checkOnStart } },
-        },
-      });
+      },
+    });
 
-      expect(findRowValue(rows, "Telemetry")).toBe(expected);
-    },
-  );
+    expect(findRowValue(rows, "Telemetry")).toBe(expected);
+  });
 
   it("reports automatic update checks as disabled for Nix-managed installations", () => {
     const params = createStatusCommandOverviewRowsParams();
