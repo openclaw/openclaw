@@ -37,6 +37,7 @@ import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -350,10 +351,7 @@ function planTerminalCompletion(
   },
 ) {
   const params = context.options;
-  if (
-    currentEntry.pauseReason === "sessions_yield" &&
-    completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
-  ) {
+  if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
   const entry = structuredClone(currentEntry);
@@ -695,9 +693,17 @@ function planTerminalCompletion(
     }
   }
   if (entry.collect) {
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
-      entry: prepared.collectorSession?.entry,
-    });
+    updateSwarmCollectorCompletion(
+      entry,
+      params.getRuntimeConfig(),
+      { entry: prepared.collectorSession?.entry },
+      // A settled yield that kept a recorded outcome has its own result or failure; only the
+      // settlement that substituted the diagnostic error, because the row had no recorded
+      // outcome, is marked.
+      completeParams.settleYielded === true && currentEntry.execution.outcome === undefined
+        ? "yielded_without_result"
+        : undefined,
+    );
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }
