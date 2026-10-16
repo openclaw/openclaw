@@ -11,6 +11,8 @@ import {
 import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireMemorySearchDatabase } from "../memory-search-database.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
@@ -234,6 +236,37 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
       expect(rows()).toHaveLength(2);
       expect(keyword("orchid")).toEqual([{ path: "memory/orchid.md" }]);
     }));
+
+  it("routes PostgreSQL indexing reads through the publication owner while search stays refused", async () => {
+    const manager = new MemoryIndexDatabase(undefined, undefined, false, undefined, true, {
+      engine: "postgres",
+      hasIndex: true,
+      ftsAvailable: true,
+    });
+    const dispatch = vi
+      .spyOn(manager, "executePublication")
+      .mockImplementation(async (command, assertCurrent) => {
+        assertCurrent();
+        return backend.execute(command);
+      });
+    try {
+      const { result } = admitted(() => {
+        expect(publishInline(replacement("host-read"))).toMatchObject({ ok: true });
+        expect(() => requireMemorySearchDatabase(database)).toThrow(
+          "PostgreSQL memory indexing is unavailable",
+        );
+        return {
+          result: manager.read(
+            { type: "source.hash", input: { source: "memory", path: "memory/host-read.md" } },
+            () => {},
+          ),
+        };
+      });
+      expect(await result).toBe("host-read");
+    } finally {
+      dispatch.mockRestore();
+    }
+  });
 
   it("retains a private full reindex across short bindings and rolls back a refused commit", () =>
     admitted(() => {
