@@ -167,8 +167,9 @@ describe.skipIf(!connection)("PostgreSQL memory source indexing", () => {
       ).toEqual(before);
       expect(db.prepare("SELECT id FROM projection_changes").all()).toEqual([]);
       expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
+      const database = db;
       expect(() =>
-        db.runTransaction(() => {
+        database.runTransaction(() => {
           value.chunks = value.chunks.slice(0, 1);
           value.embeddings = [[0, 1, 0]];
           write();

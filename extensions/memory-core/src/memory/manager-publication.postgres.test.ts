@@ -238,6 +238,10 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
     }));
 
   it("routes PostgreSQL indexing reads through the publication owner while search stays refused", async () => {
+    const command = {
+      type: "source.hash",
+      input: { source: "memory", path: "memory/host-read.md" },
+    } as const;
     const manager = new MemoryIndexDatabase(undefined, undefined, false, undefined, true, {
       engine: "postgres",
       hasIndex: true,
@@ -245,7 +249,8 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
     });
     const dispatch = vi
       .spyOn(manager, "executePublication")
-      .mockImplementation(async (command, assertCurrent) => {
+      .mockImplementation(async (received, assertCurrent) => {
+        expect(received).toEqual(command);
         assertCurrent();
         return backend.execute(command);
       });
@@ -256,10 +261,7 @@ describe.skipIf(!connection)("PostgreSQL memory publication worker", () => {
           "PostgreSQL memory indexing is unavailable",
         );
         return {
-          result: manager.read(
-            { type: "source.hash", input: { source: "memory", path: "memory/host-read.md" } },
-            () => {},
-          ),
+          result: manager.read(command, () => {}),
         };
       });
       expect(await result).toBe("host-read");
