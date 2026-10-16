@@ -285,14 +285,14 @@ if (doctorDeadline || scenario === "borrowed-phase") {
   stubs.set(
     outputUrl,
     `export * from ${JSON.stringify(`${outputUrl}?fixture-original`)};
-import { captureUpdateFinalizationDoctorOutput as capture } from ${JSON.stringify(`${outputUrl}?fixture-original`)};
+import { streamUpdateFinalizationDoctorOutput as createOutput } from ${JSON.stringify(`${outputUrl}?fixture-original`)};
 import { advanceFinalizationFixtureClock, restoreFinalizationFixtureClock } from ${JSON.stringify(fixtureClockUrl)};
-export function captureUpdateFinalizationDoctorOutput(phase) {
-  const append = capture(phase);
+export function streamUpdateFinalizationDoctorOutput(phase) {
+  const observer = createOutput(phase);
   const output = { stdout: '', stderr: '' };
   let ready = false;
-  return append && ((chunk, stream) => {
-    append(chunk, stream);
+  return { ...observer, onOutputChunk(chunk, stream) {
+    observer.onOutputChunk(chunk, stream);
     output[stream] += chunk.toString();
     if (!ready && ${
       doctorDeadline
@@ -302,7 +302,7 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
       ready = true;
       ${doctorDeadline ? "advanceFinalizationFixtureClock(1_000);" : "restoreFinalizationFixtureClock();"}
     }
-  });
+  }};
 }`,
   );
 }

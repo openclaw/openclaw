@@ -162,8 +162,9 @@ async function main() {
   if (mode === "baseline") {
     const installedVersion = readJson(path.join(packageRoot, "package.json")).version;
     const currentCronBaseline =
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-owner-doctor" &&
-      installedVersion === "2026.9.7";
+      ["cron-owner-doctor", "repair-progress"].includes(
+        process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO,
+      ) && installedVersion === "2026.9.7";
     const published = currentCronBaseline
       ? {
           version: "2026.9.7",

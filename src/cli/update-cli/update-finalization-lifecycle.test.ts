@@ -21,7 +21,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import * as cliExit from "../one-shot-exit.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
-import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
+import { streamUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 const dirs = createTempDirTracker();
 let stderrWrite: MockInstance<typeof process.stderr.write>;
@@ -443,7 +443,7 @@ it.each([false, true])(
     const custodyReady = createDeferredCore();
     const workEntered = createDeferredCore<{
       signal: AbortSignal;
-      capture: NonNullable<ReturnType<typeof captureUpdateFinalizationDoctorOutput>>;
+      capture: ReturnType<typeof streamUpdateFinalizationDoctorOutput>["onOutputChunk"];
     }>();
     const settled = createDeferredCore();
     let finished = false;
@@ -451,7 +451,7 @@ it.each([false, true])(
       lifecycle.run(
         "doctor",
         async ({ signal }) => {
-          const capture = captureUpdateFinalizationDoctorOutput("pre-plugin")!;
+          const capture = streamUpdateFinalizationDoctorOutput("pre-plugin").onOutputChunk;
           capture(Buffer.from("STEP active fixture-validation"), "stderr");
           workEntered.resolve({ signal, capture });
           await settled.promise;

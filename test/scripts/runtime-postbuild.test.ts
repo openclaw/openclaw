@@ -1,5 +1,6 @@
 // Runtime Postbuild tests cover runtime postbuild script behavior.
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -690,17 +691,193 @@ describe("runtime postbuild static assets", () => {
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
-      'export * from "./runtime-model-auth.runtime-XyZ987.js";\n',
+    expect(
+      await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8"),
+    ).toContain("export const auth = true;\n");
+    expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toContain(
+      "export const tts = true;\n",
     );
-    expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toBe(
-      'export * from "./runtime-tts.runtime-AbCd1234.mjs";\n',
-    );
-    expect(await fs.readFile(path.join(distDir, "dispatch.contract.js"), "utf8")).toBe(
-      'export * from "./dispatch.contract-AbCd1234.mjs";\n',
+    expect(await fs.readFile(path.join(distDir, "dispatch.contract.js"), "utf8")).toContain(
+      "export const dispatch = true;\n",
     );
     for (const fileName of ["library.js", "runtime-tts.runtime.mjs", "dispatch.contract.mjs"]) {
       await expectPathMissing(path.join(distDir, fileName));
+    }
+  });
+
+  it("preserves lazy export identity and one evaluation after promotion and rerun", async () => {
+    const rootDir = createTempDir("openclaw-runtime-promotion-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir);
+    const files = {
+      "package.json": '{"type":"module"}\n',
+      "dist/counter.mjs": "export const state = { evaluations: 0 };\n",
+      "dist/owned.runtime-Hash111.mjs":
+        'import { state } from "./counter.mjs"; state.evaluations++;\n' +
+        "export { state }; export let value = 1; export function advance() { value++; }\n",
+      "dist/eager.mjs": 'export * from "./owned.runtime-Hash111.mjs";\n',
+      "dist/lazy.mjs": 'export const load = () => import("./owned.runtime-Hash111.mjs");\n',
+    };
+    for (const [name, source] of Object.entries(files)) {
+      await fs.writeFile(path.join(rootDir, name), source);
+    }
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+    await expectPathMissing(path.join(distDir, "owned.runtime-Hash111.mjs"));
+    const before = await fs.readFile(path.join(distDir, "owned.runtime.js"), "utf8");
+    const eager = await import(pathToFileURL(path.join(distDir, "eager.mjs")).href);
+    const loader = await import(pathToFileURL(path.join(distDir, "lazy.mjs")).href);
+    const lazy = await loader.load();
+    expect(Object.keys(lazy).toSorted()).toEqual(["advance", "state", "value"]);
+    expect(lazy.state).toBe(eager.state);
+    expect(lazy.advance).toBe(eager.advance);
+    expect(lazy.state.evaluations).toBe(1);
+    eager.advance();
+    expect(lazy.value).toBe(2);
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+    expect(await fs.readFile(path.join(distDir, "owned.runtime.js"), "utf8")).toBe(before);
+    expect(listCoreRuntimePostBuildOutputs({ rootDir })).toContain("dist/owned.runtime.js");
+    expect((await loader.load()).state.evaluations).toBe(1);
+  });
+
+  it.each([1, 2])("refuses %i re-emitted owners beside a promoted entry", async (count) => {
+    const rootDir = createTempDir("openclaw-runtime-reemitted-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir);
+    await fs.writeFile(
+      path.join(distDir, "value.runtime-OldHash.mjs"),
+      "export const value = 1;\n",
+    );
+    writeStableRootRuntimeAliases({ rootDir });
+    const stable = await fs.readFile(path.join(distDir, "value.runtime.js"), "utf8");
+    for (let index = 0; index < count; index++) {
+      await fs.writeFile(
+        path.join(distDir, `value.runtime-NewHash${index}.mjs`),
+        "export const value = 2;\n",
+      );
+    }
+    for (const action of [
+      rewriteRootRuntimeImportsToStableAliases,
+      writeStableRootRuntimeAliases,
+    ]) {
+      expect(() => action({ rootDir })).toThrow(/collides with emitted chunks.*rebuild dist/u);
+    }
+    expect(await fs.readFile(path.join(distDir, "value.runtime.js"), "utf8")).toBe(stable);
+    expect(await fs.readFile(path.join(distDir, "value.runtime-NewHash0.mjs"), "utf8")).toBe(
+      "export const value = 2;\n",
+    );
+  });
+
+  it("carries ownership hashes through promotion and refuses a modified canonical entry", async () => {
+    const rootDir = createTempDir("openclaw-runtime-ownership-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir);
+    const source = "export const value = 1;\n";
+    const original = "owned.runtime-Hash111.mjs";
+    const stable = "owned.runtime.js";
+    const receipt = path.join(distDir, "runtime-dependency-ownership.json");
+    await fs.writeFile(path.join(distDir, original), source);
+    await fs.writeFile(
+      receipt,
+      JSON.stringify({
+        chunks: {
+          [original]: {
+            sha256: createHash("sha256").update(source).digest("hex"),
+            extensions: ["demo"],
+          },
+        },
+      }),
+    );
+    writeStableRootRuntimeAliases({ rootDir });
+    const canonical = await fs.readFile(path.join(distDir, stable), "utf8");
+    const expected = {
+      chunks: {
+        [stable]: {
+          sha256: createHash("sha256").update(canonical).digest("hex"),
+          extensions: ["demo"],
+        },
+      },
+    };
+    expect(JSON.parse(await fs.readFile(receipt, "utf8"))).toEqual(expected);
+    await expectPathMissing(path.join(distDir, original));
+    writeStableRootRuntimeAliases({ rootDir });
+    expect(JSON.parse(await fs.readFile(receipt, "utf8"))).toEqual(expected);
+    await fs.appendFile(path.join(distDir, stable), "export const changed = true;\n");
+    expect(() => writeStableRootRuntimeAliases({ rootDir })).toThrow(
+      "runtime dependency ownership no longer matches owned.runtime.js; rebuild dist",
+    );
+    expect(JSON.parse(await fs.readFile(receipt, "utf8"))).toEqual(expected);
+  });
+
+  it("retains native URLs, source maps, published paths and computed-prefix entries", async () => {
+    const rootDir = createTempDir("openclaw-runtime-retained-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir);
+    const published = previousReleaseInventory.releases
+      .flatMap(({ chunks }) => chunks)
+      .find(
+        ({ path: name }) =>
+          /\.(?:runtime|contract)-[A-Za-z0-9_-]+\.m?js$/u.test(name) && !name.startsWith("io."),
+      )?.path;
+    if (!published) {
+      throw new Error("Expected a recorded hashed runtime contract");
+    }
+    const sources = {
+      [published]: "export const value = 1;\n",
+      "meta.runtime-Hash111.mjs": "export const url = import.meta.url;\n",
+      "mapped.runtime-Hash222.mjs": "export const value = 2;\n//# sourceMappingURL=elsewhere.map\n",
+      "sidecar.runtime-Hash333.mjs": "export const value = 3;\n",
+      "sidecar.runtime-Hash333.mjs.map": '{"version":3}',
+      "call.runtime-Hash444.mjs": "export function callGateway() {}\n",
+      "text-transforms.runtime-Hash555.mjs": "export const value = 5;\n",
+      "io.runtime-Hash666.mjs":
+        "export function createConfigIO() {}\nexport function readConfigFileSnapshot() {}\n",
+    };
+    for (const [name, source] of Object.entries(sources)) {
+      await fs.writeFile(path.join(distDir, name), source);
+    }
+    writeStableRootRuntimeAliases({ rootDir });
+    for (const [name, source] of Object.entries(sources)) {
+      expect(await fs.readFile(path.join(distDir, name), "utf8")).toBe(source);
+    }
+    // The shipped fixture discovers a hashed call entry, rather than a literal import.
+    expect(
+      (await fs.readdir(distDir)).filter((name) =>
+        /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/u.test(name),
+      ),
+    ).toEqual(["call.runtime-Hash444.mjs"]);
+    expect(await fs.readFile(path.join(distDir, "io.runtime.js"), "utf8")).toContain(
+      "Published updater config reads run in the candidate's dependency tree.",
+    );
+  });
+
+  it("keeps hashed modules consumed by nested static, dynamic, require and URL edges", async () => {
+    const rootDir = createTempDir("openclaw-runtime-nested-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "nested"), { recursive: true });
+    const imports = {
+      static: 'export * from "../static.runtime-Hash111.mjs";\n',
+      dynamic: 'export const load = () => import("../dynamic.runtime-Hash111.mjs");\n',
+      require: 'const load = () => require("../require.runtime-Hash111.mjs");\n',
+      url: 'export const url = new URL("../url.runtime-Hash111.mjs", import.meta.url);\n',
+    };
+    for (const [name, source] of Object.entries(imports)) {
+      await fs.writeFile(
+        path.join(distDir, `${name}.runtime-Hash111.mjs`),
+        "export const value = 1;\n",
+      );
+      await fs.writeFile(path.join(distDir, "nested", `${name}.mjs`), source);
+    }
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+    for (const name of Object.keys(imports)) {
+      expect(await fs.readFile(path.join(distDir, `${name}.runtime-Hash111.mjs`), "utf8")).toBe(
+        "export const value = 1;\n",
+      );
+      expect(await fs.readFile(path.join(distDir, `${name}.runtime.js`), "utf8")).toBe(
+        `export * from "./${name}.runtime-Hash111.mjs";\n`,
+      );
     }
   });
 
@@ -759,6 +936,9 @@ describe("runtime postbuild static assets", () => {
     expect(mixed.named).toBe(true);
     expect(namedOnly.marker).toBe("export { marker as default }");
     expect(namedOnly).not.toHaveProperty("default");
+    expect(await fs.readFile(path.join(distDir, "mixed.contract-Hash222.mjs"), "utf8")).toContain(
+      "export default function run() {}",
+    );
 
     rewriteRootRuntimeImportsToStableAliases({ rootDir });
     writeStableRootRuntimeAliases({ rootDir });
@@ -824,6 +1004,13 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "install.runtime.js"), "utf8")).toBe(
       'export * from "./install.runtime-Aaa111.mjs";\n',
     );
+    writeStableRootRuntimeAliases({ rootDir });
+    expect(await fs.readFile(path.join(distDir, "install.runtime-Aaa111.mjs"), "utf8")).toContain(
+      "export const scanPackageInstallSource = true;",
+    );
+    expect(await fs.readFile(path.join(distDir, "install.runtime-Bbb222.js"), "utf8")).toBe(
+      "export const daemonInstall = true;\n",
+    );
   });
 
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
@@ -843,9 +1030,20 @@ describe("runtime postbuild static assets", () => {
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
-      'export * from "./runtime-model-auth.runtime-Wrap456.mjs";\n',
+    expect(
+      await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8"),
+    ).toContain(
+      'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
     );
+    await expectPathMissing(path.join(distDir, "runtime-model-auth.runtime-Wrap456.mjs"));
+    writeStableRootRuntimeAliases({ rootDir });
+    const stable = await import(
+      pathToFileURL(path.join(distDir, "runtime-model-auth.runtime.js")).href
+    );
+    const implementation = await import(
+      pathToFileURL(path.join(distDir, "runtime-model-auth.runtime-Impl123.js")).href
+    );
+    expect(stable.auth).toBe(implementation.auth);
   });
 
   it("ignores legacy wrappers to the stable runtime alias when choosing the implementation", async () => {
@@ -874,9 +1072,10 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "dispatch-OldHash.js"), "utf8")).toBe(
       ['const lazy = () => import("./runtime-plugins.runtime.js");', ""].join("\n"),
     );
-    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toBe(
-      'export * from "./runtime-plugins.runtime-NewHash.mjs";\n',
+    expect(await fs.readFile(path.join(distDir, "runtime-plugins.runtime.js"), "utf8")).toContain(
+      "export const ready = true;\n",
     );
+    await expectPathMissing(path.join(distDir, "runtime-plugins.runtime-NewHash.mjs"));
   });
 
   it.each(["js", "mjs"])("rewrites mixed runtime imports in a %s importer", async (extension) => {
@@ -1006,9 +1205,10 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "reply-dispatch-runtime-OldHash.js"), "utf8")).toBe(
       ['const dispatcher = () => import("./provider-dispatcher.runtime.js");', ""].join("\n"),
     );
-    expect(await fs.readFile(path.join(distDir, "provider-dispatcher.runtime.js"), "utf8")).toBe(
-      'export * from "./provider-dispatcher.runtime-NewHash.js";\n',
-    );
+    expect(
+      await fs.readFile(path.join(distDir, "provider-dispatcher.runtime.js"), "utf8"),
+    ).toContain('export * from "./provider-dispatcher-ImplHash.js";\n');
+    await expectPathMissing(path.join(distDir, "provider-dispatcher.runtime-NewHash.js"));
   });
 
   it("keeps hashed imports when a stable runtime alias would collide", async () => {

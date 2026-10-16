@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   plugins: vi.fn<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>(),
   restart: vi.fn(async () => "ok"),
   print: vi.fn(),
+  stderr: vi.fn(() => true),
   publication: vi.fn(
     async (
       params: { assertCurrent: () => void },
@@ -188,6 +189,7 @@ beforeEach(async () => {
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(process.stderr, "write").mockImplementation(mocks.stderr);
 });
 
 afterEach(async () => {
@@ -295,10 +297,9 @@ it("passes standalone repair ownership to both fresh Doctor phases through the p
     argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
   });
 
-  expect(
-    defaultRuntime.exit,
-    vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n"),
-  ).not.toHaveBeenCalledWith(1);
+  expect(defaultRuntime.exit, mocks.stderr.mock.calls.flat().join("\n")).not.toHaveBeenCalledWith(
+    1,
+  );
   expectSuccess("repair");
   expect(listUpdateRuns()).toEqual([
     expect.objectContaining({
@@ -332,10 +333,9 @@ async function events(): Promise<string[]> {
 
 function expectDoctorDiagnostics(): void {
   expect(defaultRuntime.log).not.toHaveBeenCalledWith(expect.stringContaining("doctor fixture"));
-  expect(defaultRuntime.error).toHaveBeenCalledWith("doctor fixture output");
-  expect(defaultRuntime.error).toHaveBeenCalledWith(
-    expect.stringContaining("doctor fixture diagnostic"),
-  );
+  for (const diagnostic of ["doctor fixture output", "doctor fixture diagnostic"]) {
+    expect(mocks.stderr).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+  }
 }
 
 function expectSuccess(lane: Lane, doctorExpected = true): void {

@@ -50,7 +50,6 @@ import {
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import { isPlainCommandExitFailure, type CommandOptions } from "../../process/exec.js";
-import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
@@ -77,7 +76,7 @@ import {
   stripGatewayServiceMarkerEnv,
   withUpdateEnv,
 } from "./update-command-service-env.js";
-import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
+import { streamUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   return await withUpdateEnv(
@@ -147,13 +146,16 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let doctorStep: UpdateStepResult | undefined;
   let doctorStartedAt: number | undefined;
   assertCurrent();
+  const doctorOutput = streamUpdateFinalizationDoctorOutput(params.phase);
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
       timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
       maxOutputBytes: 4 * 1024 * 1024,
+      // Keep credential prefixes until redaction if an output-limit stop clips a stream.
+      outputCapture: "head",
       terminateOnOutputLimit: true,
-      onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
+      onOutputChunk: doctorOutput.onOutputChunk,
       baseEnv,
       env: {
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
@@ -278,6 +280,15 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     if (doctorStep && doctorStartedAt !== undefined) {
       doctorStep.durationMs = Date.now() - doctorStartedAt;
     }
+    const output = result ?? (isRecord(failure?.error) ? failure.error : undefined);
+    // Failed children still carry raw traces; keep the timing owner's visibility policy.
+    doctorOutput.finish({
+      stdout: output?.stdout,
+      stderr:
+        typeof output?.stderr === "string"
+          ? sectionTiming.stripTrace(output.stderr)
+          : output?.stderr,
+    });
   }
   const commandFailure = failure;
   if (failure) {
@@ -452,14 +463,6 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
-    }
-    // Clack writes directly to the child's stdout. Preserve diagnostics on either
-    // exit path without letting them share the parent's JSON result stream.
-    if (typeof result?.stdout === "string" && result.stdout.trim()) {
-      defaultRuntime[params.json ? "error" : "log"](result.stdout.trimEnd());
-    }
-    if (typeof result?.stderr === "string" && result.stderr.trim()) {
-      defaultRuntime.error(result.stderr.trimEnd());
     }
   } catch (error) {
     failure = {
