@@ -330,12 +330,12 @@ describe("executeAgentTurn: primary probe routing", () => {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
       autoFallbackPrimaryProbe: undefined,
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-      hasSessionModelOverride: undefined,
-      modelOverrideSource: undefined,
-      hasAutoFallbackProvenance: undefined,
     });
+    expect(rechecked.authProfileId).toBeUndefined();
+    expect(rechecked.authProfileIdSource).toBeUndefined();
+    expect(rechecked.hasSessionModelOverride).toBeUndefined();
+    expect(rechecked.modelOverrideSource).toBeUndefined();
+    expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
   it("surfaces an empty heartbeat terminal result through the normal reply path", async () => {
