@@ -7,6 +7,8 @@ import {
   REPOSITORY,
   REPO_ROOT,
   actionRun,
+  fetchMain,
+  fields,
   closeoutMain,
   compatibilityInventory,
   githubRelease,
@@ -15,6 +17,8 @@ import {
   releaseFixture,
   step,
   workflowDispatch,
+  workflowRun,
+  workflowRuns,
 } from "./release-stable.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +27,6 @@ const fixture = () => {
   mkdirSync(scratch, { recursive: true });
   return releaseFixture(directories.make(".release-stable-post-test-", scratch));
 };
-const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const closeoutAssets = (
   names = [
     `openclaw-${RELEASE}-stable-main-closeout.json`,
@@ -174,35 +177,13 @@ describe("release:stable post-publication CLI", () => {
         "--ref",
         "main",
       ]),
-      step(
-        "gh",
-        [
-          "api",
-          "repos/openclaw/releases/actions/workflows/openclaw-macos-publish.yml/runs?event=workflow_dispatch&per_page=10",
-        ],
-        JSON.stringify({
-          workflow_runs: [
-            {
-              id: 202,
-              path: ".github/workflows/openclaw-macos-publish.yml",
-              event: "workflow_dispatch",
-              actor: { login: "release-test" },
-              head_branch: "main",
-              display_title: `Preflight v${RELEASE}`,
-              created_at: new Date(Date.now() + 1_000).toISOString(),
-            },
-            {
-              id: 203,
-              path: ".github/workflows/openclaw-macos-publish.yml",
-              event: "workflow_dispatch",
-              actor: { login: "release-test" },
-              head_branch: "main",
-              display_title: `Publish v${RELEASE}`,
-              created_at: new Date().toISOString(),
-            },
-          ],
-        }),
-      ),
+      workflowRuns("openclaw-macos-publish.yml", "openclaw/releases", [
+        {
+          ...workflowRun("openclaw-macos-publish.yml", 202, `Preflight v${RELEASE}`),
+          created_at: new Date(Date.now() + 1_000).toISOString(),
+        },
+        workflowRun("openclaw-macos-publish.yml", 203, `Publish v${RELEASE}`),
+      ]),
       step(
         "gh",
         ["api", "repos/openclaw/releases/actions/runs/203/pending_deployments"],
@@ -241,22 +222,16 @@ describe("release:stable post-publication CLI", () => {
       "openclaw/releases",
       "--ref",
       "main",
-      "-f",
-      `tag=v${RELEASE}`,
-      "-f",
-      `source_ref=release/${RELEASE}`,
-      "-f",
-      `public_release_branch=release/${RELEASE}`,
-      "-f",
-      "preflight_only=false",
-      "-f",
-      "smoke_test_only=false",
-      "-f",
-      "allow_late_calver_recovery=false",
-      "-f",
-      "preflight_run_id=202",
-      "-f",
-      "validate_run_id=201",
+      ...fields(
+        `tag=v${RELEASE}`,
+        `source_ref=release/${RELEASE}`,
+        `public_release_branch=release/${RELEASE}`,
+        "preflight_only=false",
+        "smoke_test_only=false",
+        "allow_late_calver_recovery=false",
+        "preflight_run_id=202",
+        "validate_run_id=201",
+      ),
     ]);
     expect(release.readState().macos).toMatchObject({
       validateRunId: "201",

@@ -30,6 +30,34 @@ const PARENT_RUN_ID = "67890";
 const PARENT_RUN_ATTEMPT = "2";
 const REF = `release-publish/${SHA.slice(0, 12)}-${RUN_ID}`;
 const FULL_REF = `refs/tags/${REF}`;
+const mainIdentity = (sha = SHA) =>
+  JSON.stringify({ ref: "main", fullRef: "refs/heads/main", sha });
+const executing = (ref = "main") => ({
+  workflowContract: "2",
+  workflowRef: ref,
+  workflowFullRef: `refs/heads/${ref}`,
+  workflowSha: SHA,
+});
+const parentRun = (overrides = {}) => ({
+  id: Number(PARENT_RUN_ID),
+  run_attempt: Number(PARENT_RUN_ATTEMPT),
+  repository: { full_name: "openclaw/openclaw" },
+  path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
+  event: "workflow_dispatch",
+  head_branch: "main",
+  head_sha: SHA,
+  status: "in_progress",
+  conclusion: null,
+  ...overrides,
+});
+const parentIdentity = () => ({
+  identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+  releasePublishFullRef: "refs/heads/main",
+  releasePublishRef: "main",
+  releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
+  releasePublishRunId: PARENT_RUN_ID,
+  repository: "openclaw/openclaw",
+});
 
 function protectedIdentity(
   overrides: Partial<Parameters<typeof verifyReleaseToolingIdentity>[0]> = {},
@@ -45,29 +73,19 @@ function protectedIdentity(
 
 describe("release tooling identity", () => {
   it("rejects a raw commit SHA as the workflow transport ref", () => {
-    expect(() =>
-      resolveReleaseToolingIdentity({
-        workflowContract: "2",
-        workflowFullRef: `refs/heads/${SHA}`,
-        workflowRef: SHA,
-        workflowSha: SHA,
-      }),
-    ).toThrow("workflow ref is not a trusted direct, release-ci, or protected-tag route");
+    expect(() => resolveReleaseToolingIdentity(executing(SHA))).toThrow(
+      "workflow ref is not a trusted direct, release-ci, or protected-tag route",
+    );
   });
 
-  it.each([["2", "release/2026.8.1", "refs/heads/release/2026.8.1"]])(
-    "derives contract %s identity for safe direct workflow ref %s",
-    (contract, ref, fullRef) => {
-      expect(
-        resolveReleaseToolingIdentity({
-          workflowContract: contract,
-          workflowFullRef: fullRef,
-          workflowRef: ref,
-          workflowSha: SHA,
-        }),
-      ).toEqual({ fullRef, ref, sha: SHA });
-    },
-  );
+  it("derives contract 2 identity for a safe direct release ref", () => {
+    const ref = "release/2026.8.1";
+    expect(resolveReleaseToolingIdentity(executing(ref))).toEqual({
+      ref,
+      fullRef: `refs/heads/${ref}`,
+      sha: SHA,
+    });
+  });
 
   it("rejects retired Tideclaw tooling even when prevalidated", () => {
     const workflowRef = "tideclaw/alpha/2026-08-21-1200Z";
@@ -87,37 +105,18 @@ describe("release tooling identity", () => {
   it("rejects unsupported contract 3 even with explicit identity", () => {
     expect(() =>
       resolveReleaseToolingIdentity({
-        requestedIdentityJson: JSON.stringify({
-          ref: "main",
-          fullRef: "refs/heads/main",
-          sha: SHA,
-        }),
+        ...executing(),
+        requestedIdentityJson: mainIdentity(),
         workflowContract: "3",
-        workflowFullRef: "refs/heads/main",
-        workflowRef: "main",
-        workflowSha: SHA,
       }),
     ).toThrow("release tooling contract 3 is not supported");
   });
 
-  it.each([
-    [
-      "protected tag",
-      {
-        workflowContract: "2",
-        workflowFullRef: FULL_REF,
-        workflowRef: REF,
-      },
-    ],
-  ])("requires explicit identity for $0", (_label, overrides) => {
-    const { workflowContract, workflowFullRef } = overrides;
-    const workflowRef = "workflowRef" in overrides ? overrides.workflowRef : "main";
+  it("requires explicit identity for a protected tag", () => {
     expect(() =>
       resolveReleaseToolingIdentity({
-        workflowContract,
-        workflowFullRef,
-        workflowRef,
-        workflowSha: SHA,
+        ...executing(REF),
+        workflowFullRef: FULL_REF,
       }),
     ).toThrow(/requires explicit trusted workflow identity|require explicit trusted workflow/u);
   });
@@ -126,15 +125,8 @@ describe("release tooling identity", () => {
     const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
     expect(
       resolveReleaseToolingIdentity({
-        requestedIdentityJson: JSON.stringify({
-          ref: "main",
-          fullRef: "refs/heads/main",
-          sha: SHA,
-        }),
-        workflowContract: "2",
-        workflowFullRef: `refs/heads/${releaseCiRef}`,
-        workflowRef: releaseCiRef,
-        workflowSha: SHA,
+        ...executing(releaseCiRef),
+        requestedIdentityJson: mainIdentity(),
       }),
     ).toEqual({ ref: "main", fullRef: "refs/heads/main", sha: SHA });
   });
@@ -143,15 +135,8 @@ describe("release tooling identity", () => {
     const releaseCiRef = `release-ci/${OTHER_SHA.slice(0, 12)}-123`;
     expect(() =>
       resolveReleaseToolingIdentity({
-        requestedIdentityJson: JSON.stringify({
-          fullRef: "refs/heads/main",
-          ref: "main",
-          sha: SHA,
-        }),
-        workflowContract: "2",
-        workflowFullRef: `refs/heads/${releaseCiRef}`,
-        workflowRef: releaseCiRef,
-        workflowSha: SHA,
+        ...executing(releaseCiRef),
+        requestedIdentityJson: mainIdentity(),
       }),
     ).toThrow("release-ci workflow ref does not match the workflow SHA");
   });
@@ -163,24 +148,21 @@ describe("release tooling identity", () => {
       [
         join(process.cwd(), "scripts/release-tooling-identity.mjs"),
         "resolve",
-        "--qualification-admission-json",
-        "{}",
-        "--qualification-inputs-json",
-        "{}",
-        "--candidate-sha",
-        SHA,
-        "--repository",
-        "openclaw/openclaw",
-        "--workflow-contract",
-        "2",
-        "--workflow-ref",
-        releaseCiRef,
-        "--workflow-full-ref",
-        `refs/heads/${releaseCiRef}`,
-        "--workflow-sha",
-        SHA,
-        "--requested-identity-json",
-        JSON.stringify({ ref: releaseCiRef, fullRef: `refs/heads/${releaseCiRef}`, sha: SHA }),
+        ...Object.entries({
+          "qualification-admission-json": "{}",
+          "qualification-inputs-json": "{}",
+          "candidate-sha": SHA,
+          repository: "openclaw/openclaw",
+          "workflow-contract": "2",
+          "workflow-ref": releaseCiRef,
+          "workflow-full-ref": `refs/heads/${releaseCiRef}`,
+          "workflow-sha": SHA,
+          "requested-identity-json": JSON.stringify({
+            ref: releaseCiRef,
+            fullRef: `refs/heads/${releaseCiRef}`,
+            sha: SHA,
+          }),
+        }).flatMap(([key, value]) => [`--${key}`, value]),
       ],
       { encoding: "utf8" },
     );
@@ -194,15 +176,8 @@ describe("release tooling identity", () => {
     const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
     expect(() =>
       resolveReleaseToolingIdentity({
-        requestedIdentityJson: JSON.stringify({
-          fullRef: "refs/heads/main",
-          ref: "main",
-          sha: OTHER_SHA,
-        }),
-        workflowContract: "2",
-        workflowFullRef: `refs/heads/${releaseCiRef}`,
-        workflowRef: releaseCiRef,
-        workflowSha: SHA,
+        ...executing(releaseCiRef),
+        requestedIdentityJson: mainIdentity(OTHER_SHA),
       }),
     ).toThrow("release-ci workflow identity must be trusted main");
   });
@@ -210,36 +185,21 @@ describe("release tooling identity", () => {
   it("rejects explicit identity that does not match a direct workflow", () => {
     expect(() =>
       resolveReleaseToolingIdentity({
-        requestedIdentityJson: JSON.stringify({
-          ref: "main",
-          fullRef: "refs/heads/main",
-          sha: OTHER_SHA,
-        }),
-        workflowContract: "2",
-        workflowFullRef: "refs/heads/main",
-        workflowRef: "main",
-        workflowSha: SHA,
+        ...executing(),
+        requestedIdentityJson: mainIdentity(OTHER_SHA),
       }),
     ).toThrow("must match the executing workflow ref and SHA");
   });
 
-  it.each([
-    [
-      "deleted tag",
-      {
-        runGh: () => {
-          throw new Error("HTTP 404");
-        },
-      },
-      "missing or unreadable",
-    ],
-  ])("rejects $0", (_label, overrides, expectedError) => {
+  it("rejects a deleted tag", () => {
     expect(() =>
       verifyReleaseToolingIdentity({
         ...protectedIdentity(),
-        ...overrides,
+        runGh: () => {
+          throw new Error("HTTP 404");
+        },
       }),
-    ).toThrow(expectedError);
+    ).toThrow("missing or unreadable");
   });
 
   it("rejects a prevalidated branch moved after approval", () => {
@@ -269,17 +229,7 @@ describe("release tooling identity", () => {
           object: { sha: SHA, type: "commit" },
         });
       }
-      return JSON.stringify({
-        id: Number(PARENT_RUN_ID),
-        run_attempt: Number(PARENT_RUN_ATTEMPT),
-        repository: { full_name: "openclaw/openclaw" },
-        path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: SHA,
-        status: "in_progress",
-        conclusion: null,
-      });
+      return JSON.stringify(parentRun());
     });
 
     expect(
@@ -317,24 +267,9 @@ describe("release tooling identity", () => {
     (releasePublishParentStatePolicy, status, conclusion, accepted) => {
       const validate = () =>
         validateReleasePublishParentRun({
-          identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
-          releasePublishFullRef: "refs/heads/main",
+          ...parentIdentity(),
           releasePublishParentStatePolicy,
-          releasePublishRef: "main",
-          releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
-          releasePublishRunId: PARENT_RUN_ID,
-          repository: "openclaw/openclaw",
-          run: {
-            id: Number(PARENT_RUN_ID),
-            run_attempt: Number(PARENT_RUN_ATTEMPT),
-            repository: { full_name: "openclaw/openclaw" },
-            path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
-            event: "workflow_dispatch",
-            head_branch: "main",
-            head_sha: SHA,
-            status,
-            conclusion,
-          },
+          run: parentRun({ status, conclusion }),
         });
 
       if (accepted) {
@@ -405,24 +340,11 @@ describe("release tooling identity", () => {
   ])("rejects %s independently of protected child identity", (_label, parentRef, parentFullRef) => {
     expect(() =>
       validateReleasePublishParentRun({
-        identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+        ...parentIdentity(),
         releasePublishFullRef: parentFullRef,
         releasePublishParentStatePolicy: "active",
         releasePublishRef: parentRef,
-        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
-        releasePublishRunId: PARENT_RUN_ID,
-        repository: "openclaw/openclaw",
-        run: {
-          id: Number(PARENT_RUN_ID),
-          run_attempt: Number(PARENT_RUN_ATTEMPT),
-          repository: { full_name: "openclaw/openclaw" },
-          path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
-          event: "workflow_dispatch",
-          head_branch: "main",
-          head_sha: SHA,
-          status: "in_progress",
-          conclusion: null,
-        },
+        run: parentRun(),
       }),
     ).toThrow();
   });
@@ -817,40 +739,29 @@ describe("npm qualification", () => {
     },
   );
 
-  it.each(["run", "attempt", "tooling", "workflow", "repository", "ref"])(
-    "rejects a descriptor detached from its %s binding",
-    (mismatch) => {
-      const changed = structuredClone(fullReleaseManifest);
-      const descriptor = changed.publicationArtifacts.npmPreflight;
-      if (mismatch === "run") {
-        descriptor.artifact.runId = "99999";
-      }
-      if (mismatch === "attempt") {
-        descriptor.artifact.runAttempt = "2";
-      }
-      if (mismatch === "tooling") {
-        descriptor.producer.workflowSha = OTHER_SHA;
-      }
-      if (mismatch === "workflow") {
-        descriptor.producer.workflowRef = producer.workflowRef.replace(
-          workflowPath,
-          ".github/workflows/ci.yml",
-        );
-      }
-      if (mismatch === "repository") {
-        descriptor.producer.repository = "other/repository";
-      }
-      if (mismatch === "ref") {
-        descriptor.producer.workflowRef = producer.workflowRef.replace(
-          "refs/heads/main",
-          "refs/heads/other",
-        );
-      }
-      expect(() =>
-        resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
-      ).toThrow();
-    },
-  );
+  it.each([
+    ["run", "artifact", { runId: "99999" }],
+    ["attempt", "artifact", { runAttempt: "2" }],
+    ["tooling", "producer", { workflowSha: OTHER_SHA }],
+    [
+      "workflow",
+      "producer",
+      { workflowRef: producer.workflowRef.replace(workflowPath, ".github/workflows/ci.yml") },
+    ],
+    ["repository", "producer", { repository: "other/repository" }],
+    [
+      "ref",
+      "producer",
+      { workflowRef: producer.workflowRef.replace("refs/heads/main", "refs/heads/other") },
+    ],
+  ] as const)("rejects a descriptor detached from its %s binding", (_mismatch, section, patch) => {
+    const changed = structuredClone(fullReleaseManifest);
+    const descriptor = changed.publicationArtifacts.npmPreflight;
+    Object.assign(descriptor[section], patch);
+    expect(() =>
+      resolveFullReleaseNpmPreflight({ ...resolutionInput, manifest: changed, runGh: reader() }),
+    ).toThrow();
+  });
 
   it.each([
     ["run", { id: 777 }, {}],
@@ -880,18 +791,17 @@ describe("npm qualification", () => {
       const npmLockBytes = Buffer.from(
         `${JSON.stringify({ packages: [{ lock: "x".repeat(3 * 1024 * 1024) }] })}\n`,
       );
+      const files = {
+        "preflight-manifest.json": manifestBytes,
+        [manifest.tarballName]: tarballBytes,
+        "dependency-evidence/dependency-evidence-manifest.json": Buffer.from("{}"),
+        "dependency-evidence/npm-package-locks.json": npmLockBytes,
+        "dependency-evidence/npm-package-locks.md": Buffer.from("# npm package-lock mirrors\n"),
+      };
       const zip = new JSZip();
-      zip.file("preflight-manifest.json", manifestBytes);
-      zip.file(manifest.tarballName, tarballBytes);
-      zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
-        createFolders: false,
-      });
-      zip.file("dependency-evidence/npm-package-locks.json", npmLockBytes, {
-        createFolders: false,
-      });
-      zip.file("dependency-evidence/npm-package-locks.md", "# npm package-lock mirrors\n", {
-        createFolders: false,
-      });
+      for (const [name, bytes] of Object.entries(files)) {
+        zip.file(name, bytes, { createFolders: false });
+      }
       const archive = await zip.generateAsync({
         type: "nodebuffer",
         compression: "STORE",
@@ -943,24 +853,13 @@ describe("npm qualification", () => {
         await expect(download).resolves.toMatchObject({
           producer: { runId: RUN_ID, runAttempt: "1" },
         });
-        expect(readFileSync(join(outputDir, "preflight-manifest.json"))).toEqual(manifestBytes);
-        expect(readFileSync(join(outputDir, manifest.tarballName))).toEqual(tarballBytes);
-        expect(
-          readFileSync(
-            join(outputDir, "dependency-evidence/dependency-evidence-manifest.json"),
-            "utf8",
-          ),
-        ).toBe("{}");
+        for (const [name, bytes] of Object.entries(files)) {
+          expect(readFileSync(join(outputDir, name)), name).toEqual(bytes);
+        }
         const retriedDir = join(root, "retried");
         await downloadFullReleaseNpmPreflight({ ...downloadOptions, outputDir: retriedDir });
         expect(readFileSync(join(retriedDir, manifest.tarballName))).toEqual(tarballBytes);
         expect(requests.filter((url) => url.endsWith("/zip"))).toHaveLength(1);
-        expect(readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.json"))).toEqual(
-          npmLockBytes,
-        );
-        expect(
-          readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.md"), "utf8"),
-        ).toBe("# npm package-lock mirrors\n");
       } else {
         await expect(download).rejects.toThrow(
           outcome === "archive changed"

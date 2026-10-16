@@ -6,6 +6,15 @@ import {
   validateQualificationBaselines,
 } from "../../scripts/lib/release-upgrade-baseline.mjs";
 
+const baselines = (primary: string, survivors = [primary]) => ({
+  upgradeBaseline: `openclaw@${primary}`,
+  upgradeSurvivorBaselines: survivors.map((version) => `openclaw@${version}`),
+});
+const frozenContext = {
+  candidateVersion: "2026.9.33",
+  targetContextRef: "extended-stable/2026.9.33",
+};
+
 describe("release upgrade baseline resolver", () => {
   it("captures supported predecessors relative to the candidate, never future registry tags", () => {
     const captured = resolveQualificationBaselines({
@@ -14,15 +23,9 @@ describe("release upgrade baseline resolver", () => {
       oldestSupportedVersion: "2026.6.34",
       publishedVersions: ["2026.6.34", "2026.7.34", "2026.8.2", "2026.8.3", "2026.8.4", "2026.9.1"],
     });
-    expect(captured).toEqual({
-      upgradeBaseline: "openclaw@2026.8.3",
-      upgradeSurvivorBaselines: [
-        "openclaw@2026.6.34",
-        "openclaw@2026.7.34",
-        "openclaw@2026.8.2",
-        "openclaw@2026.8.3",
-      ],
-    });
+    expect(captured).toEqual(
+      baselines("2026.8.3", ["2026.6.34", "2026.7.34", "2026.8.2", "2026.8.3"]),
+    );
     // Recovery validates retained inputs without another registry snapshot.
     expect(validateQualificationBaselines(captured, { candidateVersion: "2026.8.4" })).toEqual(
       captured,
@@ -37,10 +40,7 @@ describe("release upgrade baseline resolver", () => {
         oldestSupportedVersion: "2026.6.34",
         publishedVersions: ["2026.6.34", "2026.8.33", "2026.8.34", "2026.9.1"],
       }),
-    ).toEqual({
-      upgradeBaseline: "openclaw@2026.8.34",
-      upgradeSurvivorBaselines: ["openclaw@2026.8.34"],
-    });
+    ).toEqual(baselines("2026.8.34"));
   });
 
   // Today's 2026.9.33 line: extended-stable installs sit on 2026.8.35 until it publishes.
@@ -66,17 +66,9 @@ describe("release upgrade baseline resolver", () => {
       ...septemberLine,
       targetContextRef: "extended-stable/2026.9.33",
     });
-    expect(captured).toEqual({
-      upgradeBaseline: "openclaw@2026.8.35",
-      upgradeSurvivorBaselines: ["openclaw@2026.8.35", "openclaw@2026.9.9"],
-    });
+    expect(captured).toEqual(baselines("2026.8.35", ["2026.8.35", "2026.9.9"]));
     // Admission, publication, and workflow consumers revalidate the retained tuple.
-    expect(
-      validateQualificationBaselines(captured, {
-        candidateVersion: "2026.9.33",
-        targetContextRef: "extended-stable/2026.9.33",
-      }),
-    ).toEqual(captured);
+    expect(validateQualificationBaselines(captured, frozenContext)).toEqual(captured);
     expect(
       resolveReleaseUpgradeBaseline("2026.9.33", septemberLine.publishedVersions, {
         targetContextRef: "extended-stable/2026.9.33",
@@ -94,15 +86,7 @@ describe("release upgrade baseline resolver", () => {
   it("prefers the extended-stable predecessor for a .33 candidate outside its branch context", () => {
     expect(
       resolveQualificationBaselines({ ...septemberLine, targetContextRef: "v2026.9.33" }),
-    ).toEqual({
-      upgradeBaseline: "openclaw@2026.8.35",
-      upgradeSurvivorBaselines: [
-        "openclaw@2026.6.34",
-        "openclaw@2026.8.35",
-        "openclaw@2026.9.8",
-        "openclaw@2026.9.9",
-      ],
-    });
+    ).toEqual(baselines("2026.8.35", ["2026.6.34", "2026.8.35", "2026.9.8", "2026.9.9"]));
   });
 
   it("keeps later frozen candidates on their newest extended-stable predecessor", () => {
@@ -113,61 +97,41 @@ describe("release upgrade baseline resolver", () => {
         targetContextRef: "extended-stable/2026.9.33",
         publishedVersions: [...septemberLine.publishedVersions, "2026.9.33"],
       }),
-    ).toEqual({
-      upgradeBaseline: "openclaw@2026.9.33",
-      upgradeSurvivorBaselines: ["openclaw@2026.9.33"],
-    });
+    ).toEqual(baselines("2026.9.33"));
   });
 
   it.each([
     {
       name: "a same-month primary beside the extended-stable predecessor",
-      upgradeBaseline: "openclaw@2026.9.9",
+      primary: "2026.9.9",
     },
     {
       name: "an older extended-stable primary",
-      upgradeBaseline: "openclaw@2026.8.34",
-      extra: "openclaw@2026.8.34",
+      primary: "2026.8.34",
+      extra: "2026.8.34",
     },
-  ])("rejects $name for a frozen .33 candidate", ({ upgradeBaseline, extra }) => {
+  ])("rejects $name for a frozen .33 candidate", ({ primary, extra }) => {
     expect(() =>
       validateQualificationBaselines(
-        {
-          upgradeBaseline,
-          upgradeSurvivorBaselines: [
-            "openclaw@2026.8.35",
-            "openclaw@2026.9.9",
-            ...(extra ? [extra] : []),
-          ],
-        },
-        { candidateVersion: "2026.9.33", targetContextRef: "extended-stable/2026.9.33" },
+        baselines(primary, ["2026.8.35", "2026.9.9", ...(extra ? [extra] : [])]),
+        frozenContext,
       ),
     ).toThrow("newest selected predecessor");
   });
 
   it("rejects a regular stable primary that is not the newest survivor", () => {
     expect(() =>
-      validateQualificationBaselines(
-        {
-          upgradeBaseline: "openclaw@2026.8.2",
-          upgradeSurvivorBaselines: ["openclaw@2026.8.2", "openclaw@2026.8.3"],
-        },
-        { candidateVersion: "2026.8.4" },
-      ),
+      validateQualificationBaselines(baselines("2026.8.2", ["2026.8.2", "2026.8.3"]), {
+        candidateVersion: "2026.8.4",
+      }),
     ).toThrow("newest selected predecessor");
   });
 
-  it.each(["openclaw@2026.8.3-beta.1", "openclaw@2026.9.1"])(
+  it.each(["2026.8.3-beta.1", "2026.9.1"])(
     "rejects mutable or incompatible captured baseline %s",
     (baseline) => {
       expect(() =>
-        validateQualificationBaselines(
-          {
-            upgradeBaseline: baseline,
-            upgradeSurvivorBaselines: [baseline],
-          },
-          { candidateVersion: "2026.8.4" },
-        ),
+        validateQualificationBaselines(baselines(baseline), { candidateVersion: "2026.8.4" }),
       ).toThrow();
     },
   );

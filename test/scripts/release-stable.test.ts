@@ -12,6 +12,8 @@ import {
   REPO_ROOT,
   TOOLING_SHA,
   actionRun,
+  fetchMain,
+  fields,
   gateApproval,
   npmVisibility,
   pendingGates,
@@ -23,6 +25,8 @@ import {
   releaseFixture,
   step,
   workflowDispatch,
+  workflowRun,
+  workflowRuns,
   type FakeStep,
 } from "./release-stable.test-support.js";
 
@@ -32,7 +36,6 @@ const fixture = () => {
   mkdirSync(scratch, { recursive: true });
   return releaseFixture(directories.make(".release-stable-test-", scratch));
 };
-const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
 
 function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
@@ -58,15 +61,7 @@ const publishWorkflow = "openclaw-release-publish.yml";
 const toolingTag = "release-publish/bbbbbbbbbbbb-123";
 const parentDispatch = () =>
   step("gh", ["workflow", "run", publishWorkflow, "--repo", REPOSITORY, "--ref", toolingTag]);
-const parentRuns = (runs: object[]) =>
-  step(
-    "gh",
-    [
-      "api",
-      `repos/${REPOSITORY}/actions/workflows/${publishWorkflow}/runs?event=workflow_dispatch&per_page=10`,
-    ],
-    JSON.stringify({ workflow_runs: runs }),
-  );
+const parentRuns = (runs: object[]) => workflowRuns(publishWorkflow, REPOSITORY, runs);
 const children = (runs: object[]) =>
   step("gh", ["api", "*"], JSON.stringify({ workflow_runs: runs }));
 
@@ -107,31 +102,13 @@ describe("release:stable CLI", () => {
   });
 
   it.each([
-    {
-      label: "wrong-version",
-      packageVersion: "2026.9.5",
-      missing: "",
-      code: 2,
-      phaseStatus: "refused",
-    },
-    {
-      label: "missing-changelog",
-      packageVersion: RELEASE,
-      missing: "changelog",
-      code: 2,
-      phaseStatus: "refused",
-    },
-    {
-      label: "missing-records",
-      packageVersion: RELEASE,
-      missing: "records",
-      code: 2,
-      phaseStatus: "refused",
-    },
-    { label: "prepared", packageVersion: RELEASE, missing: "", code: 0, phaseStatus: "completed" },
-  ])(
-    "creates the confirmed branch and checks an $label cut",
-    ({ packageVersion, missing, code, phaseStatus }) => {
+    ["wrong-version", "2026.9.5", "", 2, "refused"],
+    ["missing-changelog", RELEASE, "changelog", 2, "refused"],
+    ["missing-records", RELEASE, "records", 2, "refused"],
+    ["prepared", RELEASE, "", 0, "completed"],
+  ] as const)(
+    "creates the confirmed branch and checks a %s cut",
+    (_label, packageVersion, missing, code, phaseStatus) => {
       const release = fixture();
       const state = phaseState("cut");
       state.cut = {};
@@ -293,18 +270,14 @@ describe("release:stable CLI", () => {
     expect(retained.publish.publishRunId).toBeUndefined();
     const preflight = result.calls.find((call) => call.args[2] === "openclaw-macos-publish.yml");
     expect(preflight?.args.slice(7)).toEqual([
-      "-f",
-      `tag=v${RELEASE}`,
-      "-f",
-      `source_ref=release/${RELEASE}`,
-      "-f",
-      `public_release_branch=release/${RELEASE}`,
-      "-f",
-      "preflight_only=true",
-      "-f",
-      "smoke_test_only=false",
-      "-f",
-      "allow_late_calver_recovery=false",
+      ...fields(
+        `tag=v${RELEASE}`,
+        `source_ref=release/${RELEASE}`,
+        `public_release_branch=release/${RELEASE}`,
+        "preflight_only=true",
+        "smoke_test_only=false",
+        "allow_late_calver_recovery=false",
+      ),
     ]);
   });
 
@@ -450,20 +423,15 @@ describe("release:stable CLI", () => {
     const dispatches = resumed.calls.filter((call) => call.args[0] === "workflow");
     expect(dispatches).toHaveLength(1);
     expect(dispatches[0]?.args.slice(7)).toEqual([
-      "-f",
-      `tag=v${RELEASE}`,
-      "-f",
-      "full_release_validation_run_id=101",
-      "-f",
-      "full_release_validation_run_attempt=3",
-      "-f",
-      "npm_dist_tag=latest",
-      "-f",
-      "plugin_publish_scope=all-publishable",
-      "-f",
-      "publish_openclaw_npm=true",
-      "-f",
-      "wait_for_clawhub=false",
+      ...fields(
+        `tag=v${RELEASE}`,
+        "full_release_validation_run_id=101",
+        "full_release_validation_run_attempt=3",
+        "npm_dist_tag=latest",
+        "plugin_publish_scope=all-publishable",
+        "publish_openclaw_npm=true",
+        "wait_for_clawhub=false",
+      ),
     ]);
     const helper = resumed.calls.find((call) => call.bin === "pnpm");
     expect(helper?.args).toContain("stable");
@@ -609,23 +577,10 @@ describe("release:stable CLI", () => {
     const result = release.run([
       ...publishPreparation(),
       step("gh", ["workflow", "run", workflow]),
-      step(
-        "gh",
-        [
-          "api",
-          `repos/openclaw/releases/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=10`,
-        ],
-        JSON.stringify({
-          workflow_runs: [201, 211].map((id) => ({
-            id,
-            event: "workflow_dispatch",
-            actor: { login: "release-test" },
-            created_at: new Date().toISOString(),
-            path: `.github/workflows/${workflow}`,
-            head_branch: "main",
-            display_title: "macOS Validate",
-          })),
-        }),
+      workflowRuns(
+        workflow,
+        "openclaw/releases",
+        [201, 211].map((id) => workflowRun(workflow, id, "macOS Validate")),
       ),
     ]);
     expect(result.status, result.output).toBe(2);
