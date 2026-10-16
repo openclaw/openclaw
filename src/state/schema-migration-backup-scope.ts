@@ -31,12 +31,12 @@ export function resolveSchemaMigrationBackupTables(
   return [...tables].toSorted();
 }
 
-/** Undeclared historical migrations keep full verification until their write scope is known. */
+/** Undeclared migrations and same-version repairs retain full verification. */
 export function resolveSchemaMigrationIntegrityCheck(
   migration: SchemaMigration,
   check: "quick" | "full" = "quick",
 ): SqliteIntegrityCheckOptions {
-  if (check === "full" || migration.foundVersion >= migration.supportedVersion) {
+  if (check === "full") {
     return { check };
   }
   const tables = resolveSchemaMigrationBackupTables(migration);

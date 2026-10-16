@@ -10,10 +10,46 @@ import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-pre
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import { createCacheExpiryIndexPhysicalDrift } from "../state/sqlite-index-drift.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
+
+it("refuses damaged indexes before same-version additive repair with quick requested", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+      {
+        using database = new DatabaseSync(pathname);
+        ensureOpenClawAgentDatabaseSchema(database, {
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        database.exec("ALTER TABLE session_nodes DROP COLUMN project_id");
+      }
+      createCacheExpiryIndexPhysicalDrift(pathname);
+      using database = new DatabaseSync(pathname);
+      expect(() =>
+        ensureOpenClawAgentDatabaseSchema(database, {
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+          integrityCheck: "quick",
+        }),
+      ).toThrow(/integrity_check.*idx_agent_cache_expiry/su);
+      expect(database.prepare("PRAGMA table_info(session_nodes)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "project_id" })]),
+      );
+      expect(database.prepare("SELECT value_json FROM cache_entries NOT INDEXED").all()).toEqual([
+        { value_json: "{}" },
+      ]);
+    });
+  });
+});
 
 it.each([undefined, "full"] as const)(
   "uses the requested upgrade integrity coverage before changing the schema (%s)",

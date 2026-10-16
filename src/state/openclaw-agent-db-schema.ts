@@ -184,6 +184,14 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   const hasPendingCurrentVersionMigration =
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
     hasPendingCurrentVersionAgentDatabaseMigration(database);
+  const integrity = resolveSchemaMigrationIntegrityCheck(
+    {
+      kind: "agent",
+      foundVersion: userVersion,
+      supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+    },
+    integrityCheck,
+  );
   const startedAt = performance.now();
   if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
     agentDbLog.info(
@@ -209,7 +217,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
           assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         diagnostics,
         reuseIntegrity,
-        integrity: integrityCheck ? { check: integrityCheck } : undefined,
+        integrity: integrityCheck ? integrity : undefined,
       },
     );
     if (rebuiltIndexes.length > 0) {
@@ -234,23 +242,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     assertSqliteIntegrity(database, pathname);
   } else {
     // Pending migrations cannot inherit an earlier runtime verification.
-    yield* sqliteIntegrityCheckSteps(
-      database,
-      pathname,
-      diagnostics,
-      migrationPending
-        ? resolveSchemaMigrationIntegrityCheck(
-            {
-              kind: "agent",
-              foundVersion: userVersion,
-              supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-            },
-            integrityCheck,
-          )
-        : integrityCheck
-          ? { check: integrityCheck }
-          : undefined,
-    );
+    yield* sqliteIntegrityCheckSteps(database, pathname, diagnostics, integrity);
   }
   return hasPendingCurrentVersionMigration;
 }
