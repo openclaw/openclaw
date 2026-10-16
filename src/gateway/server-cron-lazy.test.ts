@@ -117,9 +117,7 @@ describe("createLazyGatewayCronState", () => {
       adopt: vi.fn(),
       stopOwner,
     }));
-    Object.assign(state, {
-      prepareExitWatcherHandoff,
-    });
+    state.prepareExitWatcherHandoff = prepareExitWatcherHandoff;
     const start = lazy.cron.start();
     await vi.waitFor(() => expect(cron.start).toHaveBeenCalledOnce());
     const handoff = await lazy.prepareExitWatcherHandoff?.();
@@ -322,10 +320,8 @@ describe("createLazyGatewayCronState", () => {
 
   it("does not reconcile exit watchers when cron is disabled", async () => {
     const reconcileExitWatchers = vi.fn(async () => {});
-    Object.assign(state, {
-      cronEnabled: false,
-      reconcileExitWatchers,
-    });
+    state.cronEnabled = false;
+    state.reconcileExitWatchers = reconcileExitWatchers;
     lazy = createLazyGatewayCronState(createParams({ cron: { enabled: false } }));
     await lazy.cron.start();
     expect(cron.start).toHaveBeenCalledTimes(1);

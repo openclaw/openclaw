@@ -165,35 +165,34 @@ it.each([false, true])(
   },
 );
 
-it("serves HTTP work after the listener's startup scope has closed", async () => {
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  watchCancellations();
-  route.mockImplementation(async (_req, res) => {
-    // Shared-state readers honor the ambient work signal before admitting a read.
-    getAsyncWorkSignal()?.throwIfAborted();
-    res.end("live request");
-    return true;
-  });
-  const response = await fetch(`http://127.0.0.1:${listener.claim.port}/authority/core`, {
-    headers: { Connection: "close" },
-  });
-  expect([response.status, await response.text()]).toEqual([200, "live request"]);
-  await drainRequests();
-  expect(errors).not.toHaveBeenCalled();
-  expect(cancellations).toEqual([]);
-});
-
-it("does not count a delivered server rejection as a client cancellation", async () => {
-  watchCancellations();
-  route.mockImplementation(async (req, res) => {
-    await lifecycle.sendHttpRequestRejection(req, res, 413, "Payload too large", "text/plain");
-    return true;
-  });
-  const response = await fetch(`http://127.0.0.1:${listener.claim.port}/authority/core`);
-  expect([response.status, await response.text()]).toEqual([413, "Payload too large"]);
-  await drainRequests();
-  expect(cancellations).toEqual([]);
-});
+it.each([false, true])(
+  "keeps delivered HTTP work out of cancellation telemetry (rejected=%s)",
+  async (rejected) => {
+    const errors = rejected ? undefined : vi.spyOn(console, "error").mockImplementation(() => {});
+    watchCancellations();
+    route.mockImplementation(async (req, res) => {
+      if (rejected) {
+        await lifecycle.sendHttpRequestRejection(req, res, 413, "Payload too large", "text/plain");
+      } else {
+        getAsyncWorkSignal()?.throwIfAborted();
+        res.end("live request");
+      }
+      return true;
+    });
+    const response = await fetch(
+      "http://127.0.0.1:" + listener.claim.port + "/authority/core",
+      rejected ? undefined : { headers: { Connection: "close" } },
+    );
+    expect([response.status, await response.text()]).toEqual(
+      rejected ? [413, "Payload too large"] : [200, "live request"],
+    );
+    await drainRequests();
+    if (!rejected) {
+      expect(errors).not.toHaveBeenCalled();
+    }
+    expect(cancellations).toEqual([]);
+  },
+);
 
 it.each(["core", "plugin"])(
   "cancels disconnected %s reads without logging a handler failure",

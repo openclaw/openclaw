@@ -120,84 +120,80 @@ async function withControlUi(
   }
 }
 
-describe("startup plugin HTTP routing", () => {
-  it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
-    let sidecarsReady = false;
-    await withControlUi(
-      {
-        handlePluginRequest: async () => false,
-        shouldEnforcePluginGatewayAuth: () => false,
-        isStartupPluginRuntimeReady: () => sidecarsReady,
-      },
-      async (probe) => {
-        const htmlCases = [
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "*/*",
-          undefined,
-          "",
-          "text/html;q=0.5",
-          "text/*",
-          "application/xhtml+xml;q=0, text/*",
-          "application/xhtml+xml",
-          "text/html;profile=alternate;q=0, */*;q=1",
-          "text/html;charset=utf-16;q=0, text/html;q=1",
-          'text/html;note="x; q=0; y", */*',
-        ];
-        const nonHtmlCases = [
-          "application/json",
-          "text/event-stream",
-          "text/html;q=0",
-          "text/html;q=0, */*",
-          "text/html;q=0, text/*",
-          "text/html;profile=alternate;q=1, */*;q=0",
-          "text/html;charset=utf-8;q=0, text/html;q=1",
-          "text/html;q=0, text/*;charset=utf-8;q=1",
-          "*/*;q=0",
-          "text/html;Q=0",
-          "text/*;q=0",
-        ];
-        for (const ready of [false, true]) {
-          sidecarsReady = ready;
-          for (const accept of [...htmlCases, ...nonHtmlCases]) {
-            const html = htmlCases.includes(accept);
-            const { res, getBody, setHeader } = await probe.request({
-              path: "/unclaimed-spa-route",
-              method: "GET",
-              headers: accept === undefined ? undefined : { accept },
-            });
-            const label = String(accept) + " ready=" + ready;
-            expect(res.statusCode, label).toBe(html ? 200 : ready ? 404 : 503);
-            if (html) {
-              expect(getBody(), label).toContain("spa fallback");
+it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
+  let sidecarsReady = false;
+  await withControlUi(
+    {
+      handlePluginRequest: async () => false,
+      shouldEnforcePluginGatewayAuth: () => false,
+      isStartupPluginRuntimeReady: () => sidecarsReady,
+    },
+    async (probe) => {
+      const htmlCases = [
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "*/*",
+        undefined,
+        "",
+        "text/html;q=0.5",
+        "text/*",
+        "application/xhtml+xml;q=0, text/*",
+        "application/xhtml+xml",
+        "text/html;profile=alternate;q=0, */*;q=1",
+        "text/html;charset=utf-16;q=0, text/html;q=1",
+        'text/html;note="x; q=0; y", */*',
+      ];
+      const nonHtmlCases = [
+        "application/json",
+        "text/event-stream",
+        "text/html;q=0",
+        "text/html;q=0, */*",
+        "text/html;q=0, text/*",
+        "text/html;profile=alternate;q=1, */*;q=0",
+        "text/html;charset=utf-8;q=0, text/html;q=1",
+        "text/html;q=0, text/*;charset=utf-8;q=1",
+        "*/*;q=0",
+        "text/html;Q=0",
+        "text/*;q=0",
+      ];
+      for (const ready of [false, true]) {
+        sidecarsReady = ready;
+        for (const accept of [...htmlCases, ...nonHtmlCases]) {
+          const html = htmlCases.includes(accept);
+          const { res, getBody, setHeader } = await probe.request({
+            path: "/unclaimed-spa-route",
+            method: "GET",
+            headers: accept === undefined ? undefined : { accept },
+          });
+          const label = String(accept) + " ready=" + ready;
+          expect(res.statusCode, label).toBe(html ? 200 : ready ? 404 : 503);
+          if (html) {
+            expect(getBody(), label).toContain("spa fallback");
+          } else {
+            expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+            expect(getBody()).toBe(ready ? "Not Found" : "Plugin runtime is starting");
+            if (ready) {
+              expect(setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
             } else {
-              expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
-              expect(getBody()).toBe(ready ? "Not Found" : "Plugin runtime is starting");
-              if (ready) {
-                expect(setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
-              } else {
-                expect(setHeader).toHaveBeenCalledWith("Retry-After", "1");
-              }
+              expect(setHeader).toHaveBeenCalledWith("Retry-After", "1");
             }
           }
         }
-      },
-    );
-  });
+      }
+    },
+  );
 });
 
-describe("standalone MCP App HTTP routing", () => {
-  it.each([
-    ["disabled shell", false, "/__openclaw__/mcp-app"],
-    ["disabled view", false, "/__openclaw__/mcp-app/view"],
-    ["enabled malformed child", true, "/__openclaw__/mcp-app/other"],
-  ] as const)("returns 404 for the %s instead of Control UI HTML", async (_name, enabled, path) => {
-    await withControlUi(
-      {
-        getRuntimeConfig: () => ({ gateway: { trustedProxies: [] }, mcp: { apps: { enabled } } }),
-      },
-      (probe) => probe.text(path, 404, "Not Found"),
-    );
-  });
+it.each([
+  ["disabled shell", false, "/__openclaw__/mcp-app"],
+  ["disabled view", false, "/__openclaw__/mcp-app/view"],
+  ["enabled malformed child", true, "/__openclaw__/mcp-app/other"],
+] as const)("returns 404 for the %s instead of Control UI HTML", async (_name, enabled, path) => {
+  await withControlUi(
+    {
+      getRuntimeConfig: () => ({ gateway: { trustedProxies: [] }, mcp: { apps: { enabled } } }),
+    },
+    (probe) => probe.text(path, 404, "Not Found"),
+  );
 });
 
 describe("gateway probe endpoints", () => {

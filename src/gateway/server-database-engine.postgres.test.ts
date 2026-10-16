@@ -4,7 +4,6 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
-import type { ConfigFileSnapshot } from "../config/types.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -65,30 +64,27 @@ async function readAnchor(state: OpenClawTestState): Promise<Anchor | undefined>
   return { storeId: row.store_id, namespace: row.schema };
 }
 
-async function bootstrap(): Promise<ConfigFileSnapshot> {
-  // Each entry point reuses the process selection established by preflight.
+async function bootstrap() {
   const preflight = await runStartupConfigPreflight({ gateway: true, observe: false });
   expect(preflight.snapshot.valid).toBe(true);
-  try {
-    const log = createSubsystemLogger("gateway/postgres-bootstrap-test");
-    const prepared = await prepareGatewayServerBootstrap({
-      port: 18789,
-      opts: {
-        startupConfigSnapshotRead: preflight,
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      },
-      log,
-      logSecrets: log,
-      loadWorkerEnvironmentStartupModule: () => import("./server-worker-environment-startup.js"),
-      formatRuntimeGatewayAuthTokenWarning: () => "unused",
-    });
-    prepared.startupTrace.close();
-    return prepared.configSnapshot;
-  } finally {
-    await preflight.pluginCache?.[Symbol.asyncDispose]();
-  }
+  await using caches = new AsyncDisposableStack();
+  caches.use(preflight.pluginCache);
+  const log = createSubsystemLogger("gateway/postgres-bootstrap-test");
+  const prepared = await prepareGatewayServerBootstrap({
+    port: 18789,
+    opts: {
+      startupConfigSnapshotRead: preflight,
+      bind: "loopback",
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    },
+    log,
+    logSecrets: log,
+    loadWorkerEnvironmentStartupModule: () => import("./server-worker-environment-startup.js"),
+    formatRuntimeGatewayAuthTokenWarning: () => "unused",
+  });
+  prepared.startupTrace.close();
+  return prepared.configSnapshot;
 }
 
 describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => {
@@ -98,8 +94,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   beforeAll(() => client.connect());
   afterAll(() => client.end());
 
-  async function queryRows(sql: string, values: unknown[]) {
-    return (await client.query(sql, values)).rows;
+  async function queryRows<T extends pg.QueryResultRow>(sql: string, values: unknown[]) {
+    return (await client.query<T>(sql, values)).rows;
   }
   async function bootstrapped() {
     const current = await fixture();
@@ -116,11 +112,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     resetConfigRuntimeState();
     await closeStateDatabaseForTest();
     try {
-      if (state) {
-        const anchor = await readAnchor(state);
-        if (anchor) {
-          await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(anchor.namespace)} CASCADE`);
-        }
+      const anchor = state && (await readAnchor(state));
+      if (anchor) {
+        await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(anchor.namespace)} CASCADE`);
       }
     } finally {
       await state?.cleanup();
@@ -227,50 +221,42 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
   it("acquires, renews, publishes, and releases Gateway ownership in PostgreSQL", async () => {
     const { current, snapshot, anchor } = await bootstrapped();
     const claim = await acquireTestPortBlock({ offsets: [0] });
-    try {
-      await installGatewayDatabaseEngine(snapshot);
-      {
-        // Acquisition awaits the real heartbeat worker's initial durable renewal.
-        const lock = await acquireGatewayLock({
-          env: current.env,
-          port: claim.port,
-          listenerMode: "foreground",
-          allowInTests: true,
-        });
-        if (!lock) {
-          throw new Error("Gateway ownership was not acquired");
-        }
-        try {
-          lock.markListening?.();
-          const lease = await client.query<{
-            payload_json: string;
-            heartbeat_at: string;
-            expires_at: string;
-          }>(
-            `SELECT payload_json, heartbeat_at, expires_at FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
-            ["gateway-owner", "global"],
-          );
-          expect(lease.rows).toHaveLength(1);
-          const row = lease.rows[0]!;
-          expect(JSON.parse(row.payload_json)).toMatchObject({
-            port: claim.port,
-            mode: "foreground",
-            listeningAt: expect.any(Number),
-          });
-          expect(Number(row.heartbeat_at)).toBeGreaterThan(0);
-          expect(Number(row.expires_at)).toBeGreaterThan(Date.now());
-        } finally {
-          await lock.release();
-        }
-        const released = await queryRows(
-          `SELECT owner FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
-          ["gateway-owner", "global"],
-        );
-        expect(released).toEqual([]);
-      }
-    } finally {
-      await claim.release();
+    await using claims = new AsyncDisposableStack();
+    claims.defer(claim.release);
+    await installGatewayDatabaseEngine(snapshot);
+    // Acquisition awaits the real heartbeat worker's initial durable renewal.
+    const lock = await acquireGatewayLock({
+      env: current.env,
+      port: claim.port,
+      listenerMode: "foreground",
+      allowInTests: true,
+    });
+    if (!lock) {
+      throw new Error("Gateway ownership was not acquired");
     }
+    try {
+      lock.markListening?.();
+      const lease = await queryRows<Record<"payload_json" | "heartbeat_at" | "expires_at", string>>(
+        `SELECT payload_json, heartbeat_at, expires_at FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
+        ["gateway-owner", "global"],
+      );
+      expect(lease).toHaveLength(1);
+      const row = lease[0]!;
+      expect(JSON.parse(row.payload_json)).toMatchObject({
+        port: claim.port,
+        mode: "foreground",
+        listeningAt: expect.any(Number),
+      });
+      expect(Number(row.heartbeat_at)).toBeGreaterThan(0);
+      expect(Number(row.expires_at)).toBeGreaterThan(Date.now());
+    } finally {
+      await lock.release();
+    }
+    const released = await queryRows(
+      `SELECT owner FROM ${quoteIdentifier(anchor.namespace)}.state_leases WHERE scope = $1 AND lease_key = $2`,
+      ["gateway-owner", "global"],
+    );
+    expect(released).toEqual([]);
   });
 
   it.each([

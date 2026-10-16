@@ -284,27 +284,22 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
 
-  test.each([[503, "hook agent run did not start before admission timeout"]] as const)(
-    "returns %s for typed agent admission failures",
-    async (statusCode, error) => {
-      readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
-      const dispatchAgentHook = vi.fn(async () => ({
-        ok: false as const,
-        statusCode,
-        error,
-        runId: "run-1",
-      }));
-      const handler = createHooksHandler({ dispatchAgentHook });
-      const req = createHookRequest({ url: "/hooks/agent" });
-      const { res, end } = createResponse();
-
-      const handled = await handler(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(statusCode);
-      expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error, runId: "run-1" }));
-    },
-  );
+  test("returns 503 for typed agent admission failures", async () => {
+    const statusCode = 503;
+    const error = "hook agent run did not start before admission timeout";
+    readJsonBodyMock.mockResolvedValue({ ok: true, value: { message: "Dispatch" } });
+    const dispatchAgentHook = vi.fn(async () => ({
+      ok: false as const,
+      statusCode,
+      error,
+      runId: "run-1",
+    }));
+    const handler = createHooksHandler({ dispatchAgentHook });
+    const { res, end } = createResponse();
+    expect(await handler(createHookRequest({ url: "/hooks/agent" }), res)).toBe(true);
+    expect(res.statusCode).toBe(statusCode);
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error, runId: "run-1" }));
+  });
 
   test.each(["mapped-ipv6", "trusted-proxy"])(
     "shares the hook auth bucket for %s",
@@ -330,12 +325,8 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
   test("returns unhandled for a non-hook URL on an IPv6 listener", async () => {
     const handler = createHooksHandler({ bindHost: "::" });
-    const req = createHookRequest({ url: "/" });
     const { res, end } = createResponse();
-
-    const handled = await handler(req, res);
-
-    expect(handled).toBe(false);
+    expect(await handler(createHookRequest({ url: "/" }), res)).toBe(false);
     expect(end).not.toHaveBeenCalled();
   });
 });
