@@ -579,6 +579,8 @@ describe("queued compaction successor ownership", () => {
               updatedAt: 2,
               activeWriterRunId: "replacement-writer",
             });
+          } else {
+            await patchSessionEntryCore(target(), () => ({ label: "renamed while compacting" }));
           }
           const entryBeforeAppend = structuredClone(
             loadSessionEntry({ ...target(), readConsistency: "latest" }),
@@ -607,6 +609,7 @@ describe("queued compaction successor ownership", () => {
             expect(after?.sessionId).toBe(sessionId);
             expect(after?.lifecycleRevision).toBe(owner.lifecycleRevision);
             expect(after?.activeWriterRunId).toBe(capturedWriter);
+            expect(after?.label).toBe("renamed while compacting");
             expect(outcome).toEqual({ written: true });
             expect(result).toMatchObject({ ok: true, compacted: true });
           }
