@@ -27,63 +27,56 @@ vi.mock("../plugins/clawhub.js", async (importOriginal) => ({
   },
 }));
 const freshCache = <T>(run: () => T) => withPluginCache(createPluginCache(), run);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => npmInstall.mockReset());
 
-describe("update canary plugin verification", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it("keeps an unavailable copied plugin nonblocking without fetching a replacement", async () => {
-    npmInstall.mockClear();
-    const root = tempDirs.make("openclaw-canary-plugin-");
-    const env = {
-      ...buildUpdateRehearsalPathEnv(root),
-      OPENCLAW_UPDATE_IN_PROGRESS: "0",
-      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
-    };
-    const cfg = { plugins: { entries: { "canary-fixture": { enabled: true } } } };
-    await seedInstalledPluginIndex(
-      { "canary-fixture": { source: "npm", spec: "@example/canary-fixture" } },
-      { config: cfg, env },
-    );
-    await freshCache(async () => {
-      const result = await runDoctorPluginConvergence({ cfg, env });
-      expect(npmInstall).not.toHaveBeenCalled();
-      expect(result).toEqual({
-        quarantinedPlugins: [
-          {
-            pluginId: "canary-fixture",
-            state: "configured-unavailable",
-            diagnostic: {
-              kind: "plugin-verification",
-              reason: "missing-install-path",
-              detail: "Install path is missing from the plugin install record.",
-            },
-          },
-        ],
-        migrationInspection: {
-          requiredPluginIds: [],
-          inspectionRequiredPluginIds: [],
-          statelessPlugins: [],
-          runtimePluginAliases: [],
-          discoveryBlockedPluginIds: [],
+it("keeps an unavailable copied plugin nonblocking without fetching a replacement", async () => {
+  const root = tempDirs.make("openclaw-canary-plugin-");
+  const env = {
+    ...buildUpdateRehearsalPathEnv(root),
+    OPENCLAW_UPDATE_IN_PROGRESS: "0",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+  };
+  const cfg = { plugins: { entries: { "canary-fixture": { enabled: true } } } };
+  await seedInstalledPluginIndex(
+    { "canary-fixture": { source: "npm", spec: "@example/canary-fixture" } },
+    { config: cfg, env },
+  );
+  const result = await freshCache(() => runDoctorPluginConvergence({ cfg, env }));
+  expect(npmInstall).not.toHaveBeenCalled();
+  expect(result).toEqual({
+    quarantinedPlugins: [
+      {
+        pluginId: "canary-fixture",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-install-path",
+          detail: "Install path is missing from the plugin install record.",
         },
-        deferredPlugins: [
-          {
-            pluginId: "canary-fixture",
-            reason:
-              "Package convergence must wait until the updating parent releases its install records.",
-            command: "openclaw update repair",
-          },
-        ],
-      });
-    });
+      },
+    ],
+    migrationInspection: {
+      requiredPluginIds: [],
+      inspectionRequiredPluginIds: [],
+      statelessPlugins: [],
+      runtimePluginAliases: [],
+      discoveryBlockedPluginIds: [],
+    },
+    deferredPlugins: [
+      {
+        pluginId: "canary-fixture",
+        reason:
+          "Package convergence must wait until the updating parent releases its install records.",
+        command: "openclaw update repair",
+      },
+    ],
   });
 });
 
 describe.each(["startup", "repair"] as const)("%s consent inventory", (first) => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => npmInstall.mockReset());
   function createInventory(prefix: string) {
     const home = tempDirs.make(prefix);
     const bundledRoot = path.join(home, "bundled");
@@ -118,35 +111,29 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   it.each([false, true])(
     "does not install catalog-only plugins or retained bundled records (retained=%s)",
     async (retained) => {
-      npmInstall.mockClear();
       const { home, bundledRoot, cfg, env } = createInventory("openclaw-consent-inventory-");
       const pluginId = "bundled-consent-fixture";
       const packageName = "@openclaw/bundled-consent-fixture";
       const rootDir = path.join(bundledRoot, pluginId);
       fs.mkdirSync(rootDir, { recursive: true });
       const fixture = createColdPluginFixture({ rootDir, pluginId, packageName });
-      await freshCache(() =>
-        seedInstalledPluginIndex(
-          retained
-            ? {
-                [pluginId]: {
-                  source: "npm",
-                  spec: packageName,
-                  resolvedName: packageName,
-                  installPath: path.join(home, "missing-payload"),
-                },
-              }
-            : {},
-          { config: cfg, env },
-        ),
-      );
+      const records = retained
+        ? {
+            [pluginId]: {
+              source: "npm" as const,
+              spec: packageName,
+              resolvedName: packageName,
+              installPath: path.join(home, "missing-payload"),
+            },
+          }
+        : {};
+      await freshCache(() => seedInstalledPluginIndex(records, { config: cfg, env }));
       expect(listOfficialExternalPluginCatalogEntries().length).toBeGreaterThan(0);
       for (let start = 0; start < 2; start += 1) {
         await freshCache(async () => {
           await converge(cfg, env);
-          const repair = await runPostCorePluginConvergence({ cfg, env });
-          expect(repair.warnings).toEqual([]);
-          expect(repair.installRecords).toEqual({});
+          const { warnings, installRecords } = await runPostCorePluginConvergence({ cfg, env });
+          expect({ warnings, installRecords }).toEqual({ warnings: [], installRecords: {} });
         });
         // A completed lifecycle changes the next generation, not the invoking snapshot.
         const persisted = await freshCache(() =>
@@ -160,21 +147,20 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   );
 
   it.each([
-    {
-      envVar: "OPENCODE_API_KEY",
-      packages: {
+    [
+      "OPENCODE_API_KEY",
+      {
         opencode: "@openclaw/opencode-provider",
         "opencode-go": "@openclaw/opencode-go-provider",
       },
-    },
-    { envVar: "OPENROUTER_API_KEY", packages: { perplexity: "@openclaw/perplexity-plugin" } },
-  ])(
-    "converges verified official packages selected only by $envVar",
-    async ({ envVar, packages }) => {
+    ],
+    ["OPENROUTER_API_KEY", { perplexity: "@openclaw/perplexity-plugin" }],
+  ] as const)(
+    "converges verified official packages selected only by %s",
+    async (envVar, packages) => {
       const { home, cfg, env: baseEnv } = createInventory("openclaw-consent-env-");
       const env = { ...baseEnv, [envVar]: "synthetic-credential" };
       const runtimeMarkers: string[] = [];
-      npmInstall.mockClear();
       npmInstall.mockImplementation(async (params) => {
         const pluginId = params.expectedPluginId;
         const packageName = Object.entries(packages).find(([id]) => id === pluginId)?.[1];

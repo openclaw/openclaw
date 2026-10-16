@@ -34,9 +34,10 @@ function requireNoteMessage(): string {
 
 const localHealth = { cfg: { gateway: { mode: "local" as const } }, healthOk: false };
 const remoteHealth = { cfg: { gateway: { mode: "remote" as const } }, healthOk: true };
+const operatorToken = { role: "operator", token: "stale-local-token", scopes: ["operator.read"] };
 const operatorRequest = {
-  role: "operator",
-  scopes: ["operator.read"],
+  role: operatorToken.role,
+  scopes: operatorToken.scopes,
   clientId: "control-ui",
   clientMode: "webchat",
   displayName: "Dashboard",
@@ -56,9 +57,8 @@ const legacyDeviceAuthContents = JSON.stringify({
   deviceId: "synthetic-device",
   tokens: {
     operator: {
+      ...operatorToken,
       token: "synthetic-legacy-token",
-      role: "operator",
-      scopes: ["operator.read"],
       updatedAtMs: 10,
     },
   },
@@ -270,17 +270,7 @@ describe("noteDevicePairingHealth", () => {
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1);
-      try {
-        seedDeviceAuthToken({
-          deviceId: identity.deviceId,
-          role: "operator",
-          token: "stale-local-token",
-          scopes: ["operator.read"],
-        });
-      } finally {
-        now.mockRestore();
-      }
+      seedDeviceAuthToken({ deviceId: identity.deviceId, ...operatorToken, updatedAtMs: 1 });
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
@@ -424,12 +414,7 @@ describe("noteDevicePairingHealth", () => {
 
   it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "stale-local-token",
-        scopes: ["operator.read"],
-      });
+      seedDeviceAuthToken({ deviceId: identity.deviceId, ...operatorToken });
       await revokeDeviceToken({
         deviceId: identity.deviceId,
         role: "operator",

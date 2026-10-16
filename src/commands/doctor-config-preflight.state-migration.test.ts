@@ -10,7 +10,7 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  preflightStateMigrationMocks,
+  preflightStateMigrationMocks as mocks,
   resetStateMigrationPreflightMocks,
 } from "./doctor-config-preflight.state-migration.test-harness.js";
 import {
@@ -18,16 +18,6 @@ import {
   makeStartupConvergenceResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
-const {
-  repairLegacyCronStoreWithoutPrompt,
-  collectCronCodexRuntimePolicyTargetsReadOnly,
-  runPostCorePluginConvergence,
-  runActivePluginPayloadSmokeCheck,
-  planStartupPluginConvergence,
-  readConfigFileSnapshot,
-  recordDeferredPluginMigrations,
-  note,
-} = preflightStateMigrationMocks;
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 const doctorMigrationOptions = {
   migrateLegacyConfig: false,
@@ -41,7 +31,7 @@ function withPluginConfig(check: (result: PreflightResult) => void) {
     gateway,
     plugins: { entries: { discord: { enabled: true } } },
   });
-  return readConfigFileSnapshot.withImplementation(
+  return mocks.readConfigFileSnapshot.withImplementation(
     async () => snapshot,
     async () => check(await runDoctorConfigPreflight(doctorMigrationOptions)),
   );
@@ -60,7 +50,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(resetStateMigrationPreflightMocks);
 
   it("carries cron Codex runtime policy targets only during repair", async () => {
-    collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValueOnce({
+    mocks.collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValueOnce({
       targets: [{ modelRef: "openai/gpt-5.6-sol" }],
       warnings: [],
     });
@@ -71,11 +61,11 @@ describe("runDoctorConfigPreflight state migration", () => {
       repairPrefixedConfig: true,
     });
 
-    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+    expect(mocks.repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway },
       migrateCodexModelRefs: false,
     });
-    expect(collectCronCodexRuntimePolicyTargetsReadOnly).toHaveBeenCalledWith({
+    expect(mocks.collectCronCodexRuntimePolicyTargetsReadOnly).toHaveBeenCalledWith({
       cfg: { gateway },
     });
     expect(result.cronCodexRuntimePolicyTargets).toEqual([{ modelRef: "openai/gpt-5.6-sol" }]);
@@ -96,11 +86,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       },
     };
     setActiveDegradedPlugins([quarantined]);
-    planStartupPluginConvergence.mockResolvedValueOnce({
-      required: true,
-      installRecords: { discord: { source: "npm", installPath: "/plugins/discord" } },
-    });
-    runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
+    mocks.runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
       checked: ["discord"],
       failures: [{ pluginId: "discord", ...failure }],
     });
@@ -121,16 +107,15 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
     );
 
-    expect(runActivePluginPayloadSmokeCheck).toHaveBeenCalledOnce();
-    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(mocks.runActivePluginPayloadSmokeCheck).toHaveBeenCalledOnce();
+    expect(mocks.runPostCorePluginConvergence).not.toHaveBeenCalled();
     expect(listActiveDegradedPlugins()).toEqual([quarantined]);
   });
 
   it("keeps missing plugins deferred and reports host-link repair warnings", async () => {
     const hostWarning = "Failed to repair installed OpenClaw host peer links: EACCES";
-    runPostCorePluginConvergence.mockResolvedValueOnce(
+    mocks.runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
-        errored: true,
         warnings: [
           {
             reason: hostWarning,
@@ -155,7 +140,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       );
       expectDeferredPlugin(result, 'Run "openclaw update repair"');
     });
-    expect(recordDeferredPluginMigrations).toHaveBeenCalledWith({
+    expect(mocks.recordDeferredPluginMigrations).toHaveBeenCalledWith({
       env: process.env,
       pending: [expect.objectContaining({ pluginId: "discord" })],
       expectedPending: [],
@@ -167,26 +152,25 @@ describe("runDoctorConfigPreflight state migration", () => {
         diagnostic: { reason: "missing-install-path" },
       },
     ]);
-    expect(note).toHaveBeenCalledWith(
+    expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining('Plugin "discord"'),
       "Doctor warnings",
     );
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(hostWarning), "Doctor warnings");
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining(hostWarning),
+      "Doctor warnings",
+    );
   });
 
   it("bounds and redacts recorded migration warnings while preserving Doctor guidance", () => {
     const credential = "sk-" + "syntheticfixture".repeat(4);
-    try {
-      recordStartupMigrationWarnings([`Detector token ${credential} ${"details ".repeat(1000)}`]);
-      const warning = readStartupMigrationWarning();
-      expect(warning).not.toContain(credential);
-      expect(warning?.length).toBeLessThan(2200);
-      expect(warning).toContain("… (see startup log)");
-      expect(warning).toContain(
-        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
-      );
-    } finally {
-      recordStartupMigrationWarnings([]);
-    }
+    recordStartupMigrationWarnings([`Detector token ${credential} ${"details ".repeat(1000)}`]);
+    const warning = readStartupMigrationWarning();
+    expect(warning).not.toContain(credential);
+    expect(warning?.length).toBeLessThan(2200);
+    expect(warning).toContain("… (see startup log)");
+    expect(warning).toContain(
+      'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+    );
   });
 });

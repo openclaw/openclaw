@@ -30,6 +30,7 @@ const success = (stdout = ""): ExecResult => ({
   stderr: "",
 });
 const property = (type: string, data: unknown) => ({ type, data });
+const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
 const execStart = (args: string[]) =>
   property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]);
 
@@ -44,13 +45,15 @@ type Difference =
   | "port"
   | "unavailable"
   | "confirmation drift";
-type Installation =
-  | "named"
-  | "reverse aliases"
-  | "default"
-  | "canonical default"
-  | "Compose env ports"
-  | "explicit relocated";
+const installations = {
+  named: ["lisa", "openclaw-gateway-lisa", "openclaw-lisa"],
+  "reverse aliases": ["lisa", "openclaw-lisa", "openclaw-gateway-lisa"],
+  default: [undefined, "openclaw-gateway", "openclaw"],
+  "canonical default": [undefined, "openclaw-gateway", "openclaw-gateway"],
+  "Compose env ports": ["lisa", "openclaw-gateway-lisa", "openclaw-lisa"],
+  "explicit relocated": ["lisa", "operator-gateway", "operator-gateway"],
+} as const;
+type Installation = keyof typeof installations;
 type AfterRemoval = "legacy alias" | "unverifiable alias";
 
 async function exerciseDoctor(
@@ -59,24 +62,10 @@ async function exerciseDoctor(
   afterRemoval?: AfterRemoval,
 ) {
   const home = await fs.realpath(dirs.make("doctor-dueling-identity-"));
-  const profile =
-    installation === "default" || installation === "canonical default" ? undefined : "lisa";
+  const [profile, user, systemUnit] = installations[installation];
   const explicit = installation === "explicit relocated";
-  const userName = explicit
-    ? "operator-gateway.service"
-    : installation === "reverse aliases"
-      ? "openclaw-lisa.service"
-      : profile
-        ? "openclaw-gateway-lisa.service"
-        : "openclaw-gateway.service";
-  const systemName =
-    explicit || installation === "canonical default"
-      ? userName
-      : installation === "reverse aliases"
-        ? "openclaw-gateway-lisa.service"
-        : profile
-          ? "openclaw-lisa.service"
-          : "openclaw.service";
+  const userName = `${user}.service`;
+  const systemName = `${systemUnit}.service`;
   const userPath = path.join(home, ".config/systemd/user", userName);
   const systemPath = `/etc/systemd/system/${systemName}`;
   const systemFile = path.join(home, "system-unit.service");
@@ -222,10 +211,10 @@ async function exerciseDoctor(
         return success('s "257"\n');
       }
       if (commandArgs.includes("GetNameOwner")) {
-        return success(JSON.stringify(property("s", [system ? ":1.42" : ":1.43"])));
+        return reply("s", [system ? ":1.42" : ":1.43"]);
       }
       if (commandArgs.includes("GetConnectionUnixUser")) {
-        return success(JSON.stringify(property("u", [system ? 0 : 2001])));
+        return reply("u", [system ? 0 : 2001]);
       }
       if (commandArgs.includes("GetUnit") || commandArgs.includes("LoadUnit")) {
         if (
@@ -236,11 +225,7 @@ async function exerciseDoctor(
         }
         const selectedUserName = removed && afterRemoval ? legacyName : userName;
         if (commandArgs.at(-1) === (system ? systemName : selectedUserName)) {
-          return success(
-            JSON.stringify(
-              property("o", [`/org/freedesktop/systemd1/unit/${system ? "system" : "user"}`]),
-            ),
-          );
+          return reply("o", [`/org/freedesktop/systemd1/unit/${system ? "system" : "user"}`]);
         }
       }
       const index = commandArgs.findIndex((arg) => /\.(?:Unit|Service)$/.test(arg));

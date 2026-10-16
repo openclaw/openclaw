@@ -52,16 +52,14 @@ async function runRepair(
   });
 }
 
-const gatewayProgramArguments = [
-  "/usr/bin/node",
-  "/usr/local/bin/openclaw",
-  "gateway",
-  "--port",
-  "18789",
-];
+const gatewayProgramArguments = createGatewayCommand().programArguments;
 
-function createRecommendedServiceAudit(code: string, message: string): ServiceConfigAudit {
-  return { ok: false, issues: [{ code, message, level: "recommended" }] };
+function createRecommendedServiceAudit(
+  code: string,
+  message: string,
+  fields: Partial<ServiceConfigAudit["issues"][number]> = {},
+): ServiceConfigAudit {
+  return { ok: false, issues: [{ code, message, level: "recommended", ...fields }] };
 }
 
 function createGatewayInstallPlanFixture(): Awaited<
@@ -108,16 +106,12 @@ async function withSourceCheckout(run: (entrypoint: string) => Promise<void>) {
   });
 }
 
-function setupGatewayEntrypointRepairScenario(params: {
-  currentEntrypoint: string;
-  installEntrypoint: string;
-  installWorkingDirectory?: string;
-}) {
-  mocks.readCommand.mockResolvedValue(createGatewayCommand(params.currentEntrypoint));
+function setupGatewayEntrypointRepairScenario(current: string, installed: string) {
+  mocks.readCommand.mockResolvedValue(createGatewayCommand(current));
   mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
   mocks.buildGatewayInstallPlan.mockResolvedValue({
-    ...createGatewayCommand(params.installEntrypoint),
-    ...(params.installWorkingDirectory ? { workingDirectory: params.installWorkingDirectory } : {}),
+    ...createGatewayCommand(installed),
+    workingDirectory: "/tmp",
   });
   fsMocks.realpath.mockImplementation(async (value: string) => value);
 }
@@ -198,17 +192,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
   it("reports an orphaned unsafe systemd backup without an active service command", async () => {
     mocks.readCommand.mockResolvedValue(null);
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: false,
-      issues: [
-        {
-          code: "systemd-unit-backup-unsafe",
-          message: "Systemd service backup exposes gateway credentials.",
-          detail: "/home/test/.config/systemd/user/openclaw-gateway.service.bak",
-          level: "recommended",
-        },
-      ],
-    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "systemd-unit-backup-unsafe",
+        "Systemd service backup exposes gateway credentials.",
+        { detail: "/home/test/.config/systemd/user/openclaw-gateway.service.bak" },
+      ),
+    );
     await runRepair();
     expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
       expect.objectContaining({ command: null, platform: process.platform }),
@@ -227,14 +217,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
             source: "exec",
             provider: "execmain",
             id: "gateway/token",
-          },
-        },
-      },
-      secrets: {
-        providers: {
-          execmain: {
-            source: "exec",
-            command: process.execPath,
           },
         },
       },
@@ -383,17 +365,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
         managedDefinition,
         managedOverrides: overrides,
       });
-      mocks.auditGatewayServiceConfig.mockResolvedValue({
-        ok: false,
-        issues: [
-          {
-            code: issue,
-            message: "repair",
-            level: "recommended",
-            environmentKeys: embeddedManagedIssue ? ["MANAGED_B"] : undefined,
-          },
-        ],
-      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue(
+        createRecommendedServiceAudit(issue, "repair", {
+          environmentKeys: embeddedManagedIssue ? ["MANAGED_B"] : undefined,
+        }),
+      );
       mocks.buildGatewayInstallPlan.mockResolvedValue({
         ...createGatewayCommand(entrypoint),
         ...(embeddedManagedIssue
@@ -455,18 +431,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
         managedDefinition,
         managedOverrides: overrides,
       });
-      mocks.auditGatewayServiceConfig.mockResolvedValue({
-        ok: false,
-        issues: [
-          {
-            code: issue,
-            message: "repair",
-            level: "recommended",
-            environmentKeys:
-              issue === "gateway-proxy-env-embedded" ? ["https_proxy"] : ["TAVILY_API_KEY"],
-          },
-        ],
-      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue(
+        createRecommendedServiceAudit(issue, "repair", {
+          environmentKeys:
+            issue === "gateway-proxy-env-embedded" ? ["https_proxy"] : ["TAVILY_API_KEY"],
+        }),
+      );
       mocks.buildGatewayInstallPlan.mockResolvedValue({
         ...managedDefinition,
         environment: {
@@ -523,11 +493,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("skips entrypoint rewrite in non-interactive fix mode", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
-      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
-      installWorkingDirectory: "/tmp",
-    });
+    setupGatewayEntrypointRepairScenario(
+      "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+      "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+    );
 
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -547,63 +516,42 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not persist EnvironmentFile-backed service tokens into config", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-      },
-      async () => {
-        mocks.readCommand.mockResolvedValue({
-          programArguments: gatewayProgramArguments,
-          environment: {
-            OPENCLAW_GATEWAY_TOKEN: "env-file-token",
-          },
-          environmentValueSources: {
-            OPENCLAW_GATEWAY_TOKEN: "file",
-          },
-        });
-        mocks.auditGatewayServiceConfig.mockResolvedValue({
-          ok: false,
-          issues: [],
-        });
-        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
-        mocks.install.mockResolvedValue(undefined);
-        const cfg: OpenClawConfig = {
-          gateway: {},
-        };
-        await runRepair(cfg);
-        expect(mocks.writeConfig).not.toHaveBeenCalled();
-        expect(mocks.buildGatewayInstallPlan).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({ config: cfg }),
-        );
-        expect(mocks.stage).not.toHaveBeenCalled();
-      },
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: { OPENCLAW_GATEWAY_TOKEN: "env-file-token" },
+      environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: "file" },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: false, issues: [] });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayInstallPlanFixture());
+    mocks.install.mockResolvedValue(undefined);
+    const cfg: OpenClawConfig = { gateway: {} };
+    await runRepair(cfg);
+    expectNoServiceWrite("writeConfig", "stage");
+    expect(mocks.buildGatewayInstallPlan).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ config: cfg }),
     );
   });
 
-  it.each(["OPENCLAW_SERVICE_REPAIR_POLICY"])(
-    "reports service config drift but skips repair when %s is external",
-    async (envKey) => {
-      await withEnvAsync({ [envKey]: "external" }, async () => {
-        setupGatewayEntrypointRepairScenario({
-          currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
-          installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
-          installWorkingDirectory: "/tmp",
-        });
-        const prompter = makeDoctorPrompts();
-        await runRepair(undefined, {}, prompter);
-        expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledOnce();
-        configNote("Gateway service entrypoint does not match the current install.");
-        expect(mocks.note).toHaveBeenCalledWith(
-          formatServiceRepairDeferredNote("external"),
-          "Gateway service config",
-        );
-        expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-        expect(mocks.writeConfig).not.toHaveBeenCalled();
-        expectNoServiceWrite("stage", "install");
-      });
-    },
-  );
+  it("reports service config drift but skips repair when externally managed", async () => {
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      setupGatewayEntrypointRepairScenario(
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+      );
+      const prompter = makeDoctorPrompts();
+      await runRepair(undefined, {}, prompter);
+      expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledOnce();
+      configNote("Gateway service entrypoint does not match the current install.");
+      expect(mocks.note).toHaveBeenCalledWith(
+        formatServiceRepairDeferredNote("external"),
+        "Gateway service config",
+      );
+      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+      expect(mocks.writeConfig).not.toHaveBeenCalled();
+      expectNoServiceWrite("stage", "install");
+    });
+  });
 
   it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
     await withSourceCheckout(async (entrypoint) => {
@@ -622,11 +570,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
   it("does not duplicate Gateway service config panels for a source-checkout entrypoint with audit findings", async () => {
     await withSourceCheckout(async (currentEntrypoint) => {
-      setupGatewayEntrypointRepairScenario({
+      setupGatewayEntrypointRepairScenario(
         currentEntrypoint,
-        installEntrypoint: "/usr/local/lib/node_modules/openclaw/dist/index.js",
-        installWorkingDirectory: "/tmp",
-      });
+        "/usr/local/lib/node_modules/openclaw/dist/index.js",
+      );
       await runRepair();
       const notes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway service config");
       expect(notes).toHaveLength(1);
@@ -659,7 +606,9 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     vi.clearAllMocks();
     mocks.writeConfig.mockReset().mockImplementation(async (nextConfig) => nextConfig);
-    mocks.findSystemdGatewayInstallation.mockResolvedValue({ kind: "none" });
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
     delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
   });
@@ -669,29 +618,27 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
   });
 
-  it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
-    mockProcessPlatform("linux");
-    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
-    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+  it.each([
+    [true, "Cleanup of openclaw-gateway.service completed."],
+    [false, "systemctl --user disable --now openclaw-gateway.service"],
+  ] as const)("reports user-unit removal with disabled=%s", async (disabled, message) => {
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
       removed: true,
-      disabled: true,
+      disabled,
     });
     const runtime = makeDoctorIo();
-    const prompter = makeDoctorPrompts();
-    await maybeResolveDuelingSystemdGatewayScopes(runtime, prompter);
-    expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Cleanup of openclaw-gateway.service completed."),
-    );
+    await maybeResolveDuelingSystemdGatewayScopes(runtime, makeDoctorPrompts());
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(message));
+    if (disabled) {
+      expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
+    } else {
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("sole gateway manager"));
+    }
   });
 
   it("emits cleanup hints and does not remove anything when declined", async () => {
-    mockProcessPlatform("linux");
-    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
-    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([
       "systemctl --user disable --now openclaw-gateway.service",
       "rm ~/.config/systemd/user/openclaw-gateway.service",
@@ -703,46 +650,20 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalled();
   });
 
-  it.each(["OPENCLAW_SUPERVISOR_MODE"])(
-    "skips removal and repair confirmation when %s is external",
-    async (envKey) => {
-      mockProcessPlatform("linux");
-      mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
-      mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
-      const prompter = makeDoctorPrompts();
-      await withEnvAsync({ [envKey]: "external" }, async () => {
-        await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
-      });
-      expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-      expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
-      expect(mocks.note).toHaveBeenCalledWith(
-        formatServiceRepairDeferredNote("external"),
-        "Gateway cleanup skipped",
-      );
-    },
-  );
-
-  it("tells the operator to stop the unit when systemctl could not disable it", async () => {
-    mockProcessPlatform("linux");
-    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
-    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
-    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
-      unitName: "openclaw-gateway.service",
-      unitPath: duelingInstallation.user.unitPath,
-      removed: true,
-      disabled: false,
+  it("skips removal and repair confirmation when externally supervised", async () => {
+    const prompter = makeDoctorPrompts();
+    await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+      await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
     });
-    const runtime = makeDoctorIo();
-    await maybeResolveDuelingSystemdGatewayScopes(runtime, makeDoctorPrompts());
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("systemctl --user disable --now openclaw-gateway.service"),
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      formatServiceRepairDeferredNote("external"),
+      "Gateway cleanup skipped",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("sole gateway manager"));
   });
 
   it("fails closed when the system unit ownership probe errors", async () => {
-    mockProcessPlatform("linux");
-    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
     mocks.isSystemUnitActiveAndEnabled.mockRejectedValue(new Error("systemctl wedged"));
     const prompter = makeDoctorPrompts();
     await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
@@ -751,7 +672,6 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
   });
 
   it("does nothing for a single-scope (user-only) install", async () => {
-    mockProcessPlatform("linux");
     mocks.findSystemdGatewayInstallation.mockResolvedValue({
       kind: "user",
       user: duelingInstallation.user,

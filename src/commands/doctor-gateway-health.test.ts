@@ -77,6 +77,14 @@ describe("checkGatewayHealth", () => {
     title: string,
     message: string | ReturnType<typeof expect.stringContaining>,
   ) => expect(note).toHaveBeenCalledWith(message, title);
+  const expectRpc = (method: string, timeoutMs: number, params?: object) =>
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method,
+        timeoutMs,
+        ...(params ? { params } : {}),
+      }),
+    );
 
   beforeEach(() => {
     vi.spyOn(performance, "now").mockReturnValue(0);
@@ -380,16 +388,8 @@ describe("checkGatewayHealth", () => {
       await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
       expect(note).not.toHaveBeenCalled();
       expect(sharedRuntime.error).not.toHaveBeenCalled();
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "channels.status",
-          params: { probe: true, timeoutMs: 5_000 },
-          timeoutMs: 6_100,
-        }),
-      );
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "diagnostics.stability", timeoutMs: 6_100 }),
-      );
+      expectRpc("channels.status", 6_100, { probe: true, timeoutMs: 5_000 });
+      expectRpc("diagnostics.stability", 6_100);
       expect(callGateway).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
@@ -410,24 +410,18 @@ describe("checkGatewayHealth", () => {
       await vi.advanceTimersByTimeAsync(21_000);
 
       await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "channels.status",
-          params: { probe: true, timeoutMs: 13_000 },
-          timeoutMs: 21_000,
-        }),
-      );
-      expect(note).toHaveBeenCalledWith(
+      expectRpc("channels.status", 21_000, { probe: true, timeoutMs: 13_000 });
+      expectNote(
+        "Channel warnings",
         expect.stringContaining(
           "Gateway answered status in 7s; channel diagnostics did not finish within 21s",
         ),
-        "Channel warnings",
       );
-      expect(note).toHaveBeenCalledWith(
+      expectNote(
+        "Telemetry exporters",
         expect.stringContaining(
           "Gateway answered status in 7s; exporter diagnostics did not finish within 21s",
         ),
-        "Telemetry exporters",
       );
       expect(
         note.mock.calls.every(([message]) => String(message).includes("host may be slow")),
@@ -436,54 +430,40 @@ describe("checkGatewayHealth", () => {
     });
   });
 
-  it("redacts credentials and terminal controls in channel probe failures", async () => {
-    const token = "sk-abcdefghijklmnopqrstuv";
-    callGateway
-      .mockResolvedValueOnce({ ok: true })
-      .mockRejectedValueOnce(
-        new Error(`\u001B[31mchannel probe failed\nAuthorization: Bearer ${token}`),
+  it.each(["channel", "exporter"] as const)(
+    "redacts %s failures and reports their retry command",
+    async (target) => {
+      const token = "sk-abcdefghijklmnopqrstuv";
+      callGateway.mockResolvedValueOnce({ ok: true });
+      if (target === "exporter") {
+        callGateway.mockResolvedValueOnce({});
+      }
+      callGateway.mockRejectedValueOnce(
+        new Error(`\u001B[31m${target} probe failed\nAuthorization: Bearer ${token}`),
       );
-
-    await expect(check()).resolves.toEqual({
-      authenticated: true,
-      healthOk: true,
-      status: { ok: true },
-    });
-
-    const [message, title] = note.mock.calls.at(-1) ?? [];
-    expect(title).toBe("Channel warnings");
-    expect(message).toContain("channel probe failed\\nAuthorization: Bearer");
-    expect(message).not.toContain(token);
-    expect(message).not.toContain("\u001B");
-    expect(message.split("\n")).toHaveLength(2);
-    expect(message).toContain("Retry: openclaw channels status --probe");
-    expect(sharedRuntime.error).not.toHaveBeenCalled();
-  });
-
-  it("reports sanitized exporter diagnostic failures with a retry command", async () => {
-    const token = "sk-abcdefghijklmnopqrstuv";
-    callGateway
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(
-        new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
+      await expect(check(target === "exporter" ? { timeoutMs: 3000 } : {})).resolves.toEqual({
+        authenticated: true,
+        healthOk: true,
+        status: { ok: true },
+      });
+      const [message, actualTitle] = note.mock.calls.at(-1) ?? [];
+      expect(actualTitle).toBe(target === "channel" ? "Channel warnings" : "Telemetry exporters");
+      expect(message).toContain(
+        target === "channel"
+          ? "channel probe failed\\nAuthorization: Bearer"
+          : "Exporter diagnostics failed: exporter probe failed",
       );
-
-    await expectResult({
-      authenticated: true,
-      healthOk: true,
-      status: { ok: true },
-    });
-
-    const [message, title] = note.mock.calls.at(-1) ?? [];
-    expect(title).toBe("Telemetry exporters");
-    expect(message).toContain("Exporter diagnostics failed: exporter probe failed");
-    expect(message).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
-    expect(message).not.toContain(token);
-    expect(message).not.toContain("\u001B");
-    expect(message.split("\n")).toHaveLength(2);
-    expect(sharedRuntime.error).not.toHaveBeenCalled();
-  });
+      expect(message).toContain(
+        target === "channel"
+          ? "Retry: openclaw channels status --probe"
+          : "Retry: openclaw gateway stability --type telemetry.exporter",
+      );
+      expect(message).not.toContain(token);
+      expect(message).not.toContain("\u001B");
+      expect(message.split("\n")).toHaveLength(2);
+      expect(sharedRuntime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
@@ -511,8 +491,6 @@ describe("checkGatewayHealth", () => {
       .mockResolvedValueOnce({
         secretEgressProxy: {
           state: "degraded",
-          caExpiresAt: "2026-09-01T00:00:00.000Z",
-          failedCertificates: 0,
           message: "Check the system clock, then restart the Gateway.",
         },
       })
@@ -536,14 +514,12 @@ describe("checkGatewayHealth", () => {
           {
             ownerKind: "account",
             ownerId: "discord:ops",
-            state: "unavailable",
             paths: ["channels.discord.accounts.ops.token"],
             reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
           },
           {
             ownerKind: "capability",
             ownerId: "tts",
-            state: "unavailable",
             degradationState: "stale",
             paths: ["tts.providers.elevenlabs.apiKey"],
             reason: "secret provider policy denied resolution",
@@ -551,7 +527,6 @@ describe("checkGatewayHealth", () => {
           {
             ownerKind: "capability",
             ownerId: "web-fetch:firecrawl",
-            state: "unavailable",
             paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
             reason: "resolved secret value was invalid",
           },
@@ -578,25 +553,9 @@ describe("checkGatewayHealth", () => {
     callGateway
       .mockResolvedValueOnce({
         degradedPlugins: [
-          {
-            pluginId: "discord",
-            state: "configured-unavailable",
-            diagnostic: {
-              kind: "plugin-verification",
-              reason: "unreadable-package-json",
-              detail: "permission denied",
-            },
-          },
-          {
-            pluginId: "matrix",
-            state: "configured-unavailable",
-            diagnostic: {
-              kind: "plugin-verification",
-              reason: "missing-main-entry",
-              detail: "dist/index.js is missing",
-            },
-          },
-        ],
+          ["discord", "unreadable-package-json", "permission denied"],
+          ["matrix", "missing-main-entry", "dist/index.js is missing"],
+        ].map(([pluginId, reason, detail]) => ({ pluginId, diagnostic: { reason, detail } })),
       })
       .mockResolvedValueOnce({});
 
@@ -762,13 +721,12 @@ describe("probeGatewayMemoryStatus", () => {
     callGateway.mockRejectedValue(
       new Error(`gateway timeout after 8000ms\nGateway target: ${TEST_GATEWAY_URL}`),
     );
-
     const result = await probeGatewayMemoryStatus({ cfg });
     expect(result).toMatchObject({ checked: false, ready: false, skipped: false });
     expect(result.error).toContain("gateway memory check timed out");
   });
 
-  it("propagates checked: false and skipped: true when gateway skipped the embedding probe", async () => {
+  it("propagates an uncached shallow probe as skipped", async () => {
     callGateway.mockResolvedValue({
       embedding: {
         ok: false,
@@ -777,7 +735,6 @@ describe("probeGatewayMemoryStatus", () => {
           "memory embedding readiness not checked; run `openclaw memory status --deep` to check",
       },
     });
-
     const result = await probeGatewayMemoryStatus({ cfg });
     expect(result).toMatchObject({ checked: false, ready: false, skipped: true });
     expect(result.error).toContain("not checked");
@@ -785,7 +742,6 @@ describe("probeGatewayMemoryStatus", () => {
 
   it("keeps gateway request timeouts as explicit failures", async () => {
     callGateway.mockRejectedValue(new Error("gateway request timeout for doctor.memory.status"));
-
     await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
       checked: true,
       ready: false,

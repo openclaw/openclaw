@@ -36,20 +36,32 @@ function inventory(
 ) {
   mocks.findExtraGatewayServices.mockResolvedValue({ services, errors });
 }
-function macService(label: string, legacy: boolean): ExtraGatewayService {
-  const sourcePath = `/Users/test/Library/LaunchAgents/${label}.plist`;
+function fileService(
+  platform: "darwin" | "linux",
+  label: string,
+  scope: "user" | "system" = "user",
+  legacy = false,
+): ExtraGatewayService {
+  const directory =
+    platform === "darwin"
+      ? "/Users/test/Library/LaunchAgents"
+      : scope === "user"
+        ? "/home/test/.config/systemd/user"
+        : "/etc/systemd/system";
+  const sourcePath = `${directory}/${label}${platform === "darwin" ? ".plist" : ""}`;
   return {
-    platform: "darwin",
+    platform,
     label,
-    detail: `plist: ${sourcePath}`,
     sourcePath,
-    scope: "user",
+    detail: `${platform === "darwin" ? "plist" : "unit"}: ${sourcePath}`,
+    scope,
     legacy,
   };
 }
+
 function setupLegacyMacService() {
   mockProcessPlatform("darwin");
-  inventory([macService(LEGACY_MAC_LABEL, true)]);
+  inventory([fileService("darwin", LEGACY_MAC_LABEL, "user", true)]);
 }
 async function scan(deep = false, runtime = makeDoctorIo(), prompts = makeDoctorPrompts()) {
   await maybeScanExtraGatewayServices({ deep }, runtime, prompts);
@@ -123,15 +135,7 @@ describe("maybeScanExtraGatewayServices", () => {
     async (_, active, scope, reported) => {
       mockProcessPlatform("linux");
       await useRealCleanupHints();
-      const unitPath = `${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/custom-gateway.service`;
-      const service = {
-        platform: "linux" as const,
-        label: "custom-gateway.service",
-        detail: `unit: ${unitPath}`,
-        sourcePath: unitPath,
-        scope,
-        legacy: false,
-      };
+      const service = fileService("linux", "custom-gateway.service", scope);
       inventory(
         [service],
         [
@@ -158,7 +162,7 @@ describe("maybeScanExtraGatewayServices", () => {
             "Inspection hints",
           );
         }
-        expectNoNoteContaining(`rm ${unitPath}`, "Cleanup hints");
+        expectNoNoteContaining(`rm ${service.sourcePath}`, "Cleanup hints");
       } else {
         expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
       }
@@ -189,7 +193,7 @@ describe("maybeScanExtraGatewayServices", () => {
 
   it.each([false, true])("limits macOS cleanup hints to non-legacy extras (%s)", async (legacy) => {
     mockProcessPlatform("darwin");
-    const extraService = macService("com.example.openclaw-gateway", legacy);
+    const extraService = fileService("darwin", "com.example.openclaw-gateway", "user", legacy);
     inventory([extraService]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue(
       legacy
@@ -243,17 +247,7 @@ describe("maybeScanExtraGatewayServices", () => {
       mockProcessPlatform("linux");
       const label =
         kind === "unsupported" ? "clawdbot-gateway-custom.service" : "clawdbot-gateway.service";
-      inventory([
-        {
-          platform: "linux",
-          label,
-          detail: `unit: /home/test/.config/systemd/user/${label}`,
-          sourcePath: `/home/test/.config/systemd/user/${label}`,
-          scope: "user",
-          marker: "clawdbot",
-          legacy: true,
-        },
-      ]);
+      inventory([{ ...fileService("linux", label, "user", true), marker: "clawdbot" }]);
       mocks.uninstallLegacySystemdUnits.mockResolvedValue([
         {
           name: "clawdbot-gateway",
@@ -295,99 +289,72 @@ describe("maybeScanExtraGatewayServices", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    stderr?: string;
-    registered?: boolean;
-    accessError?: string;
-    moveError?: boolean;
-    reason?: string;
-  }>([
-    { name: "missing service", stderr: "Could not find service" },
-    { name: "missing process", stderr: "No such process" },
-    { name: "registered stopped label", registered: true },
-    { name: "absent plist", accessError: "ENOENT" },
-    { name: "uninspectable plist", accessError: "EACCES", reason: "could not inspect plist" },
-    { name: "unmovable plist", moveError: true, reason: "could not move plist" },
-  ])(
-    "settles confirmed legacy macOS cleanup for $name",
-    async ({ stderr = "Could not find service", registered, accessError, moveError, reason }) => {
-      setupLegacyMacService();
-      mocks.execLaunchctl
-        .mockResolvedValueOnce(launchctlResult())
-        .mockResolvedValueOnce(launchctlResult());
-      if (registered) {
-        mocks.execLaunchctl.mockResolvedValueOnce(
-          launchctlResult({ stdout: "state = waiting\npid = 0\n" }),
-        );
-      }
-      mocks.execLaunchctl.mockResolvedValueOnce(launchctlResult({ code: 113, stderr }));
-      const { access, rename } = mockPlistFs();
-      if (accessError) {
-        access.mockRejectedValue(Object.assign(new Error(accessError), { code: accessError }));
-      }
-      if (moveError) {
-        rename.mockRejectedValue(new Error("permission denied"));
-      }
-      const runtime = makeDoctorIo();
-      await scan(false, runtime);
-      expectBoundedLaunchctlCleanup();
-      expect(mocks.execLaunchctl).toHaveBeenCalledTimes(registered ? 4 : 3);
-      expect(rename).toHaveBeenCalledTimes(accessError ? 0 : 1);
-      if (reason) {
-        expectNoteContaining(`${LEGACY_MAC_LABEL} (${reason})`, "Legacy gateway cleanup skipped");
-        expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-      } else {
-        expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-        expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
-      }
-      expectNoInstall(runtime);
-    },
-  );
-
-  it.each([
-    {
-      name: "timeouts",
-      results: Array.from({ length: 3 }, () =>
-        launchctlResult({ code: 124, termination: "timeout" }),
-      ),
-    },
-    {
-      name: "unknown failures",
-      results: Array.from({ length: 3 }, () =>
-        launchctlResult({ code: 1, stderr: "Permission denied" }),
-      ),
-    },
-    {
-      name: "loaded probe after successful unload",
-      results: [
-        launchctlResult({ code: 124, termination: "timeout" }),
-        launchctlResult(),
-        launchctlResult({ stdout: "state = waiting\npid = 0\n" }),
-        launchctlResult({ code: 1, stderr: "Permission denied" }),
-      ],
-    },
-  ])("keeps the plist after $name", async ({ results }) => {
+  const absent = launchctlResult({ code: 113, stderr: "Could not find service" });
+  const stopped = launchctlResult({ stdout: "state = waiting\npid = 0\n" });
+  const timeout = launchctlResult({ code: 124, termination: "timeout" });
+  const denied = launchctlResult({ code: 1, stderr: "Permission denied" });
+  const sequence = (...probes: LaunchctlResult[]) => [
+    launchctlResult(),
+    launchctlResult(),
+    ...probes,
+  ];
+  const reasons = {
+    inspect: "could not inspect plist",
+    move: "could not move plist",
+    unload: "launchctl could not confirm unload",
+  };
+  it.each<[string, LaunchctlResult[], ("absent" | keyof typeof reasons)?]>([
+    ["missing service", sequence(absent)],
+    ["missing process", sequence(launchctlResult({ code: 113, stderr: "No such process" }))],
+    ["registered stopped label", sequence(stopped, absent)],
+    ["absent plist", sequence(absent), "absent"],
+    ["uninspectable plist", sequence(absent), "inspect"],
+    ["unmovable plist", sequence(absent), "move"],
+    ["timeouts", [timeout, timeout, timeout], "unload"],
+    ["unknown failures", [denied, denied, denied], "unload"],
+    [
+      "loaded probe after successful unload",
+      [timeout, launchctlResult(), stopped, denied],
+      "unload",
+    ],
+  ])("settles legacy macOS cleanup for %s", async (_, outcomes, failure) => {
     setupLegacyMacService();
-    for (const result of results) {
+    for (const result of outcomes) {
       mocks.execLaunchctl.mockResolvedValueOnce(result);
     }
     const { mkdir, access, rename } = mockPlistFs();
+    if (failure === "absent" || failure === "inspect") {
+      const code = failure === "absent" ? "ENOENT" : "EACCES";
+      access.mockRejectedValue(Object.assign(new Error(code), { code }));
+    }
+    if (failure === "move") {
+      rename.mockRejectedValue(new Error("permission denied"));
+    }
     const runtime = makeDoctorIo();
     await scan(false, runtime);
     expectBoundedLaunchctlCleanup();
-    expect(mocks.execLaunchctl).toHaveBeenCalledTimes(results.length);
-    for (const operation of [mkdir, access, rename]) {
-      expect(operation).not.toHaveBeenCalled();
+    expect(mocks.execLaunchctl).toHaveBeenCalledTimes(outcomes.length);
+    if (failure === "unload") {
+      for (const operation of [mkdir, access, rename]) {
+        expect(operation).not.toHaveBeenCalled();
+      }
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      );
+    } else {
+      expect(rename).toHaveBeenCalledTimes(failure === "absent" || failure === "inspect" ? 0 : 1);
+      expectNoInstall(runtime);
     }
-    expectNoteContaining(
-      `${LEGACY_MAC_LABEL} (launchctl could not confirm unload)`,
-      "Legacy gateway cleanup skipped",
-    );
-    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      "Legacy gateway services removed. Installing OpenClaw gateway next.",
-    );
+    if (failure && failure !== "absent") {
+      expectNoteContaining(
+        `${LEGACY_MAC_LABEL} (${reasons[failure]})`,
+        "Legacy gateway cleanup skipped",
+      );
+      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+    } else {
+      expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+    }
   });
 
   it.skipIf(process.platform === "win32").each([false, true])(
