@@ -8,7 +8,10 @@ import {
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+import {
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -21,6 +24,10 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import {
+  resolveMattermostEffectiveReplyToId,
+  resolveMattermostThreadSessionContext,
+} from "./monitor-context.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
   isRequestBodyLimitError,
@@ -592,6 +599,13 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendSlashCommandResponse(res, 200, "Processing...");
 
+    // A command typed in a thread belongs to that thread, like a post does.
+    const replyRootId = resolveMattermostEffectiveReplyToId({
+      kind: auth.kind,
+      replyToMode: resolveMattermostReplyToMode(account, auth.kind),
+      threadRootId: payload.root_id,
+    });
+
     try {
       await handleSlashCommandAsync({
         account,
@@ -609,6 +623,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         channelDisplay: auth.channelDisplay,
         roomLabel: auth.roomLabel,
         commandAuthorized: auth.commandAuthorized,
+        replyRootId,
         log,
       });
     } catch (err) {
@@ -618,6 +633,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
           cfg,
           accountId: account.accountId,
+          replyToId: replyRootId,
         });
       } catch {
         // best-effort error reply
@@ -642,6 +658,7 @@ async function handleSlashCommandAsync(params: {
   roomLabel: string;
   commandAuthorized: boolean;
   triggerId?: string;
+  replyRootId?: string;
   log?: (msg: string) => void;
 }) {
   const {
@@ -660,11 +677,12 @@ async function handleSlashCommandAsync(params: {
     roomLabel,
     commandAuthorized,
     triggerId,
+    replyRootId,
     log,
   } = params;
   const core = getMattermostRuntime();
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const channelRoute = core.channel.routing.resolveAgentRoute({
     cfg,
     channel: "mattermost",
     accountId: account.accountId,
@@ -674,6 +692,13 @@ async function handleSlashCommandAsync(params: {
       id: kind === "direct" ? senderId : channelId,
     },
   });
+  const thread = resolveMattermostThreadSessionContext({
+    baseSessionKey: channelRoute.sessionKey,
+    kind,
+    replyToMode: resolveMattermostReplyToMode(account, kind),
+    threadRootId: replyRootId,
+  });
+  const route = { ...channelRoute, sessionKey: thread.sessionKey };
 
   const fromLabel =
     kind === "direct"
@@ -693,6 +718,7 @@ async function handleSlashCommandAsync(params: {
       commandText,
       messageSid,
       entry: pickerEntry,
+      replyRootId,
     });
     if (hasModels) {
       runtime.log?.(`delivered model picker to ${to}`);
@@ -713,6 +739,7 @@ async function handleSlashCommandAsync(params: {
           : `mattermost:channel:${channelId}`,
     To: to,
     SessionKey: route.sessionKey,
+    ParentSessionKey: thread.parentSessionKey,
     AccountId: route.accountId,
     ChatType: chatType,
     ConversationRouteContextObserved: true,
@@ -732,6 +759,8 @@ async function handleSlashCommandAsync(params: {
     CommandSource: "native" as const,
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,
+    ReplyToId: thread.effectiveReplyToId,
+    MessageThreadId: thread.effectiveReplyToId,
   });
 
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "mattermost", account.accountId, {
@@ -763,6 +792,7 @@ async function handleSlashCommandAsync(params: {
           channelId,
           accountId: account.accountId,
           agentId: route.agentId,
+          replyToId: replyRootId,
           textLimit,
           tableMode,
           sendMessage: sendMessageMattermost,
@@ -780,7 +810,7 @@ async function handleSlashCommandAsync(params: {
     },
     replyPipeline: {
       typing: {
-        start: () => sendMattermostTyping(client, { channelId }),
+        start: () => sendMattermostTyping(client, { channelId, parentId: replyRootId }),
         onStartError: (err) => {
           logTypingFailure({
             log: (message) => log?.(message),
