@@ -13,6 +13,7 @@ import { requireDirectorySync, syncDirectory } from "../infra/directory-durabili
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
@@ -209,8 +210,9 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
   assertCurrent();
   // This one-shot worker is joined before publication; it never survives a runtime swap.
   const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
+  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
   const pool = new WorkerTaskPool<BackupTask, T>({
-    workerUrl: new URL(import.meta.url),
+    workerUrl: source.moduleUrl,
     maxWorkers: 1,
     workerOptions: { workerData: { openclawDatabaseBackup: true } },
   });

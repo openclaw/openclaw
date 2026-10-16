@@ -94,6 +94,7 @@ async function loadUpdateDatabaseBackupRuntime() {
   const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
     import("./backup-sqlite-snapshot.js"),
     import("../snapshot/database-backup.js"),
+    import("./update-database-restore-postgres.js"),
   ]);
   return { discoverBackupDatabasePaths, readBackupEngine };
 }

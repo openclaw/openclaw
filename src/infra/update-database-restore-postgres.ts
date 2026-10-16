@@ -8,6 +8,7 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "./database-engine/postgres-catalog.js";
+import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { quoteSqliteIdentifier as quote } from "./sqlite-schema-sql.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
@@ -26,8 +27,9 @@ export async function prepareUpdatePostgresRestore(
   assertCurrent: () => void,
 ): Promise<Reply> {
   assertCurrent();
+  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
   const pool = new WorkerTaskPool<Task, Reply>({
-    workerUrl: new URL(import.meta.url),
+    workerUrl: source.moduleUrl,
     maxWorkers: 1,
     workerOptions: { workerData: { updatePostgresRestore: true } },
   });
