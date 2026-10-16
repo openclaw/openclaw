@@ -1,39 +1,7 @@
 import { vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
-import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
-
-export function installRuntime(params?: {
-  buildMentionRegexes?: () => RegExp[];
-  hasControlCommand?: (body: string) => boolean;
-  matchesMentionPatterns?: (body: string, regexes: RegExp[]) => boolean;
-  shouldHandleTextCommands?: () => boolean;
-}) {
-  const runtime = {
-    channel: {
-      inbound: {
-        dispatchReply: vi.fn(async () => undefined),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
-      },
-      commands: {
-        shouldHandleTextCommands: params?.shouldHandleTextCommands ?? vi.fn(() => false),
-      },
-      text: {
-        hasControlCommand: params?.hasControlCommand ?? vi.fn(() => false),
-      },
-      mentions: {
-        buildMentionRegexes: params?.buildMentionRegexes ?? vi.fn(() => []),
-        matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
-      },
-    },
-  };
-  setNextcloudTalkRuntime(runtime as unknown as PluginRuntime);
-  return runtime;
-}
 
 export function createRuntimeEnv() {
   return {
