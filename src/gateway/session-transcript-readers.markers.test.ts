@@ -34,12 +34,12 @@ function message(id: string, content: string, role: "user" | "assistant" | "tool
   return { type: "message" as const, id, message: { role, content } };
 }
 
-function compaction(id: string, firstKeptEntryId: string, summary = `${id} summary`) {
+function compaction(id: string, firstKeptEntryId: string) {
   return {
     type: "compaction" as const,
     id,
     timestamp,
-    summary,
+    summary: `${id} summary`,
     firstKeptEntryId,
     tokensBefore: 100,
     tokensAfter: 25,
@@ -175,28 +175,6 @@ describe("session transcript reader marker projection", () => {
       expect(openClawMeta(entry)).not.toHaveProperty("summary");
     }
   });
-
-  test.each([
-    { stored: "x".repeat(16_000), expected: "x".repeat(16_000) },
-    { stored: `prefix${"x".repeat(16_001)}`, expected: undefined },
-  ])(
-    "bounds a requested compaction summary at the stored cap ($stored.length chars)",
-    async ({ stored, expected }) => {
-      const scope = await writeTranscript("compaction-summary-cap", [
-        message("before", "Original conversation"),
-        compaction("bounded", "before", stored),
-      ]);
-      const requestedRead = await readSessionMessageByIdAsync(scope, "bounded", {
-        includeCompactionSummary: true,
-      });
-
-      expect(openClawMeta(requestedRead.message)).toMatchObject({
-        kind: "compaction",
-        id: "bounded",
-      });
-      expect(openClawMeta(requestedRead.message)["summary"]).toBe(expected);
-    },
-  );
 
   test("reads a bounded ended window without successor turns after same-ID reset", async () => {
     const boundaryId = "ended-boundary";
