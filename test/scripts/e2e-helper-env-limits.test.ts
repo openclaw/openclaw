@@ -74,56 +74,52 @@ describe("e2e helper numeric env limits", () => {
     }
   });
 
-  it("cancels Open WebUI HTTP probe response bodies", async () => {
+  it.each([
+    { name: "cancels response bodies", cancelBody: true, timeoutMs: 500 },
+    {
+      name: "clamps oversized timers before scheduling",
+      cancelBody: false,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    },
+  ])("Open WebUI HTTP probe $name", async ({ cancelBody, timeoutMs }) => {
     const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
     let canceled = false;
     const fetchImpl = (async (_url: string, init: RequestInit) => {
-      expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      if (cancelBody) {
+        expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      }
       return new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            canceled = true;
-          },
-        }),
+        cancelBody
+          ? new ReadableStream<Uint8Array>({
+              cancel() {
+                canceled = true;
+              },
+            })
+          : null,
         { status: 200 },
       );
     }) as typeof fetch;
-
     await expect(
       probeHttpStatus({
-        bearer: "token-123",
+        ...(cancelBody ? { bearer: "token-123" } : {}),
         fetchImpl,
-        timeoutMs: 500,
+        timeoutMs,
         url: "http://127.0.0.1/probe",
       }),
     ).resolves.toBe(true);
-    expect(canceled).toBe(true);
-  });
-
-  it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
-    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        init.signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
-      return new Response(null, { status: 200 });
-    }) as typeof fetch;
-
-    await expect(
-      probeHttpStatus({
-        fetchImpl,
-        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
-        url: "http://127.0.0.1/probe",
-      }),
-    ).resolves.toBe(true);
+    expect(canceled).toBe(cancelBody);
   });
 
   it("bounds generated ClickClack plugin response bodies", async () => {

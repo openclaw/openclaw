@@ -1,8 +1,7 @@
 import { ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
@@ -59,6 +58,61 @@ function parseEvents(body: string) {
     .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
     .map((line) => JSON.parse(line.slice(6)));
 }
+
+function responseBody(events: ReturnType<typeof parseEvents>, stream: boolean) {
+  return stream ? events.find((event) => event.type === "response.completed").response : events[0];
+}
+function responseItems(events: ReturnType<typeof parseEvents>, stream: boolean) {
+  return stream
+    ? events
+        .filter((event) => event.type === "response.output_item.done")
+        .map((event) => event.item)
+    : events[0].output;
+}
+function chatMessages(events: ReturnType<typeof parseEvents>, stream: boolean) {
+  return events.map((chunk) => (stream ? chunk.choices[0].delta : chunk.choices[0].message));
+}
+function apiText(events: ReturnType<typeof parseEvents>, api: string, stream: boolean) {
+  return api === "responses"
+    ? responseBody(events, stream).output[0].content[0].text
+    : chatMessages(events, stream)
+        .map((message) => message.content ?? "")
+        .join("");
+}
+const functionTool = (name: string, parameters: unknown = { type: "object" }) => ({
+  name,
+  parameters,
+  type: "function",
+});
+const inputMessage = (content: unknown, role = "user") => ({ role, content });
+const textMessage = (text: string, role = "user") => ({
+  type: "message",
+  ...inputMessage([{ type: "input_text", text }], role),
+});
+async function requestApi(
+  baseUrl: string,
+  api: string,
+  stream: boolean,
+  turns: unknown[],
+  extra: { model?: string; tools?: unknown[] } = {},
+  assert: TestContext["expect"] = expect,
+) {
+  const response = await post(
+    baseUrl,
+    {
+      ...extra,
+      [api === "responses" ? "input" : "messages"]: turns,
+      stream,
+    },
+    api,
+  );
+  assert(response.status).toBe(200);
+  return stream ? parseEvents(await response.text()) : [await response.json()];
+}
+const responseText = (body: { output?: { content?: { text?: string }[] }[] }) =>
+  body.output?.[0]?.content?.[0]?.text;
+const codeModeFailure =
+  "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
 const webSearchMockPath = "scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs";
@@ -159,15 +213,9 @@ async function stopServer(child: ChildProcess) {
 
 async function withMockServer(
   context: Pick<TestContext, "signal" | "onTestFinished">,
-  scriptPath: string,
-  env: Record<string, string>,
-  run: (
-    baseUrl: string,
-    output: {
-      stderr: () => string;
-      stdout: () => string;
-    },
-  ) => Promise<void>,
+  run: (baseUrl: string, stderr: () => string) => Promise<void>,
+  env: Record<string, string> = {},
+  scriptPath = mockOpenAiPath,
 ) {
   const port = Number(env.MOCK_PORT ?? "0");
   let stderr = "";
@@ -196,10 +244,7 @@ async function withMockServer(
       () => stderr,
       context.signal,
     );
-    await run(`http://127.0.0.1:${boundPort}`, {
-      stderr: () => stderr,
-      stdout: () => stdout,
-    });
+    await run(`http://127.0.0.1:${boundPort}`, () => stderr);
   } finally {
     await stop();
   }
@@ -210,6 +255,7 @@ async function withControl(
   initial: unknown,
   run: (baseUrl: string, paths: { control: string; requestLog: string }) => Promise<void>,
   logRequests = false,
+  env: Record<string, string> = {},
 ) {
   await withTempDir("openclaw-mock-control-", async (root) => {
     const control = join(root, "response.json");
@@ -218,88 +264,81 @@ async function withControl(
     if (logRequests) {
       await writeFile(requestLog, "");
     }
-    await withMockServer(
-      context,
-      mockOpenAiPath,
-      {
-        MOCK_RESPONSE_CONTROL: control,
-        ...(logRequests ? { MOCK_REQUEST_LOG: requestLog } : {}),
-      },
-      (baseUrl) => run(baseUrl, { control, requestLog }),
-    );
+    await withMockServer(context, (baseUrl) => run(baseUrl, { control, requestLog }), {
+      ...env,
+      MOCK_RESPONSE_CONTROL: control,
+      ...(logRequests ? { MOCK_REQUEST_LOG: requestLog } : {}),
+    });
   });
 }
 
-describe("mock server readiness diagnostics", () => {
-  it("includes bounded, redacted output after startup pipes close", async ({ signal }) => {
-    const child = new ChildProcess();
-    const stdout = new PassThrough();
-    child.stdout = stdout;
-    const secret = `synthetic-${"PRIVATE_TOKEN_SEGMENT".repeat(300)}-tail`;
-    let output = `${"s".repeat(6_000)}\nstdout-tail`;
-    let stderr = `${"e".repeat(6_000)}\nAuthorization: Bearer ${secret}\ninitial failure`;
-    const result = waitForListening(
-      child,
-      12_345,
-      () => output,
-      () => stderr,
-      signal,
-    ).then(
-      () => {
-        throw new Error("mock unexpectedly became ready");
-      },
-      (error: unknown) => {
-        if (!(error instanceof Error)) {
-          throw error;
-        }
-        return error;
-      },
-    );
-    let settled = false;
-    void result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    try {
-      child.emit("exit", 1, null);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const settledBeforeClose = settled;
-      output += "\nmock-openai listening on 12345\n";
-      stdout.emit("data", "late readiness marker");
-      stderr += "\nlate stderr cause";
-      child.emit("close", 1, null);
-      const error = await result;
-      expect(error.message).toContain("mock server exited before listening: code=1 signal=null");
-      expect(error.message).toContain("late stderr cause");
-      expect(error.message).toContain("stdout-tail");
-      expect(error.message).not.toContain("PRIVATE_TOKEN_SEGMENT");
-      expect(error.message.length).toBeLessThanOrEqual(8_300);
-      expect(settledBeforeClose).toBe(false);
-    } finally {
-      child.emit("close", 1, null);
-      stdout.destroy();
-      await result.catch(() => undefined);
-    }
-  });
+it("includes bounded, redacted output after startup pipes close", async ({ signal }) => {
+  const child = new ChildProcess();
+  const stdout = new PassThrough();
+  child.stdout = stdout;
+  const secret = `synthetic-${"PRIVATE_TOKEN_SEGMENT".repeat(300)}-tail`;
+  let output = `${"s".repeat(6_000)}\nstdout-tail`;
+  let stderr = `${"e".repeat(6_000)}\nAuthorization: Bearer ${secret}\ninitial failure`;
+  const result = waitForListening(
+    child,
+    12_345,
+    () => output,
+    () => stderr,
+    signal,
+  ).then(
+    () => {
+      throw new Error("mock unexpectedly became ready");
+    },
+    (error: unknown) => {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return error;
+    },
+  );
+  let settled = false;
+  void result.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  try {
+    child.emit("exit", 1, null);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const settledBeforeClose = settled;
+    output += "\nmock-openai listening on 12345\n";
+    stdout.emit("data", "late readiness marker");
+    stderr += "\nlate stderr cause";
+    child.emit("close", 1, null);
+    const error = await result;
+    expect(error.message).toContain("mock server exited before listening: code=1 signal=null");
+    expect(error.message).toContain("late stderr cause");
+    expect(error.message).toContain("stdout-tail");
+    expect(error.message).not.toContain("PRIVATE_TOKEN_SEGMENT");
+    expect(error.message.length).toBeLessThanOrEqual(8_300);
+    expect(settledBeforeClose).toBe(false);
+  } finally {
+    child.emit("close", 1, null);
+    stdout.destroy();
+    await result.catch(() => undefined);
+  }
 });
 
 describe("mock OpenAI response markers", () => {
   it.for([false, true])(
     "drives one Telegram topic spawn and current-turn acknowledgments (stream=%s)",
     async (stream, ctx) => {
-      await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+      await withMockServer(ctx, async (baseUrl) => {
         const run = "topic-proof";
+        const marker = (phase: string, id = run) => `TELEGRAM_BINDING_${phase}_${id}`;
         const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
-        const create = user(`TELEGRAM_BINDING_SPAWN_${run}`);
-        const tools = [
-          { type: "function", name: "sessions_spawn", parameters: { type: "object" } },
-        ];
+        const create = user(marker("SPAWN"));
+        const tools = [functionTool("sessions_spawn")];
         const context = user(
           "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         );
@@ -308,20 +347,14 @@ describe("mock OpenAI response markers", () => {
         const currentContext = stream
           ? user(currentContextText)
           : { role: "user", content: currentContextText };
-        const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
-          const response = await post(baseUrl, {
-            model: "fixture-agent",
-            input,
-            tools: declaredTools,
+        const request = async (input: unknown[], declaredTools: unknown[] = tools) =>
+          responseBody(
+            await requestApi(baseUrl, "responses", stream, input, {
+              model: "fixture-agent",
+              tools: declaredTools,
+            }),
             stream,
-          });
-          expect(response.status).toBe(200);
-          if (!stream) {
-            return (await response.json()).output;
-          }
-          const events = parseEvents(await response.text());
-          return events.find((event) => event.type === "response.completed").response.output;
-        };
+          ).output;
         const expectText = (output: unknown, text: string) => {
           expect(output).toEqual([
             expect.objectContaining({
@@ -347,7 +380,7 @@ describe("mock OpenAI response markers", () => {
           cleanup: "keep",
           context: "isolated",
         });
-        expectText(await request([create]), `TELEGRAM_BINDING_WAITING_${run}`);
+        expectText(await request([create]), marker("WAITING"));
 
         const receipt = {
           type: "function_call_output",
@@ -360,14 +393,14 @@ describe("mock OpenAI response markers", () => {
           }),
         };
         const completed = [create, call, receipt, context, currentContext];
-        expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
+        expectText(await request(completed), marker("ACK_PARENT"));
         expectText(
           await request([create, call, { ...receipt, call_id: "unrelated" }]),
-          `TELEGRAM_BINDING_WAITING_${run}`,
+          marker("WAITING"),
         );
         expectText(
           await request([create, call, { ...receipt, output: '{"status":"error"}' }]),
-          `TELEGRAM_BINDING_FAIL_SPAWN_${run}`,
+          marker("FAIL_SPAWN"),
         );
 
         // Child tasks and follow-ups may carry parent history and still expose spawn.
@@ -393,7 +426,7 @@ describe("mock OpenAI response markers", () => {
         ]) {
           expectText(
             await request([...completed, user(text), currentContext]),
-            "TELEGRAM_BINDING_ACK_CHILD_boundary",
+            marker("ACK_CHILD", "boundary"),
           );
         }
         expectText(
@@ -412,7 +445,7 @@ describe("mock OpenAI response markers", () => {
             user(
               [
                 "[Chat messages since your last reply - for context]",
-                `TELEGRAM_BINDING_SPAWN_${run}`,
+                marker("SPAWN"),
                 "",
                 "[Current message - respond to this]",
                 "ordinary latest message",
@@ -429,10 +462,10 @@ describe("mock OpenAI response markers", () => {
 
         // An old successful receipt cannot acknowledge or suppress a distinct new turn.
         expectText(
-          await request([user("TELEGRAM_BINDING_SPAWN_second-proof")], []),
-          "TELEGRAM_BINDING_FAIL_TOOL_NOT_DECLARED_second-proof",
+          await request([user(marker("SPAWN", "second-proof"))], []),
+          marker("FAIL_TOOL_NOT_DECLARED", "second-proof"),
         );
-        const next = await request([...completed, user("TELEGRAM_BINDING_SPAWN_second-proof")]);
+        const next = await request([...completed, user(marker("SPAWN", "second-proof"))]);
         expect(next).toHaveLength(1);
         expect(next[0]).toMatchObject({ type: "function_call", name: "sessions_spawn" });
         expect(JSON.parse(next[0].arguments).taskName).toBe("telegram-binding-second-proof");
@@ -443,234 +476,177 @@ describe("mock OpenAI response markers", () => {
   );
 
   it.concurrent.for([
-    { api: "responses", stream: false, modelMap: true },
-    { api: "responses", stream: true, modelMap: true },
-    { api: "chat/completions", stream: false, modelMap: true },
-    { api: "chat/completions", stream: true, modelMap: true },
+    { api: "responses", stream: false },
+    { api: "responses", stream: true },
+    { api: "chat/completions", stream: false },
+    { api: "chat/completions", stream: true },
   ])(
-    "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
-    async ({ api, stream, modelMap }, ctx) => {
+    "emits native exec draft-proof calls from $api (stream=$stream)",
+    async ({ api, stream }, ctx) => {
       const { expect: taskExpect } = ctx;
-      await withTempDir("mock-response-markers-", async (root) => {
-        const control = join(root, "response.json");
-        const utilityText = '{"headline":"Structured fixture","health":"on-track"}';
-        await writeFile(
-          control,
-          JSON.stringify({ models: { "fixture-utility": { text: utilityText } } }),
-        );
-        await withMockServer(
-          ctx,
-          mockOpenAiPath,
-          {
-            MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80",
-            ...(modelMap ? { MOCK_RESPONSE_CONTROL: control } : {}),
-          },
-          async (baseUrl) => {
-            const user = { role: "user", content: "return OPENCLAW_E2E_DRAFTPROOF" };
-            const tool = {
-              name: "exec",
-              description: "Execute a shell command",
-              parameters: execSchema,
-            };
-            const request = async (turns: unknown[], model = "fixture-agent") => {
-              const response = await post(
-                baseUrl,
-                {
-                  model,
-                  [api === "responses" ? "input" : "messages"]: turns,
-                  tools: [
-                    api === "responses"
-                      ? { type: "function", ...tool }
-                      : { type: "function", function: tool },
-                  ],
-                  stream,
-                },
-                api,
-              );
-              taskExpect(response.status).toBe(200);
-              if (!stream) {
-                return [await response.json()];
-              }
-              return parseEvents(await response.text());
-            };
-
-            if (modelMap) {
-              const utility = await request([user], "fixture-utility");
-              const text =
-                api === "responses"
-                  ? (stream
-                      ? utility.find((event) => event.type === "response.completed").response
-                      : utility[0]
-                    ).output[0].content[0].text
-                  : utility
-                      .map((chunk) =>
-                        stream
-                          ? (chunk.choices[0].delta.content ?? "")
-                          : chunk.choices[0].message.content,
-                      )
-                      .join("");
-              taskExpect(text).toBe(utilityText);
-            }
-            const first = await request([user]);
-            let call;
-            let assistant;
-            if (api === "responses") {
-              if (stream) {
-                taskExpect(first.filter((event) => event.item?.type === "message")).toMatchObject([
-                  { type: "response.output_item.added", output_index: 0 },
-                  { type: "response.output_item.done", output_index: 0 },
-                ]);
-              }
-              const items = stream
-                ? first
-                    .filter((event) => event.type === "response.output_item.done")
-                    .map((event) => event.item)
-                : first[0].output;
-              taskExpect(items).toHaveLength(2);
-              taskExpect(items[0]).toMatchObject({
-                type: "message",
-                phase: "commentary",
-                content: [
-                  { type: "output_text", text: "Checking the workspace before answering." },
+      const utilityText = '{"headline":"Structured fixture","health":"on-track"}';
+      await withControl(
+        ctx,
+        { models: { "fixture-utility": { text: utilityText } } },
+        async (baseUrl) => {
+          const user = { role: "user", content: "return OPENCLAW_E2E_DRAFTPROOF" };
+          const tool = {
+            name: "exec",
+            description: "Execute a shell command",
+            parameters: execSchema,
+          };
+          const request = (turns: unknown[], model = "fixture-agent") =>
+            requestApi(
+              baseUrl,
+              api,
+              stream,
+              turns,
+              {
+                model,
+                tools: [
+                  api === "responses"
+                    ? { type: "function", ...tool }
+                    : { type: "function", function: tool },
                 ],
-              });
-              call = items[1];
-              taskExpect(call).toMatchObject({ type: "function_call", name: "exec" });
-              assistant = items;
-            } else {
-              const messages = first.map((chunk) =>
-                stream ? chunk.choices[0].delta : chunk.choices[0].message,
-              );
-              const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
-              taskExpect(toolIndex).toBeGreaterThanOrEqual(0);
-              taskExpect(
-                messages
-                  .slice(0, toolIndex + 1)
-                  .map((message) => message.content ?? "")
-                  .join(""),
-              ).toBe("Checking the workspace before answering.");
-              taskExpect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(
-                false,
-              );
-              const toolCalls = messages[toolIndex].tool_calls;
-              taskExpect(toolCalls).toHaveLength(1);
-              call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
-              taskExpect(call.name).toBe("exec");
-              assistant = [
-                {
-                  role: "assistant",
-                  content: "Checking the workspace before answering.",
-                  tool_calls: toolCalls,
-                },
-              ];
-            }
+              },
+              taskExpect,
+            );
 
-            // A final marker also follows validation errors; prove the emitted call itself works.
-            const args = JSON.parse(call.arguments);
-            validateToolArguments(tool, {
-              type: "toolCall",
-              id: call.call_id,
-              name: call.name,
-              arguments: args,
+          const utility = await request([user], "fixture-utility");
+          taskExpect(apiText(utility, api, stream)).toBe(utilityText);
+          const first = await request([user]);
+          let call;
+          let assistant;
+          if (api === "responses") {
+            if (stream) {
+              taskExpect(first.filter((event) => event.item?.type === "message")).toMatchObject([
+                { type: "response.output_item.added", output_index: 0 },
+                { type: "response.output_item.done", output_index: 0 },
+              ]);
+            }
+            const items = responseItems(first, stream);
+            taskExpect(items).toHaveLength(2);
+            taskExpect(items[0]).toMatchObject({
+              type: "message",
+              phase: "commentary",
+              content: [{ type: "output_text", text: "Checking the workspace before answering." }],
             });
-            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
-            let toolOutput = "openclaw-draft-proof\n";
-            // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
-            if (process.platform !== "win32") {
-              const startedAt = performance.now();
-              // Keep the real shell wait without blocking the other draft-proof rows.
-              const execution = promisify(execFile)("bash", ["-c", args.command], {
-                encoding: "utf8",
-                timeout: 10_000,
-              });
-              const result = await execution;
-              taskExpect(execution.child.exitCode, result.stderr).toBe(0);
-              taskExpect(execution.child.signalCode).toBeNull();
-              taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
-              toolOutput = result.stdout;
-            }
-
-            const finalStartedAt = performance.now();
-            const runtimeText =
-              "OpenClaw runtime context:\nCurrent conversation facts\nEnd OpenClaw runtime context.";
-            const runtimeContext = {
-              role: "user",
-              content: stream
-                ? [{ type: api === "responses" ? "input_text" : "text", text: runtimeText }]
-                : runtimeText,
-            };
-            const completedTurn = [
-              user,
-              ...assistant,
-              api === "responses"
-                ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
-                : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
-              runtimeContext,
+            call = items[1];
+            taskExpect(call).toMatchObject({ type: "function_call", name: "exec" });
+            assistant = items;
+          } else {
+            const messages = chatMessages(first, stream);
+            const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
+            taskExpect(toolIndex).toBeGreaterThanOrEqual(0);
+            taskExpect(
+              messages
+                .slice(0, toolIndex + 1)
+                .map((message) => message.content ?? "")
+                .join(""),
+            ).toBe("Checking the workspace before answering.");
+            taskExpect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(
+              false,
+            );
+            const toolCalls = messages[toolIndex].tool_calls;
+            taskExpect(toolCalls).toHaveLength(1);
+            call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
+            taskExpect(call.name).toBe("exec");
+            assistant = [
+              {
+                role: "assistant",
+                content: "Checking the workspace before answering.",
+                tool_calls: toolCalls,
+              },
             ];
-            const final = await request(completedTurn);
-            if (api === "responses") {
-              const response = stream
-                ? final.find((event) => event.type === "response.completed").response
-                : final[0];
-              taskExpect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
-            } else {
-              taskExpect(
-                final
-                  .map((chunk) =>
-                    stream
-                      ? (chunk.choices[0].delta.content ?? "")
-                      : chunk.choices[0].message.content,
-                  )
-                  .join(""),
-              ).toBe("OPENCLAW_E2E_DRAFTPROOF");
-              taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
-            }
+          }
 
-            const followup = await request([
-              ...completedTurn,
-              { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
-              { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
-              runtimeContext,
-            ]);
-            if (api === "responses") {
-              const items = stream
-                ? followup
-                    .filter((event) => event.type === "response.output_item.done")
-                    .map((event) => event.item)
-                : followup[0].output;
-              taskExpect(items).toContainEqual(
-                taskExpect.objectContaining({ type: "function_call", name: "exec" }),
-              );
-            } else {
-              const calls = followup.flatMap((chunk) => {
-                const message = stream ? chunk.choices[0].delta : chunk.choices[0].message;
-                return message.tool_calls ?? [];
-              });
-              taskExpect(calls).toContainEqual(
-                taskExpect.objectContaining({
-                  function: taskExpect.objectContaining({ name: "exec" }),
-                }),
-              );
-            }
-            const health = await (await fetch(`${baseUrl}/health`)).json();
-            taskExpect(health.requests.selections).toEqual({
-              model: modelMap ? 1 : 0,
-              global: 0,
-              automaticTool: 2,
-              automaticText: 1,
+          // A final marker also follows validation errors; prove the emitted call itself works.
+          const args = JSON.parse(call.arguments);
+          validateToolArguments(tool, {
+            type: "toolCall",
+            id: call.call_id,
+            name: call.name,
+            arguments: args,
+          });
+          taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
+          let toolOutput = "openclaw-draft-proof\n";
+          // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
+          if (process.platform !== "win32") {
+            const startedAt = performance.now();
+            // Keep the real shell wait without blocking the other draft-proof rows.
+            const execution = promisify(execFile)("bash", ["-c", args.command], {
+              encoding: "utf8",
+              timeout: 10_000,
             });
-          },
-        );
-      });
+            const result = await execution;
+            taskExpect(execution.child.exitCode, result.stderr).toBe(0);
+            taskExpect(execution.child.signalCode).toBeNull();
+            taskExpect(result.stdout).toBe(toolOutput);
+            taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
+            toolOutput = result.stdout;
+          }
+
+          const finalStartedAt = performance.now();
+          const runtimeText =
+            "OpenClaw runtime context:\nCurrent conversation facts\nEnd OpenClaw runtime context.";
+          const runtimeContext = {
+            role: "user",
+            content: stream
+              ? [{ type: api === "responses" ? "input_text" : "text", text: runtimeText }]
+              : runtimeText,
+          };
+          const completedTurn = [
+            user,
+            ...assistant,
+            api === "responses"
+              ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
+              : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
+            runtimeContext,
+          ];
+          const final = await request(completedTurn);
+          taskExpect(apiText(final, api, stream)).toBe("OPENCLAW_E2E_DRAFTPROOF");
+          if (api !== "responses") {
+            taskExpect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
+          }
+
+          const followup = await request([
+            ...completedTurn,
+            { role: "assistant", content: "OPENCLAW_E2E_DRAFTPROOF" },
+            { role: "user", content: "repeat OPENCLAW_E2E_DRAFTPROOF for this next turn" },
+            runtimeContext,
+          ]);
+          if (api === "responses") {
+            const items = responseItems(followup, stream);
+            taskExpect(items).toContainEqual(
+              taskExpect.objectContaining({ type: "function_call", name: "exec" }),
+            );
+          } else {
+            const calls = chatMessages(followup, stream).flatMap(
+              (message) => message.tool_calls ?? [],
+            );
+            taskExpect(calls).toContainEqual(
+              taskExpect.objectContaining({
+                function: taskExpect.objectContaining({ name: "exec" }),
+              }),
+            );
+          }
+          const health = await (await fetch(`${baseUrl}/health`)).json();
+          taskExpect(health.requests.selections).toEqual({
+            model: 1,
+            global: 0,
+            automaticTool: 2,
+            automaticText: 1,
+          });
+        },
+        false,
+        { MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80" },
+      );
     },
   );
 
   it("counts ingress independently of body rejection and excludes health/catalog probes", async (ctx) => {
     await withMockServer(
       ctx,
-      mockOpenAiPath,
-      { OPENCLAW_MOCK_OPENAI_REQUEST_MAX_BYTES: "128" },
       async (baseUrl) => {
         const initial = await (await fetch(`${baseUrl}/health`)).json();
         await (await fetch(`${baseUrl}/v1/models`)).text();
@@ -708,47 +684,41 @@ describe("mock OpenAI response markers", () => {
           automaticText: 0,
         });
       },
+      { OPENCLAW_MOCK_OPENAI_REQUEST_MAX_BYTES: "128" },
     );
   });
 
   it("matches only own model keys and rejects mixed global/map controls", async (ctx) => {
-    await withTempDir("mock-response-controls-", async (root) => {
-      const control = join(root, "response.json");
-      await writeFile(control, JSON.stringify({ models: { arbitrary: { text: "mapped" } } }));
-      await withMockServer(
-        ctx,
-        mockOpenAiPath,
-        { MOCK_RESPONSE_CONTROL: control },
-        async (baseUrl) => {
-          const request = () =>
-            fetch(`${baseUrl}/v1/responses`, {
-              method: "POST",
-              body: JSON.stringify({ model: "toString", input: "hello", stream: false }),
-            });
-          expect((await (await request()).json()).output[0].content[0].text).toBe(
-            "OPENCLAW_E2E_OK",
+    await withControl(
+      ctx,
+      { models: { arbitrary: { text: "mapped" } } },
+      async (baseUrl, { control }) => {
+        const request = () =>
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            body: JSON.stringify({ model: "toString", input: "hello", stream: false }),
+          });
+        expect((await (await request()).json()).output[0].content[0].text).toBe("OPENCLAW_E2E_OK");
+        for (const global of [
+          { text: "global" },
+          { responses: [{ text: "global" }] },
+          { default: { text: "global" } },
+          { scriptVersion: "global" },
+        ]) {
+          await writeFile(
+            control,
+            JSON.stringify({ models: { arbitrary: { text: "mapped" } }, ...global }),
           );
-          for (const global of [
-            { text: "global" },
-            { responses: [{ text: "global" }] },
-            { default: { text: "global" } },
-            { scriptVersion: "global" },
-          ]) {
-            await writeFile(
-              control,
-              JSON.stringify({ models: { arbitrary: { text: "mapped" } }, ...global }),
-            );
-            const response = await request();
-            expect(response.status).toBe(500);
-            expect(await response.text()).toContain("exclusive nonempty map");
-          }
-        },
-      );
-    });
+          const response = await request();
+          expect(response.status).toBe(500);
+          expect(await response.text()).toContain("exclusive nonempty map");
+        }
+      },
+    );
   });
 
   it("echoes dynamic OpenClaw E2E and update serving markers", async (ctx) => {
-    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+    await withMockServer(ctx, async (baseUrl) => {
       const servingMarker = "update-verified-67a60fb5-203d-4d08-bfba-6f5a053af61b";
       const servingPrompt = `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`;
       const cases = [
@@ -769,7 +739,7 @@ describe("mock OpenAI response markers", () => {
         const body = await response.json();
 
         expect(response.status).toBe(200);
-        expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+        expect(responseText(body)).toBe(marker);
       }
 
       const currentMarker = "OPENCLAW_E2E_SEED_2_333";
@@ -809,31 +779,9 @@ describe("mock OpenAI response markers", () => {
             },
           ];
           for (const { messages, marker } of markerCases) {
-            const response = await post(
-              baseUrl,
-              {
-                [route === "responses" ? "input" : "messages"]: messages,
-                stream,
-              },
-              route,
+            expect(apiText(await requestApi(baseUrl, route, stream, messages), route, stream)).toBe(
+              marker,
             );
-            expect(response.status).toBe(200);
-            if (stream) {
-              const events = parseEvents(await response.text());
-              const text =
-                route === "responses"
-                  ? events.find((event) => event.type === "response.completed")?.response.output[0]
-                      .content[0].text
-                  : events.map((event) => event.choices?.[0]?.delta?.content ?? "").join("");
-              expect(text).toBe(marker);
-            } else {
-              const body = await response.json();
-              expect(
-                route === "responses"
-                  ? body.output?.[0]?.content?.[0]?.text
-                  : body.choices?.[0]?.message?.content,
-              ).toBe(marker);
-            }
           }
         }
         const malformed = await fetch(`${baseUrl}/v1/${route}`, {
@@ -850,11 +798,6 @@ describe("mock OpenAI response markers", () => {
   it("can split a deterministic response across delayed streaming deltas", async (ctx) => {
     await withMockServer(
       ctx,
-      mockOpenAiPath,
-      {
-        MOCK_RESPONSE_CHUNK_DELAY_MS: "80",
-        SUCCESS_MARKER: "First streamed preview remains visible before the follow-up edit arrives.",
-      },
       async (baseUrl) => {
         const startedAt = Date.now();
         const response = await post(baseUrl, {
@@ -873,6 +816,10 @@ describe("mock OpenAI response markers", () => {
           { type: "response.output_item.done", output_index: 0 },
         ]);
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
+      },
+      {
+        MOCK_RESPONSE_CHUNK_DELAY_MS: "80",
+        SUCCESS_MARKER: "First streamed preview remains visible before the follow-up edit arrives.",
       },
     );
   });
@@ -951,9 +898,7 @@ describe("mock OpenAI response markers", () => {
           text: "visible after reveal",
         });
         const body = await request;
-        expect(body.output?.[0]?.content?.[0]?.text, JSON.stringify(body)).toBe(
-          "visible after reveal",
-        );
+        expect(responseText(body), JSON.stringify(body)).toBe("visible after reveal");
       },
     );
   });
@@ -979,9 +924,7 @@ describe("mock OpenAI response markers", () => {
         await writeJsonAtomic(control, { ...script, hold: false });
         const first = await firstPromise;
         const firstBody = await first.json();
-        expect(firstBody.output?.[0]?.content?.[0]?.text, JSON.stringify(firstBody)).toBe(
-          "first response",
-        );
+        expect(responseText(firstBody), JSON.stringify(firstBody)).toBe("first response");
         const second = await request();
         expect(second.status).toBe(429);
         expect(await second.json()).toEqual({
@@ -1027,16 +970,13 @@ describe("mock OpenAI response markers", () => {
   });
 
   it("records bounded media facts without provider payload bytes", async (ctx) => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-content-facts-"));
-    const requestLog = join(root, "requests.ndjson");
     const pdfBytes = "private-pdf-bytes";
     const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
-    try {
+    await withTempDir("openclaw-mock-content-facts-", async (root) => {
+      const requestLog = join(root, "requests.ndjson");
       await writeFile(requestLog, "");
       await withMockServer(
         ctx,
-        mockOpenAiPath,
-        { MOCK_REQUEST_LOG: requestLog },
         async (baseUrl) => {
           const send = async (input: unknown) => {
             const response = await post(baseUrl, { input, stream: false });
@@ -1045,36 +985,29 @@ describe("mock OpenAI response markers", () => {
           await send([
             {
               type: "message",
-              role: "user",
-              content: Array.from({ length: 128 }, (_, index) => ({
-                type: "input_text",
-                text: `historical turn ${index}`,
-              })),
+              ...inputMessage(
+                Array.from({ length: 128 }, (_, index) => ({
+                  type: "input_text",
+                  text: `historical turn ${index}`,
+                })),
+              ),
             },
             {
               type: "message",
-              role: "user",
-              content: [
+              ...inputMessage([
                 {
                   type: "input_file",
                   filename: "proof.pdf",
                   file_data: `data:application/pdf;base64,${pdfBase64}`,
                 },
                 { type: "input_text", text: "Summarize the staged document." },
-              ],
+              ]),
             },
           ]);
           await send([
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
-                },
-              ],
-            },
+            textMessage(
+              "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
+            ),
           ]);
 
           const recorded = await readFile(requestLog, "utf8");
@@ -1126,10 +1059,9 @@ describe("mock OpenAI response markers", () => {
           );
           expect(malformedEntry?.seq).toBe(3);
         },
+        { MOCK_REQUEST_LOG: requestLog },
       );
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
+    });
   });
 
   it("supports scripted connection drops", async (ctx) => {
@@ -1144,7 +1076,7 @@ describe("mock OpenAI response markers", () => {
 
   it("resumes the MCP Code Mode fixture", async (ctx) => {
     const tools = createCodeModeTools({});
-    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+    await withMockServer(ctx, async (baseUrl) => {
       const input: Record<string, unknown>[] = [
         { content: "mcp code mode api file qa check", role: "user" },
       ];
@@ -1152,11 +1084,7 @@ describe("mock OpenAI response markers", () => {
         const response = await post(baseUrl, {
           input,
           stream: false,
-          tools: tools.map(({ name, parameters }) => ({
-            name,
-            parameters,
-            type: "function",
-          })),
+          tools: tools.map(({ name, parameters }) => functionTool(name, parameters)),
         });
         expect(response.status).toBe(200);
         const result = await response.json();
@@ -1210,15 +1138,11 @@ describe("mock OpenAI response markers", () => {
         type: "function_call_output",
       });
       const completed = await request();
-      expect(completed.output?.[0]?.content?.[0]?.text).toContain(
-        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
-      );
+      expect(responseText(completed)).toContain("MCP_CODE_MODE_FILE_OK note=fixture-note-alpha");
 
       input.push({ output: "fixture call failed", type: "function_call_output" });
       const failed = await request();
-      expect(failed.output?.[0]?.content?.[0]?.text).toBe(
-        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
-      );
+      expect(responseText(failed)).toBe(codeModeFailure);
     });
   });
 
@@ -1234,7 +1158,7 @@ describe("mock OpenAI response markers", () => {
     { output: "", tools: ["exec", "wait"] },
     { output: undefined, tools: ["exec", "wait"] },
   ])("rejects an unusable MCP Code Mode continuation: $output", async ({ output, tools }, ctx) => {
-    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+    await withMockServer(ctx, async (baseUrl) => {
       const response = await post(baseUrl, {
         input: [
           { content: "mcp code mode api file qa check", role: "user" },
@@ -1244,26 +1168,20 @@ describe("mock OpenAI response markers", () => {
           },
         ],
         stream: false,
-        tools: tools.map((name) => ({
-          name,
-          parameters: { type: "object" },
-          type: "function",
-        })),
+        tools: tools.map((name) => functionTool(name)),
       });
       expect(response.status).toBe(200);
       const body = await response.json();
-      expect(body.output?.[0]?.content?.[0]?.text).toBe(
-        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
-      );
+      expect(responseText(body)).toBe(codeModeFailure);
     });
   });
 
   it("drives the MCP App fixture tool before returning the visible marker", async (ctx) => {
-    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+    await withMockServer(ctx, async (baseUrl) => {
       const first = await post(baseUrl, {
         input: [{ content: "mcp app conformance qa check", role: "user" }],
         stream: false,
-        tools: [{ name: "fixture__show", parameters: { type: "object" }, type: "function" }],
+        tools: [functionTool("fixture__show")],
       });
       const firstBody = await first.json();
       expect(firstBody.output?.[0]).toMatchObject({
@@ -1280,12 +1198,12 @@ describe("mock OpenAI response markers", () => {
         stream: false,
       });
       const secondBody = await second.json();
-      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("MCP_APP_CONFORMANCE_READY");
+      expect(responseText(secondBody)).toBe("MCP_APP_CONFORMANCE_READY");
     });
   });
 
   it("discovers the Agent Plugins bundle tool and validates its target receipt", async (ctx) => {
-    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+    await withMockServer(ctx, async (baseUrl) => {
       const runtimeContext = {
         role: "user",
         content:
@@ -1300,11 +1218,7 @@ describe("mock OpenAI response markers", () => {
         const response = await post(baseUrl, {
           input,
           stream: false,
-          tools: names.map((name) => ({
-            type: "function",
-            name,
-            parameters: { type: "object" },
-          })),
+          tools: names.map((name) => functionTool(name)),
         });
         expect(response.status).toBe(200);
         return (await response.json()).output[0];
@@ -1338,30 +1252,17 @@ describe("mock OpenAI response markers", () => {
         store: false,
         max_output_tokens: 240,
         input: [
-          {
-            type: "message",
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
-              },
-            ],
-          },
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: JSON.stringify({
-                  previousRecap: "",
-                  messages: ["user: agent plugin bundle qa check"],
-                  omittedContent: false,
-                }),
-              },
-            ],
-          },
+          textMessage(
+            "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
+            "system",
+          ),
+          textMessage(
+            JSON.stringify({
+              previousRecap: "",
+              messages: ["user: agent plugin bundle qa check"],
+              omittedContent: false,
+            }),
+          ),
         ],
       });
       expect(recap.status).toBe(200);
@@ -1413,59 +1314,45 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(webSearch.stderr).toContain("invalid MOCK_PORT: 0");
   });
 
-  it("returns a clear error when mock OpenAI cannot append request logs", async (ctx) => {
-    const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-mock-request-log-"));
-    try {
+  it.for([
+    { script: mockOpenAiPath, name: "mock-openai" },
+    { script: webSearchMockPath, name: "mock-openai-web-search" },
+  ])("reports request log failures from $name", async ({ script, name }, ctx) => {
+    await withTempDir("openclaw-mock-request-log-", async (requestLogDirectory) => {
+      const webSearch = script === webSearchMockPath;
       await withMockServer(
         ctx,
-        mockOpenAiPath,
-        { MOCK_REQUEST_LOG: requestLogDirectory },
-        async (baseUrl, output) => {
-          const response = await post(baseUrl, { input: "OPENCLAW_E2E_OK" });
+        async (baseUrl, stderr) => {
+          const response = await post(
+            baseUrl,
+            webSearch
+              ? {
+                  input: "OPENCLAW_SCHEMA_E2E_OK",
+                  reasoning: { effort: "low" },
+                  tools: [{ type: "web_search" }],
+                }
+              : { input: "OPENCLAW_E2E_OK" },
+          );
           const body = await response.json();
-
           expect(response.status).toBe(500);
           expect(body.error.message).toContain("mock OpenAI request log write failed");
           await expect
-            .poll(() => output.stderr(), { timeout: 1_000 })
-            .toContain("mock-openai request log write failed");
+            .poll(stderr, { timeout: 1_000 })
+            .toContain(`${name} request log write failed`);
         },
-      );
-    } finally {
-      await rm(requestLogDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("returns a clear error when web-search mock cannot append request logs", async (ctx) => {
-    const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-web-search-log-"));
-    try {
-      await withMockServer(
-        ctx,
-        webSearchMockPath,
         {
-          MOCK_PORT: String(await getFreePort()),
           MOCK_REQUEST_LOG: requestLogDirectory,
-          RAW_SCHEMA_ERROR: "400 schema rejected",
-          SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",
+          ...(webSearch
+            ? {
+                MOCK_PORT: String(await getFreePort()),
+                RAW_SCHEMA_ERROR: "400 schema rejected",
+                SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",
+              }
+            : {}),
         },
-        async (baseUrl, output) => {
-          const response = await post(baseUrl, {
-            input: "OPENCLAW_SCHEMA_E2E_OK",
-            reasoning: { effort: "low" },
-            tools: [{ type: "web_search" }],
-          });
-          const body = await response.json();
-
-          expect(response.status).toBe(500);
-          expect(body.error.message).toContain("mock OpenAI request log write failed");
-          await expect
-            .poll(() => output.stderr(), { timeout: 1_000 })
-            .toContain("mock-openai-web-search request log write failed");
-        },
+        script,
       );
-    } finally {
-      await rm(requestLogDirectory, { force: true, recursive: true });
-    }
+    });
   });
 });
 
@@ -1610,9 +1497,7 @@ describe("SQLite flip mock endpoint ownership", () => {
           expect((result as AggregateError).errors[0]).toBe(configFailure);
           await expect(stat(instance!.stateDir)).resolves.toBeDefined();
           expect(await tryBind(publishedPort!)).toMatchObject({ code: "EADDRINUSE" });
-          expect(mockAtSettlement.closeCount).toBe(0);
-          expect(mockAtSettlement.exitCode).toBeNull();
-          expect(mockAtSettlement.signalCode).toBeNull();
+          expect(mockAtSettlement).toEqual({ closeCount: 0, exitCode: null, signalCode: null });
         } else {
           expect(result).toMatchObject({
             ok: false,

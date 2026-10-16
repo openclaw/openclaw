@@ -1,16 +1,24 @@
-import { spawnSync } from "node:child_process";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runOnboard(root: string, body: string, setup = "", timeout?: number) {
-  const fixture = path.join(root, "onboard.sh");
-  await writeFile(
-    fixture,
-    `#!/usr/bin/env bash
+function runShell(
+  body: string,
+  options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding"> = {},
+) {
+  return spawnSync(process.platform === "darwin" ? "/bin/bash" : "bash", ["-c", body], {
+    encoding: "utf8",
+    ...options,
+  });
+}
+
+function runOnboard(root: string, body: string, setup = "", timeout?: number) {
+  return runShell(
+    `
 set -euo pipefail
 export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
 export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(root)}
@@ -18,8 +26,8 @@ OPENCLAW_ENTRY=node
 ${setup}
 source scripts/e2e/lib/onboard/scenario.sh
 ${body}`,
+    { cwd: process.cwd(), timeout },
   );
-  return spawnSync("bash", [fixture], { cwd: process.cwd(), encoding: "utf8", timeout });
 }
 
 // Reviewed public SKILL.md from @steipete/gifgrep 1.0.1; data, never executed.
@@ -80,11 +88,26 @@ const maintainedRawRow = {
   source: "clawhub",
   install: { kind: "clawhub", reference: "steipete/gifgrep" },
 };
+const searchArgs = (query = "gifgrep") => ["skills", "search", query, "--limit", "8", "--json"];
+const installArgs = ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"];
+const candidate = (slug: string, installRef: string) => ({ slug, installRef });
+const writeJson = (file: string, value: unknown) => writeFile(file, `${JSON.stringify(value)}\n`);
+const writeExecutable = (file: string, contents: string) =>
+  writeFile(file, contents, { mode: 0o755 });
+
 const maintainedMappedRow = {
   slug: "gifgrep",
   ownerHandle: "steipete",
   installRef: "@steipete/gifgrep",
 };
+
+async function installFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const bin = path.join(root, "bin");
+  const scratch = path.join(root, "scratch");
+  await Promise.all([mkdir(bin), mkdir(scratch)]);
+  return { root, bin, scratch };
+}
 
 async function runClawhubInstallProof(options: {
   results: Record<string, unknown>[];
@@ -92,24 +115,20 @@ async function runClawhubInstallProof(options: {
   origin?: Record<string, unknown>;
   lock?: Record<string, unknown>;
   skillText?: string;
-  refusal?: boolean;
+  refusal?: boolean | "frozen" | "unrelated";
+  rejectedSlug?: string;
 }) {
-  const root = tempDirs.make("openclaw-clawhub-maintained-");
-  const bin = path.join(root, "bin");
-  const scratch = path.join(root, "scratch");
+  const { root, bin, scratch } = await installFixture("openclaw-clawhub-maintained-");
   const callsPath = path.join(root, "calls.jsonl");
   const fixturePath = path.join(root, "fixture.json");
   const redactorPath = path.join(root, "redactor.mjs");
-  await mkdir(bin);
-  await mkdir(scratch);
   await writeFile(redactorPath, "export const redactSensitiveText = (value) => value;\n");
-  await writeFile(
+  await writeExecutable(
     path.join(bin, "node"),
     `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`,
-    { mode: 0o755 },
   );
   await writeFile(fixturePath, JSON.stringify({ skillText: maintainedSkillText, ...options }));
-  await writeFile(
+  await writeExecutable(
     path.join(bin, "pnpm"),
     `#!${process.execPath}
 const fs = require("node:fs");
@@ -128,9 +147,16 @@ switch (args[1]) {
     console.log(JSON.stringify({ results: fixture.results }));
     break;
   case "install": {
-    if (fixture.refusal) {
-      console.error("ClawHub found security risks in gifgrep@1.0.1");
-      console.error("Update cancelled; rerun with --acknowledge-clawhub-risk");
+    if (fixture.refusal && (!fixture.rejectedSlug || fixture.rejectedSlug === slug)) {
+      if (fixture.refusal === "unrelated") {
+        console.error("network connection reset");
+      } else if (fixture.refusal === "frozen") {
+        console.error("╭─ ClawHub Security Audit ─╮");
+        console.error("│ Outcome: Blocked        │");
+      } else {
+        console.error("ClawHub found security risks in " + slug + "@1.0.1");
+        console.error("Update cancelled; rerun with --acknowledge-clawhub-risk");
+      }
       process.exit(1);
     }
     const versionIndex = args.indexOf("--version");
@@ -153,7 +179,6 @@ switch (args[1]) {
   default: process.exit(64);
 }
 `,
-    { mode: 0o755 },
   );
   const result = spawnSync(
     process.platform === "darwin" ? "/bin/bash" : "bash",
@@ -212,6 +237,13 @@ async function extractClawhubModule(kind: "verifier" | "selector"): Promise<stri
   return script.slice(start + marker.length, end);
 }
 
+async function runClawhubModule(kind: "verifier" | "selector", ...args: string[]) {
+  return spawnSync(process.execPath, ["--input-type=module", "-", ...args], {
+    encoding: "utf8",
+    input: await extractClawhubModule(kind),
+  });
+}
+
 function runInstall(bin: string, scratch: string, overrides: Record<string, string> = {}) {
   return spawnSync("bash", ["scripts/e2e/lib/skills/clawhub-install-proof.sh"], {
     cwd: process.cwd(),
@@ -253,11 +285,8 @@ describe("e2e shell tempfile hygiene", () => {
       throw new Error("Config reload RPC status function was not found");
     }
     const callsPath = path.join(tempRoot, "calls.txt");
-    const result = spawnSync(
-      process.platform === "darwin" ? "/bin/bash" : "bash",
-      [
-        "-c",
-        `
+    const result = runShell(
+      `
 set -euo pipefail
 PORT=18789
 TOKEN=synthetic-token
@@ -269,9 +298,7 @@ $5"
 ${rpcFunction}
 check_rpc_status "$OUTPUT_PATH"
 `,
-      ],
       {
-        encoding: "utf8",
         timeout: 5_000,
         env: {
           ...process.env,
@@ -382,31 +409,39 @@ test ! -s ${JSON.stringify(sentPath)}
   it("checks local onboarding logs for systemd noise", async () => {
     const contents = await readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
 
-    expect(contents).toContain(
+    for (const text of [
       'ONBOARD_TMP_DIR="$(mktemp -d "$ONBOARD_TMP_ROOT/openclaw-onboard.XXXXXX")"',
-    );
-    expect(contents).toContain('OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"');
-    expect(contents).toContain('GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"');
-    expect(contents).not.toContain("/tmp/gateway-e2e.log");
-    expect(contents).toContain('validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"');
-    expect(contents).not.toContain(
-      "validate_local_basic_log /tmp/openclaw-onboard-local-basic.log",
-    );
-    expect(contents).toContain(
+      'OPENCLAW_E2E_LOG_DIR="$ONBOARD_TMP_DIR/logs"',
+      'GATEWAY_LOG_PATH="$ONBOARD_TMP_DIR/gateway-e2e.log"',
+      'validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"',
       'openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"',
-    );
+    ]) {
+      expect(contents).toContain(text);
+    }
+    for (const text of [
+      "/tmp/gateway-e2e.log",
+      "validate_local_basic_log /tmp/openclaw-onboard-local-basic.log",
+    ]) {
+      expect(contents).not.toContain(text);
+    }
   });
 
-  it("probes onboarding gateway readiness through TCP", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-gateway-log-");
-    const result = await runOnboard(
-      tempRoot,
-      `
-openclaw_e2e_probe_tcp() { return 0; }
+  it.each([true, false])(
+    "requires onboarding gateway TCP readiness (reachable=%s)",
+    async (reachable) => {
+      const tempRoot = tempDirs.make("openclaw-onboard-gateway-");
+      const result = await runOnboard(
+        tempRoot,
+        `
+openclaw_e2e_probe_tcp() { return ${reachable ? 0 : 1}; }
 sleep 30 &
 GATEWAY_PID="$!"
 printf 'listening on ws://127.0.0.1:18789\\n' >"$GATEWAY_LOG_PATH"
-wait_for_gateway
+if wait_for_gateway; then
+  test ${reachable ? 0 : 1} -eq 0
+else
+  test ${reachable ? 0 : 1} -eq 1
+fi
 case "$GATEWAY_LOG_PATH" in
   "$ONBOARD_TMP_DIR"/*) ;;
   *) echo "gateway log escaped scratch root: $GATEWAY_LOG_PATH" >&2; exit 1 ;;
@@ -414,35 +449,17 @@ esac
 cleanup_onboard_artifacts
 test ! -e "$ONBOARD_TMP_DIR"
 `,
-    );
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-
-  it("rejects onboarding gateway readiness when the TCP probe fails", async () => {
-    const tempRoot = tempDirs.make("openclaw-onboard-gateway-tcp-");
-    const result = await runOnboard(
-      tempRoot,
-      `
-openclaw_e2e_probe_tcp() { return 1; }
-sleep 30 &
-GATEWAY_PID="$!"
-printf 'listening on ws://127.0.0.1:18789\\n' >"$GATEWAY_LOG_PATH"
-if wait_for_gateway; then
-  echo "gateway readiness passed without TCP reachability" >&2
-  cleanup_onboard_artifacts
-  exit 1
-fi
-cleanup_onboard_artifacts
-test ! -e "$ONBOARD_TMP_DIR"
-`,
-      "export OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS=2\nexport OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S=0.1",
-    );
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("Gateway failed to start");
-    expect(result.stdout).toContain("TCP probe never succeeded");
-  });
+        reachable
+          ? ""
+          : "export OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS=2\nexport OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S=0.1",
+      );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      if (!reachable) {
+        expect(result.stdout).toContain("Gateway failed to start");
+        expect(result.stdout).toContain("TCP probe never succeeded");
+      }
+    },
+  );
 
   it("rejects invalid onboarding gateway wait attempts before probing", async () => {
     const tempRoot = tempDirs.make("openclaw-onboard-gateway-attempts-");
@@ -469,18 +486,10 @@ exit "$status"
   });
 
   it("removes fallback ClawHub skill install HOME on failure", async () => {
-    const tempRoot = tempDirs.make("openclaw-clawhub-home-test-");
-    const fakeBin = path.join(tempRoot, "bin");
-    const scratchRoot = path.join(tempRoot, "scratch");
-    await mkdir(fakeBin, { recursive: true });
-    await mkdir(scratchRoot, { recursive: true });
-    await writeFile(
-      path.join(fakeBin, "pnpm"),
-      `#!/usr/bin/env bash
-exit 42
-`,
-      { mode: 0o755 },
+    const { bin: fakeBin, scratch: scratchRoot } = await installFixture(
+      "openclaw-clawhub-home-test-",
     );
+    await writeExecutable(path.join(fakeBin, "pnpm"), "#!/usr/bin/env bash\nexit 42\n");
 
     const result = runInstall(fakeBin, scratchRoot);
 
@@ -495,164 +504,88 @@ exit 42
     const tempRoot = tempDirs.make("openclaw-clawhub-select-test-");
     const searchPath = path.join(tempRoot, "search.json");
     const resolvePath = path.join(tempRoot, "resolved.json");
-    const selector = await extractClawhubModule("selector");
-    await writeFile(
-      searchPath,
-      `${JSON.stringify({
-        results: [
-          {
-            installRef: "@owner/risky",
-            native: { skill: { isSuspicious: true } },
-            slug: "preferred",
-            trust: { clawHubVerdict: "suspicious" },
-          },
-          {
-            installRef: "@owner/safe",
-            native: { skill: { isSuspicious: false } },
-            slug: "homeassistant-safe",
-            trust: { clawHubVerdict: null, installability: "installable" },
-          },
-          {
-            installRef: "@owner/fallback-two",
-            slug: "fallback-two",
-          },
-          {
-            installRef: "@owner/fallback-three",
-            slug: "fallback-three",
-          },
-          {
-            installRef: "@owner/fallback-four",
-            slug: "fallback-four",
-          },
-        ],
-      })}\n`,
-    );
+    await writeJson(searchPath, {
+      results: [
+        {
+          installRef: "@owner/risky",
+          native: { skill: { isSuspicious: true } },
+          slug: "preferred",
+          trust: { clawHubVerdict: "suspicious" },
+        },
+        {
+          installRef: "@owner/safe",
+          native: { skill: { isSuspicious: false } },
+          slug: "homeassistant-safe",
+          trust: { clawHubVerdict: null, installability: "installable" },
+        },
+        candidate("fallback-two", "@owner/fallback-two"),
+        candidate("fallback-three", "@owner/fallback-three"),
+        candidate("fallback-four", "@owner/fallback-four"),
+      ],
+    });
 
-    const defaultResult = spawnSync(
-      process.execPath,
-      ["--input-type=module", "-", searchPath, resolvePath, "", "preferred"],
-      { encoding: "utf8", input: selector },
+    const defaultResult = await runClawhubModule(
+      "selector",
+      searchPath,
+      resolvePath,
+      "",
+      "preferred",
     );
     expect(defaultResult.status, defaultResult.stderr).toBe(0);
     expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
       candidates: [
-        {
-          installRef: "@owner/safe",
-          slug: "homeassistant-safe",
-        },
-        {
-          installRef: "@owner/fallback-two",
-          slug: "fallback-two",
-        },
-        {
-          installRef: "@owner/fallback-three",
-          slug: "fallback-three",
-        },
-        {
-          installRef: "@owner/fallback-four",
-          slug: "fallback-four",
-        },
+        candidate("homeassistant-safe", "@owner/safe"),
+        candidate("fallback-two", "@owner/fallback-two"),
+        candidate("fallback-three", "@owner/fallback-three"),
+        candidate("fallback-four", "@owner/fallback-four"),
       ],
     });
 
-    const explicitResult = spawnSync(
-      process.execPath,
-      ["--input-type=module", "-", searchPath, resolvePath, "preferred", "preferred"],
-      { encoding: "utf8", input: selector },
+    const explicitResult = await runClawhubModule(
+      "selector",
+      searchPath,
+      resolvePath,
+      "preferred",
+      "preferred",
     );
     expect(explicitResult.status, explicitResult.stderr).toBe(0);
     expect(JSON.parse(await readFile(resolvePath, "utf8"))).toMatchObject({
-      candidates: [
-        {
-          installRef: "@owner/risky",
-          slug: "preferred",
-        },
-      ],
+      candidates: [candidate("preferred", "@owner/risky")],
     });
   });
 
   it("falls through a search candidate rejected by live ClawHub security", async () => {
-    const tempRoot = tempDirs.make("openclaw-clawhub-live-risk-test-");
-    const fakeBin = path.join(tempRoot, "bin");
-    const scratchRoot = path.join(tempRoot, "scratch");
-    const attemptsPath = path.join(tempRoot, "attempts.txt");
-    await mkdir(fakeBin, { recursive: true });
-    await mkdir(scratchRoot, { recursive: true });
-    await writeFile(
-      path.join(fakeBin, "pnpm"),
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [ "\${1:-}" = --silent ]; then shift; fi
-if [ "\${1:-}" = openclaw ]; then shift; fi
-case "\${1:-} \${2:-}" in
-  "skills search")
-    printf '%s\n' '{"results":[{"slug":"risky","installRef":"risky"},{"slug":"safe","installRef":"safe"}]}'
-    ;;
-  "skills install")
-    ref="\${3:-}"
-    printf '%s\n' "$ref" >>${JSON.stringify(attemptsPath)}
-    if [ "$ref" = risky ]; then
-      if [ "\${FAKE_RISK_MODE:-blocked}" = unrelated ]; then
-        printf '%s\n' 'network connection reset' >&2
-        exit 1
-      fi
-      if [ "\${FAKE_RISK_MODE:-current}" = frozen ]; then
-        printf '%s\n' '╭─ ClawHub Security Audit ─╮' >&2
-        printf '%s\n' '│ Outcome: Blocked        │' >&2
-      else
-        printf '%s\n' 'ClawHub found security risks in risky@1.0.0' >&2
-        printf '%s\n' 'Update cancelled; rerun with --acknowledge-clawhub-risk' >&2
-      fi
-      exit 1
-    fi
-    skill_dir="$HOME/.openclaw/workspace/skills/safe"
-    mkdir -p "$skill_dir/.clawhub" "$HOME/.openclaw/workspace/.clawhub"
-    printf '%s\n' 'name: Safe' >"$skill_dir/SKILL.md"
-    printf '%s\n' '{"slug":"safe","registry":"https://clawhub.ai","installedVersion":"1.0.0"}' >"$skill_dir/.clawhub/origin.json"
-    printf '%s\n' '{"skills":{"safe":{"version":"1.0.0"}}}' >"$HOME/.openclaw/workspace/.clawhub/lock.json"
-    ;;
-  "skills info")
-    printf '{"skillKey":"safe","baseDir":"%s"}\n' "$HOME/.openclaw/workspace/skills/safe"
-    ;;
-  *) exit 64 ;;
-esac
-`,
-      { mode: 0o755 },
-    );
-
-    const result = runInstall(fakeBin, scratchRoot, {
-      OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain(
-      "Skipping live ClawHub skill with current security findings: risky",
-    );
-    expect(result.stdout).toContain("E2E_OK installed=safe version=1.0.0");
-    expect((await readFile(attemptsPath, "utf8")).trim().split("\n")).toEqual(["risky", "safe"]);
-
-    await rm(attemptsPath, { force: true });
-    const frozenResult = runInstall(fakeBin, scratchRoot, {
-      FAKE_RISK_MODE: "frozen",
-      OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
-    });
-    expect(frozenResult.status, `${frozenResult.stdout}\n${frozenResult.stderr}`).toBe(0);
-    expect((await readFile(attemptsPath, "utf8")).trim().split("\n")).toEqual(["risky", "safe"]);
-
-    await rm(attemptsPath, { force: true });
-    const explicitResult = runInstall(fakeBin, scratchRoot, {
-      OPENCLAW_SKILL_INSTALL_E2E_SLUG: "risky",
-    });
+    const runRisk = (refusal: true | "frozen" | "unrelated", explicit = false) =>
+      runClawhubInstallProof({
+        results: [candidate("risky", "risky"), candidate("safe", "safe")],
+        overrides: {
+          OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
+          ...(explicit ? { OPENCLAW_SKILL_INSTALL_E2E_SLUG: "risky" } : {}),
+        },
+        origin: { installedVersion: "1.0.0" },
+        lock: { version: "1.0.0" },
+        skillText: "name: Safe\n",
+        refusal,
+        rejectedSlug: "risky",
+      });
+    const attempts = (calls: string[][]) =>
+      calls.filter((args) => args[1] === "install").map((args) => args[2]);
+    for (const mode of [true, "frozen"] as const) {
+      const result = await runRisk(mode);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain(
+        "Skipping live ClawHub skill with current security findings: risky",
+      );
+      expect(result.stdout).toContain("E2E_OK installed=safe version=1.0.0");
+      expect(attempts(result.calls)).toEqual(["risky", "safe"]);
+    }
+    const explicitResult = await runRisk(true, true);
     expect(explicitResult.status).not.toBe(0);
-    expect((await readFile(attemptsPath, "utf8")).trim()).toBe("risky");
+    expect(attempts(explicitResult.calls)).toEqual(["risky"]);
 
-    await rm(attemptsPath, { force: true });
-    const unrelatedResult = runInstall(fakeBin, scratchRoot, {
-      FAKE_RISK_MODE: "unrelated",
-      OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "risky",
-    });
+    const unrelatedResult = await runRisk("unrelated");
     expect(unrelatedResult.status).not.toBe(0);
-    expect((await readFile(attemptsPath, "utf8")).trim()).toBe("risky");
+    expect(attempts(unrelatedResult.calls)).toEqual(["risky"]);
   });
 
   it.each([
@@ -661,6 +594,14 @@ esac
     { shape: "consistent hybrid", row: { ...maintainedRawRow, ...maintainedMappedRow } },
   ])("pins the maintained $shape ClawHub fixture", async ({ row }) => {
     const result = await runClawhubInstallProof({
+      overrides:
+        row === maintainedRawRow
+          ? {
+              OPENCLAW_SKILL_INSTALL_E2E_QUERY: "",
+              OPENCLAW_SKILL_INSTALL_E2E_SLUG: "",
+              OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "",
+            }
+          : {},
       results: [
         {
           ...maintainedMappedRow,
@@ -677,31 +618,11 @@ esac
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls).toEqual([
-      ["skills", "search", "gifgrep", "--limit", "8", "--json"],
-      ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"],
+      searchArgs(),
+      installArgs,
       ["skills", "info", "gifgrep", "--json"],
     ]);
     expect(result.stdout).toContain("E2E_OK installed=gifgrep version=1.0.1");
-  });
-
-  it("keeps the maintained fixture when all overrides are explicitly empty", async () => {
-    const result = await runClawhubInstallProof({
-      results: [maintainedRawRow],
-      overrides: {
-        OPENCLAW_SKILL_INSTALL_E2E_QUERY: "",
-        OPENCLAW_SKILL_INSTALL_E2E_SLUG: "",
-        OPENCLAW_SKILL_INSTALL_E2E_PREFERRED_SLUG: "",
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls[1]).toEqual([
-      "skills",
-      "install",
-      "@steipete/gifgrep",
-      "--version",
-      "1.0.1",
-      "--force",
-    ]);
   });
 
   it.each([
@@ -725,27 +646,13 @@ esac
     ["null install", { ...maintainedRawRow, install: null }],
     ["partial install", { ...maintainedRawRow, install: { kind: "clawhub" } }],
     ["contradictory hybrid", { ...maintainedRawRow, installRef: "@other/gifgrep" }],
+    ["mapped trust verdict", { ...maintainedMappedRow, trust: { clawHubVerdict: "suspicious" } }],
+    ["native suspicious flag", { ...maintainedRawRow, native: { skill: { isSuspicious: true } } }],
   ] as const)("rejects maintained fixture search identity: %s", async (_name, row) => {
     const result = await runClawhubInstallProof({ results: [row] });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Maintained ClawHub fixture");
-    expect(result.calls).toEqual([["skills", "search", "gifgrep", "--limit", "8", "--json"]]);
-  });
-
-  it.each([
-    {
-      marker: "mapped trust verdict",
-      row: { ...maintainedMappedRow, trust: { clawHubVerdict: "suspicious" } },
-    },
-    {
-      marker: "native suspicious flag",
-      row: { ...maintainedRawRow, native: { skill: { isSuspicious: true } } },
-    },
-  ])("rejects maintained fixture risk before install: $marker", async ({ row }) => {
-    const result = await runClawhubInstallProof({ results: [row] });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Maintained ClawHub fixture");
-    expect(result.calls).toEqual([["skills", "search", "gifgrep", "--limit", "8", "--json"]]);
+    expect(result.calls).toEqual([searchArgs()]);
   });
 
   it.each([
@@ -762,9 +669,7 @@ esac
     const result = await runClawhubInstallProof({ results: [maintainedRawRow], ...fault });
     expect(result.status).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("E2E_OK");
-    expect(result.calls.filter((args) => args[1] === "install")).toEqual([
-      ["skills", "install", "@steipete/gifgrep", "--version", "1.0.1", "--force"],
-    ]);
+    expect(result.calls.filter((args) => args[1] === "install")).toEqual([installArgs]);
     expect(result.stdout).not.toContain("Skipping live ClawHub skill");
   });
 
@@ -782,25 +687,15 @@ esac
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls).toEqual([
-      [
-        "skills",
-        "search",
-        key.endsWith("_QUERY") ? "custom" : "homeassistant",
-        "--limit",
-        "8",
-        "--json",
-      ],
+      searchArgs(key.endsWith("_QUERY") ? "custom" : "homeassistant"),
       ["skills", "install", "@another-owner/custom", "--force"],
       ["skills", "info", "custom", "--json"],
     ]);
   });
 
   it.each(["", "custom"])("forwards raw Docker skill overrides: %j", (value) => {
-    const result = spawnSync(
-      process.platform === "darwin" ? "/bin/bash" : "bash",
-      [
-        "-c",
-        `
+    const result = runShell(
+      `
 set -euo pipefail
 source() { :; }
 docker_e2e_resolve_image() { printf '%s' fixture-image; }
@@ -813,9 +708,7 @@ run_logged_print() { shift; "$@"; }
 docker_e2e_run_with_harness() { printf '%s\\n' "$@"; }
 . scripts/e2e/skill-install-docker.sh
 `,
-      ],
       {
-        encoding: "utf8",
         timeout: 5_000,
         env: {
           PATH: "/usr/bin:/bin",
@@ -852,31 +745,23 @@ docker_e2e_run_with_harness() { printf '%s\\n' "$@"; }
     await mkdir(path.dirname(originPath), { recursive: true });
     await mkdir(path.dirname(lockPath), { recursive: true });
     await writeFile(path.join(skillDir, "SKILL.md"), `---\nname: Demo\n---\n`);
-    await writeFile(
-      configPath,
-      `${JSON.stringify({ skills: { install: { allowUploadedArchives: false } } })}\n`,
-    );
-    await writeFile(
-      originPath,
-      `${JSON.stringify({
-        installedVersion: "1.0.0",
-        registry: "https://clawhub.ai",
-        slug,
-      })}\n`,
-    );
+    await writeJson(configPath, { skills: { install: { allowUploadedArchives: false } } });
+    await writeJson(originPath, {
+      installedVersion: "1.0.0",
+      registry: "https://clawhub.ai",
+      slug,
+    });
     await writeFile(lockPath, `${JSON.stringify({ skills: { [slug]: { version: "1.0.0" } } })}\n`);
-    await writeFile(
-      infoPath,
-      `${JSON.stringify({ filePath: escapedInfoPath, skillKey: "wrong-skill" })}\n`,
-    );
+    await writeJson(infoPath, { filePath: escapedInfoPath, skillKey: "wrong-skill" });
 
-    const result = spawnSync(
-      process.execPath,
-      ["--input-type=module", "-", configPath, skillDir, originPath, lockPath, infoPath, slug],
-      {
-        encoding: "utf8",
-        input: await extractClawhubModule("verifier"),
-      },
+    const result = await runClawhubModule(
+      "verifier",
+      configPath,
+      skillDir,
+      originPath,
+      lockPath,
+      infoPath,
+      slug,
     );
 
     expect(result.status).not.toBe(0);
