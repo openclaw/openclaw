@@ -71,11 +71,7 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpSnapshot: vi.fn(),
 }));
 
-vi.mock("../navigation-guard.js", () => ({
-  assertBrowserNavigationAllowed: navigationGuardMocks.assertBrowserNavigationAllowed,
-  assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
-}));
+vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 
 vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
@@ -113,15 +109,17 @@ vi.mock("./agent.shared.js", () => ({
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-function getSnapshotGetHandler(
-  state = {
+function snapshotState() {
+  return {
     resolved: {
       actionTimeoutMs: 60_000,
       extraArgs: [],
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
     },
-  },
-) {
+  };
+}
+
+function getSnapshotGetHandler(state = snapshotState()) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
   const handler = getHandlers.get("/snapshot");
@@ -157,22 +155,21 @@ function createPwModule(overrides: Record<string, ReturnType<typeof vi.fn>> = {}
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
-    cdpMocks.getDocumentIdentitiesViaCdp
-      .mockReset()
-      .mockResolvedValue({ mainFrame: "cdp:test-document", frameTree: "cdp:test-tree" });
+    cdpMocks.getDocumentIdentitiesViaCdp.mockReset();
     cdpMocks.snapshotAria.mockClear();
-    cdpMocks.snapshotRoleViaCdp.mockReset().mockResolvedValue({
-      snapshot: '- link "private" [ref=e1]',
-      refs: { e1: { role: "link", name: "private" } },
-      stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
-    });
+    cdpMocks.snapshotRoleViaCdp.mockReset();
     pwState.module = null;
     tabLookup.mockClear();
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
+    navigationGuardMocks.assertBrowserNavigationResultAllowed
+      .mockReset()
+      .mockResolvedValue(undefined);
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
 
   it("blocks AI CDP role snapshots when the current tab violates browser navigation policy", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+      new Error("browser navigation blocked by policy"),
+    );
     const response = await snapshot({ format: "ai", interactive: "true" });
 
     expect(response.statusCode).toBe(400);
@@ -185,7 +182,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("uses CDP first for unscoped managed role snapshots and publishes its refs", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const pw = createPwModule();
     pwState.module = pw;
     const response = await snapshot({
@@ -217,7 +213,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("falls back to Playwright once when the CDP-first snapshot fails early", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     cdpMocks.snapshotRoleViaCdp.mockRejectedValueOnce(new Error("cdp unavailable"));
     const pw = createPwModule();
     pwState.module = pw;
@@ -230,7 +225,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("keeps aria refs on Playwright-first role snapshots", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const pw = createPwModule();
     pwState.module = pw;
     const response = await snapshot({ format: "ai", interactive: "true", refs: "aria" });
@@ -249,7 +243,6 @@ describe("local-managed browser snapshot routes", () => {
   ])(
     "validates only captured documents for %s snapshots",
     async (_label, playwright, query, reject) => {
-      navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
       const identities = vi
         .fn()
         .mockResolvedValueOnce({ mainFrame: "main", frameTree: "before-child-navigation" })
@@ -277,7 +270,6 @@ describe("local-managed browser snapshot routes", () => {
     ],
     ["an explicit zero cap", { maxChars: "0" }, {}],
   ])("forwards %s to Playwright AI snapshots", async (_name, query, expected) => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const snapshotRoleViaPlaywright = vi.fn(async () => ({ snapshot: "Playwright" }));
     pwState.module = createPwModule({ snapshotRoleViaPlaywright });
     const response = await snapshot(query);
@@ -297,7 +289,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("surfaces pending dialog state without reading the blocked page", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     const snapshotRoleViaPlaywright = vi.fn(async () => ({ snapshot: "Playwright" }));
     pwState.module = createPwModule({
       getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
@@ -329,7 +320,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("rejects a snapshot when the main-frame loader changes during capture", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
     cdpMocks.getDocumentIdentitiesViaCdp
       .mockResolvedValueOnce({ mainFrame: "cdp:before", frameTree: "cdp:tree-before" })
       .mockResolvedValueOnce({ mainFrame: "cdp:after", frameTree: "cdp:tree-after" });
@@ -342,7 +332,6 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("disables deltas when no stable document identity is available", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
     cdpMocks.getDocumentIdentitiesViaCdp.mockResolvedValue({});
     const handler = getSnapshotGetHandler();
     const first = createBrowserRouteResponse();
@@ -360,14 +349,7 @@ describe("local-managed browser snapshot routes", () => {
   });
 
   it("reuses same-document delta keys across request contexts in one browser runtime", async () => {
-    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
-    const state = {
-      resolved: {
-        actionTimeoutMs: 60_000,
-        extraArgs: [],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      },
-    };
+    const state = snapshotState();
     const firstHandler = getSnapshotGetHandler(state);
     const secondHandler = getSnapshotGetHandler(state);
     const first = createBrowserRouteResponse();
@@ -389,16 +371,21 @@ describe("local-managed browser snapshot routes", () => {
   });
 });
 
+async function captureRelay(bridge: { captureOperationTarget: () => (() => string) | undefined }) {
+  const relays = new Map([["chrome", { bridge }]]);
+  const ctx = { state: () => state } as unknown as BrowserRouteContext;
+  const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
+  const resolveRelayTarget = await captureBrowserOperationTarget({
+    ctx,
+    profileName: "chrome",
+    targetId: "old-123",
+  });
+  return { relays, resolveRelayTarget };
+}
+
 describe("captureBrowserOperationTarget", () => {
   it("fails closed when a registered relay cannot capture the acted-on target", async () => {
-    const relays = new Map([["chrome", { bridge: { captureOperationTarget: () => undefined } }]]);
-    const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
-    const ctx = { state: () => state } as unknown as BrowserRouteContext;
-    const resolveRelayTarget = await captureBrowserOperationTarget({
-      ctx,
-      profileName: "chrome",
-      targetId: "old-123",
-    });
+    const { resolveRelayTarget } = await captureRelay({ captureOperationTarget: () => undefined });
 
     expect(typeof resolveRelayTarget).toBe("function");
     expect(
@@ -411,16 +398,8 @@ describe("captureBrowserOperationTarget", () => {
   });
 
   it("rejects a replacement relay even when it reports the same profile and target", async () => {
-    const original = {
-      bridge: { captureOperationTarget: () => () => "replacement-456" },
-    };
-    const relays = new Map([["chrome", original]]);
-    const state = { extensionRelays: relays, profiles: new Map([["chrome", {}]]) };
-    const ctx = { state: () => state } as unknown as BrowserRouteContext;
-    const resolveRelayTarget = await captureBrowserOperationTarget({
-      ctx,
-      profileName: "chrome",
-      targetId: "old-123",
+    const { relays, resolveRelayTarget } = await captureRelay({
+      captureOperationTarget: () => () => "replacement-456",
     });
 
     expect(

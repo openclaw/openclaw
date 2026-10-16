@@ -44,22 +44,14 @@ type PlaywrightRouteParams = {
     cdpUrl: string;
     tab: { targetId: string };
     signal: AbortSignal;
-    pw: {
-      cookiesGetViaPlaywright: typeof routeState.cookiesGetViaPlaywright;
-      cookiesSetManyViaPlaywright: typeof routeState.cookiesSetManyViaPlaywright;
-      setDeviceViaPlaywright: typeof routeState.setDeviceViaPlaywright;
-      setHttpCredentialsViaPlaywright: typeof routeState.setHttpCredentialsViaPlaywright;
-      storageGetViaPlaywright: typeof routeState.storageGetViaPlaywright;
-      storageSetViaPlaywright: typeof routeState.storageSetViaPlaywright;
-      storageClearViaPlaywright: typeof routeState.storageClearViaPlaywright;
-    };
+    pw: typeof routeState;
   }) => Promise<unknown>;
 };
 
-function getPostHandler(route: string) {
-  const { app, postHandlers } = createBrowserRouteApp();
+function getHandler(method: "get" | "post", route: string) {
+  const { app, postHandlers, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentStorageRoutes(app, {} as never);
-  const handler = postHandlers.get(route);
+  const handler = (method === "get" ? getHandlers : postHandlers).get(route);
   expect(handler).toBeTypeOf("function");
   return handler;
 }
@@ -71,9 +63,21 @@ async function post(
   signal?: AbortSignal,
 ) {
   const response = createBrowserRouteResponse();
-  await getPostHandler(route)!({ params, query: {}, body, signal }, response.res);
+  await getHandler("post", route)!({ params, query: {}, body, signal }, response.res);
   return response;
 }
+
+async function get(
+  route: string,
+  params: BrowserRequest["params"] = {},
+  query: BrowserRequest["query"] = {},
+) {
+  const response = createBrowserRouteResponse();
+  await getHandler("get", route)!({ params, query }, response.res);
+  return response;
+}
+
+const target = { cdpUrl: "http://127.0.0.1:18800", targetId: "tab-1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -118,8 +122,7 @@ describe("browser device route", () => {
     );
 
     expect(routeState.setDeviceViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      targetId: "tab-1",
+      ...target,
       name: "iPhone 14",
       signal: controller.signal,
     });
@@ -138,7 +141,7 @@ describe("browser device route", () => {
     routeState.setDeviceViaPlaywright.mockImplementationOnce(async () => controller.abort());
 
     await expect(
-      getPostHandler("/set/device")?.(
+      getHandler("post", "/set/device")?.(
         {
           params: {},
           query: {},
@@ -178,8 +181,7 @@ describe("browser cookie batch route", () => {
     );
 
     expect(routeState.cookiesSetManyViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      targetId: "tab-1",
+      ...target,
       cookies,
       signal: controller.signal,
     });
@@ -203,14 +205,7 @@ describe("browser storage route boundaries", () => {
     const kind = "local";
     routeState.storage[kind].set("account", "plain");
     routeState.storage[kind].set(" account ", "padded");
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserAgentStorageRoutes(app, {} as never);
-    const response = createBrowserRouteResponse();
-
-    await getHandlers.get("/storage/:kind")!(
-      { params: { kind }, query: { key: " account " } },
-      response.res,
-    );
+    const response = await get("/storage/:kind", { kind }, { key: " account " });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({
@@ -276,11 +271,7 @@ describe("browser storage route boundaries", () => {
   );
 
   it("keeps cookie reads behind the current-tab URL guard", async () => {
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserAgentStorageRoutes(app, {} as never);
-    const response = createBrowserRouteResponse();
-
-    await getHandlers.get("/cookies")?.({ params: {}, query: {} }, response.res);
+    const response = await get("/cookies");
 
     expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
       expect.objectContaining({ feature: "cookies", enforceCurrentUrlAllowed: true }),
@@ -295,8 +286,7 @@ describe("browser storage route boundaries", () => {
     });
 
     expect(routeState.setHttpCredentialsViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-      targetId: "tab-1",
+      ...target,
       username: "browser-user",
       password: "sensitive-browser-password",
       clear: false,
