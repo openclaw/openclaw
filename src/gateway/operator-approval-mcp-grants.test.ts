@@ -123,10 +123,10 @@ async function requestGrant(
     client: {
       connId: "runtime-1",
       connect: { client: { id: "test-client" } },
-      ...(options.trusted === false
-        ? {}
-        : {
-            internal: {
+      internal:
+        options.trusted === false
+          ? undefined
+          : {
               agentRuntimeIdentity: {
                 kind: "agentRuntime",
                 agentId: "main",
@@ -135,7 +135,6 @@ async function requestGrant(
                 approvalOwnerPluginId: "codex",
               },
             },
-          }),
     },
     respond: vi.fn(() => acknowledged.resolve()),
     isWebchatConnect: () => false,
@@ -215,18 +214,15 @@ describe("gateway MCP tool grants", () => {
     { name: "closed authority", closed: true },
   ])("does not mint for $name", async (options) => {
     const { aux, authority, pending, record } = await requestGrant(options);
-    if (options.serverConfig) {
+    if (options.serverConfig || options.removed) {
       setRuntimeConfigSnapshot({
         ...cfg,
         mcp: {
-          servers: {
-            "project.docs": { command: "docs-mcp", ...options.serverConfig },
-          },
+          servers: options.removed
+            ? {}
+            : { "project.docs": { command: "docs-mcp", ...options.serverConfig } },
         },
       });
-    }
-    if (options.removed) {
-      setRuntimeConfigSnapshot({ ...cfg, mcp: { servers: {} } });
     }
     if (options.closed) {
       releaseAgentRunDelegatedAuthority(authority);
