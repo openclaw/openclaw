@@ -621,7 +621,9 @@ describe("chat pane header", () => {
     const { container } = mountHeader({
       catalog: true,
       session: undefined,
-      panelMenuActions: [{ id: "terminal", label: "Terminal", icon: icons.copy, onActivate: vi.fn() }],
+      panelMenuActions: [
+        { id: "terminal", label: "Terminal", icon: icons.copy, onActivate: vi.fn() },
+      ],
     });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
