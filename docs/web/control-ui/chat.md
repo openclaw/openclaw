@@ -157,21 +157,14 @@ Drag an empty area of the titlebar row to move the window; its buttons keep thei
 
 ## Mobile message input
 
-In browsers identified as iPhone, iPad (including desktop-mode browsing), or Android,
-Return inserts a line break in Chat, New Session, Side chat, and the command palette prompt. Send with the **Send**, **Start**,
-or **Ask** button. Hardware-keyboard modifiers do not send either. This behavior
-is fixed: there is no mobile Enter-to-send setting, and a saved desktop send
-preference does not change it. Selecting a slash command or argument completes
-the draft without running it; Return stays available for editing while menus
-are open. Queued-message edits also use Return for line breaks and their save
-button to commit.
+On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
+use the **Send**, **Start**, **Ask**, or queued-edit save button to submit.
+Keyboard modifiers do not submit either, including while suggestion menus are open.
 
-Desktop browsers keep their existing **Send shortcut** preference, including in
-narrow windows and on touchscreen computers. The synced preference stays visible
-in **Settings → Appearance → Chat** on every device, so you can configure your
-desktop shortcut from mobile; it does not change mobile sending. Android browsers that mask their
-platform as a Linux desktop also keep desktop shortcuts; touch capability and
-window size alone do not identify a mobile platform.
+**Settings → Appearance → Chat → Send shortcut** stays visible and synced on all
+devices, but only controls desktop submission. Narrow windows and touchscreen
+computers retain desktop shortcuts. Android browsers identifying as desktop Linux
+also retain desktop behavior; touch and window size alone cannot distinguish them.
 
 ## Context breakdown
 

@@ -2,8 +2,6 @@ import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { composer, newChatPage } from "./chat-flow-fixtures.test-support.ts";
 import {
-  captureUiProof,
-  captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   requireRecord,
@@ -26,15 +24,12 @@ suite.define(() => {
       userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
       saved: true,
     },
-  ])("requires visible submit buttons in a $name", async ({ name, userAgent, saved }) => {
-    const { context, page } = await newChatPage(suite, {
+  ])("requires visible submit buttons in a $name", async ({ userAgent, saved }) => {
+    const { page } = await newChatPage(suite, {
       userAgent,
       hasTouch: true,
       isMobile: true,
       viewport: { width: 390, height: 844 },
-      ...(captureUiProofEnabled
-        ? { recordVideo: { dir: suite.artifactDir, size: { width: 390, height: 844 } } }
-        : {}),
     });
     const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
     if (saved) {
@@ -50,39 +45,40 @@ suite.define(() => {
         "sessions.create": { key: "agent:main:mobile-button-proof", runStarted: true },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const chat = composer(page);
-    await chat.fill("First line");
-    await chat.press("End");
-    await chat.press("Enter");
-    await chat.pressSequentially("Second line");
-    expect(await chat.inputValue()).toBe("First line\nSecond line");
-    await chat.press("Control+Enter");
-    await chat.press("Meta+Enter");
-    await expectRequestCountStable(gateway, "chat.send", 0);
-    const chatDraft = await chat.inputValue();
-    await captureUiProof(suite, page, "mobile-submit", `${name}-chat-newline.png`);
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
-    expect(requireRecord((await gateway.waitForRequest("chat.send")).params).message).toBe(
-      chatDraft.trim(),
-    );
-
-    await page.goto(`${suite.server.baseUrl}new`);
-    const draft = page.locator(".new-session-page__message");
-    await draft.fill("New session first line");
-    await draft.press("End");
-    await draft.press("Enter");
-    await draft.pressSequentially("Second line");
-    expect(await draft.inputValue()).toBe("New session first line\nSecond line");
-    await draft.press("Control+Enter");
-    await draft.press("Meta+Enter");
-    await expectRequestCountStable(gateway, "sessions.create", 0);
-    const newSessionDraft = await draft.inputValue();
-    await captureUiProof(suite, page, "mobile-submit", `${name}-start-newline.png`);
-    await page.getByRole("button", { name: "Start session", exact: true }).click();
-    expect(requireRecord((await gateway.waitForRequest("sessions.create")).params).message).toBe(
-      newSessionDraft.trim(),
-    );
+    for (const { route, selector, button, method } of [
+      { route: "chat", selector: ".chat-input", button: "Send message", method: "chat.send" },
+      {
+        route: "new",
+        selector: ".new-session-page__message",
+        button: "Start session",
+        method: "sessions.create",
+      },
+    ]) {
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const draft = route === "chat" ? composer(page) : page.locator(selector);
+      await draft.fill("First line Second line");
+      await draft.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(10, 11));
+      await draft.press("Enter");
+      expect(await draft.inputValue()).toBe("First line\nSecond line");
+      expect(await draft.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(
+        11,
+      );
+      expect(await draft.getAttribute("aria-keyshortcuts")).toBeNull();
+      for (const key of [
+        "Control+Enter",
+        "Meta+Enter",
+        "Control+Shift+Enter",
+        "Meta+Shift+Enter",
+      ]) {
+        await draft.press(key);
+      }
+      await expectRequestCountStable(gateway, method, 0);
+      const message = await draft.inputValue();
+      await page.getByRole("button", { name: button, exact: true }).click();
+      expect(requireRecord((await gateway.waitForRequest(method)).params).message).toBe(
+        message.trim(),
+      );
+    }
     if (saved) {
       expect(
         await page.evaluate(
@@ -90,11 +86,6 @@ suite.define(() => {
           settingsKey,
         ),
       ).toBe("modifier-enter");
-    }
-    const video = page.video();
-    await suite.closeBrowserContext(context);
-    if (video) {
-      console.log(`Mobile submit recording: ${await video.path()}`);
     }
   });
 

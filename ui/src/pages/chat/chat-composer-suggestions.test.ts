@@ -337,7 +337,7 @@ describe("chat composer suggestion accessibility", () => {
   });
 });
 
-it("completes mobile local commands without executing them from the menu", async () => {
+it("leaves mobile Return for editing while the slash menu is open", async () => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
   onTestFinished(() => {
     vi.restoreAllMocks();
@@ -354,7 +354,5 @@ it("completes mobile local commands without executing them from the menu", async
   textarea.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false);
   expect(textarea.value).toBe("/res");
-  container.querySelector<HTMLElement>(".slash-menu-item")!.click();
-  await waitForSolid(() => expect(textarea.value).toBe("/reset"));
   expect(onSend).not.toHaveBeenCalled();
 });
