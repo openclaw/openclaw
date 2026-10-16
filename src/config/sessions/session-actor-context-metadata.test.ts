@@ -238,7 +238,7 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         },
       });
       const appended = {
-        type: "message",
+        type: "message" as const,
         id: "after-window",
         parentId: events.at(-1)!.id,
         timestamp: "2026-01-01T00:00:00.000Z",
@@ -258,6 +258,7 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
               message: {
                 messageJson: JSON.stringify(appended.message),
                 cwd: "/synthetic",
+                validateTurn: false,
               },
               options: {},
             },
