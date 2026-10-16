@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createNativeSessionBindingAuthority,
@@ -18,20 +17,20 @@ import {
 import { createClientHarness } from "./test-support.js";
 
 const remoteWorkspaceRoot = "/remote/codex-workspace";
-let localWorkspaceRoot: string;
+const readPath = "/remote/report.txt";
 let openClawState: OpenClawTestState;
+type MediaOptions = Parameters<typeof prepareCodexRemoteWorkspaceMessageMedia>[0];
+type ExecClient = Parameters<typeof createCodexRemoteWorkspaceFileReader>[0];
 
 beforeEach(async () => {
   openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "codex-remote-workspace-media-",
   });
-  localWorkspaceRoot = await mkdtemp(path.join(os.tmpdir(), "codex-workspace-media-"));
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await rm(localWorkspaceRoot, { recursive: true, force: true });
   await openClawState.cleanup();
 });
 
@@ -53,14 +52,11 @@ function createRemoteFileReader(files: Record<string, string>) {
 function prepareMedia(
   args: Record<string, unknown>,
   readRemoteFile?: RemoteWorkspaceFileReader,
-  options: Omit<
-    Parameters<typeof prepareCodexRemoteWorkspaceMessageMedia>[0],
-    "args" | "readRemoteFile"
-  > = {},
+  options: Omit<MediaOptions, "args" | "readRemoteFile"> = {},
 ) {
   return prepareCodexRemoteWorkspaceMessageMedia({
     args,
-    localWorkspaceRoot,
+    localWorkspaceRoot: openClawState.workspaceDir,
     remoteWorkspaceRoot,
     readRemoteFile,
     ...options,
@@ -70,7 +66,8 @@ function prepareMedia(
 const saveInbound = (content: string, name: string) =>
   saveMediaBuffer(Buffer.from(content), "text/plain", "inbound", 1_024, name);
 const readText = (filePath: unknown) => readFile(String(filePath), "utf8");
-const readFrom = (request: Parameters<typeof createCodexRemoteWorkspaceFileReader>[0]["request"]) =>
+const execResult = (stdout: string, exitCode = 0, stderr = "") => ({ exitCode, stdout, stderr });
+const readFrom = (request: ExecClient["request"]) =>
   createCodexRemoteWorkspaceFileReader(
     { request },
     createNativeSessionBindingAuthority([], vi.fn()),
@@ -88,13 +85,9 @@ async function expectNoRead(
 
 describe("Codex remote file transport", () => {
   it("distinguishes missing files from a missing Node.js executable", async () => {
-    const request = vi.fn(async () => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "ENOENT: missing report.txt",
-    }));
+    const request = vi.fn(async () => execResult("", 1, "ENOENT: missing report.txt"));
     const read = readFrom(request);
-    await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
+    await expect(read({ path: readPath, maxBytes: 64 })).rejects.toThrow(
       "file read failed: ENOENT",
     );
   });
@@ -104,7 +97,7 @@ describe("Codex remote file transport", () => {
       throw new Error("failed to spawn command: No such file or directory");
     });
     const read = readFrom(request);
-    await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
+    await expect(read({ path: readPath, maxBytes: 64 })).rejects.toThrow(
       "requires Node.js on the remote app-server host",
     );
   });
@@ -141,19 +134,12 @@ describe("Codex remote file transport", () => {
           expect(request.params).toMatchObject({ env: { NODE_OPTIONS: null, NODE_PATH: null } });
           expect(request.params).not.toHaveProperty("outputBytesCap");
           const offset = Number(request.params.command[6]);
-          const reply = () =>
-            send({
-              id: request.id,
-              result: {
-                exitCode: 0,
-                stdout: JSON.stringify({
-                  dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
-                  size: bytes.length,
-                  revision: "same-file",
-                }),
-                stderr: "",
-              },
-            });
+          const stdout = JSON.stringify({
+            dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
+            size: bytes.length,
+            revision: "same-file",
+          });
+          const reply = () => send({ id: request.id, result: execResult(stdout) });
           if (offset === 0 && holdFirstReply) {
             firstReply.resolve(reply);
           } else {
@@ -167,7 +153,7 @@ describe("Codex remote file transport", () => {
           await replace();
         }
         const read = createCodexRemoteWorkspaceFileReader(harness.client, captured.authority);
-        transfer = read({ path: "/remote/report.txt", maxBytes: bytes.length });
+        transfer = read({ path: readPath, maxBytes: bytes.length });
         const settled = transfer.catch(() => undefined);
         if (holdFirstReply) {
           const reply = await Promise.race([
@@ -208,7 +194,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       [imagePath]: "authoritative remote image\n",
     });
 
-    const result = await prepareMedia(
+    const { args, sourcePathsByStagedPath: sources } = await prepareMedia(
       {
         action: "upload-file",
         filePath: reportAlias,
@@ -218,29 +204,32 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       readRemoteFile,
       { remoteWorkspaceRoot: remoteRoot },
     );
-    const stagedReportPath = result.args.filePath;
-    const stagedImagePath = (result.args.attachments as Array<{ filePath: string }>)[0]?.filePath;
+    const report = args.filePath;
+    const image = (args.attachments as Array<{ filePath: string }>)[0]?.filePath;
 
-    expect(result.args).toEqual({
+    expect(args).toEqual({
       action: "upload-file",
-      filePath: stagedReportPath,
-      mediaUrls: [stagedReportPath, "https://example.com/image.png"],
-      attachments: [{ filePath: stagedImagePath, title: "Preview" }],
+      filePath: report,
+      mediaUrls: [report, "https://example.com/image.png"],
+      attachments: [{ filePath: image, title: "Preview" }],
     });
-    expect(result.sourcePathsByStagedPath.size).toBe(2);
-    expect(new Set(result.sourcePathsByStagedPath.get(String(stagedReportPath)))).toEqual(
+    expect(sources.size).toBe(2);
+    expect(new Set(sources.get(String(report)))).toEqual(
       new Set([reportAlias, reportPath, "reports/slack-upload.txt"]),
     );
-    expect(result.sourcePathsByStagedPath.get(String(stagedImagePath))).toEqual([imagePath]);
+    expect(sources.get(String(image))).toEqual([imagePath]);
     expect(readRemoteFile).toHaveBeenCalledTimes(2);
-    expect(stagedReportPath).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
-    await expect(readText(stagedReportPath)).resolves.toBe("authoritative remote report\n");
-    await expect(readText(stagedImagePath)).resolves.toBe("authoritative remote image\n");
+    expect(report).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
+    await expect(readText(report)).resolves.toBe("authoritative remote report\n");
+    await expect(readText(image)).resolves.toBe("authoritative remote image\n");
   });
 
   it("uses authoritative remote bytes when a stale local file exists", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
-    await writeFile(path.join(localWorkspaceRoot, "reused-upload.txt"), "stale local content\n");
+    await writeFile(
+      path.join(openClawState.workspaceDir, "reused-upload.txt"),
+      "stale local content\n",
+    );
 
     const result = await prepareMedia(
       { filePath: remotePath },
@@ -277,16 +266,11 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
   it("rejects symlinks disguised as Gateway-owned media", async () => {
     const saved = await saveInbound("old Gateway media\n", "replaceable.txt");
-    const externalRoot = await mkdtemp(path.join(os.tmpdir(), "codex-media-external-"));
-    try {
-      const externalPath = path.join(externalRoot, "private.txt");
-      await writeFile(externalPath, "gateway-local private data\n");
-      await unlink(saved.path);
-      await symlink(externalPath, saved.path);
-      await expectNoRead({ filePath: saved.path });
-    } finally {
-      await rm(externalRoot, { recursive: true, force: true });
-    }
+    const externalPath = path.join(openClawState.workspaceDir, "private.txt");
+    await writeFile(externalPath, "gateway-local private data\n");
+    await unlink(saved.path);
+    await symlink(externalPath, saved.path);
+    await expectNoRead({ filePath: saved.path });
   });
 
   it("fails closed when remote transfers have no active app-server client", async () => {
@@ -334,13 +318,11 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
 
   it("counts repeated attachment entries before issuing any remote request", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reports/report.txt`;
-    const readRemoteFile = createRemoteFileReader({ [remotePath]: "report" });
     for (const args of [
       { mediaUrls: Array.from({ length: 17 }, () => remotePath) },
       { attachments: Array.from({ length: 17 }, () => ({ filePath: remotePath })) },
     ]) {
-      await expect(prepareMedia(args, readRemoteFile)).rejects.toThrow("16-attachment limit");
-      expect(readRemoteFile).not.toHaveBeenCalled();
+      await expectNoRead(args, "16-attachment limit");
     }
   });
 

@@ -106,7 +106,6 @@ function pendingFence() {
       "openclaw-oauth-refresh-fence:v1:0123456789abcdef0123456789abcdef:access:37a0fe0429d128e8102d651fb8c78266739a4cee85cb5f6f492ebd0994b2a013",
     refresh:
       "openclaw-oauth-refresh-fence:v1:0123456789abcdef0123456789abcdef:refresh:9414cbfe06eb993dafcd4864c92b06108e31361731dbabe2f382ef2d5124209a",
-    expires: 1,
   };
 }
 

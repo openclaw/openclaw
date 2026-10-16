@@ -49,23 +49,20 @@ function fixture() {
       throw new Error("revoked");
     }
   };
-  const snapshot: ReviewSnapshot = {
-    phase,
-    review: {
-      id: "review-1",
-      sessionId,
-      runId: "failed-run",
-      ...runtime,
-      nativeThreadId: "native-thread",
-      nativeTurnId: "failed-turn",
-      review: findings,
-    },
+  const review: ReviewSnapshot["review"] = {
+    id: "review-1",
+    sessionId,
+    runId: "failed-run",
+    ...runtime,
+    nativeThreadId: "native-thread",
+    nativeTurnId: "failed-turn",
+    review: findings,
   };
   // The host's session tests own real issuance and durable comparison.
   const host = {
     read: vi.fn<ProviderReviewAcknowledgment["read"]>(() => {
       assertCurrent();
-      return { ...snapshot, phase };
+      return { review, phase };
     }),
     assertRuntime: vi.fn<ProviderReviewAcknowledgment["assertRuntime"]>((params) => {
       params.assertCurrent();
