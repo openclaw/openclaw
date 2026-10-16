@@ -14,6 +14,8 @@ fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
 const writeJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const writeJsonFile = (file: string, value: unknown) =>
+  fs.writeFileSync(file, JSON.stringify(value));
 const registrations: Record<string, () => Promise<(program: Command) => void>> = {
   sandbox: async () => (await import("./sandbox-cli.js")).registerSandboxCli,
   agents: async () => (await import("./program/register.agent.js")).registerAgentsCommands,
@@ -28,29 +30,16 @@ const registrations: Record<string, () => Promise<(program: Command) => void>> =
 };
 try {
   if (process.argv[2] === "migrate-uncertain") {
-    const [
-      { runMigrationApply },
-      { hasCommandProcessCleanupError },
-      { retainCommandProcessCleanup },
-      { resolveGatewayLockPaths, readLockPayloadSync },
-    ] = await Promise.all([
-      import("../commands/migrate/apply.js"),
-      import("../process/exec-result.js"),
-      import("../process/exec-spawn.js"),
-      import("../infra/gateway-lock.js"),
-    ]);
+    const { runMigrationApply } = await import("../commands/migrate/apply.js");
+    const { hasCommandProcessCleanupError } = await import("../process/exec-result.js");
+    const { retainCommandProcessCleanup } = await import("../process/exec-spawn.js");
+    const { resolveGatewayLockPaths, readLockPayloadSync } =
+      await import("../infra/gateway-lock.js");
+    const { summarizeMigrationItems } = await import("../plugin-sdk/migration.js");
     const plan = {
       providerId: "fixture",
       source: "synthetic-source",
-      summary: {
-        total: 0,
-        planned: 0,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: summarizeMigrationItems([]),
       items: [],
     };
     let applyCompleted = false;
@@ -106,15 +95,10 @@ try {
       laterRefused,
     });
   } else if (process.argv[2] === "settlement") {
-    const [
-      { ManagedWorktreeService },
-      { getOpenClawDatabaseMaintenanceScope },
-      { openOpenClawStateDatabase },
-    ] = await Promise.all([
-      import("../agents/worktrees/service.js"),
-      import("../state/openclaw-state-db-async-lifecycle.js"),
-      import("../state/openclaw-state-db.js"),
-    ]);
+    const { ManagedWorktreeService } = await import("../agents/worktrees/service.js");
+    const { getOpenClawDatabaseMaintenanceScope } =
+      await import("../state/openclaw-state-db-async-lifecycle.js");
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
     const repoRoot = process.argv[3]!;
     let database: ReturnType<typeof openOpenClawStateDatabase> | undefined;
     await runWithLocalStateOwner({
@@ -143,17 +127,10 @@ try {
         assertCurrent();
       },
     });
-    fs.writeFileSync(
-      path.join(root, "settlement.json"),
-      JSON.stringify({
-        databaseOpen: database?.db.isOpen,
-      }),
-    );
+    writeJsonFile(path.join(root, "settlement.json"), { databaseOpen: database?.db.isOpen });
   } else {
-    const [{ requireNodeSqlite }, { resolveGatewayLockPaths }] = await Promise.all([
-      import("../infra/node-sqlite.js"),
-      import("../infra/gateway-lock.js"),
-    ]);
+    const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
+    const { resolveGatewayLockPaths } = await import("../infra/gateway-lock.js");
     const native = requireNodeSqlite();
     const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
     let worktreeSql = 0;
@@ -168,6 +145,7 @@ try {
         return;
       }
       worktreeSql += Number(worktree);
+      let identity: { pid?: number; role?: string } = {};
       try {
         const owner: { pid: number; role?: string } = JSON.parse(
           fs.readFileSync(ownerPath, "utf8"),
@@ -175,14 +153,12 @@ try {
         if (worktree) {
           ownerPids.add(owner.pid);
         }
-        if (ownershipWrite) {
-          ownershipWrites.push({ pid: owner.pid, role: owner.role });
-        }
+        identity = { pid: owner.pid, role: owner.role };
       } catch {
         missingCustody += Number(worktree);
-        if (ownershipWrite) {
-          ownershipWrites.push({});
-        }
+      }
+      if (ownershipWrite) {
+        ownershipWrites.push(identity);
       }
     };
     for (const method of ["prepare", "exec"] as const) {
@@ -208,19 +184,16 @@ try {
       });
     }
     process.on("exit", () => {
-      fs.writeFileSync(
-        path.join(control, "sql-observation.json"),
-        JSON.stringify({
-          pid: process.pid,
-          worktreeSql,
-          missingCustody,
-          ownerPids: [...ownerPids],
-          ownershipWrites,
-        }),
-      );
+      writeJsonFile(path.join(control, "sql-observation.json"), {
+        pid: process.pid,
+        worktreeSql,
+        missingCustody,
+        ownerPids: [...ownerPids],
+        ownershipWrites,
+      });
     });
-    const [{ withConsoleLogsRoutedToStderrForJson }, { runCliWithExitFinalization }] =
-      await Promise.all([import("./json-output-mode.js"), import("./one-shot-exit.js")]);
+    const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
+    const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
     await runCliWithExitFinalization({
       run: () =>
         withConsoleLogsRoutedToStderrForJson(
@@ -266,8 +239,8 @@ try {
     });
   }
 } catch (error) {
-  const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
-    await Promise.all([import("./failure-output.js"), import("./json-output-mode.js")]);
+  const { formatCliFailureLines, formatCliJsonFailure } = await import("./failure-output.js");
+  const { isJsonOutputModeActive } = await import("./json-output-mode.js");
   if (isJsonOutputModeActive(process.argv)) {
     writeJson(formatCliJsonFailure(error));
   }

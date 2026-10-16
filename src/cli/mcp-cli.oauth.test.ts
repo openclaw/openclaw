@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../config/home-env.test-harness.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,
@@ -24,204 +24,184 @@ async function readServer() {
   return JSON.parse(lastLogLine());
 }
 
-async function withMcpHome(run: () => Promise<void>) {
-  await withTempHome("openclaw-cli-mcp-home-", async () => {
-    vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
-    await run();
-  });
-}
+let restoreHome: () => Promise<void>;
 
-describe("mcp cli OAuth", () => {
-  beforeEach(() => {
-    resetMcpCliTestState();
-  });
+beforeEach(async () => {
+  resetMcpCliTestState();
+  const env = await createTempHomeEnv("openclaw-cli-mcp-home-");
+  restoreHome = env.restore;
+  vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
+});
 
-  afterEach(async () => {
+afterEach(async () => {
+  try {
+    await restoreHome();
+  } finally {
     await cleanupMcpCliTestState();
+  }
+});
+
+it("surfaces required OAuth authorization in status and doctor", async () => {
+  readMcpOAuthCredentialsStatus.mockResolvedValue({
+    state: "requires-authorization",
   });
 
-  it("surfaces required OAuth authorization in status and doctor", async () => {
-    await withMcpHome(async () => {
-      readMcpOAuthCredentialsStatus.mockResolvedValue({
-        state: "requires-authorization",
-      });
+  await setServer("docs", { ...httpServer, auth: "oauth" });
+  mockLog.mockClear();
 
-      await setServer("docs", { ...httpServer, auth: "oauth" });
-      mockLog.mockClear();
+  await mcp("status", "--verbose");
 
-      await mcp("status", "--verbose");
+  const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
+  expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
+  expect(statusLines).toContain("  oauth: requires-authorization");
 
-      const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
-      expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
-      expect(statusLines).toContain("  oauth: requires-authorization");
+  mockLog.mockClear();
+  await mcp("doctor", "--json");
 
-      mockLog.mockClear();
-      await mcp("doctor", "--json");
-
-      expect(JSON.parse(lastLogLine())).toMatchObject({
+  expect(JSON.parse(lastLogLine())).toMatchObject({
+    ok: true,
+    servers: [
+      {
+        name: "docs",
         ok: true,
-        servers: [
+        issues: [
           {
-            name: "docs",
-            ok: true,
-            issues: [
-              {
-                level: "warning",
-                message:
-                  "OAuth credentials require additional authorization; run openclaw mcp login docs",
-              },
-            ],
+            level: "warning",
+            message:
+              "OAuth credentials require additional authorization; run openclaw mcp login docs",
           },
         ],
-      });
-    });
+      },
+    ],
+  });
+});
+
+it("shows connected requester principals in list and status output", async () => {
+  countMcpOAuthPrincipals.mockResolvedValue(2);
+
+  await setServer("calendar", {
+    ...httpServer,
+    auth: "oauth",
+    oauth: { identity: "per-requester" },
+  });
+  await setServer("context7", { command: "uvx", args: ["context7-mcp"] });
+  mockLog.mockClear();
+
+  await mcp("list");
+  expect(mockLog.mock.calls.map(([line]) => String(line))).toContain(
+    "- calendar (2 connected principals)",
+  );
+  const listing = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+  expect(listing).toContain("- context7");
+  expect(listing).toContain("OpenClaw-managed MCP servers (");
+  expect(listing).toContain("OpenClaw-managed mcp.servers entries");
+  expect(listing).toContain("does not include mcporter servers from config/mcporter.json");
+
+  mockLog.mockClear();
+  await mcp("status", "--json");
+  expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
+    name: "calendar",
+    connectedPrincipals: 2,
+  });
+  expect(readMcpOAuthCredentialsStatus).not.toHaveBeenCalled();
+});
+
+it("configures enablement, timeouts, and OAuth login", async () => {
+  completeMcpOAuthAuthorization.mockResolvedValueOnce("authorized");
+
+  await setServer("docs", httpServer);
+  await mcp("configure", "docs", "--disable", "--timeout", "9", "--auth", "oauth");
+  await mcp("login", "docs", "--code", "abc123");
+
+  expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
+    expect.objectContaining({
+      serverName: "docs",
+      serverUrl: "https://mcp.example.com",
+    }),
+    expect.objectContaining({ url: "https://mcp.example.com" }),
+    { code: "abc123" },
+  );
+
+  mockLog.mockClear();
+  await mcp("status", "--json");
+  expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
+    name: "docs",
+    enabled: false,
+    ok: false,
+    requestTimeoutMs: 9_000,
+    auth: "oauth",
+  });
+});
+
+it("preserves per-requester identity and redirect metadata when updating OAuth scope", async () => {
+  const oauth = {
+    identity: "per-requester",
+    scope: "docs.read",
+    redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
+    clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
+  };
+  await setServer("docs", {
+    ...httpServer,
+    auth: "oauth",
+    oauth,
+    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
   });
 
-  it("shows connected requester principals in list and status output", async () => {
-    await withMcpHome(async () => {
-      countMcpOAuthPrincipals.mockResolvedValue(2);
+  await mcp("configure", "docs", "--oauth-scope", "docs.write", "--include", "search");
 
-      await setServer("calendar", {
-        ...httpServer,
-        auth: "oauth",
-        oauth: { identity: "per-requester" },
-      });
-      await setServer("context7", { command: "uvx", args: ["context7-mcp"] });
-      mockLog.mockClear();
+  expect(await readServer()).toMatchObject({
+    oauth: { ...oauth, scope: "docs.write" },
+    toolFilter: { include: ["search"], exclude: ["admin_*"] },
+  });
+});
 
-      await mcp("list");
-      expect(mockLog.mock.calls.map(([line]) => String(line))).toContain(
-        "- calendar (2 connected principals)",
-      );
-      const listing = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
-      expect(listing).toContain("- context7");
-      expect(listing).toContain("OpenClaw-managed MCP servers (");
-      expect(listing).toContain("OpenClaw-managed mcp.servers entries");
-      expect(listing).toContain("does not include mcporter servers from config/mcporter.json");
-
-      mockLog.mockClear();
-      await mcp("status", "--json");
-      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
-        name: "calendar",
-        connectedPrincipals: 2,
-      });
-      expect(readMcpOAuthCredentialsStatus).not.toHaveBeenCalled();
-    });
+it("does not restore previous OAuth metadata after an explicit clear", async () => {
+  await setServer("docs", {
+    url: "https://mcp.example.com",
+    auth: "oauth",
+    oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
   });
 
-  it("configures enablement, timeouts, and OAuth login", async () => {
-    await withMcpHome(async () => {
-      completeMcpOAuthAuthorization.mockResolvedValueOnce("authorized");
+  await mcp("configure", "docs", "--clear-auth", "--auth", "oauth", "--oauth-scope", "docs.write");
 
-      await setServer("docs", httpServer);
-      await mcp("configure", "docs", "--disable", "--timeout", "9", "--auth", "oauth");
-      await mcp("login", "docs", "--code", "abc123");
+  expect((await readServer()).oauth).toEqual({ scope: "docs.write" });
+});
 
-      expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
-        expect.objectContaining({
-          serverName: "docs",
-          serverUrl: "https://mcp.example.com",
-        }),
-        expect.objectContaining({ url: "https://mcp.example.com" }),
-        { code: "abc123" },
-      );
-
-      mockLog.mockClear();
-      await mcp("status", "--json");
-      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
-        name: "docs",
-        enabled: false,
-        ok: false,
-        requestTimeoutMs: 9_000,
-        auth: "oauth",
-      });
+it.each(["login", "logout"] as const)(
+  "rejects operator %s for per-requester OAuth",
+  async (command) => {
+    await setServer("calendar", {
+      ...httpServer,
+      auth: "oauth",
+      oauth: { identity: "per-requester" },
     });
-  });
+    const operation =
+      command === "login" ? completeMcpOAuthAuthorization : clearMcpOAuthCredentials;
+    operation.mockClear();
+    mockError.mockClear();
+    await expect(
+      mcp(command, "calendar", ...(command === "login" ? ["--code", "abc123"] : [])),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(lastErrorLine()).toBe(
+      `MCP server "calendar" uses per-requester OAuth. ${
+        command === "login"
+          ? "Senders connect from the channel via the MCP connect flow."
+          : "Remove or replace the server to clear requester credentials."
+      }`,
+    );
+    expect(operation).not.toHaveBeenCalled();
+  },
+);
 
-  it("preserves per-requester identity and redirect metadata when updating OAuth scope", async () => {
-    await withMcpHome(async () => {
-      const oauth = {
-        identity: "per-requester",
-        scope: "docs.read",
-        redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
-        clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
-      };
-      await setServer("docs", {
-        ...httpServer,
-        auth: "oauth",
-        oauth,
-        toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-      });
+it("clears stored OAuth credentials after auth is removed", async () => {
+  await setServer("docs", httpServer);
+  clearMcpOAuthCredentials.mockClear();
+  await mcp("logout", "docs");
 
-      await mcp("configure", "docs", "--oauth-scope", "docs.write", "--include", "search");
-
-      expect(await readServer()).toMatchObject({
-        oauth: { ...oauth, scope: "docs.write" },
-        toolFilter: { include: ["search"], exclude: ["admin_*"] },
-      });
-    });
-  });
-
-  it("does not restore previous OAuth metadata after an explicit clear", async () => {
-    await withMcpHome(async () => {
-      await setServer("docs", {
-        url: "https://mcp.example.com",
-        auth: "oauth",
-        oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
-      });
-
-      await mcp(
-        "configure",
-        "docs",
-        "--clear-auth",
-        "--auth",
-        "oauth",
-        "--oauth-scope",
-        "docs.write",
-      );
-
-      expect((await readServer()).oauth).toEqual({ scope: "docs.write" });
-    });
-  });
-
-  it("rejects operator login and logout for per-requester OAuth", async () => {
-    await withMcpHome(async () => {
-      await setServer("calendar", {
-        ...httpServer,
-        auth: "oauth",
-        oauth: { identity: "per-requester" },
-      });
-      mockError.mockClear();
-      completeMcpOAuthAuthorization.mockClear();
-      clearMcpOAuthCredentials.mockClear();
-
-      await expect(mcp("login", "calendar", "--code", "abc123")).rejects.toMatchObject({ code: 1 });
-      expect(lastErrorLine()).toBe(
-        'MCP server "calendar" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.',
-      );
-      expect(completeMcpOAuthAuthorization).not.toHaveBeenCalled();
-
-      mockError.mockClear();
-      await expect(mcp("logout", "calendar")).rejects.toMatchObject({ code: 1 });
-      expect(lastErrorLine()).toBe(
-        'MCP server "calendar" uses per-requester OAuth. Remove or replace the server to clear requester credentials.',
-      );
-      expect(clearMcpOAuthCredentials).not.toHaveBeenCalled();
-    });
-  });
-
-  it("clears stored OAuth credentials after auth is removed", async () => {
-    await withMcpHome(async () => {
-      await setServer("docs", httpServer);
-      clearMcpOAuthCredentials.mockClear();
-      await mcp("logout", "docs");
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
-        expect.objectContaining({
-          serverName: "docs",
-          serverUrl: "https://mcp.example.com",
-        }),
-      );
-    });
-  });
+  expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+    expect.objectContaining({
+      serverName: "docs",
+      serverUrl: "https://mcp.example.com",
+    }),
+  );
 });

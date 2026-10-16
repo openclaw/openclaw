@@ -84,6 +84,35 @@ const readJson = async (...parts: string[]) => JSON.parse(await readText(...part
 const expectMissing = (file: string) =>
   expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 
+async function writeFixture(root: string, file: string, content: string, executable = false) {
+  const target = path.join(root, file);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, content);
+  if (executable) {
+    await fs.chmod(target, 0o755);
+  }
+}
+
+function cliPayload(result: Awaited<ReturnType<typeof runCliProcessChild>>, code = 0) {
+  expect(result.code, result.stderr).toBe(code);
+  return JSON.parse(result.stdout);
+}
+
+const createArgs = (repo: string, name: string) => [
+  "worktrees",
+  "create",
+  repo,
+  "--name",
+  name,
+  "--base-ref",
+  "HEAD",
+  "--json",
+];
+const expectCustody = (env: NodeJS.ProcessEnv) =>
+  expect(acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 })).rejects.toThrow(
+    "state ownership",
+  );
+
 function stubHome(env: NodeJS.ProcessEnv, root: string, includeState = false) {
   for (const key of ["HOME", "USERPROFILE"]) {
     vi.stubEnv(key, root);
@@ -123,16 +152,18 @@ describe("same-root local mutation routing", () => {
     env = environment(root);
     repo = await initializeRepository(root);
     for (const file of ["alpha/a.txt", "beta/b.txt", "excluded/no.txt"]) {
-      await fs.mkdir(path.dirname(path.join(repo, file)), { recursive: true });
-      await fs.writeFile(path.join(repo, file), file);
+      await writeFixture(repo, file, file);
     }
-    await fs.mkdir(path.join(repo, ".openclaw", "worktree-profiles"), { recursive: true });
-    await fs.writeFile(path.join(repo, ".openclaw", "worktree-profiles", "alpha"), "alpha\n");
-    await fs.writeFile(path.join(repo, ".openclaw", "worktree-profiles", "beta"), "beta\n");
+    for (const profile of ["alpha", "beta"]) {
+      await writeFixture(repo, `.openclaw/worktree-profiles/${profile}`, `${profile}\n`);
+    }
     if (process.platform !== "win32") {
-      const setup = path.join(repo, ".openclaw", "worktree-setup.sh");
-      await fs.writeFile(setup, "#!/bin/sh\nprintf 'owner setup complete\\n' > setup-proof.txt\n");
-      await fs.chmod(setup, 0o755);
+      await writeFixture(
+        repo,
+        ".openclaw/worktree-setup.sh",
+        "#!/bin/sh\nprintf 'owner setup complete\\n' > setup-proof.txt\n",
+        true,
+      );
     }
     await git(repo, "add", ".");
     await git(repo, "commit", "-m", "source profiles");
@@ -255,18 +286,7 @@ describe("same-root local mutation routing", () => {
 
   const create = (name: string, extra: string[] = [], selector = repo) =>
     runCliProcessChild({
-      nodeArgs: [
-        ...entrypoint,
-        "worktrees",
-        "create",
-        selector,
-        "--name",
-        name,
-        "--base-ref",
-        "HEAD",
-        "--json",
-        ...extra,
-      ],
+      nodeArgs: [...entrypoint, ...createArgs(selector, name), ...extra],
       // A configured remote URL must not redirect this same-root operation.
       env: { ...env, OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1" },
     });
@@ -295,8 +315,7 @@ describe("same-root local mutation routing", () => {
       ["--source-profile", "alpha", "--source-profile", "beta"],
       repoSelector,
     );
-    expect(result.code, result.stderr).toBe(0);
-    const record: ManagedWorktreeRecord = JSON.parse(result.stdout);
+    const record: ManagedWorktreeRecord = cliPayload(result);
     expect({
       repoRoot: record.repoRoot,
       sourceBranch: await git(repo, "branch", "--list", "openclaw/routed"),
@@ -327,8 +346,7 @@ describe("same-root local mutation routing", () => {
         await service.remove({ id: record.id, reason: "create restore fixture" });
       }
       const repeated = await create("routed");
-      expect(repeated.code, repeated.stderr).toBe(0);
-      expect(JSON.parse(repeated.stdout)).toMatchObject({ id: record.id, path: record.path });
+      expect(cliPayload(repeated)).toMatchObject({ id: record.id, path: record.path });
       expect(await readText(record.path, "alpha/a.txt")).toBe("retained routed work\n");
       expect(
         (await service.listRegistryRecords()).find((item) => item.id === record.id)?.removedAt,
@@ -498,9 +516,8 @@ describe("same-root local mutation routing", () => {
           await prepared.verify(false);
           await maintenanceClock.advanceBy(0);
           const progress = await run(["worktrees", "gc", "--job", payload.jobId, "--json"]);
-          expect(progress.code, progress.stderr).toBe(1);
+          const completed = cliPayload(progress, 1);
           expect(methods.slice(before)).toEqual([method, method]);
-          const completed = JSON.parse(progress.stdout);
           expect(completed).toMatchObject({
             jobId: payload.jobId,
             state: "completed",
@@ -573,10 +590,9 @@ describe("offline local mutation custody", () => {
         setupSocket = socket;
         socket.once("data", () => setupReady.resolve(socket));
       });
-      const setup = path.join(repo, ".openclaw", "worktree-setup.sh");
-      await fs.mkdir(path.dirname(setup), { recursive: true });
-      await fs.writeFile(
-        setup,
+      await writeFixture(
+        repo,
+        ".openclaw/worktree-setup.sh",
         `#!/usr/bin/env node
 const socket = require("node:net").connect(${reservation.claim.port}, "127.0.0.1", () => socket.write("ready"));
 socket.on("data", () => {
@@ -584,21 +600,11 @@ socket.on("data", () => {
   socket.end();
 });
 `,
+        true,
       );
-      await fs.chmod(setup, 0o755);
       try {
         const result = await runCliProcessChild({
-          nodeArgs: [
-            ...entrypoint,
-            "worktrees",
-            "create",
-            repo,
-            "--name",
-            "offline",
-            "--base-ref",
-            "HEAD",
-            "--json",
-          ],
+          nodeArgs: [...entrypoint, ...createArgs(repo, "offline")],
           env,
           interact: async (child) => {
             const socket = await awaitGateBeforeSettlement(
@@ -606,15 +612,12 @@ socket.on("data", () => {
               once(child, "exit"),
               "CLI exited before setup hook",
             );
-            await expect(
-              acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 }),
-            ).rejects.toThrow("state ownership");
+            await expectCustody(env);
             socket.write("release");
             child.stdin.end();
           },
         });
-        expect(result.code, result.stderr).toBe(0);
-        const record: ManagedWorktreeRecord = JSON.parse(result.stdout);
+        const record: ManagedWorktreeRecord = cliPayload(result);
         expect(await readText(record.path, "README.md")).toBe("base\n");
         expect(await readText(record.path, "setup-proof.txt")).toBe("local setup complete\n");
         expect(record.path).toContain(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"));
@@ -658,9 +661,7 @@ socket.on("data", () => {
             exited,
             "CLI exited before retained continuation",
           );
-          await expect(
-            acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 }),
-          ).rejects.toThrow("state ownership");
+          await expectCustody(env);
           if (interrupt) {
             child.kill("SIGTERM");
             await awaitGateBeforeSettlement(
@@ -668,9 +669,7 @@ socket.on("data", () => {
               exited,
               "CLI exited before signal settlement",
             );
-            await expect(
-              acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 }),
-            ).rejects.toThrow("state ownership");
+            await expectCustody(env);
           }
           child.stdin.end("continue\n");
         },
