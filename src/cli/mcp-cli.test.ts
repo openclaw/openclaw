@@ -114,6 +114,32 @@ describe("mcp cli", () => {
     });
   });
 
+  it.each(["node", " node "])("preserves literal stdio paths from add flags: %j", async (name) => {
+    await withMcpHome(async (home, workspaceDir) => {
+      const command = path.join(workspaceDir, name);
+      const cwd = path.join(workspaceDir, `${name}-workspace `);
+      await runMcpCommand([
+        "mcp",
+        "add",
+        "literal",
+        "--command",
+        command,
+        "--arg",
+        "server.mjs",
+        "--cwd",
+        cwd,
+        "--no-probe",
+      ]);
+      const saved = JSON.parse(
+        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      );
+      expect(saved.mcp.servers.literal).toEqual({ command, args: ["server.mjs"], cwd });
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "literal", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({ command, args: ["server.mjs"], cwd });
+    });
+  });
+
   it("does not replace an MCP server added while probing", async () => {
     await withMcpHome(async () => {
       let competitorWon = false;
