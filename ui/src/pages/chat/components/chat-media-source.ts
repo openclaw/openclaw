@@ -14,7 +14,7 @@ function finiteMediaTime(value: number): number {
 }
 
 /** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
-export class ChatMediaSourceController {
+export class ChatMediaSourceOwner {
   private appliedSource = "";
   private appliedIdentity = "";
   private pendingSource = "";

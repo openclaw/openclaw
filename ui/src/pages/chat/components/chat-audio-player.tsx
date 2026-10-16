@@ -27,7 +27,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -73,7 +73,7 @@ function ChatAudioPlayerContent(
     waveformPeaks: null,
     waveformWidth: 0,
   });
-  const sourceController = new ChatMediaSourceController();
+  const sourceController = new ChatMediaSourceOwner();
   const sourceState = projectOwner(sourceController, (owner) => owner);
   const cancelPendingResume = () => sourceController.cancelPendingResume();
   let mediaElement: HTMLAudioElement | null = null;

@@ -11,7 +11,7 @@ import {
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 
 type ChatVideoPlayerProps = {
   src: string;
@@ -36,7 +36,7 @@ function ChatVideoPlayerContent(
   host.style.display = "contents";
   // Buffering can lower readyState after the first frame without another loadeddata event.
   const [frameReady, setFrameReady] = createSignal(false);
-  const sourceController = new ChatMediaSourceController();
+  const sourceController = new ChatMediaSourceOwner();
   const sourceState = projectOwner(sourceController, (owner) => owner);
   let media: HTMLVideoElement | undefined;
   let mediaVisible = false;
