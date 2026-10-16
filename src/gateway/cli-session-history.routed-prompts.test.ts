@@ -14,6 +14,15 @@ import {
 } from "./cli-session-history.test-support.js";
 
 const DRIFT_NOTE = buildCliSessionDriftNote(["system-prompt", "prompt-tools"]);
+const OPS_PROVENANCE: InputProvenance = {
+  kind: "inter_session",
+  sourceSessionKey: "agent:ops:main",
+  sourceTool: "sessions_send",
+};
+const REQUESTER_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+const REQUESTER_FRAME =
+  'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n';
 
 function writeClaudeEntries(filePath: string, entries: readonly Record<string, unknown>[]) {
   return fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
@@ -21,37 +30,26 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 
 describe("routed CLI prompts in chat history", () => {
   it.each([
-    { shape: "text block", description: "earlier messages in this chat" },
-    {
-      shape: "text block",
-      description:
-        "messages recorded in this chat since your last reply here (possibly already in this session)",
-    },
-  ])(
-    "preserves unmatched routed $shape provenance beneath $description context",
-    async ({ shape, description }) => {
-      await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-        const provenance: InputProvenance = {
-          kind: "inter_session",
-          sourceSessionKey: "agent:ops:main",
-          sourceTool: "sessions_send",
-        };
-        const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
-        const raw = `${note}\n\n${buildInterSessionPromptContext(provenance).text}\nPlease check the build.`;
-        const content = shape === "string" ? raw : [{ type: "text", text: raw }];
-        await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-switch-back" })]);
+    "earlier messages in this chat",
+    "messages recorded in this chat since your last reply here (possibly already in this session)",
+  ])("preserves unmatched routed text block provenance beneath %s context", async (description) => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+      const provenance = OPS_PROVENANCE;
+      const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
+      const raw = `${note}\n\n${buildInterSessionPromptContext(provenance).text}\nPlease check the build.`;
+      const content = [{ type: "text", text: raw }];
+      await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-switch-back" })]);
 
-        const merged = mergeImportedChatHistoryMessages({
-          localMessages: [],
-          importedMessages: await readMessages(),
-        });
-
-        expect(merged).toHaveLength(1);
-        expect(merged[0]).toMatchObject({ role: "user", content, provenance });
-        expect(merged[0]).not.toMatchObject({ senderIsOwner: true });
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [],
+        importedMessages: await readMessages(),
       });
-    },
-  );
+
+      expect(merged).toHaveLength(1);
+      expect(merged[0]).toMatchObject({ role: "user", content, provenance });
+      expect(merged[0]).not.toMatchObject({ senderIsOwner: true });
+    });
+  });
 
   it("records inter-session provenance from the routed prompt envelope", async () => {
     await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
@@ -95,65 +93,34 @@ describe("routed CLI prompts in chat history", () => {
     });
   });
 
-  it.each([{ shape: "text block", decoration: "requester frame" }])(
-    "matches literal routed $shape $decoration before removing generated-looking decorations",
-    async ({ shape, decoration }) => {
-      await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
-        const provenance: InputProvenance = {
-          kind: "inter_session",
-          sourceSessionKey: "agent:ops:main",
-          sourceTool: "sessions_send",
-        };
-        const envelope = buildInterSessionPromptContext(provenance).text;
-        const body = `${envelope}\nPlease check the build.`;
-        const hint =
-          'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
-        const frame =
-          'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n';
-        const quoted = `${decoration === "requester frame" ? frame : ""}${hint}\n\nPlease check the build.`;
-        const raw =
-          decoration === "resume"
-            ? `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`
-            : `${envelope}\n${quoted}`;
-        const content = shape === "string" ? raw : [{ type: "text", text: raw }];
-        const plain = {
-          ...user(decoration === "resume" ? body : "Please check the build."),
-          provenance,
-        };
-        const literalContent =
-          decoration === "resume"
-            ? content
-            : shape === "string"
-              ? quoted
-              : [{ type: "text", text: quoted }];
-        const literal = { ...user(literalContent), provenance };
-        await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-literal" })]);
+  it("matches literal routed text block requester frame before removing generated-looking decorations", async () => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+      const provenance = OPS_PROVENANCE;
+      const envelope = buildInterSessionPromptContext(provenance).text;
+      const quoted = `${REQUESTER_FRAME}${REQUESTER_HINT}\n\nPlease check the build.`;
+      const content = [{ type: "text", text: `${envelope}\n${quoted}` }];
+      const plain = { ...user("Please check the build."), provenance };
+      const literal = { ...user([{ type: "text", text: quoted }]), provenance };
+      await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "routed-literal" })]);
 
-        const imported = await readMessages();
-        const merged = mergeImportedChatHistoryMessages({
-          localMessages: [plain, literal],
-          importedMessages: imported,
-        });
-
-        expect(merged).toEqual([
-          plain,
-          { ...literal, __openclaw: cliMeta("routed-literal", sessionId) },
-        ]);
-        expect(imported[0]?.content).toEqual(content);
+      const imported = await readMessages();
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [plain, literal],
+        importedMessages: imported,
       });
-    },
-  );
+
+      expect(merged).toEqual([
+        plain,
+        { ...literal, __openclaw: cliMeta("routed-literal", sessionId) },
+      ]);
+      expect(imported[0]?.content).toEqual(content);
+    });
+  });
 
   it("keeps routed quotation identities from advancing the plain-body floor on reload", () => {
-    const provenance: InputProvenance = {
-      kind: "inter_session",
-      sourceSessionKey: "agent:ops:main",
-      sourceTool: "sessions_send",
-    };
+    const provenance = OPS_PROVENANCE;
     const envelope = buildInterSessionPromptContext(provenance).text;
-    const quoted =
-      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner"}}\n```\n\n' +
-      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\nhello';
+    const quoted = `${REQUESTER_FRAME}${REQUESTER_HINT}\n\nhello`;
     const plain = { ...user("hello"), provenance };
     const literal = { ...user(quoted, undefined, cliMeta("literal")), provenance };
     const imports = [
@@ -193,16 +160,12 @@ describe("routed CLI prompts in chat history", () => {
   });
 
   it("dedupes routed prompts whose drift note sits under the inter-session envelope", () => {
-    const envelope = buildInterSessionPromptContext({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:main",
-      sourceTool: "sessions_send",
-    }).text;
-    const provenance = {
+    const provenance: InputProvenance = {
       kind: "inter_session",
       sourceSessionKey: "agent:main:main",
       sourceTool: "sessions_send",
     };
+    const envelope = buildInterSessionPromptContext(provenance).text;
     const routed = { ...user(`${envelope}\nPlease check the build.`, 1_000), provenance };
     const settled = {
       ...user("[Subagent Context] Every subagent has settled.", 2_000),
@@ -277,11 +240,7 @@ describe("routed CLI prompts in chat history", () => {
   });
 
   it("keeps an owner message apart from a routed message with the same body", () => {
-    const provenance: InputProvenance = {
-      kind: "inter_session",
-      sourceSessionKey: "agent:ops:main",
-      sourceTool: "sessions_send",
-    };
+    const provenance = OPS_PROVENANCE;
     const envelope = buildInterSessionPromptContext(provenance).text;
     const owner = user("done", 1_000);
     const importedRouted = {
@@ -298,11 +257,7 @@ describe("routed CLI prompts in chat history", () => {
   });
 
   it("dedupes routed prompts carrying queued system event lines", () => {
-    const provenance: InputProvenance = {
-      kind: "inter_session",
-      sourceSessionKey: "agent:ops:main",
-      sourceTool: "sessions_send",
-    };
+    const provenance = OPS_PROVENANCE;
     const envelope = buildInterSessionPromptContext(provenance).text;
     const local = { ...user("what changed?", 1_000), provenance };
     const imported = {

@@ -17,7 +17,10 @@ import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
@@ -25,20 +28,77 @@ import { createReadonlySessionHistoryReader } from "./session-history-readonly-r
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
 
+function historyFixture(state: OpenClawTestState, nativeId: string, sessionId: string) {
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
+  const entry = {
+    sessionId,
+    updatedAt: 1,
+    cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+  };
+  return { scope, entry };
+}
+
+function historyTarget(
+  state: OpenClawTestState,
+  scope: ReturnType<typeof historyFixture>["scope"],
+) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  return {
+    transcript: { ...scope, sessionFile: scope.sessionKey },
+    database: { agentId: database.agentId, path: database.path },
+    entryValidationKey: scope.sessionKey,
+  };
+}
+
+function historyParams(
+  { scope, entry }: ReturnType<typeof historyFixture>,
+  homeDir: string,
+  max = 10,
+) {
+  return {
+    entry,
+    provider: "claude-cli",
+    sessionId: scope.sessionId,
+    storePath: scope.storePath,
+    sessionAgentId: scope.agentId,
+    canonicalKey: scope.sessionKey,
+    cliHistoryHomeDir: homeDir,
+    max,
+    maxHistoryBytes: 64 * 1024,
+    effectiveMaxChars: 4096,
+    offset: undefined,
+    messageId: undefined,
+  };
+}
+
+async function readNativePage(
+  params: ReturnType<typeof historyParams>,
+  readers: CliHistoryReaders,
+) {
+  const cli = await prepareCliSessionHistoryReader(params, readers);
+  if (!cli) {
+    throw new Error("Expected native history reader");
+  }
+  try {
+    return await readChatHistoryPageKernel(params, {
+      readers: cli.readers,
+      readMessageSequence: cli.sequence,
+      deferProfileDisplay: true,
+    });
+  } finally {
+    cli.dispose();
+  }
+}
+
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:cli-prefix",
-        sessionId: "cli-prefix",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const entry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
-      };
+      const { scope, entry } = historyFixture(state, nativeId, "cli-prefix");
       await replaceSessionEntry(scope, entry);
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: scope.sessionId },
@@ -68,12 +128,7 @@ it("serves a captured history prefix while both transcripts append and observes 
         }
         return createReadStream(file, options);
       });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const target = {
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      };
+      const target = historyTarget(state, scope);
       const owner = new OpenClawAgentDatabaseReadOnlyScope();
       const base = createReadonlySessionHistoryReader(target);
       let localAppended = false;
@@ -93,36 +148,8 @@ it("serves a captured history prefix while both transcripts append and observes 
           return page;
         },
       };
-      const params = {
-        entry,
-        provider: "claude-cli",
-        sessionId: scope.sessionId,
-        storePath: scope.storePath,
-        sessionAgentId: scope.agentId,
-        canonicalKey: scope.sessionKey,
-        cliHistoryHomeDir: homeDir,
-        max: 4,
-        maxHistoryBytes: 64 * 1024,
-        effectiveMaxChars: 4096,
-        offset: undefined,
-        messageId: undefined,
-      };
-      const read = () =>
-        owner.run(target.database, async () => {
-          const cli = await prepareCliSessionHistoryReader(params, readers);
-          if (!cli) {
-            throw new Error("Expected native history reader");
-          }
-          try {
-            return await readChatHistoryPageKernel(params, {
-              readers: cli.readers,
-              readMessageSequence: cli.sequence,
-              deferProfileDisplay: true,
-            });
-          } finally {
-            cli.dispose();
-          }
-        });
+      const params = historyParams({ scope, entry }, homeDir, 4);
+      const read = () => owner.run(target.database, () => readNativePage(params, readers));
       try {
         const first = await read();
         expect(first.messages.map(readChatHistoryMessageId)).toEqual([
@@ -151,24 +178,9 @@ it("serves a captured history prefix while both transcripts append and observes 
 it("applies native history eligibility to actual empty, message, and marker-only source pages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId }) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "cli-eligibility",
-        sessionKey: "agent:main:cli-eligibility",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const entry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
-      };
+      const { scope, entry } = historyFixture(state, nativeId, "cli-eligibility");
       await replaceSessionEntry(scope, entry);
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const target = {
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      };
+      const target = historyTarget(state, scope);
       const owner = new OpenClawAgentDatabaseReadOnlyScope();
       const readers = createReadonlySessionHistoryReader(target);
       const message = {
@@ -201,18 +213,8 @@ it("applies native history eligibility to actual empty, message, and marker-only
           await owner.run(target.database, async () => {
             const cli = await prepareCliSessionHistoryReader(
               {
-                entry,
+                ...historyParams({ scope, entry }, homeDir),
                 provider: cell.provider,
-                sessionId: scope.sessionId,
-                storePath: scope.storePath,
-                sessionAgentId: scope.agentId,
-                canonicalKey: scope.sessionKey,
-                cliHistoryHomeDir: homeDir,
-                max: 10,
-                maxHistoryBytes: 64 * 1024,
-                effectiveMaxChars: 4096,
-                offset: undefined,
-                messageId: undefined,
               },
               readers,
             );
@@ -246,17 +248,7 @@ it("applies native history eligibility to actual empty, message, and marker-only
 it("observes newly available reset archives and refuses changed archive bodies under older identities", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "cli-archive",
-        sessionKey: "agent:main:cli-archive",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const entry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
-      };
+      const { scope, entry } = historyFixture(state, nativeId, "cli-archive");
       const header = { type: "session", version: 3, id: scope.sessionId };
       await replaceSessionEntry(scope, entry);
       await replaceTranscriptEvents(scope, [header]);
@@ -270,43 +262,11 @@ it("observes newly available reset archives and refuses changed archive bodies u
           message: { role: "assistant", content: "Native body" },
         }),
       );
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const target = {
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      };
+      const target = historyTarget(state, scope);
       const owner = new OpenClawAgentDatabaseReadOnlyScope();
       const readers = createReadonlySessionHistoryReader(target);
-      const params = {
-        entry,
-        provider: "claude-cli",
-        sessionId: scope.sessionId,
-        storePath: scope.storePath,
-        sessionAgentId: scope.agentId,
-        canonicalKey: scope.sessionKey,
-        cliHistoryHomeDir: homeDir,
-        max: 10,
-        maxHistoryBytes: 64 * 1024,
-        effectiveMaxChars: 4096,
-        offset: undefined,
-        messageId: undefined,
-      };
-      const read = async () => {
-        const cli = await prepareCliSessionHistoryReader(params, readers);
-        if (!cli) {
-          throw new Error("Expected native history reader");
-        }
-        try {
-          return await readChatHistoryPageKernel(params, {
-            readers: cli.readers,
-            readMessageSequence: cli.sequence,
-            deferProfileDisplay: true,
-          });
-        } finally {
-          cli.dispose();
-        }
-      };
+      const params = historyParams({ scope, entry }, homeDir);
+      const read = () => readNativePage(params, readers);
       const archive = (id: string, content: string) =>
         [
           header,
@@ -393,17 +353,7 @@ it.each([
   const kind = decoration.replace(" CRLF", "");
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId: nativeId, filePath }) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "cli-generated-prefixes",
-        sessionKey: "agent:main:cli-generated-prefixes",
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const entry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
-      };
+      const { scope, entry } = historyFixture(state, nativeId, "cli-generated-prefixes");
       const note = buildCliSessionDriftNote(["prompt-tools"]);
       const hint =
         'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
@@ -463,30 +413,12 @@ it.each([
           ),
         ].join("\n"),
       );
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const target = {
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      };
+      const target = historyTarget(state, scope);
       const owner = new OpenClawAgentDatabaseReadOnlyScope();
       try {
         await owner.run(target.database, async () => {
           const cli = await prepareCliSessionHistoryReader(
-            {
-              entry,
-              provider: "claude-cli",
-              sessionId: scope.sessionId,
-              storePath: scope.storePath,
-              sessionAgentId: scope.agentId,
-              canonicalKey: scope.sessionKey,
-              cliHistoryHomeDir: homeDir,
-              max: 10,
-              maxHistoryBytes: 64 * 1024,
-              effectiveMaxChars: 4096,
-              offset: undefined,
-              messageId: undefined,
-            },
+            historyParams({ scope, entry }, homeDir),
             createReadonlySessionHistoryReader(target),
           );
           if (!cli) {

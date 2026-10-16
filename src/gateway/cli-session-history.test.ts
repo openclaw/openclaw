@@ -81,6 +81,34 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
   return fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
 }
 
+function readImportedHistory(
+  entries: readonly Record<string, unknown>[],
+  options?: Omit<
+    Parameters<typeof readClaudeCliSessionMessagesAsync>[0],
+    "cliSessionId" | "homeDir"
+  >,
+) {
+  return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+    await writeClaudeEntries(filePath, entries);
+    return { messages: await readMessages(options), sessionId };
+  });
+}
+
+const nativeImage = {
+  type: "image",
+  source: { type: "base64", media_type: "image/png", data: "x" },
+};
+const nativeReply = {
+  type: "assistant",
+  uuid: "assistant-1",
+  message: { role: "assistant", content: "response" },
+};
+const transformedPrompt = "transformed synthetic reseed prompt";
+const reseedOptions = {
+  localSessionId: "openclaw-session",
+  reseedReceipt: receipt(transformedPrompt),
+};
+
 describe("cli session history", () => {
   it("omits isMeta rows and records internal Claude context provenance", async () => {
     await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
@@ -285,163 +313,112 @@ describe("cli session history", () => {
   });
 
   it("recovers the current user text from legacy reseed envelopes", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const reseedPrompt = buildLegacyReseedPrompt();
-      await writeClaudeEntries(filePath, [claudeUser(reseedPrompt, { uuid: "reseed-user" })]);
-
-      const messages = await readMessages();
-
-      expect(messages).toHaveLength(1);
-      expectFields(messages[0], { role: "user", content: "current" });
-    });
+    const { messages } = await readImportedHistory([
+      claudeUser(buildLegacyReseedPrompt(), { uuid: "reseed-user" }),
+    ]);
+    expect(messages).toHaveLength(1);
+    expectFields(messages[0], { role: "user", content: "current" });
   });
 
   it("fails open when the receipt belongs to a different local session", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const transformedPrompt = "transformed synthetic reseed prompt";
-      await writeClaudeEntries(filePath, [
-        claudeUser(transformedPrompt, { uuid: "synthetic-reseed" }),
-      ]);
-
-      const messages = await readMessages({
+    const { messages } = await readImportedHistory(
+      [claudeUser(transformedPrompt, { uuid: "synthetic-reseed" })],
+      {
         localSessionId: "new-openclaw-session",
         reseedReceipt: receipt(transformedPrompt, "old-openclaw-session"),
-      });
-
-      expect(messages).toHaveLength(1);
-      expectFields(messages[0], { role: "user", content: transformedPrompt });
-    });
+      },
+    );
+    expect(messages).toHaveLength(1);
+    expectFields(messages[0], { role: "user", content: transformedPrompt });
   });
 
   it("suppresses only receipt-matched text while preserving sibling attachments", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const transformedPrompt = "transformed synthetic reseed prompt";
-      await writeClaudeEntries(filePath, [
-        claudeUser(
-          [
-            { type: "text", text: transformedPrompt },
-            { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-          ],
-          { uuid: "synthetic-reseed" },
-        ),
-        {
-          type: "assistant",
-          uuid: "assistant-1",
-          message: { role: "assistant", content: "response" },
-        },
-      ]);
-
-      const messages = await readMessages({
-        localSessionId: "openclaw-session",
-        reseedReceipt: receipt(transformedPrompt),
-      });
-
-      expect(messages).toHaveLength(2);
-      expect(readRecord(messages[0]).content).toEqual([
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-      ]);
-      expectFields(messages[1], { role: "assistant", content: "response" });
-    });
+    const { messages } = await readImportedHistory(
+      [
+        claudeUser([{ type: "text", text: transformedPrompt }, nativeImage], {
+          uuid: "synthetic-reseed",
+        }),
+        nativeReply,
+      ],
+      reseedOptions,
+    );
+    expect(messages).toHaveLength(2);
+    expect(readRecord(messages[0]).content).toEqual([nativeImage]);
+    expectFields(messages[1], { role: "assistant", content: "response" });
   });
 
   it("preserves receipt-matched arrays with multiple text blocks", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const transformedPrompt = "transformed synthetic reseed prompt";
-      const content = [
-        { type: "text", text: transformedPrompt },
-        { type: "text", text: "real extra user text" },
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-      ];
-      await writeClaudeEntries(filePath, [
+    const content = [
+      { type: "text", text: transformedPrompt },
+      { type: "text", text: "real extra user text" },
+      nativeImage,
+    ];
+    const { messages } = await readImportedHistory(
+      [
         claudeUser(content, { uuid: "synthetic-reseed" }),
         claudeUser(transformedPrompt, { uuid: "later-exact-match" }),
-      ]);
-
-      const messages = await readMessages({
-        localSessionId: "openclaw-session",
-        reseedReceipt: receipt(transformedPrompt),
-      });
-
-      expect(messages).toHaveLength(2);
-      expect(readRecord(messages[0]).content).toEqual(content);
-      expectFields(messages[1], { role: "user", content: transformedPrompt });
-    });
+      ],
+      reseedOptions,
+    );
+    expect(messages).toHaveLength(2);
+    expect(readRecord(messages[0]).content).toEqual(content);
+    expectFields(messages[1], { role: "user", content: transformedPrompt });
   });
 
   it("recovers legacy array-form reseed text while preserving attachments", async () => {
-    await withClaudeProjectsDir(async ({ sessionId, filePath, readMessages }) => {
-      await writeClaudeEntries(filePath, [
-        claudeUser([
-          { type: "text", text: buildLegacyReseedPrompt() },
-          { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-        ]),
-      ]);
-
-      const messages = await readMessages();
-
-      expect(messages).toHaveLength(1);
-      expectFields(readRecord(messages[0])["__openclaw"], {
-        id: `claude-cli:${sessionId}:line:1`,
-      });
-      expect(readRecord(messages[0]).content).toEqual([
-        { type: "text", text: "current" },
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
-      ]);
+    const { messages, sessionId } = await readImportedHistory([
+      claudeUser([{ type: "text", text: buildLegacyReseedPrompt() }, nativeImage]),
+    ]);
+    expect(messages).toHaveLength(1);
+    expectFields(readRecord(messages[0])["__openclaw"], {
+      id: `claude-cli:${sessionId}:line:1`,
     });
+    expect(readRecord(messages[0]).content).toEqual([
+      { type: "text", text: "current" },
+      nativeImage,
+    ]);
   });
 
   it("drops empty legacy reseed text while preserving sibling native content", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const caption = { type: "text", text: "real caption" };
-      const image = {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "x" },
-      };
-      const document = { type: "document", source: { type: "text", data: "notes" } };
-      await writeClaudeEntries(filePath, [
-        claudeUser(
-          [caption, { type: "text", text: buildLegacyReseedPrompt("") }, image, document],
-          { uuid: "legacy-empty-reseed" },
-        ),
-      ]);
+    const caption = { type: "text", text: "real caption" };
+    const document = { type: "document", source: { type: "text", data: "notes" } };
+    const { messages } = await readImportedHistory([
+      claudeUser(
+        [caption, { type: "text", text: buildLegacyReseedPrompt("") }, nativeImage, document],
+        { uuid: "legacy-empty-reseed" },
+      ),
+    ]);
 
-      const messages = await readMessages();
-
-      expect(messages).toHaveLength(1);
-      expect(readRecord(messages[0]).content).toEqual([caption, image, document]);
-    });
+    expect(messages).toHaveLength(1);
+    expect(readRecord(messages[0]).content).toEqual([caption, nativeImage, document]);
   });
 
   it.each([
     ["string", buildLegacyReseedPrompt("")],
     ["single text block", [{ type: "text", text: buildLegacyReseedPrompt("") }]],
   ])("drops empty legacy reseed rows in %s form", async (_label, content) => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      await writeClaudeEntries(filePath, [claudeUser(content, { uuid: "legacy-empty-reseed" })]);
-
-      const messages = await readMessages();
-
-      expect(messages).toEqual([]);
-    });
+    const { messages } = await readImportedHistory([
+      claudeUser(content, { uuid: "legacy-empty-reseed" }),
+    ]);
+    expect(messages).toEqual([]);
   });
 
   it("fails open when the first user row does not match the reseed receipt", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const expectedPrompt = "expected synthetic prompt";
-      await writeClaudeEntries(filePath, [
+    const expectedPrompt = "expected synthetic prompt";
+    const { messages } = await readImportedHistory(
+      [
         claudeUser("different prompt", { uuid: "unexpected-first-user" }),
         claudeUser(expectedPrompt, { uuid: "later-matching-user" }),
-      ]);
-
-      const messages = await readMessages({
+      ],
+      {
         localSessionId: "openclaw-session",
         reseedReceipt: receipt(expectedPrompt),
-      });
+      },
+    );
 
-      expect(messages).toHaveLength(2);
-      expectFields(messages[0], { role: "user", content: "different prompt" });
-      expectFields(messages[1], { role: "user", content: expectedPrompt });
-    });
+    expect(messages).toHaveLength(2);
+    expectFields(messages[0], { role: "user", content: "different prompt" });
+    expectFields(messages[1], { role: "user", content: expectedPrompt });
   });
 
   it("rejects path-like Claude CLI session ids", async () => {
@@ -621,11 +598,7 @@ describe("cli session history", () => {
         claudeUser("summary", { isCompactSummary: true }),
         claudeUser([{ type: "tool_result", tool_use_id: "tool-1", content: "done" }]),
         claudeUser(syntheticPrompt, { uuid: "synthetic-reseed" }),
-        {
-          type: "assistant",
-          uuid: "assistant-1",
-          message: { role: "assistant", content: "response" },
-        },
+        nativeReply,
         claudeUser(syntheticPrompt, { uuid: "later-replay" }),
       ]);
 

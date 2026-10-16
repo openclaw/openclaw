@@ -1,6 +1,3 @@
-// Chat attachment tests cover inbound image/file parsing, media-store cleanup,
-// warning surfaces, size limits, and outbound message block assembly.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,23 +110,17 @@ async function parseWithWarnings(
   return { parsed, logs };
 }
 
-async function parseTextOnlyAttachments(
-  message: string,
-  attachments: ChatAttachment[],
-  logs: string[],
-  infos?: string[],
+function persistParsed(
+  parsed: Pick<ParsedAttachments, "images" | "offloadedRefs">,
+  overrides: Partial<Parameters<typeof persistInboundImagesForTranscript>[0]> = {},
 ) {
-  const log: NonNullable<Parameters<typeof parseMessageWithAttachments>[2]>["log"] = {
-    warn: (warning) => logs.push(warning),
-  };
-  if (infos) {
-    log.info = (info) => infos.push(info);
-  }
-  return parseMessageWithAttachments(message, attachments, { log, supportsImages: false });
-}
-
-async function cleanupOffloadedRefs(refs: { id: string }[]) {
-  await Promise.allSettled(refs.map((ref) => deleteMediaBufferMock(ref.id, "inbound")));
+  return persistInboundImagesForTranscript({
+    images: parsed.images,
+    offloadedRefs: parsed.offloadedRefs,
+    log: { warn: vi.fn() },
+    logContext: "chat.send",
+    ...overrides,
+  });
 }
 
 function expectSingleInlinePng(parsed: ParsedAttachments) {
@@ -231,12 +222,7 @@ describe("composer attachment origin", () => {
         `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
       );
       expect(parsed.images).toEqual([]);
-      const persisted = await persistInboundImagesForTranscript({
-        images: parsed.images,
-        offloadedRefs: parsed.offloadedRefs,
-        log: { warn: vi.fn() },
-        logContext: "chat.send",
-      });
+      const persisted = await persistParsed(parsed);
       const message = buildPersistedUserTurnMessage({
         text: "Read this",
         timestamp: 123,
@@ -291,12 +277,7 @@ describe("persistInboundImagesForTranscript", () => {
         width: 32,
         height: 16,
       });
-      const persisted = await persistInboundImagesForTranscript({
-        images: parsed.images,
-        offloadedRefs: parsed.offloadedRefs,
-        log: { warn: vi.fn() },
-        logContext: "chat.send",
-      });
+      const persisted = await persistParsed(parsed);
       const message = buildPersistedUserTurnMessage({
         text: "Inspect this",
         media: persisted.entries.map((entry) => entry.fact),
@@ -331,12 +312,7 @@ describe("persistInboundImagesForTranscript", () => {
         height: 16,
       },
     ]);
-    const persisted = await persistInboundImagesForTranscript({
-      images: parsed.images,
-      offloadedRefs: parsed.offloadedRefs,
-      log: { warn: vi.fn() },
-      logContext: "chat.send",
-    });
+    const persisted = await persistParsed(parsed);
     expect(parsed.images[0]).toMatchObject({ width: 16, height: 32 });
     expect(persisted.entries[0]?.fact).toMatchObject({ width: 16, height: 32 });
     expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
@@ -354,12 +330,7 @@ describe("persistInboundImagesForTranscript", () => {
       ],
       { supportsImages: false },
     );
-    const persisted = await persistInboundImagesForTranscript({
-      images: parsed.images,
-      offloadedRefs: parsed.offloadedRefs,
-      log: { warn: vi.fn() },
-      logContext: "chat.send",
-    });
+    const persisted = await persistParsed(parsed);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
     expect(parsed.offloadedRefs[0]?.width).toBeUndefined();
     expect(parsed.offloadedRefs[0]?.height).toBeUndefined();
@@ -406,12 +377,10 @@ describe("persistInboundImagesForTranscript", () => {
       contentType: "image/png",
     });
 
-    const result = await persistInboundImagesForTranscript({
-      images: parsed.images,
+    const result = await persistParsed(parsed, {
       offloadedRefs: [
         { ...parsed.offloadedRefs[0]!, mediaRef: "https://signed.example/private-video" },
       ],
-      log: { warn: vi.fn() },
       logContext: "test",
     });
 
@@ -515,11 +484,10 @@ describe("parseMessageWithAttachments", () => {
     // batch that produced imageOrder=["offloaded","inline","offloaded"] even
     // though only one image offload existed. Structural facts and imageOrder
     // must agree so hydration cannot swap it ahead of the inline image.
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const bigPng = Buffer.alloc(2_100_000);
     bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
     const { parsed } = await parseWithWarnings("x", [
-      pdfAttachment({ content: pdf }),
+      pdfAttachment(),
       pngAttachment(),
       pngAttachment({ fileName: "big.png", content: bigPng.toString("base64") }),
     ]);
@@ -668,32 +636,27 @@ describe("parseMessageWithAttachments validation errors", () => {
   it("caps text-only image offloads", async () => {
     const logs: string[] = [];
     const infos: string[] = [];
-    const attachments = Array.from({ length: 11 }, (_, index): ChatAttachment => ({
-      type: "image",
-      mimeType: "image/png",
-      fileName: `dot-${index}.png`,
-      content: PNG_1x1,
-    }));
-    const parsed = await parseTextOnlyAttachments("see these", attachments, logs, infos);
-
-    try {
-      expect(parsed.images).toHaveLength(0);
-      expect(parsed.offloadedRefs).toHaveLength(10);
-      expect(parsed.imageOrder).toHaveLength(10);
-      expect(parsed.message.match(/\[media attached: media:\/\/inbound\//g)).toHaveLength(10);
-      expect(parsed.message).toContain(
-        "[image attachment omitted: text-only attachment limit reached]",
-      );
-      expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
-        "see these\n[image attachment omitted: text-only attachment limit reached]",
-      );
-      expect(logs).toEqual([
-        "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
-      ]);
-      expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
-    } finally {
-      await cleanupOffloadedRefs(parsed.offloadedRefs);
-    }
+    const attachments = Array.from({ length: 11 }, (_, index) =>
+      pngAttachment({ fileName: `dot-${index}.png` }),
+    );
+    const parsed = await parseMessageWithAttachments("see these", attachments, {
+      supportsImages: false,
+      log: { warn: (warning) => logs.push(warning), info: (info) => infos.push(info) },
+    });
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(10);
+    expect(parsed.imageOrder).toHaveLength(10);
+    expect(parsed.message.match(/\[media attached: media:\/\/inbound\//g)).toHaveLength(10);
+    expect(parsed.message).toContain(
+      "[image attachment omitted: text-only attachment limit reached]",
+    );
+    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
+      "see these\n[image attachment omitted: text-only attachment limit reached]",
+    );
+    expect(logs).toEqual([
+      "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
+    ]);
+    expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
   });
 });
 
@@ -782,12 +745,7 @@ describe("attachment validation", () => {
 
   it("rejects images over limit without decoding base64", async () => {
     const big = "A".repeat(10_000);
-    const att: ChatAttachment = {
-      type: "image",
-      mimeType: "image/png",
-      fileName: "big.png",
-      content: big,
-    };
+    const att = pngAttachment({ fileName: "big.png", content: big });
 
     const fromSpy = vi.spyOn(Buffer, "from");
     try {

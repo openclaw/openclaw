@@ -20,6 +20,7 @@ function registerTurn(
   runId: string,
   controller: AbortController,
   sessionId = runId,
+  options: Partial<Parameters<typeof registerQueuedChatTurn>[0]> = {},
 ): boolean {
   return registerQueuedChatTurn({
     chatQueuedTurns: map,
@@ -27,6 +28,7 @@ function registerTurn(
     controller,
     sessionId,
     sessionKey: "main",
+    ...options,
   });
 }
 
@@ -36,12 +38,7 @@ describe("chat-queued-turns", () => {
     const controller = new AbortController();
     let observedController: AbortController | undefined;
     expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "run-abort",
-        controller,
-        sessionId: "sess-abort",
-        sessionKey: "main",
+      registerTurn(map, "run-abort", controller, "sess-abort", {
         onAborted: () => {
           observedController = map.get("run-abort")?.controller;
         },
@@ -58,12 +55,7 @@ describe("chat-queued-turns", () => {
     const second = new AbortController();
     let cancelled = false;
     expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "reused",
-        controller: first,
-        sessionId: "old",
-        sessionKey: "main",
+      registerTurn(map, "reused", first, "old", {
         onAborted: () => {
           cancelled = true;
         },
@@ -141,46 +133,16 @@ describe("chat-queued-turns", () => {
   it("rejects re-register with a different controller", () => {
     const map = emptyMap();
     const first = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "run-a",
-      controller: first,
-      sessionId: "sess-a",
-      sessionKey: "main",
-    });
-    expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "run-a",
-        controller: new AbortController(),
-        sessionId: "sess-a",
-        sessionKey: "main",
-      }),
-    ).toBe(false);
+    registerTurn(map, "run-a", first, "sess-a");
+    expect(registerTurn(map, "run-a", new AbortController(), "sess-a")).toBe(false);
   });
 
   it("preserves whitespace-distinct protocol run IDs", () => {
     const map = emptyMap();
     const spaced = new AbortController();
     const plain = new AbortController();
-    expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: " run-a ",
-        controller: spaced,
-        sessionId: "sess-a",
-        sessionKey: "main",
-      }),
-    ).toBe(true);
-    expect(
-      registerQueuedChatTurn({
-        chatQueuedTurns: map,
-        runId: "run-a",
-        controller: plain,
-        sessionId: "sess-a",
-        sessionKey: "main",
-      }),
-    ).toBe(true);
+    expect(registerTurn(map, " run-a ", spaced, "sess-a")).toBe(true);
+    expect(registerTurn(map, "run-a", plain, "sess-a")).toBe(true);
 
     expect(map.get(" run-a ")?.controller).toBe(spaced);
     expect(abortQueuedChatTurnById(map, { runId: " run-a ", sessionKey: "main" }).aborted).toBe(
@@ -194,14 +156,7 @@ describe("chat-queued-turns", () => {
     const map = emptyMap();
     const controller = new AbortController();
     const onAborted = vi.fn();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "run-b",
-      controller,
-      sessionId: "sess-b",
-      sessionKey: "main",
-      onAborted,
-    });
+    registerTurn(map, "run-b", controller, "sess-b", { onAborted });
     const res = abortQueuedChatTurnById(map, {
       runId: "run-b",
       sessionKey: "main",
@@ -217,13 +172,7 @@ describe("chat-queued-turns", () => {
   it("retains a retired collect source identity until aggregate completion", () => {
     const map = emptyMap();
     const controller = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "run-collected",
-      controller,
-      sessionId: "sess-collected",
-      sessionKey: "main",
-    });
+    registerTurn(map, "run-collected", controller, "sess-collected");
 
     expect(retireQueuedChatTurnCancellation(map, "run-collected", controller)).toBe(true);
     expect(
@@ -243,13 +192,7 @@ describe("chat-queued-turns", () => {
   it("refuses abort when sessionKey mismatches unless allowed", () => {
     const map = emptyMap();
     const controller = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "run-c",
-      controller,
-      sessionId: "sess-c",
-      sessionKey: "main",
-    });
+    registerTurn(map, "run-c", controller, "sess-c");
     expect(abortQueuedChatTurnById(map, { runId: "run-c", sessionKey: "other" }).aborted).toBe(
       false,
     );
@@ -265,29 +208,15 @@ describe("chat-queued-turns", () => {
 
   it("lists session matches and supports global agent scoping", () => {
     const map = emptyMap();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "g-main",
-      controller: new AbortController(),
-      sessionId: "s1",
+    registerTurn(map, "g-main", new AbortController(), "s1", {
       sessionKey: "global",
       agentId: "main",
     });
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "g-other",
-      controller: new AbortController(),
-      sessionId: "s2",
+    registerTurn(map, "g-other", new AbortController(), "s2", {
       sessionKey: "global",
       agentId: "other",
     });
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "local",
-      controller: new AbortController(),
-      sessionId: "s3",
-      sessionKey: "agent:main:main",
-    });
+    registerTurn(map, "local", new AbortController(), "s3", { sessionKey: "agent:main:main" });
     const globalMain = listQueuedChatTurnsForSession({
       chatQueuedTurns: map,
       sessionKeys: ["global"],
@@ -306,20 +235,8 @@ describe("chat-queued-turns", () => {
     const map = emptyMap();
     const a = new AbortController();
     const b = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "qa",
-      controller: a,
-      sessionId: "s",
-      sessionKey: "main",
-    });
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "qb",
-      controller: b,
-      sessionId: "s",
-      sessionKey: "main",
-    });
+    registerTurn(map, "qa", a, "s");
+    registerTurn(map, "qb", b, "s");
     const matches = listQueuedChatTurnsForSession({
       chatQueuedTurns: map,
       sessionKeys: ["main"],
