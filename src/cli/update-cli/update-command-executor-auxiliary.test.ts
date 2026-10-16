@@ -92,6 +92,16 @@ function preloadFixture(kind: "require" | "import") {
   return { marker, env: { ...process.env, NODE_OPTIONS: `--${kind}=${JSON.stringify(value)}` } };
 }
 
+function installer(
+  params: Omit<Parameters<typeof createPackageRuntimeRecovery>[0], "root" | "timeoutMs"> & {
+    timeoutMs?: number;
+  },
+) {
+  const recovery = createPackageRuntimeRecovery({ root, timeoutMs: 10000, ...params });
+  assert(recovery.installCommand);
+  return recovery.installCommand;
+}
+
 it.for([
   { phase: "initializing", fragmented: false },
   { phase: "admitted", fragmented: true },
@@ -121,15 +131,12 @@ it.for([
     }
     await withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
-      const recovery = createPackageRuntimeRecovery({
-        root,
+      const install = installer({
         opts:
           phase === "admitted" ? { run: { runId, env: process.env, executorFence: fence } } : {},
         executorFence: phase === "initializing" ? fence : undefined,
-        timeoutMs: 10000,
       });
-      assert(recovery.installCommand);
-      const installing = recovery.installCommand(
+      const installing = install(
         nodeExecPath,
         [
           "--input-type=module",
@@ -174,17 +181,15 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
       if (failure === "nonzero" || failure === "timeout" || failure === "unsettled") {
-        const recovery = createPackageRuntimeRecovery({
-          root,
+        const install = installer({
           opts: { run: { runId, env: process.env, executorFence: fence } },
           timeoutMs: failure === "timeout" ? 150 : 10000,
         });
-        assert(recovery.installCommand);
         const childCode =
           "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send('ready')";
         const unsettled = `const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childCode)}],{stdio:['ignore','ignore','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref()});`;
         await expect(
-          recovery.installCommand(
+          install(
             process.execPath,
             [
               "-e",
@@ -201,10 +206,7 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
         const candidate = path.join(root, "candidate");
         fs.mkdirSync(candidate);
         const store = createManagedHandoffLeaseStore();
-        const incumbent =
-          failure === "candidate-busy"
-            ? store.acquire(candidate, "other-owner", { kind: "update" })
-            : undefined;
+        const incumbent = store.acquire(candidate, "other-owner", { kind: "update" });
         try {
           await expect(
             withUpdateCommandExecutorChild(
@@ -218,7 +220,7 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
             ),
           ).rejects.toThrow();
         } finally {
-          if (incumbent?.kind === "acquired") {
+          if (incumbent.kind === "acquired") {
             expect(store.current(incumbent.lease)).toBe(true);
             expect(store.release(incumbent.lease)).toBe(true);
           }
@@ -392,13 +394,10 @@ it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] 
     });
     const outcome = await withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot, preflight: true });
-      const recovery = createPackageRuntimeRecovery({
-        root,
+      const install = installer({
         opts: { run: { runId, env: process.env, executorFence: fence } },
-        timeoutMs: 10000,
       });
-      assert(recovery.installCommand);
-      await recovery.installCommand(
+      await install(
         nodeExecPath,
         ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
         preload.env,
@@ -542,7 +541,6 @@ it.each(["before-launch", "at-input"] as const)(
         requesterAuthority: { requester: {}, isCurrent: () => requesterCurrent },
       },
     };
-    const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
       requesterCurrent = false;
     };
@@ -564,12 +562,11 @@ it.each(["before-launch", "at-input"] as const)(
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       assert(opts.run);
       opts.run.executorFence = await executor.enter(root, { serviceRoot, preflight: true });
-      const recovery = createPackageRuntimeRecovery(recoveryParams);
-      assert(recovery.installCommand);
+      const install = installer({ opts });
       if (boundary === "before-launch") {
         revoke();
       }
-      await recovery.installCommand(
+      await install(
         nodeExecPath,
         ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
         process.env,

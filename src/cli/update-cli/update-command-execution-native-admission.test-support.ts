@@ -16,6 +16,8 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { bindExecutionGuards, schemaContext } from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { updateGitInstall } from "./update-command-git.js";
+import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
 
@@ -23,6 +25,7 @@ type Fixtures = Pick<
   typeof import("./update-command-execution.test-support.js"),
   "executionParams" | "mocks" | "successfulUpdate"
 >;
+type Candidate = Pick<PackageInstallUpdateParams, "validateCandidate">;
 
 export function registerNativeAdmissionTests({
   executionParams,
@@ -67,17 +70,11 @@ export function registerNativeAdmissionTests({
           params.opts.admission = "installed";
         }
         const events: string[] = [];
-        mocks.runPackageUpdate.mockImplementation(
-          async ({
-            validateCandidate,
-          }: {
-            validateCandidate: (root: string) => Promise<unknown>;
-          }) => {
-            await validateCandidate(candidate);
-            events.push("publish");
-            return successfulUpdate;
-          },
-        );
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate }: Candidate) => {
+          await validateCandidate(candidate);
+          events.push("publish");
+          return successfulUpdate;
+        });
         const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result).toMatchObject({
           status: "error",
@@ -114,11 +111,7 @@ export function registerNativeAdmissionTests({
           events.push("native-admission");
           return false;
         });
-        const candidate = async ({
-          validateCandidate,
-        }: {
-          validateCandidate: (root: string) => Promise<unknown>;
-        }) => {
+        const candidate = async ({ validateCandidate }: Candidate) => {
           await validateCandidate(dir);
           // Models the package/Git publisher which follows successful validation.
           events.push("publish");
@@ -126,9 +119,7 @@ export function registerNativeAdmissionTests({
         };
         mocks.runPackageUpdate.mockImplementation(candidate);
         mocks.runGitUpdate.mockImplementation(
-          async (
-            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-          ) => {
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
             if (!options.inspectGitTarget || !options.validateCandidate) {
               throw new Error("Missing actual Git admission callbacks");
             }
@@ -155,106 +146,56 @@ export function registerNativeAdmissionTests({
       }),
   );
 
-  const consumerCases: Array<{
+  type ConsumerCase = {
     name: string;
-    shared: boolean;
+    shared?: boolean;
     linkedDist?: boolean;
-    running: boolean;
-    late: boolean;
-    refused: boolean;
+    running?: boolean;
+    late?: boolean;
+    refused?: boolean;
     route?: "git";
     consumer?: "selected" | "same-profile-other-service";
     unreadableFirst?: boolean;
     selectedRunning?: boolean;
     startsDuringStop?: boolean;
-  }> = [
-    { name: "live shared root", shared: true, running: true, late: false, refused: true },
-    { name: "stopped shared root", shared: true, running: false, late: false, refused: false },
-    { name: "live disjoint root", shared: false, running: true, late: false, refused: false },
-    {
-      name: "live selected service with shared sibling",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-      selectedRunning: true,
-    },
-    {
-      name: "live selected service with disjoint sibling",
+  };
+  const consumer = (name: string, overrides: Omit<ConsumerCase, "name"> = {}): ConsumerCase => ({
+    name,
+    ...overrides,
+  });
+  const consumerCases = [
+    consumer("live shared root"),
+    consumer("stopped shared root", { running: false, refused: false }),
+    consumer("live disjoint root", { shared: false, refused: false }),
+    consumer("live selected service with shared sibling", { selectedRunning: true }),
+    consumer("live selected service with disjoint sibling", {
       shared: false,
-      running: true,
-      late: false,
       refused: false,
       selectedRunning: true,
-    },
-    {
-      name: "sibling starts during selected stop",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
+    }),
+    consumer("sibling starts during selected stop", {
       selectedRunning: true,
       startsDuringStop: true,
-    },
-    {
-      name: "disjoint package with shared resolved entrypoint",
+    }),
+    consumer("disjoint package with shared resolved entrypoint", {
       shared: false,
       linkedDist: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "sibling starts during staging",
-      shared: true,
-      running: true,
-      late: true,
-      refused: true,
-    },
-    {
-      name: "Git shared publication",
-      route: "git",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "selected package no-restart",
-      consumer: "selected",
-      shared: true,
-      running: true,
-      late: false,
-      refused: false,
-    },
-    {
-      name: "same-profile other service",
-      consumer: "same-profile-other-service",
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
-    {
-      name: "unreadable unrelated definition",
+    }),
+    consumer("sibling starts during staging", { late: true }),
+    consumer("Git shared publication", { route: "git" }),
+    consumer("selected package no-restart", { consumer: "selected", refused: false }),
+    consumer("same-profile other service", { consumer: "same-profile-other-service" }),
+    consumer("unreadable unrelated definition", {
       unreadableFirst: true,
       shared: false,
-      running: true,
-      late: false,
       refused: false,
-    },
-    {
-      name: "live sibling after unreadable definition",
-      unreadableFirst: true,
-      shared: true,
-      running: true,
-      late: false,
-      refused: true,
-    },
+    }),
+    consumer("live sibling after unreadable definition", { unreadableFirst: true }),
   ];
   it.each(consumerCases)(
     "protects managed consumers before publication: $name",
-    async (scenario) => {
+    async (overrides) => {
+      const scenario = { shared: true, running: true, late: false, refused: true, ...overrides };
       if (process.platform === "darwin") {
         // Model the Linux service reader, while retaining the real host self
         // identity used by the executor's POSIX lease and SQLite lifecycle.
@@ -362,11 +303,11 @@ export function registerNativeAdmissionTests({
           if (args?.env?.OPENCLAW_PROFILE === "unreadable") {
             throw new ServiceInspectionError("windows-task-inspection-failed");
           }
-          const consumer = args?.env === consumerEnv;
+          const isConsumer = args?.env === consumerEnv;
           return observedState(
-            consumer ? consumerEnv : selectedEnv,
-            consumer ? running : selectedRunning,
-            consumer ? otherRoot : root,
+            isConsumer ? consumerEnv : selectedEnv,
+            isConsumer ? running : selectedRunning,
+            isConsumer ? otherRoot : root,
           );
         });
         const selectedVerdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -404,9 +345,7 @@ export function registerNativeAdmissionTests({
           return successfulUpdate;
         });
         mocks.runGitUpdate.mockImplementation(
-          async (
-            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-          ) => {
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
             const target = { schemaVersions: { state: 15, agent: 19 } };
             await options.inspectGitTarget?.(target);
             await options.beforeGitMutation?.(target);

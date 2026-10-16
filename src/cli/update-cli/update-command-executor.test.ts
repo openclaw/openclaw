@@ -616,24 +616,15 @@ describe("candidate executor delegation", () => {
       helper.unref();
     });
   `;
-  it.each([
-    { changedRoot: true, revoked: false, splitService: true },
-    { changedRoot: true, revoked: "original", splitService: true },
-    { changedRoot: true, revoked: "service", splitService: true },
-    { changedRoot: true, revoked: "candidate", splitService: true },
-  ])(
-    "retains installation owners through a real child ($changedRoot, $revoked, $splitService)",
-    async ({ changedRoot, revoked, splitService }) => {
-      const candidateRoot = changedRoot ? path.join(root, "activated") : root;
-      if (changedRoot) {
-        fs.mkdirSync(candidateRoot);
-      }
-      const serviceRoot = splitService ? path.join(root, "service-A") : undefined;
-      if (serviceRoot) {
-        fs.mkdirSync(serviceRoot);
-      }
+  it.each([false, "original", "service", "candidate"] as const)(
+    "retains installation owners through a real child (revoked=%s)",
+    async (revoked) => {
+      const candidateRoot = path.join(root, "activated");
+      const serviceRoot = path.join(root, "service-A");
+      fs.mkdirSync(candidateRoot);
+      fs.mkdirSync(serviceRoot);
       const revokedRoot =
-        revoked === "service" ? serviceRoot! : revoked === "original" ? root : candidateRoot;
+        revoked === "service" ? serviceRoot : revoked === "original" ? root : candidateRoot;
       const ready = createDeferred();
       const proceed = path.join(root, "proceed");
       const output = path.join(root, "effect");
@@ -673,11 +664,9 @@ describe("candidate executor delegation", () => {
           expect(store.acquire(candidateRoot, "other-candidate", { kind: "update" }).kind).toBe(
             "busy",
           );
-          if (serviceRoot) {
-            const serviceOwner = store.read(serviceRoot);
-            assert(serviceOwner.kind === "current");
-            expect(store.release(serviceOwner.lease)).toBe(false);
-          }
+          const serviceOwner = store.read(serviceRoot);
+          assert(serviceOwner.kind === "current");
+          expect(store.release(serviceOwner.lease)).toBe(false);
           if (revoked) {
             replaceOwner(revokedRoot);
           }
@@ -697,7 +686,7 @@ describe("candidate executor delegation", () => {
           kind: "current",
           lease: { owner: "replacement" },
         });
-        if (changedRoot && revoked === "candidate") {
+        if (revoked === "candidate") {
           expect(
             createManagedHandoffLeaseStore().acquire(root, "next-original", { kind: "update" })
               .kind,
@@ -711,9 +700,7 @@ describe("candidate executor delegation", () => {
         expect(fs.readFileSync(output, "utf8")).toBe("owned");
         expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
         expect(createManagedHandoffLeaseStore().read(candidateRoot)).toEqual({ kind: "absent" });
-        if (serviceRoot) {
-          expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
-        }
+        expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
       }
     },
   );

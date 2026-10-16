@@ -42,9 +42,9 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     exercise: (fixture: {
       root: string;
       run: Run;
-      params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">;
       events: string[];
       beforeCall: { run?: () => void };
+      readRun: () => ReturnType<typeof getUpdateRunAsync>;
       start: () => ReturnType<typeof executeMutableUpdate>;
     }) => Promise<void>,
   ) => {
@@ -126,9 +126,9 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           await exercise({
             root,
             run,
-            params,
             events,
             beforeCall,
+            readRun: () => getUpdateRunAsync(run.runId, { env }),
             start: async () => executeMutableUpdate(await bindExecutionGuards(params)),
           });
         });
@@ -198,7 +198,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             }),
           ]);
           expect(fixture.events).toEqual([]);
-          const recorded = await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env });
+          const recorded = await fixture.readRun();
           expect(recorded?.phase).toBe(phase);
           if (phase === "staging") {
             expect(recorded?.target).toMatchObject({
@@ -257,9 +257,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       try {
         expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
         expect(releasedBeforeSettlement).toBe(true);
-        expect((await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env }))?.phase).toBe(
-          "validating",
-        );
+        expect((await fixture.readRun())?.phase).toBe("validating");
         expect(fixture.events).toContain("canary");
       } finally {
         if (releaseTurn) {
@@ -333,9 +331,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           expect(fixture.events).toEqual([]);
           if (failure === "missing-row") {
             expect(result?.failure?.detail).toContain("Unknown update run");
-            expect(
-              await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env }),
-            ).toBeUndefined();
+            expect(await fixture.readRun()).toBeUndefined();
           } else if (failure === "missing-reply") {
             expect(result?.failure?.detail).toContain("Update history disappeared");
           } else {
@@ -360,9 +356,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       );
       expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
       expect(fixture.events).toContain("canary");
-      expect(await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env })).toEqual(
-        terminal,
-      );
+      expect(await fixture.readRun()).toEqual(terminal);
     });
   });
 

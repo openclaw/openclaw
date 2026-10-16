@@ -35,6 +35,11 @@ it.skipIf(process.platform === "win32").each([
     }
     const control = path.join(root, "control");
     fs.mkdirSync(control);
+    const file = (name: string) => path.join(root, name);
+    const read = (name: string) => fs.readFileSync(file(name), "utf8");
+    const leasePath = path.join(control, "managed-update-handoffs.sqlite");
+    const contender = () =>
+      createManagedHandoffLeaseStore({ databasePath: leasePath, serviceManagerEnv: process.env });
     const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
     const importArgs = owner.pathname.endsWith(".ts")
       ? ["--import", path.resolve("scripts/tsx.mjs")]
@@ -203,11 +208,7 @@ it.skipIf(process.platform === "win32").each([
         throw new Error("Missing fixture parent PID");
       }
       if (generation) {
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        expect(contender.acquire(targetRoot, "target-contender", { kind: "update" }).kind).toBe(
+        expect(contender().acquire(targetRoot, "target-contender", { kind: "update" }).kind).toBe(
           "busy",
         );
       }
@@ -218,7 +219,7 @@ it.skipIf(process.platform === "win32").each([
           output,
         ).toEqual({ event: "second-exit", code: 1, signal: null });
         // Process exit does not order delivery across stdout and stderr pipes.
-        expect(JSON.parse(fs.readFileSync(path.join(root, "second-error.json"), "utf8"))).toEqual({
+        expect(JSON.parse(read("second-error.json"))).toEqual({
           name: "UpdateCommandRecoveryPendingError",
           message: "Legacy finalizer lifetime could not be acquired.",
         });
@@ -228,13 +229,8 @@ it.skipIf(process.platform === "win32").each([
         await Promise.race([deadlineFailure.promise, exited]);
         expect(parentExitCode, output).toBeNull();
         expect(parentExitSignal, output).toBe("SIGKILL");
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        expect(contender.acquire(root, "successor", { kind: "update" }).kind).toBe("busy");
+        expect(contender().acquire(root, "successor", { kind: "update" }).kind).toBe("busy");
       }
-      const leasePath = path.join(control, "managed-update-handoffs.sqlite");
       if (lifetime === "replaced row") {
         const writer = new DatabaseSync(leasePath);
         writer
@@ -246,35 +242,28 @@ it.skipIf(process.platform === "win32").each([
         fs.copyFileSync(leasePath, `${leasePath}.replacement`);
         fs.renameSync(`${leasePath}.replacement`, leasePath);
       }
-      fs.writeFileSync(path.join(root, "proceed"), "go");
+      fs.writeFileSync(file("proceed"), "go");
       await Promise.race([deadlineFailure.promise, closed]);
-      const continuationExitPath = path.join(root, "continuation-exit.json");
       expect(
-        fs.existsSync(continuationExitPath),
+        fs.existsSync(file("continuation-exit.json")),
         `Legacy continuation did not exit: ${output}`,
       ).toBe(true);
-      expect(JSON.parse(fs.readFileSync(continuationExitPath, "utf8")), output).toEqual({
+      expect(JSON.parse(read("continuation-exit.json")), output).toEqual({
         code: lifetime === "live" ? 0 : 1,
       });
       if (lifetime === "live") {
         expect(parentExitCode, output).toBe(0);
       }
-      expect(JSON.parse(fs.readFileSync(path.join(root, "observation.json"), "utf8"))).toEqual({
+      expect(JSON.parse(read("observation.json"))).toEqual({
         current: lifetime === "live",
-        parentPid: managed
-          ? Number(fs.readFileSync(path.join(root, "wrapper-pid"), "utf8"))
-          : child.pid,
+        parentPid: managed ? Number(read("wrapper-pid")) : child.pid,
         ...(managed ? { helperPid: child.pid } : {}),
       });
-      expect(fs.existsSync(path.join(root, "effect"))).toBe(lifetime === "live");
-      const database = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"), {
-        readOnly: true,
-      });
+      expect(fs.existsSync(file("effect"))).toBe(lifetime === "live");
+      const database = new DatabaseSync(leasePath, { readOnly: true });
       try {
         if (managed) {
-          const originalRow = JSON.parse(
-            fs.readFileSync(path.join(root, "original-row.json"), "utf8"),
-          );
+          const originalRow = JSON.parse(read("original-row.json"));
           expect(
             database
               .prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?")
@@ -293,23 +282,20 @@ it.skipIf(process.platform === "win32").each([
         database.close();
       }
       if (lifetime === "exited") {
-        const contender = createManagedHandoffLeaseStore({
-          databasePath: path.join(control, "managed-update-handoffs.sqlite"),
-          serviceManagerEnv: process.env,
-        });
-        const acquired = contender.acquire(root, "successor", { kind: "update" });
+        const store = contender();
+        const acquired = store.acquire(root, "successor", { kind: "update" });
         expect(acquired.kind).toBe("acquired");
         if (acquired.kind === "acquired") {
-          expect(contender.release(acquired.lease)).toBe(true);
+          expect(store.release(acquired.lease)).toBe(true);
         }
       }
     } finally {
       clearTimeout(deadline);
       // Failed assertions must also release the independently grouped native leaf.
-      fs.writeFileSync(path.join(root, "proceed"), "go");
+      fs.writeFileSync(file("proceed"), "go");
       killGroup();
       await closed.finally(() => termination?.force());
-      const leafPidFile = path.join(root, "leaf-pid");
+      const leafPidFile = file("leaf-pid");
       if (fs.existsSync(leafPidFile)) {
         // Cleanup hang guard after the owner released/killed the group, not a readiness race.
         await waitForDead(
