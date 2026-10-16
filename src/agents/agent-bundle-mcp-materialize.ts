@@ -250,6 +250,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(server?.instructions ? { serverInstructions: server.instructions } : {}),
         ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
@@ -323,6 +324,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
           safeServerName,
           toolName: operation,
           operation,
+          ...(server.instructions ? { serverInstructions: server.instructions } : {}),
           ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
         },
       });

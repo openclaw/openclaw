@@ -8,6 +8,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { buildBundleMcpToolsFromCatalog } from "../../agent-bundle-mcp-materialize.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
@@ -494,6 +495,69 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
     expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
+  });
+
+  it("renders MCP server instructions only for servers that keep a final tool", async () => {
+    const serverTool = (serverName: string, toolName: string) => ({
+      serverName,
+      safeServerName: serverName,
+      toolName,
+      inputSchema: Type.Object({}),
+      fallbackDescription: `${serverName} ${toolName}`,
+    });
+    const bundleTools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          research: {
+            serverName: "research",
+            launchSummary: "research",
+            toolCount: 1,
+            instructions: "RESEARCH_GUIDANCE: rank binding precedents first.",
+          },
+          calc: {
+            serverName: "calc",
+            launchSummary: "calc",
+            toolCount: 1,
+            instructions: "CALC_GUIDANCE: use for court-table updates.",
+          },
+          plain: { serverName: "plain", launchSummary: "plain", toolCount: 1 },
+        },
+        tools: [
+          serverTool("research", "search"),
+          serverTool("calc", "run"),
+          serverTool("plain", "ping"),
+        ],
+      },
+    });
+    const render = async (toolNames: string[]) =>
+      (
+        await buildAttemptSystemPrompt({
+          isRawModelRun: false,
+          transformSystemPrompt,
+          embeddedSystemPrompt: {
+            workspaceDir: "/tmp/openclaw",
+            runtimeInfo: { host: "test-host", os: "Linux", arch: "x64", node: "v24.0.0" },
+            // Final policy removed every calc tool before prompt assembly.
+            tools: bundleTools.filter((tool) => toolNames.includes(tool.name)),
+            bootstrapMode: "full",
+            contextFiles: [],
+          },
+        })
+      ).systemPrompt;
+
+    const prompt = await render(["research__search", "plain__ping"]);
+    expect(prompt).toContain(
+      "## MCP Server Instructions\nGuidance published by MCP servers for their own tools.",
+    );
+    expect(prompt).toContain(
+      "### research (`research__*`)\nRESEARCH_GUIDANCE: rank binding precedents first.",
+    );
+    expect(prompt).not.toContain("CALC_GUIDANCE");
+    expect(prompt).not.toContain("### plain");
+
+    expect(await render(["plain__ping"])).not.toContain("## MCP Server Instructions");
   });
 
   it("preserves runtime extra system prompt context", async () => {

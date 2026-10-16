@@ -563,6 +563,53 @@ describe("createBundleMcpToolRuntime", () => {
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
   });
 
+  it("carries server instructions on server tools and utility tools", () => {
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          knowledge: {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            launchSummary: "knowledge",
+            toolCount: 1,
+            instructions: "Cite resource URIs.",
+            resources: { listChanged: false },
+          },
+          plain: { serverName: "plain", launchSummary: "plain", toolCount: 1 },
+        },
+        tools: [
+          {
+            serverName: "knowledge",
+            safeServerName: "knowledge",
+            toolName: "search",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "search",
+          },
+          {
+            serverName: "plain",
+            safeServerName: "plain",
+            toolName: "ping",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "ping",
+          },
+        ],
+      },
+    });
+
+    expect(
+      Object.fromEntries(
+        tools.map((tool) => [tool.name, getPluginToolMeta(tool)?.mcp?.serverInstructions]),
+      ),
+    ).toEqual({
+      knowledge__resources_list: "Cite resource URIs.",
+      knowledge__resources_read: "Cite resource URIs.",
+      knowledge__search: "Cite resource URIs.",
+      plain__ping: undefined,
+    });
+  });
+
   it("projects session-denied tools only for read-only inventory", () => {
     const catalog = {
       version: 1,

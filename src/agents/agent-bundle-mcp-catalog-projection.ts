@@ -1,14 +1,37 @@
 /** Projects MCP catalog metadata without owning transport or catalog lifetime. */
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   McpCatalogTool,
+  McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
 } from "./agent-bundle-mcp-types.js";
-import { readMcpAppToolExtensions } from "./mcp-app-extension-metadata.js";
+import {
+  readMcpAppIcons,
+  readMcpAppSettingsCapability,
+  readMcpAppToolExtensions,
+} from "./mcp-app-extension-metadata.js";
 import { normalizeMcpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
-import { normalizeToolUiVisibility, sanitizeMcpMetadataText } from "./mcp-metadata.js";
+import {
+  normalizeToolUiVisibility,
+  sanitizeMcpMetadataText,
+  sanitizeMcpServerInstructions,
+} from "./mcp-metadata.js";
 import type { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
+
+/** Projects server-level metadata read from a connected client's initialize result. */
+export function projectMcpServerMetadata(
+  client: Pick<Client, "getServerVersion" | "getServerCapabilities" | "getInstructions">,
+): Pick<McpServerCatalog, "title" | "icons" | "settings" | "instructions"> {
+  const instructions = sanitizeMcpServerInstructions(client.getInstructions());
+  return {
+    title: client.getServerVersion()?.title,
+    icons: readMcpAppIcons(client.getServerVersion()?.icons),
+    settings: readMcpAppSettingsCapability(client.getServerCapabilities()),
+    ...(instructions ? { instructions } : {}),
+  };
+}
 
 export function projectBundleMcpCatalogFailure(
   catalog: McpToolCatalog | undefined,

@@ -13,6 +13,7 @@ import { logWarn } from "../logger.js";
 import {
   projectBundleMcpCatalogTools,
   projectBundleMcpCatalogFailure,
+  projectMcpServerMetadata,
 } from "./agent-bundle-mcp-catalog-projection.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
@@ -25,7 +26,6 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { readMcpAppIcons, readMcpAppSettingsCapability } from "./mcp-app-extension-metadata.js";
 import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
 import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
@@ -717,9 +717,7 @@ function createServerMcpRuntime(
           safeServerName,
           launchSummary: launchDescription,
           pluginId: loaded.pluginIdsByServer?.[serverName],
-          title: session.client.getServerVersion()?.title,
-          icons: readMcpAppIcons(session.client.getServerVersion()?.icons),
-          settings: readMcpAppSettingsCapability(session.client.getServerCapabilities()),
+          ...projectMcpServerMetadata(session.client),
           toolCount: exposedTools.length,
           requestTimeoutMs: resolved.requestTimeoutMs,
           supportsParallelToolCalls: resolved.supportsParallelToolCalls,

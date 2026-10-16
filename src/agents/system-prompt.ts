@@ -73,6 +73,7 @@ import { buildSkillsSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
   buildSystemPromptToolingSection,
+  type McpServerInstructionsEntry,
 } from "./system-prompt-tool-list.js";
 import type {
   PromptMode,
@@ -327,6 +328,8 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  /** Initialize guidance from MCP servers that own a tool in the final list. */
+  mcpServerInstructions?: McpServerInstructionsEntry[];
   messageTool?: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
@@ -394,7 +397,6 @@ export function buildAgentSystemPrompt(params: {
     promptSurface,
     acpSpawnRuntimeEnabled,
   });
-  const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
   const renderOpenClawToolWorkflowHints =
     isOpenClawMainPromptSurface(promptSurface) && params.codeModeActive !== true;
 
@@ -665,10 +667,9 @@ export function buildAgentSystemPrompt(params: {
     ...buildSystemPromptToolingSection({
       includeToolGuidance,
       toolLines,
-      toolSchemaDirectoryPrompt,
       promptSurface,
       availableTools,
-      webSearchUnconfigured: params.webSearchUnconfigured,
+      prompt: params,
     }),
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
