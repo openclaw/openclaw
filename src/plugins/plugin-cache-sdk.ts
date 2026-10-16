@@ -54,6 +54,7 @@ export function createPluginCacheSdk() {
     argvDirectories: new Map<string, string[]>(),
     devSourceRoots: new Map<string, string | null>(),
     runtimeModules: new Map<string, PluginRuntimeModuleResolution>(),
+    usableDistArtifacts: new Map<string, boolean>(),
     normalizedJitiAliases: new Map<string, PluginSdkAliasMap>(),
     aliasFacts: new WeakMap<
       PluginSdkAliasMap,
