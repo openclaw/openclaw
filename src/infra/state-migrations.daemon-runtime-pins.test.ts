@@ -58,6 +58,7 @@ function receipt() {
   );
 }
 function seedSource(rows: DaemonRuntimePinRow[]): void {
+  const targetExisted = fs.existsSync(resolveDaemonRuntimePinStorePath(env));
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)");
@@ -67,6 +68,10 @@ function seedSource(rows: DaemonRuntimePinRow[]): void {
     },
     { env },
   );
+  // Model the pre-cutover producer: legacy shared pins had no local store or receipt.
+  if (!targetExisted) {
+    fs.rmSync(resolveDaemonRuntimePinStorePath(env), { force: true });
+  }
 }
 
 describe("daemon runtime pin owner migration", () => {
@@ -77,6 +82,45 @@ describe("daemon runtime pin owner migration", () => {
     }
     return owner;
   }
+
+  it("does not complete the profile migration when creating an unrelated database", () => {
+    runOpenClawStateWriteTransaction(() => undefined, {
+      env,
+      path: path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), "unrelated.sqlite"),
+    });
+    expect(receipt()).toBeUndefined();
+    expect(fs.existsSync(resolveDaemonRuntimePinStorePath(env))).toBe(false);
+  });
+
+  it.each(["copied", "complete"] as const)(
+    "preserves an existing %s receipt when a fresh source is created",
+    async (phase) => {
+      withDaemonRuntimePinStore(env, true, (db) => {
+        db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
+          pin.state_key,
+          pin.value_json,
+          pin.updated_at_ms,
+        );
+        db.prepare("INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, ?, 123)").run(
+          "retained-source.sqlite",
+          phase,
+        );
+      });
+      const originalReceipt = receipt();
+      runOpenClawStateWriteTransaction(() => undefined, { env });
+      expect(receipt()).toEqual(originalReceipt);
+      expect(targetRows()).toEqual([pin]);
+      const owner = await holdGatewayOwnership();
+      try {
+        expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([
+          expect.stringContaining("Stop the Gateway"),
+        ]);
+      } finally {
+        await owner.release();
+      }
+      expect(receipt()).toEqual(originalReceipt);
+    },
+  );
 
   it("consumes the completed same-source receipt while the Gateway owns the profile", async () => {
     seedSource([pin]);

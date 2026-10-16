@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
@@ -11,6 +10,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { writeDaemonRuntimePinMigrationReceipt } from "./state-migrations.daemon-runtime-pins-receipt.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -33,22 +33,6 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
   } catch (error) {
     return { changes: [], warnings: [`Failed migrating daemon runtime pins: ${String(error)}`] };
   }
-  const receipt = (db: DatabaseSync, phase: "copied" | "complete") => {
-    const result = db
-      .prepare(`
-      INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, ?, ?)
-      ON CONFLICT(version) DO UPDATE SET source_state=excluded.source_state,
-        phase=excluded.phase, updated_at=excluded.updated_at
-      WHERE daemon_runtime_pin_migration.phase != 'copied'
-        OR daemon_runtime_pin_migration.source_state = excluded.source_state
-    `)
-      .run(sourceState, phase, Date.now());
-    if (result.changes === 0) {
-      throw new Error(
-        "Runtime pin migration source changed; both stores were retained. Restore the original source and run openclaw doctor.",
-      );
-    }
-  };
   return await withLegacyMigrationStateLock({
     env,
     stateDir: resolveStateDir(env),
@@ -78,7 +62,7 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
                 return 0;
               }
               withDaemonRuntimePinStore(lockedEnv, true, (target) => {
-                receipt(target, "copied");
+                writeDaemonRuntimePinMigrationReceipt(target, sourceState, "copied");
                 const targetDb = getNodeSqliteKysely<DaemonRuntimePinDatabase>(target);
                 const existing = executeSqliteQuerySync(
                   target,
@@ -113,7 +97,9 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
             { env: lockedEnv },
             { operationLabel: "state-migration.daemon-runtime-pins" },
           );
-      withDaemonRuntimePinStore(lockedEnv, true, (db) => receipt(db, "complete"));
+      withDaemonRuntimePinStore(lockedEnv, true, (db) =>
+        writeDaemonRuntimePinMigrationReceipt(db, sourceState, "complete"),
+      );
       return {
         changes: moved > 0 ? [`Moved ${moved} daemon runtime pin(s) to local service intent.`] : [],
         warnings: [],
