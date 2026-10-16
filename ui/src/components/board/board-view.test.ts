@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import "../../lib/toast-host.ts";
 import "../mcp-app-view-registration.ts";
 // Side-effect import: registers the custom elements mount() depends on
@@ -710,6 +711,25 @@ describe("openclaw-board-view", () => {
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
     expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("settles a same-turn resize from the pointer-up position", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle")!;
+    const pointer = (target: EventTarget, type: string, clientY: number) => {
+      const event = new MouseEvent(type, { button: 0, clientX: 100, clientY, bubbles: true });
+      Object.defineProperty(event, "pointerId", { value: 7 });
+      target.dispatchEvent(event);
+    };
+    pointer(handle, "pointerdown", 100);
+    pointer(window, "pointerup", 100 + 2 * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP));
+    expect(applyOps).toHaveBeenCalledExactlyOnceWith([
+      { kind: "widget_resize", name: "alpha", sizeW: 6, sizeH: 6, heightMode: "fixed" },
+    ]);
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+    expect(view.querySelector(".board-announcer")?.textContent).toContain("Resized Alpha status");
   });
 
   it("cancels an in-progress gesture when the board becomes inactive", async () => {
