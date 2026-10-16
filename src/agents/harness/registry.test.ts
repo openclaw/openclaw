@@ -27,6 +27,7 @@ import type { AgentHarness } from "./types.js";
 const resolveProviderRefOwnership = vi.hoisted(() => vi.fn(() => ({ status: "unowned" as const })));
 const warn = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Capture warnings without initializing process-wide logging sinks.
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {

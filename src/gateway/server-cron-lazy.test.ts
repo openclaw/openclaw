@@ -17,6 +17,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
 const { buildGatewayCronService } = vi.hoisted(() => ({ buildGatewayCronService: vi.fn() }));
+// mock-isolation: Keep the heavy cron runtime unloaded to prove lazy service creation.
 vi.mock("./server-cron.js", () => ({ buildGatewayCronService }));
 
 const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");

@@ -42,15 +42,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./config.js", async (importOriginal) => {
-  const {
-    resolveVoiceCallSessionKey,
-    resolveVoiceCallNumberRouteKeyForCall,
-    resolveVoiceCallEffectiveConfig,
-  } = await importOriginal<typeof import("./config.js")>();
+  const actual = await importOriginal<typeof import("./config.js")>();
   return {
-    resolveVoiceCallSessionKey,
-    resolveVoiceCallNumberRouteKeyForCall,
-    resolveVoiceCallEffectiveConfig,
+    ...actual,
     resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
     resolveVoiceCallStreamExposurePaths: mocks.resolveVoiceCallStreamExposurePaths,
     resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,

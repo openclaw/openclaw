@@ -529,12 +529,12 @@ describe("MediaStreamHandler security hardening", () => {
       await withTimeout(audioReceived.promise);
 
       expect(Buffer.concat(receivedAudio).toString()).toBe("early");
-      expect(onConnectCalls).toBe(1);
+      expect(onConnect).toHaveBeenCalledOnce();
       expect(onTranscriptionReady).not.toHaveBeenCalled();
 
       sttReady.resolve();
       await withTimeout(transcriptionReady.promise);
-      expect(onConnectCalls).toBe(1);
+      expect(onConnect).toHaveBeenCalledOnce();
       expect(onTranscriptionReady).toHaveBeenCalledOnce();
     } finally {
       sttReady.resolve();

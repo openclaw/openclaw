@@ -332,7 +332,7 @@ describe("harness runtime plugins", () => {
   });
 
   it("scopes cold metadata to selected runtime candidates from the installed index", () => {
-    const scope = createAgentRuntimeMetadataPluginIdScope({
+    const scope = createMetadataScope({
       config: { plugins: { slots: { memory: "none" } } },
       workspaceDir: "/tmp/workspace",
       selections: [

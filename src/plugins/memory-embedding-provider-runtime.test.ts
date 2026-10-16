@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   >(() => undefined),
 }));
 
+// mock-isolation: Control capability lookup without loading the active plugin registry.
 vi.mock("./capability-provider-runtime.js", () => mocks);
 
 function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {

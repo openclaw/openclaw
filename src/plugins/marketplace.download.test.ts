@@ -58,7 +58,7 @@ function respond(
   return release;
 }
 
-function streamingResponse(cancel: () => void, status = 200) {
+function streamingResponse(cancel: () => void | Promise<void>, status = 200) {
   return new Response(
     new ReadableStream<Uint8Array>({
       start: (controller) => controller.enqueue(Buffer.from("archive fixture")),

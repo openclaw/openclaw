@@ -46,7 +46,7 @@ const { createOpenClawTestState } = loadHost(
   path.join(repository, "src/test-utils/openclaw-test-state.ts"),
 ) as typeof import("../test-utils/openclaw-test-state.js");
 // Native SDK and config reads must share their module-local host bindings.
-function loadNativeHost<T>(source: string): T {
+function loadNativeHost(source: string): unknown {
   const loaded = tryNativeRequireModule(path.join(repository, source), {
     aliasMap: preparePluginLoaderAliases({
       modulePath: memorySource,
@@ -55,11 +55,11 @@ function loadNativeHost<T>(source: string): T {
     }).resolveAlias,
   });
   assert(loaded.ok, `Expected native host module ${source}`);
-  return loaded.moduleExport as T;
+  return loaded.moduleExport;
 }
-const { registerAgentWorkspaceAccess } = loadNativeHost<
-  typeof import("../plugin-sdk/agent-workspace-runtime.js")
->("src/plugin-sdk/agent-workspace-runtime.ts");
+const { registerAgentWorkspaceAccess } = loadNativeHost(
+  "src/plugin-sdk/agent-workspace-runtime.ts",
+) as typeof import("../plugin-sdk/agent-workspace-runtime.js");
 const { resolveSessionTranscriptsDirForAgent } = loadHost(
   path.join(repository, "src/config/sessions/paths.ts"),
 ) as typeof import("../config/sessions/paths.js");
@@ -77,9 +77,9 @@ const { appendSessionTranscriptMessageByIdentity, publishSessionTranscriptUpdate
     path.join(repository, "src/plugin-sdk/session-transcript-runtime.ts"),
   ) as typeof import("../plugin-sdk/session-transcript-runtime.js");
 
-const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost<
-  typeof import("../config/runtime-snapshot.js")
->("src/config/runtime-snapshot.ts");
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
+  "src/config/runtime-snapshot.ts",
+) as typeof import("../config/runtime-snapshot.js");
 
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
 type SyncReason = "watch" | "interval" | "session-delta" | "session-startup-catchup";
