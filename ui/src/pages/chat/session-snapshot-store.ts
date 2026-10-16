@@ -12,6 +12,7 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 import {
+  CHAT_TRANSCRIPT_METADATA_KEYS,
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
@@ -61,20 +62,7 @@ const paginationSchema = z.discriminatedUnion("hasMore", [
     .strict(),
 ]);
 
-const transcriptMetadataSchema = Type.Pick(SessionRowSchema, [
-  "key",
-  "kind",
-  "label",
-  "displayName",
-  "derivedTitle",
-  "classification",
-  "participants",
-  "expandedParticipants",
-  "owner",
-  "lastRunId",
-  "status",
-  "runtimeMs",
-]);
+const transcriptMetadataSchema = Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS);
 
 const snapshotSchema = z
   .object({

@@ -12,9 +12,10 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
 import { isNodeHostStats } from "../../../../src/shared/node-host-stats.js";
-import type {
-  NodeListNode,
-  NodeWorkerBundleStatus,
+import {
+  NODE_APPROVAL_STATE_VALUES,
+  type NodeListNode,
+  type NodeWorkerBundleStatus,
 } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
@@ -58,12 +59,7 @@ export type DeviceInventoryGroup = {
   duplicates: DeviceInventoryEntry[];
 };
 
-const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
-  "approved",
-  "pending-approval",
-  "pending-reapproval",
-  "unapproved",
-]);
+const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set(NODE_APPROVAL_STATE_VALUES);
 
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {

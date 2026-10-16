@@ -97,9 +97,6 @@ export class LinkReaderPanelOwner {
   dispatchEvent(event: Event) {
     return this.host.dispatchEvent(event);
   }
-  get updateComplete() {
-    return Promise.resolve(true);
-  }
   private hostedSignature = "";
 
   get hostedTabs() {
@@ -114,10 +111,6 @@ export class LinkReaderPanelOwner {
   }
   get activeHostedTabId(): string | null {
     return this.activeId;
-  }
-  async closeHostedTab(id: string): Promise<void> {
-    this.closeTab(id);
-    await this.updateComplete;
   }
   urlDraft = "";
   invalidUrl = false;
