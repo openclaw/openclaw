@@ -10,6 +10,7 @@ import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isSmallModel } from "../shared/model-param-b.js";
+import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
@@ -47,7 +48,7 @@ describe("configured catalog route overlays", () => {
           providers: {
             "route-fixture": {
               ...capturedRoute,
-              models: [{ id: "compact-chat", name: "Compact Chat", parameterCount }],
+              models: [{ ...makeModel("compact-chat"), name: "Compact Chat", parameterCount }],
             },
           },
         },
