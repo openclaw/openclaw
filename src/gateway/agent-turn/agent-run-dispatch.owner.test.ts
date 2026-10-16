@@ -50,9 +50,9 @@ function createGate() {
   };
 }
 
-function expectUncalled(...spies: unknown[]) {
+function expectCalls(count: number, ...spies: unknown[]) {
   for (const spy of spies) {
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(count);
   }
 }
 
@@ -158,8 +158,7 @@ describe("Gateway dispatch run ownership", () => {
         expect(emitFinal).not.toHaveBeenCalled();
         save.resolve();
         await completion;
-        expect(emitFinal).toHaveBeenCalledOnce();
-        expect(params.cleanupAbortController).toHaveBeenCalledOnce();
+        expectCalls(1, emitFinal, params.cleanupAbortController);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(startup === "media" ? 0 : 1);
         expect(entry.resolveTerminalProducer?.()).toBeUndefined();
       } finally {
@@ -191,7 +190,7 @@ describe("Gateway dispatch run ownership", () => {
         throw new Error("startup failed");
       });
       params.cleanupAbortController.mockImplementation(() => {
-        expectUncalled(params.io.emitFinal, setGatewayDedupeEntries);
+        expectCalls(0, params.io.emitFinal, setGatewayDedupeEntries);
         withdrawal.mockReturnValue("pending-input-1");
       });
 
@@ -273,7 +272,7 @@ describe("Gateway dispatch run ownership", () => {
       },
       dedupeKeys: [`agent:${runId}`],
     });
-    expectUncalled(mocks.agentCommand, mocks.clearAgentRunContext);
+    expectCalls(0, mocks.agentCommand, mocks.clearAgentRunContext);
     expect(context.chatAbortControllers.get(runId)).toBe(successor);
     expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -321,18 +320,16 @@ describe("Gateway dispatch run ownership", () => {
       const completion = dispatchAgentRunFromGateway({ ...params, onSettled });
       try {
         await settlement.entered;
-        expectUncalled(emitFinal, cleanupAbortController);
+        expectCalls(0, emitFinal, cleanupAbortController);
         settlement.resolve();
         await cleanup.entered;
-        expectUncalled(emitFinal, setGatewayDedupeEntries);
+        expectCalls(0, emitFinal, setGatewayDedupeEntries);
         recover?.();
         expect(setGatewayDedupeEntries).not.toHaveBeenCalled();
         cleanup.resolve();
         await completion;
-        expect(setGatewayDedupeEntries).toHaveBeenCalledOnce();
-        expect(cleanupAbortController).toHaveBeenCalledOnce();
-        expect(emitFinal).toHaveBeenCalledOnce();
-        expect(emitFinal).toHaveBeenCalledWith(
+        expectCalls(1, setGatewayDedupeEntries, cleanupAbortController);
+        expect(emitFinal).toHaveBeenCalledExactlyOnceWith(
           [
             outcome !== "failure",
             expect.objectContaining({

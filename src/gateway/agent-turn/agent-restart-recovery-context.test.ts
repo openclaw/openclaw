@@ -19,7 +19,6 @@ const matchingParams = {
     restartRecoveryDeliveryContext: {
       channel: "discord",
       to: "discord:dm:123",
-      accountId: "work",
       threadId: "thread-1",
     },
     restartRecoveryRequesterAccountId: "work",
@@ -46,6 +45,14 @@ const matchingInternalParams = {
 
 const ordinaryRun = (params: Parameters<typeof resolveContext>[0]) =>
   resolveContext({ ...params, isRestartRecoveryResumeRun: false });
+const resolveEntry = (
+  entry: Partial<NonNullable<Parameters<typeof resolveContext>[0]["sessionEntry"]>>,
+  params: typeof matchingParams | typeof matchingInternalParams = matchingParams,
+) =>
+  resolveContext({
+    ...params,
+    sessionEntry: { ...params.sessionEntry, ...entry },
+  });
 
 describe("resolveAgentRestartRecoveryContext", () => {
   it.each([matchingParams, matchingUiParams, matchingInternalParams])(
@@ -70,14 +77,13 @@ describe("resolveAgentRestartRecoveryContext", () => {
   it("does not restore an internal source for ordinary runs or external delivery claims", () => {
     expect(ordinaryRun(matchingInternalParams)).toBeUndefined();
     expect(
-      resolveContext({
-        ...matchingInternalParams,
-        sessionEntry: {
-          ...matchingInternalParams.sessionEntry,
+      resolveEntry(
+        {
           restartRecoveryDeliveryContext:
             matchingParams.sessionEntry.restartRecoveryDeliveryContext,
         },
-      }),
+        matchingInternalParams,
+      ),
     ).toBeUndefined();
   });
 
@@ -102,26 +108,12 @@ describe("resolveAgentRestartRecoveryContext", () => {
         sameChannelThreadRequired: true,
       },
     });
-    expect(
-      resolveContext({
-        ...matchingParams,
-        sessionEntry: {
-          ...matchingParams.sessionEntry,
-          restartRecoveryDeliveryContext: undefined,
-        },
-      }),
-    ).toBeUndefined();
+    expect(resolveEntry({ restartRecoveryDeliveryContext: undefined })).toBeUndefined();
   });
 
   it("preserves the source provider without granting delivery authority for a blank target", () => {
     expect(
-      resolveContext({
-        ...matchingParams,
-        sessionEntry: {
-          ...matchingParams.sessionEntry,
-          restartRecoveryDeliveryContext: { channel: " Discord ", to: "   " },
-        },
-      }),
+      resolveEntry({ restartRecoveryDeliveryContext: { channel: " Discord ", to: "   " } }),
     ).toEqual({ messageChannel: "discord" });
   });
 });

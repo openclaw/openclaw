@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
 import {
@@ -81,9 +81,9 @@ function createGate() {
   };
 }
 
-function expectUncalled(...spies: unknown[]) {
+function expectCalls(count: number, ...spies: unknown[]) {
   for (const spy of spies) {
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(count);
   }
 }
 
@@ -97,8 +97,7 @@ function createExecution(
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
   const callerRelease = vi.fn();
-  const { promise: runtimeReleased, resolve: resolveRuntimeReleased } = createDeferred();
-  const runtimeRelease = vi.fn(async () => resolveRuntimeReleased());
+  const runtimeRelease = vi.fn(async () => {});
   const controller = new AbortController();
   if (options.aborted) {
     controller.abort();
@@ -108,7 +107,6 @@ function createExecution(
     gatewayRelease,
     callerRelease,
     runtimeRelease,
-    runtimeReleased,
     params: {
       assertContextCurrent: options.assertContextCurrent,
       prepared: {
@@ -415,12 +413,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const completion = startAgentRunExecution(execution.params).then(finished);
       const observed = completion.catch((error: unknown) => error);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           commandEntered.promise,
-          disposal.entered.then(() => {
-            throw new Error("Execution entered disposal before command dispatch");
-          }),
-        ]);
+          disposal.entered,
+          "Execution entered disposal before command dispatch",
+        );
         const producer = entry.resolveTerminalProducer?.();
         expect(
           producer?.handoff(async (producerCompleted) => {
@@ -429,23 +426,24 @@ describe("startAgentRunExecution Gateway ownership", () => {
           }),
         ).toBe(true);
         finishCommand.resolve();
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           save.entered,
-          disposal.entered.then(() => {
-            throw new Error("Execution entered disposal before its terminal save");
-          }),
-        ]);
+          disposal.entered,
+          "Execution entered disposal before its terminal save",
+        );
         expect(execution.runtimeRelease).not.toHaveBeenCalled();
         expect(entry.executionSettlement?.status).toBe("pending");
         save.resolve();
         await disposal.entered;
-        expect(entry.registrationCleanupRequested).toBe(true);
-        expect(entry.projectSessionActive).toBe(false);
-        expect(entry.executionSettlement?.status).toBe("pending");
+        expect(entry).toMatchObject({
+          registrationCleanupRequested: true,
+          projectSessionActive: false,
+          executionSettlement: { status: "pending" },
+        });
         expect(entry.resolveTerminalProducer?.()).toBeUndefined();
         expect(registration.markExecutionStarted()).toBe(false);
         expect(controllers.get(execution.params.runId)).toBe(entry);
-        expectUncalled(execution.callerRelease, finished);
+        expectCalls(0, execution.callerRelease, finished);
         if (database) {
           expect(database.isOpen).toBe(true);
         }
@@ -454,12 +452,16 @@ describe("startAgentRunExecution Gateway ownership", () => {
           expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
           expect(database?.isOpen).toBe(false);
           expect(nativeDisposals).toBe(1);
-          expect(entry.executionSettlement?.status).toBe("rejected");
-          expect(entry.executionSettlement?.cleanupSettled).toBe(true);
+          expect(entry.executionSettlement).toMatchObject({
+            status: "rejected",
+            cleanupSettled: true,
+          });
         } else if (outcome === "cleanup failure") {
           expect(await observed).toBe(cleanupFault);
-          expect(entry.executionSettlement?.status).toBe("rejected");
-          expect(entry.executionSettlement?.cleanupSettled).toBe(false);
+          expect(entry.executionSettlement).toMatchObject({
+            status: "rejected",
+            cleanupSettled: false,
+          });
         } else {
           await completion;
           expect(entry.executionSettlement?.status).toBe("fulfilled");
@@ -492,13 +494,15 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const completion = startAgentRunExecution(execution.params);
     try {
       await disposal.entered;
-      expect(registration.entry.registrationCleanupRequested).toBe(true);
-      expect(registration.entry.projectSessionActive).toBe(false);
+      expect(registration.entry).toMatchObject({
+        registrationCleanupRequested: true,
+        projectSessionActive: false,
+      });
       expect(admission.isActive()).toBe(false);
       expect(controllers.get(execution.params.runId)).toBe(registration.entry);
       expect(isChatAbortControllerEntryAbortable(registration.entry)).toBe(false);
       expect(registration.markExecutionStarted()).toBe(false);
-      expectUncalled(dispatchAgentRunFromGateway, execution.callerRelease);
+      expectCalls(0, dispatchAgentRunFromGateway, execution.callerRelease);
       disposal.resolve();
       await completion;
       expect(controllers.has(execution.params.runId)).toBe(false);
@@ -778,8 +782,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
     await completion;
-    expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-    expect(execution.callerRelease).toHaveBeenCalledOnce();
+    expectCalls(1, execution.runtimeRelease, execution.callerRelease);
   });
 
   it.each([undefined, "/workspace/session-override"])(
@@ -797,8 +800,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
       const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
       expect(dispatch?.ingressOpts.workspaceDir).toBe(workspaceOverride ?? "/workspace/admitted");
-      expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-      expect(execution.callerRelease).toHaveBeenCalledOnce();
+      expectCalls(1, execution.runtimeRelease, execution.callerRelease);
     },
   );
 
@@ -875,25 +877,22 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const completion = startAgentRunExecution(execution.params).then(finished);
       try {
         await Promise.race([recovery.entered, completion]);
-        expectUncalled(dispatchAgentRunFromGateway, execution.params.io.emitFinal);
+        expectCalls(0, dispatchAgentRunFromGateway, execution.params.io.emitFinal);
         expect(execution.params.context.dedupe.size).toBe(0);
-        expectUncalled(finishExecution, replyObserved, execution.abortCleanup);
+        expectCalls(0, finishExecution, replyObserved, execution.abortCleanup);
         recovery.resolve();
         await Promise.race([settlement.entered, completion]);
-        expectUncalled(execution.params.io.emitFinal, execution.abortCleanup);
+        expectCalls(0, execution.params.io.emitFinal, execution.abortCleanup);
         expect(execution.params.context.dedupe.size).toBe(0);
         settlement.resolve();
         await Promise.race([disposal.entered, completion]);
         expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
         expect(execution.params.context.dedupe.size).toBe(1);
-        expect(execution.abortCleanup).toHaveBeenCalledOnce();
-        expect(execution.gatewayRelease).toHaveBeenCalledOnce();
-        expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-        expectUncalled(execution.callerRelease, finishExecution, replyObserved, finished);
+        expectCalls(1, execution.abortCleanup, execution.gatewayRelease, execution.runtimeRelease);
+        expectCalls(0, execution.callerRelease, finishExecution, replyObserved, finished);
         disposal.resolve();
         await completion;
-        expect(finished).toHaveBeenCalledOnce();
-        expect(execution.callerRelease).toHaveBeenCalledOnce();
+        expectCalls(1, finished, execution.callerRelease);
         expect(finishExecution).toHaveBeenCalledExactlyOnceWith(execution.params.runId);
         if (successor) {
           expect(execution.params.context.chatAbortControllers.get(execution.params.runId)).toBe(
@@ -942,9 +941,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
       await startAgentRunExecution(execution.params);
       expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-      expect(execution.abortCleanup).toHaveBeenCalledOnce();
-      expect(execution.gatewayRelease).toHaveBeenCalledOnce();
-      expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+      expectCalls(1, execution.abortCleanup, execution.gatewayRelease, execution.runtimeRelease);
       const warnings = vi.mocked(execution.params.context.logGateway.warn).mock.calls;
       expect(warnings).toHaveLength(2);
       if (incognito) {

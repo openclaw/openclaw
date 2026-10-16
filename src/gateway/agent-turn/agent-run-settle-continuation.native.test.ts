@@ -1,8 +1,7 @@
-// Native admission, transcript promotion and durable completion; no model or tools execute.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -20,7 +19,6 @@ import {
   reconcileAgentRunUserTurnCompletion as reconcileCompletion,
   releasePreparedAgentRunUserTurn as release,
 } from "./agent-run-user-turn.js";
-import type { AgentTurnIo } from "./types.js";
 
 const reads = vi.hoisted(() => ({ command: vi.fn() }));
 // mock-isolation: Keep model/tools outside this regression; the Gateway terminal dispatcher stays native.
@@ -37,17 +35,12 @@ describe("requester-settle processing survives later user turns", () => {
   const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() });
   const preparationContext = createTrackedDispatch().context;
   const logGateway = { ...preparationContext.logGateway, warn: vi.fn() };
-  const prepare = (
-    signal?: AbortSignal,
-    assertCompletionCurrent = () => {},
-    overrides: Partial<Parameters<typeof prepareAgentRunUserTurn>[0]> = {},
-  ) =>
+  const prepare = (overrides: Partial<Parameters<typeof prepareAgentRunUserTurn>[0]> = {}) =>
     prepareAgentRunUserTurn({
       assertCurrent: () => {},
       onUserTurnMediaPersisted: () => {},
-      assertCompletionCurrent,
+      assertCompletionCurrent: () => {},
       settleWakeReplay: { sourceSessionKeys: [sourceSessionKey], assertCurrent: () => {} },
-      abortSignal: signal,
       getAbortStopReason: () => "rpc",
       request,
       cfg: { session: { store: fixture.storePath() } },
@@ -73,27 +66,31 @@ describe("requester-settle processing survives later user turns", () => {
       ...overrides,
     });
   const assistant = (stopReason: "toolUse" | "stop", text = "") => ({
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "messages" as const,
-    provider: "anthropic" as const,
-    model: "sonnet-4.6",
-    usage: createZeroUsageFixture(),
-    timestamp: 2,
-    stopReason,
+    ...makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2, stopReason }),
     __openclaw: { runId },
   });
   type Prepared = Awaited<ReturnType<typeof prepare>>;
   const completion = (turn: Prepared) => turn.recorder!.getProcessingCompletion!();
-  const complete = (turn: Prepared) =>
-    completeUserTurnProcessing(turn.recorder, buildAgentRunTerminalOutcome({ status: "ok" }));
-  const reconcile = (turn: Prepared, cleanup: () => Promise<void>, io: AgentTurnIo) =>
-    reconcileCompletion(turn, { runId }, cleanup, io);
-  const expectNoReconciliation = (turn: Prepared) => {
-    expect(completion(turn)).toBeUndefined();
+  const complete = (
+    turn: Prepared,
+    outcome: Parameters<typeof buildAgentRunTerminalOutcome>[0] = { status: "ok" },
+  ) => completeUserTurnProcessing(turn.recorder, buildAgentRunTerminalOutcome(outcome));
+  const reconciliation = (turn: Prepared) => {
     const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
     const cleanup = vi.fn(async () => {});
-    expect(reconcile(turn, cleanup, io)).toBeUndefined();
+    return { io, cleanup, result: reconcileCompletion(turn, { runId }, cleanup, io) };
+  };
+  const expectAcknowledgement = async (turn: Prepared, payload: Record<string, unknown>) => {
+    const { io, result } = reconciliation(turn);
+    await result;
+    expect(io.emitAcceptance).toHaveBeenCalledWith([true, { runId, ...payload }, undefined], {
+      runId,
+    });
+  };
+  const expectNoReconciliation = (turn: Prepared) => {
+    expect(completion(turn)).toBeUndefined();
+    const { io, cleanup, result } = reconciliation(turn);
+    expect(result).toBeUndefined();
     expect(cleanup).not.toHaveBeenCalled();
     expect(io.emitAcceptance).not.toHaveBeenCalled();
   };
@@ -158,7 +155,6 @@ describe("requester-settle processing survives later user turns", () => {
       await appendNewerTurn(manager, key, "New user request");
     }
     const before = await loadTranscriptEvents(scope());
-    // This is the original failure boundary, not a readiness error or an in-memory-only fixture.
     await expect(
       manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
     ).rejects.toThrow("outside the current turn");
@@ -166,18 +162,11 @@ describe("requester-settle processing survives later user turns", () => {
     rotateAgentEventLifecycleGeneration();
     for (let duplicate = 0; duplicate < 2; duplicate++) {
       const replay = await prepare();
-      const cleanup = vi.fn(async () => {});
-      const emitAcceptance = vi.fn();
-      expect(completion(replay)).toMatchObject({
-        reason: "completed",
-        status: "ok",
-      });
-      await reconcile(replay, cleanup, {
-        emitAcceptance,
-        emitFinal: vi.fn(),
-      } satisfies AgentTurnIo);
+      expect(completion(replay)).toMatchObject({ reason: "completed", status: "ok" });
+      const { io, cleanup, result } = reconciliation(replay);
+      await result;
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(emitAcceptance).toHaveBeenCalledWith(
+      expect(io.emitAcceptance).toHaveBeenCalledWith(
         expect.arrayContaining([
           true,
           expect.objectContaining({ inputProcessingCompleted: true, status: "ok" }),
@@ -191,15 +180,16 @@ describe("requester-settle processing survives later user turns", () => {
   });
 
   it.each([
-    { privateCompletion: false, consumed: false },
-    { privateCompletion: false, consumed: true },
-    { privateCompletion: true, consumed: false },
-    { privateCompletion: true, consumed: true },
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
   ])(
-    "durably cancels settlement (private=$privateCompletion, consumed=$consumed) without acknowledging success",
-    async ({ privateCompletion, consumed }) => {
+    "durably cancels settlement (private=%s, consumed=%s) without acknowledging success",
+    async (privateCompletion, consumed) => {
       const controller = new AbortController();
-      const original = await prepare(controller.signal, () => {}, {
+      const original = await prepare({
+        abortSignal: controller.signal,
         privateCompletion: privateCompletion ? true : undefined,
         request: { ...request, expectedExistingSessionId: sessionId },
       });
@@ -208,23 +198,16 @@ describe("requester-settle processing survives later user turns", () => {
       }
       controller.abort();
       await original.recorder!.waitForPendingInputSettlement!();
-      expect(completion(original)).toMatchObject({
-        reason: "cancelled",
-        status: "error",
-      });
+      expect(completion(original)).toMatchObject({ reason: "cancelled", status: "error" });
       await release(original, "cancelled");
       rotateAgentEventLifecycleGeneration();
       const replay = await prepare();
       expect(completion(replay)).toMatchObject({ reason: "cancelled" });
-      const emitAcceptance = vi.fn();
-      await reconcile(replay, async () => {}, {
-        emitAcceptance,
-        emitFinal: vi.fn(),
-      } satisfies AgentTurnIo);
-      expect(emitAcceptance).toHaveBeenCalledWith(
-        [true, { runId, status: "error", summary: "cancelled", stopReason: "rpc" }, undefined],
-        { runId },
-      );
+      await expectAcknowledgement(replay, {
+        status: "error",
+        summary: "cancelled",
+        stopReason: "rpc",
+      });
       expect(reads.command).not.toHaveBeenCalled();
       await release(replay, "cancelled");
     },
@@ -266,10 +249,13 @@ describe("requester-settle processing survives later user turns", () => {
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
     const controller = new AbortController();
-    const original = await prepare(controller.signal, () => {
-      if (!current) {
-        throw new Error("completion authority revoked");
-      }
+    const original = await prepare({
+      abortSignal: controller.signal,
+      assertCompletionCurrent: () => {
+        if (!current) {
+          throw new Error("completion authority revoked");
+        }
+      },
     });
     await original.recorder!.persistApproved();
     const before = await loadTranscriptEvents(scope());
@@ -291,7 +277,8 @@ describe("requester-settle processing survives later user turns", () => {
     async (producerSettles) => {
       let finishGrace: (() => void) | undefined;
       const controller = new AbortController();
-      const original = await prepare(controller.signal, () => {}, {
+      const original = await prepare({
+        abortSignal: controller.signal,
         getAbortStopReason: () => "timeout",
         deferTimeoutCompletion: (settle) => {
           finishGrace = settle;
@@ -304,15 +291,12 @@ describe("requester-settle processing survives later user turns", () => {
       expect(completion(original)).toBeUndefined();
       expect(finishGrace).toBeTypeOf("function");
       if (producerSettles) {
-        await completeUserTurnProcessing(
-          original.recorder,
-          buildAgentRunTerminalOutcome({
-            status: "timeout",
-            stopReason: "timeout",
-            timeoutPhase: "provider",
-            providerStarted: true,
-          }),
-        );
+        await complete(original, {
+          status: "timeout",
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        });
       }
       finishGrace!();
       await original.recorder!.waitForPendingInputSettlement!();
@@ -340,7 +324,7 @@ describe("requester-settle processing survives later user turns", () => {
     };
     const preparePeer = () =>
       withSessionSendDelivery({ delivery }, () =>
-        prepare(undefined, () => {}, {
+        prepare({
           settleWakeReplay: undefined,
           inputProvenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
         }),
@@ -355,19 +339,11 @@ describe("requester-settle processing survives later user turns", () => {
     const before = await loadTranscriptEvents(scope());
     rotateAgentEventLifecycleGeneration();
     const replay = await preparePeer();
-    const emitAcceptance = vi.fn();
-    await reconcile(replay, async () => {}, {
-      emitAcceptance,
-      emitFinal: vi.fn(),
+    await expectAcknowledgement(replay, {
+      status: "ok",
+      summary: "completed",
+      inputProcessingCompleted: true,
     });
-    expect(emitAcceptance).toHaveBeenCalledWith(
-      [
-        true,
-        { runId, status: "ok", summary: "completed", inputProcessingCompleted: true },
-        undefined,
-      ],
-      { runId },
-    );
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     await release(replay);
     expect(reads.command).not.toHaveBeenCalled();
