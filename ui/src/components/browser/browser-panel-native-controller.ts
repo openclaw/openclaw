@@ -13,7 +13,7 @@ import {
   type BrowserInspectedNode,
   type BrowserPanelTab,
 } from "./browser-client.ts";
-import type { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
+import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
 import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
@@ -49,7 +49,7 @@ interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
-  readonly input: Pick<BrowserPanelInputController, "paintOverlay">;
+  readonly input: Pick<BrowserPanelInputOwner, "paintOverlay">;
   setState<Key extends keyof BrowserPanelNativeState>(
     key: Key,
     value: BrowserPanelNativeState[Key],

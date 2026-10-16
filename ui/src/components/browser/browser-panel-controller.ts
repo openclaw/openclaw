@@ -21,8 +21,8 @@ import {
   openBrowserTab,
   startBrowser,
 } from "./browser-client.ts";
-import { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import { BrowserPanelDownload } from "./browser-panel-download.ts";
+import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
 import {
   BrowserPanelOperationOwnership,
@@ -63,7 +63,7 @@ export class BrowserPanelController implements PanelLifecycleController {
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
-  readonly input: BrowserPanelInputController;
+  readonly input: BrowserPanelInputOwner;
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
@@ -72,7 +72,7 @@ export class BrowserPanelController implements PanelLifecycleController {
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
-    this.input = new BrowserPanelInputController(this);
+    this.input = new BrowserPanelInputOwner(this);
     this.stream = new BrowserPanelStream(this);
     this.native = new BrowserPanelNativeController(this);
     host.addController(this);
