@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as toasts from "../../lib/toast.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { contextWithClient, createPage } from "./usage-page.test-support.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -26,7 +27,7 @@ it.each(["disconnect", "replacement"] as const)(
       );
       response.reject(new Error("Connection lost during export"));
       await response.promise.catch(() => {});
-      expect(page.read().data.exporting).toBe(false);
+      await waitForSolid(() => expect(page.read().data.exporting).toBe(false));
       if (change === "disconnect") {
         expect(toast).toHaveBeenCalledWith({ message: "Export: Connection lost during export" });
       } else {

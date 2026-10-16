@@ -140,19 +140,18 @@ describe("UsagePage cache convergence", () => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(1);
       window.dispatchEvent(new Event("focus"));
       await vi.advanceTimersByTimeAsync(0);
-      await page.refresh();
       await page.updateComplete;
       expect(page.querySelector(".usage-loading-card")).toBeNull();
       expect(page.querySelector(".usage-cache-warning.warning")?.textContent).toContain(
         "Automatic checks paused",
       );
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
       refreshButton(page).click();
       await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
     },
   );
 
@@ -521,7 +520,7 @@ describe("UsagePage provider usage outcome", () => {
       await page.updateComplete;
       const refresh = () => page.refresh();
       if (loadSource === "direct") {
-        refresh();
+        await refresh();
         await vi.waitFor(() => {
           if (failed) {
             expect(page.providerUsageUnavailable).toBe(true);
@@ -535,7 +534,7 @@ describe("UsagePage provider usage outcome", () => {
       ).length;
       phase = 2;
       if (aggregateFails) {
-        refresh();
+        await refresh();
         await vi.waitFor(() => expect(page.usageError).not.toBeNull());
         expect(page.providerUsageUnavailable).toBe(false);
         if (!failed) {
