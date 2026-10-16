@@ -7,6 +7,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "./embedded-agent-runner/run/types.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import {
   buildEmbeddedRunnerAssistant,
   immediateEnqueue,
@@ -140,13 +141,63 @@ async function run(cfg: OpenClawConfig, runId: string) {
 
 describe("connection retry transport refresh", () => {
   it.each([
-    ["changed origin", "http://127.0.0.1:21431/v1", "http://127.0.0.1:21432/v1", false, false],
-    ["unchanged origin", "http://127.0.0.1:21431/v1", "http://127.0.0.1:21431/v1", false, true],
-    ["withdrawn credential", "http://127.0.0.1:21431/v1", "http://127.0.0.1:21432/v1", true, false],
+    [
+      "changed origin",
+      "http://127.0.0.1:21431/v1",
+      "http://127.0.0.1:21432/v1",
+      false,
+      false,
+      false,
+      false,
+    ],
+    [
+      "unchanged origin",
+      "http://127.0.0.1:21431/v1",
+      "http://127.0.0.1:21431/v1",
+      false,
+      true,
+      false,
+      false,
+    ],
+    [
+      "local no-auth transport",
+      "http://127.0.0.1:21431/v1",
+      "http://127.0.0.1:21432/v1",
+      true,
+      false,
+      true,
+      false,
+    ],
+    [
+      "initial local no-auth transport",
+      "http://127.0.0.1:21431/v1",
+      "http://127.0.0.1:21432/v1",
+      true,
+      false,
+      true,
+      true,
+    ],
+    [
+      "unavailable remote credential",
+      "http://127.0.0.1:21431/v1",
+      "https://model.example/v1",
+      true,
+      false,
+      false,
+      false,
+    ],
   ] as const)(
     "keeps credentials and endpoint coherent after a %s publication",
-    async (_label, before, after, credentialWithdrawn, assistantFailure) => {
-      const initial = config(before, "synthetic-old-key", "old-route");
+    async (
+      _label,
+      before,
+      after,
+      credentialWithdrawn,
+      assistantFailure,
+      localNoAuth,
+      initialNoAuth,
+    ) => {
+      const initial = config(before, initialNoAuth ? undefined : "synthetic-old-key", "old-route");
       const current = config(
         after,
         credentialWithdrawn ? undefined : "synthetic-current-key",
@@ -164,7 +215,7 @@ describe("connection retry transport refresh", () => {
         if (observations.length === 1) {
           expect(params).toMatchObject({
             model: { baseUrl: before, headers: { "X-Local-Route": "old-route" } },
-            resolvedApiKey: "synthetic-old-key",
+            resolvedApiKey: initialNoAuth ? CUSTOM_LOCAL_AUTH_MARKER : "synthetic-old-key",
             prompt: "Preserve this admitted request exactly.",
           });
           await publish(current);
@@ -211,12 +262,19 @@ describe("connection retry transport refresh", () => {
       expect(retry).toMatchObject({
         provider: "local-fixture",
         modelId: "chat",
-        resolvedApiKey: credentialWithdrawn ? "synthetic-old-key" : "synthetic-current-key",
+        resolvedApiKey: localNoAuth
+          ? CUSTOM_LOCAL_AUTH_MARKER
+          : credentialWithdrawn
+            ? "synthetic-old-key"
+            : "synthetic-current-key",
         model: {
-          baseUrl: credentialWithdrawn ? before : after,
+          baseUrl: credentialWithdrawn && !localNoAuth ? before : after,
           contextWindow: 16_000,
           maxTokens: 2048,
-          headers: { "X-Local-Route": credentialWithdrawn ? "old-route" : "current-route" },
+          headers: {
+            "X-Local-Route": credentialWithdrawn && !localNoAuth ? "old-route" : "current-route",
+            ...(localNoAuth ? { Authorization: null } : {}),
+          },
         },
         continuation: { prompt: "Preserve this admitted request exactly.", messages: history },
       });

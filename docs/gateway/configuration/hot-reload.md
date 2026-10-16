@@ -184,6 +184,7 @@ After a transient connection failure, an in-flight turn using a directly configu
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
 model, permissions, prompt, conversation history, and model limits while resolving
 credentials, headers, and request settings from the updated provider config.
+Removing a key also takes effect when the updated local provider requires no authentication.
 Auth-profile, native-runtime, dynamically prepared, and managed local-service
 transports keep their admitted settings; start a new turn after changing those.
 Caller request overrides also retain their selected transport.

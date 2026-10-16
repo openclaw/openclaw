@@ -8,6 +8,8 @@ import {
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../model-auth-provider-config.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
 import {
   acquirePreparedModelRuntimeSnapshot,
@@ -108,6 +110,10 @@ export async function prepareEmbeddedRunRuntime(
     refreshTransportForConnectionError: async () => {
       const current = transport.snapshot();
       const source = current.activePreparedAuthPlan.credentialSource;
+      const localNoAuth =
+        source?.kind === "none" &&
+        transport.getApiKeyInfo()?.apiKey === CUSTOM_LOCAL_AUTH_MARKER &&
+        hasSyntheticLocalProviderAuthConfig({ cfg: transportConfig, provider: initial.provider });
       if (
         !publication ||
         initialSnapshot.pluginHarnessOwnsTransport ||
@@ -121,9 +127,10 @@ export async function prepareEmbeddedRunRuntime(
         current.runtimeAuthState ||
         getModelProviderLocalService(initialSnapshot.effectiveModel) ||
         getModelProviderLocalServiceReconciler(initialSnapshot.effectiveModel) ||
-        !isConfiguredKeyAuthSource(source) ||
-        source?.kind !== "direct" ||
-        source.authorization !== "declared" ||
+        (!localNoAuth &&
+          (!isConfiguredKeyAuthSource(source) ||
+            source?.kind !== "direct" ||
+            source.authorization !== "declared")) ||
         !hasStaticConfiguredTransport(transportConfig)
       ) {
         return;
@@ -200,6 +207,8 @@ export async function prepareEmbeddedRunRuntime(
           getPreparedModelRuntimeSnapshot(ownerInput) !== published ||
           next.lastProfileId ||
           next.runtimeAuthState ||
+          (next.activePreparedAuthPlan.credentialSource?.kind === "none" &&
+            candidate.getApiKeyInfo()?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER) ||
           getModelProviderLocalService(next.effectiveModel) ||
           getModelProviderLocalServiceReconciler(next.effectiveModel)
         ) {

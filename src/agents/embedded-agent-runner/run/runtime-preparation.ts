@@ -179,7 +179,7 @@ export async function prepareEmbeddedRunTransport(input: {
     authStorage,
     modelRegistry,
     preparedModelRuntime: input.preparedModelRuntime,
-    requireDirectAuth: input.refreshTransport !== undefined,
+    requireConfiguredTransportAuth: input.refreshTransport !== undefined,
     getAgentHarness: () => agentHarness,
     setAgentHarness: (nextHarness) => {
       agentHarness = nextHarness;
