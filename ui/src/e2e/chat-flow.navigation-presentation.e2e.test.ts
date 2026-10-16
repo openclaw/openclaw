@@ -2,6 +2,16 @@ import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
+  timedText,
+  expectCount,
+  expectTextContains,
+  expectText,
+  chatFixture,
+  composer as chatComposer,
+  newChatPage,
+  sessionRow,
+} from "./chat-flow-fixtures.test-support.ts";
+import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
   chatSessionListResponse,
@@ -15,7 +25,6 @@ import {
 } from "./chat-flow.test-support.ts";
 import { watchNavigationFollowIntent } from "./chat-navigation-follow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -35,19 +44,6 @@ async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
   });
 }
 
-function textMessage(role: string, text: string, fields: Record<string, unknown> = {}) {
-  return { role, content: [{ type: "text", text }], ...fields };
-}
-
-function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  fields: Record<string, unknown> = {},
-) {
-  return { key, kind: "direct", label, updatedAt, ...fields };
-}
-
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
@@ -61,18 +57,11 @@ suite.define(() => {
         JSON.stringify({
           chatSplitLayout: {
             activePaneId: "p1",
-            columns: [
-              {
-                id: "c1",
-                panes: [{ id: "p1", sessionKey: "agent:main:session-a" }],
-                paneWeights: [1],
-              },
-              {
-                id: "c2",
-                panes: [{ id: "p2", sessionKey: "agent:main:session-a" }],
-                paneWeights: [1],
-              },
-            ],
+            columns: [1, 2].map((index) => ({
+              id: `c${index}`,
+              panes: [{ id: `p${index}`, sessionKey: "agent:main:session-a" }],
+              paneWeights: [1],
+            })),
             columnWeights: [0.5, 0.5],
           },
         }),
@@ -81,16 +70,14 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup", "chat.startup"],
-      historyMessages: [
-        textMessage("assistant", "Shared cold startup proof.", { timestamp: Date.now() }),
-      ],
+      historyMessages: [timedText("assistant", "Shared cold startup proof.")],
       methodResponses: { "sessions.list": chatSessionListResponse() },
       sessionKey: "agent:main:session-a",
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
     const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-    await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
+    await expectCount(panes, 2, { timeout: 10_000 });
     await expect
       .poll(() =>
         panes.evaluateAll((nodes) =>
@@ -107,17 +94,12 @@ suite.define(() => {
     expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
     await gateway.resolveDeferred("chat.startup");
-    await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+    await expectCount(page.getByText("Shared cold startup proof."), 2);
     expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
   });
 
   it("retains scrolled and end-anchored sessions without history reloads", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    const page = await context.newPage();
+    const { page } = await newChatPage(suite, { viewport: { height: 720, width: 1280 } });
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
     const messages = (label: string, count: number) =>
@@ -157,7 +139,7 @@ suite.define(() => {
     await gateway.waitForRequest("agent.identity.get");
     const initialIdentityRequestCount = (await gateway.getRequests("agent.identity.get")).length;
     const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-    await expect.poll(() => thread.count()).toBe(1);
+    await expectCount(thread, 1);
     expect(await distanceFromBottom(thread)).toBeLessThanOrEqual(8);
     await thread.evaluate((element) => {
       const transcript = element as HTMLElement;
@@ -210,19 +192,15 @@ suite.define(() => {
   });
 
   it("renders always-on pane headers without desktop topbar chrome", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      historyMessages: [
-        textMessage("assistant", "Split toolbar proof.", { timestamp: Date.now() }),
-      ],
-      methodResponses: { "sessions.list": chatSessionListResponse() },
-      sessionKey: "agent:main:session-a",
-    });
+    const { page, gateway } = await chatFixture(
+      suite,
+      {
+        historyMessages: [timedText("assistant", "Split toolbar proof.")],
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+        sessionKey: "agent:main:session-a",
+      },
+      { viewport: { height: 900, width: 1440 } },
+    );
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
     await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
@@ -232,12 +210,12 @@ suite.define(() => {
 
     const layout = page.getByRole("button", { name: "Layout", exact: true });
     await expect.poll(() => layout.isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+    await expectCount(page.locator(".chat-pane__header"), 1);
     const taskHeader = page.locator(".chat-pane__header");
     const regularHeaderPadding = await taskHeader.evaluate(
       (header) => getComputedStyle(header).paddingLeft,
     );
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = chatComposer(page);
     await composer.fill("Keep this draft while docking beside native controls");
     const originalComposer = await composer.elementHandle();
     await page.evaluate(() => {
@@ -287,11 +265,7 @@ suite.define(() => {
       .poll(() => layout.evaluate((node) => node.closest(".agent-chat__composer-shell") == null))
       .toBe(true);
     await page.locator("openclaw-chat-pane").evaluate((pane) => {
-      (
-        globalThis as typeof globalThis & {
-          classicChatPane?: Element;
-        }
-      ).classicChatPane = pane;
+      Reflect.set(globalThis, "classicChatPane", pane);
     });
     const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
     await gateway.deferNext("chat.startup");
@@ -303,27 +277,19 @@ suite.define(() => {
     // Each pane owns the same in-flow header in classic and split layouts.
     const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
     const headers = page.locator(".chat-pane__header");
-    await expect.poll(() => panes.count()).toBe(2);
+    await expectCount(panes, 2);
     await panes.last().getByText("Split toolbar proof.").waitFor();
-    await expect
-      .poll(() =>
-        panes.last().locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]').count(),
-      )
-      .toBe(0);
+    await expectCount(
+      panes.last().locator('openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]'),
+      0,
+    );
     await gateway.resolveDeferred("chat.startup");
     await expect
       .poll(() =>
-        panes.first().evaluate(
-          (pane) =>
-            (
-              globalThis as typeof globalThis & {
-                classicChatPane?: Element;
-              }
-            ).classicChatPane === pane,
-        ),
+        panes.first().evaluate((pane) => Reflect.get(globalThis, "classicChatPane") === pane),
       )
       .toBe(true);
-    await expect.poll(() => headers.count()).toBe(2);
+    await expectCount(headers, 2);
     await expect
       .poll(async () => {
         const visible = await Promise.all((await headers.all()).map((pane) => pane.isVisible()));
@@ -331,8 +297,8 @@ suite.define(() => {
       })
       .toBe(true);
     // Each pane keeps a single Layout menu for its own panels and split actions.
-    await expect.poll(() => headers.first().locator(".chat-pane__layout-menu").count()).toBe(1);
-    await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
+    await expectCount(headers.first().locator(".chat-pane__layout-menu"), 1);
+    await expectCount(page.locator(".chat-workspace-rail"), 0);
 
     const cells = page.locator(".chat-split-view__cell");
     const actionRows = headers.locator(".chat-pane__actions");
@@ -395,17 +361,12 @@ suite.define(() => {
       { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
     );
     const unrelatedTarget = page.locator(".chat-split-view");
-    const unrelatedDrag = {
-      bubbles: true,
-      clientX: 0,
-      clientY: 0,
-      dataTransfer,
-    };
+    const unrelatedDrag = { bubbles: true, clientX: 0, clientY: 0, dataTransfer };
     await unrelatedTarget.dispatchEvent("dragenter", unrelatedDrag);
     await unrelatedTarget.dispatchEvent("dragover", unrelatedDrag);
-    await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(0);
+    await expectCount(page.locator(".chat-split-view__drop-indicator"), 0);
     await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
-    await expect.poll(() => panes.count()).toBe(2);
+    await expectCount(panes, 2);
     await expect
       .poll(() => new URL(page.url()).pathname)
       .toBe(controlUiSessionPath("agent:main:session-a"));
@@ -423,11 +384,11 @@ suite.define(() => {
     };
     await targetHeader.dispatchEvent("dragenter", directHeaderDrag);
     await targetHeader.dispatchEvent("dragover", directHeaderDrag);
-    await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(1);
+    await expectCount(page.locator(".chat-split-view__drop-indicator"), 1);
     await targetHeader.dispatchEvent("drop", directHeaderDrag);
     await dataTransfer.dispose();
 
-    await expect.poll(() => panes.count()).toBe(3);
+    await expectCount(panes, 3);
     await expect
       .poll(async () =>
         (await page.locator(".chat-pane__session-title").allTextContents()).map((title) =>
@@ -440,106 +401,113 @@ suite.define(() => {
       .toBe(controlUiSessionPath("agent:main:session-b"));
   });
 
-  it("opens current context and latest-run usage from the composer ring", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [
-        { role: "user", content: "Show current usage", timestamp: Date.now() - 1_000 },
-        {
-          role: "assistant",
-          content: "Usage ready.",
-          cost: {
-            input: 0.003456,
-            output: 0.018,
-            cacheRead: 0.0015,
-            cacheWrite: 0.0005,
-            total: 0.023456,
-          },
-          model: "gpt-5.5",
-          provider: "openai",
-          timestamp: Date.now(),
-        },
-        {
-          role: "assistant",
-          content: "Usage ready.",
-          model: "gateway-injected",
-          provider: "openclaw",
-          timestamp: Date.now() + 1,
-          usage: {
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
-        },
-      ],
+  it.each([
+    { name: "current context and latest-run cost", stale: false },
+    { name: "approximate stale context without a warning", stale: true },
+  ])("shows $name in the composer usage ring", async ({ stale }) => {
+    const { page } = await chatFixture(suite, {
+      ...(stale
+        ? {}
+        : {
+            historyMessages: [
+              { role: "user", content: "Show current usage", timestamp: Date.now() - 1_000 },
+              {
+                role: "assistant",
+                content: "Usage ready.",
+                model: "gpt-5.5",
+                provider: "openai",
+                timestamp: Date.now(),
+                cost: {
+                  input: 0.003456,
+                  output: 0.018,
+                  cacheRead: 0.0015,
+                  cacheWrite: 0.0005,
+                  total: 0.023456,
+                },
+              },
+              {
+                role: "assistant",
+                content: "Usage ready.",
+                model: "gateway-injected",
+                provider: "openclaw",
+                timestamp: Date.now() + 1,
+                usage: { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              },
+            ],
+          }),
       methodResponses: {
         "sessions.list": {
           count: 1,
-          defaults: {
-            contextTokens: 200_000,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-          },
           path: "",
+          ts: Date.now(),
+          defaults: { contextTokens: 200_000, model: "gpt-5.5", modelProvider: "openai" },
           sessions: [
             {
-              contextTokens: 200_000,
-              estimatedCostUsd: 0.023456,
-              inputTokens: 757_300,
               key: "main",
               kind: "direct",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              outputTokens: 42_300,
-              totalTokens: 46_000,
+              contextTokens: 200_000,
               updatedAt: Date.now(),
+              ...(stale
+                ? { totalTokens: 190_000, totalTokensFresh: false }
+                : {
+                    estimatedCostUsd: 0.023456,
+                    inputTokens: 757_300,
+                    outputTokens: 42_300,
+                    totalTokens: 46_000,
+                    model: "gpt-5.5",
+                    modelProvider: "openai",
+                  }),
             },
           ],
-          ts: Date.now(),
         },
       },
     });
-
     await page.goto(`${suite.server.baseUrl}chat`);
     const trigger = page.locator("summary.context-ring");
     await trigger.waitFor({ timeout: 10_000 });
+    if (stale) {
+      expect((await trigger.textContent())?.trim()).toBe("");
+      expect(await trigger.getAttribute("aria-label")).toBe(
+        "Session context usage: ~190k of 200k (~95%)",
+      );
+      expect(
+        await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
+      ).toBe(false);
+    }
     await trigger.click();
-
     const popover = page.locator(".context-usage__popover");
-    await expect.poll(() => popover.isVisible()).toBe(true);
-    await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
-    await expect.poll(() => popover.textContent()).toContain("757.3k");
-    await expect.poll(() => popover.textContent()).toContain("42.3k");
-    await expect.poll(() => popover.textContent()).toContain("Est. cost");
-    await expect.poll(() => popover.textContent()).toContain("$0.023");
-    await expect.poll(() => popover.textContent()).toContain("Cost by Type");
-    await expect.poll(() => popover.textContent()).toContain("$0.0035");
-    await expect.poll(() => popover.textContent()).toContain("$0.018");
-    await expect.poll(() => popover.textContent()).toContain("$0.0015");
-    await expect.poll(() => popover.textContent()).toContain("$0.0005");
-
-    await page.keyboard.press("Escape");
-    await expect.poll(() => popover.isHidden()).toBe(true);
+    if (stale) {
+      await expectTextContains(popover, "~190k / 200k · ~95%");
+    } else {
+      await expect.poll(() => popover.isVisible()).toBe(true);
+      for (const text of [
+        "46k / 200k · 23%",
+        "757.3k",
+        "42.3k",
+        "Est. cost",
+        "$0.023",
+        "Cost by Type",
+        "$0.0035",
+        "$0.018",
+        "$0.0015",
+        "$0.0005",
+      ]) {
+        await expectTextContains(popover, text);
+      }
+      await page.keyboard.press("Escape");
+      await expect.poll(() => popover.isHidden()).toBe(true);
+    }
   });
 
   it("routes page typing to the active composer without stealing text input focus", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [
-        textMessage("assistant", "Type whenever you are ready.", { timestamp: Date.now() }),
-      ],
+    const { page } = await chatFixture(suite, {
+      historyMessages: [timedText("assistant", "Type whenever you are ready.")],
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText("Type whenever you are ready.").click();
 
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = chatComposer(page);
     await expect
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(false);
@@ -562,64 +530,17 @@ suite.define(() => {
     expect(await composer.inputValue()).toBe("first character preserved");
   });
 
-  it("keeps stale context visible as approximate without warning", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: { contextTokens: 200_000, model: "gpt-5.5", modelProvider: "openai" },
-          path: "",
-          sessions: [
-            {
-              contextTokens: 200_000,
-              key: "main",
-              kind: "direct",
-              totalTokens: 190_000,
-              totalTokensFresh: false,
-              updatedAt: Date.now(),
-            },
-          ],
-          ts: Date.now(),
-        },
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const trigger = page.locator("summary.context-ring");
-    await trigger.waitFor({ timeout: 10_000 });
-    expect((await trigger.textContent())?.trim()).toBe("");
-    expect(await trigger.getAttribute("aria-label")).toBe(
-      "Session context usage: ~190k of 200k (~95%)",
-    );
-    expect(
-      await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
-    ).toBe(false);
-
-    await trigger.click();
-    await expect
-      .poll(() => page.locator(".context-usage__popover").textContent())
-      .toContain("~190k / 200k · ~95%");
-  });
-
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await chatFixture(suite, {
       deferredMethods: ["sessions.list"],
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-      historyMessages: [
-        textMessage("assistant", "History renders before sessions finish.", {
-          timestamp: Date.now(),
-        }),
-      ],
+      historyMessages: [timedText("assistant", "History renders before sessions finish.")],
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
 
     await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = chatComposer(page);
     await composer.waitFor({ state: "visible", timeout: 10_000 });
 
     // The chat boot hydrates the sidebar session list; that request stays
@@ -640,8 +561,7 @@ suite.define(() => {
   });
 
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
+    const { page } = await newChatPage(suite);
     const createdSessionKeys = Array.from(
       { length: 11 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
@@ -651,11 +571,7 @@ suite.define(() => {
     const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
     const sessions = {
       count: createdSessionKeys.length + 1,
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.5",
-        modelProvider: "openai",
-      },
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
       path: "",
       sessions: [
         sessionRow(pinnedSessionKey, "Pinned Session", 50, { createdAt: 2_000 }),
@@ -683,9 +599,9 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-    await page.locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]').waitFor({
-      timeout: 10_000,
-    });
+    await page
+      .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+      .waitFor({ timeout: 10_000 });
     // Personal shortcuts do not add a row to the ten-row Sessions page.
     const pinnedLink = page.locator(
       `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
@@ -700,9 +616,10 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
       )
       .click();
-    await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
-      timeout: 10_000,
-    });
+    await page
+      .locator(".sidebar-recent-session--active")
+      .getByText("Session B")
+      .waitFor({ timeout: 10_000 });
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
     const activeWeight = await page
@@ -730,12 +647,11 @@ suite.define(() => {
 
     await filterAndSort.click();
     await page.getByRole("main").click();
-    await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
+    await expectCount(page.locator(".sidebar-session-sort-menu"), 0);
   });
 
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
+    const { page } = await newChatPage(suite);
     const initialKey = "agent:main:session-a";
     const key = "agent:main:session-b";
     const readableTitle = "Readable planning title";
@@ -778,7 +694,7 @@ suite.define(() => {
     const link = row.locator("a.sidebar-recent-session__link");
     const tree = row.locator("..");
     const list = tree.locator("..");
-    await expect.poll(() => label.textContent()).toBe(readableTitle);
+    await expectText(label, readableTitle);
     expect(await list.getAttribute("role")).toBe("list");
     expect(await tree.getAttribute("role")).toBe("listitem");
     expect(await row.getAttribute("role")).toBeNull();
@@ -797,17 +713,14 @@ suite.define(() => {
     const patchRequest = await gateway.waitForRequest("sessions.patch", {
       match: { key, unread: true },
     });
-    expect(requireRecord(patchRequest.params)).toMatchObject({
-      key,
-      unread: true,
-    });
+    expect(requireRecord(patchRequest.params)).toMatchObject({ key, unread: true });
     await expect
       .poll(async () => {
         const requests = await gateway.getRequests("sessions.list", rosterMatch);
         return requests.slice(listCountBeforePatch).map((request) => request.params);
       })
       .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
-    await expect.poll(() => label.textContent()).toBe(readableTitle);
+    await expectText(label, readableTitle);
     expect(await link.getAttribute("aria-current")).toBe("page");
     // The retained title can match before the refresh renders Unread.
     await expect.poll(() => link.ariaSnapshot()).toContain(`link "Unread ${readableTitle}"`);

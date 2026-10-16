@@ -3,14 +3,26 @@ import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  timedText,
+  persistedText,
+  expectTextContains,
+  expectText,
+  agentEvent,
+  chatDelta,
+  chatEvent,
+  chatFixture,
+  composer as chatComposer,
+  sendChat,
+  sendMessage,
+  transcript as chatTranscript,
+} from "./chat-flow-fixtures.test-support.ts";
+import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
-  installMockGateway,
   requireRecord,
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -22,26 +34,6 @@ type WorkingRowSample = {
   top: number | null;
 };
 
-function textMessage(role: string, text: string, fields: Record<string, unknown> = {}) {
-  return { role, content: [{ type: "text", text }], ...fields };
-}
-
-function chatDelta(
-  runId: string,
-  text: string,
-  sessionKey: string,
-  fields: Record<string, unknown> = {},
-) {
-  return {
-    deltaText: text,
-    message: textMessage("assistant", text, { timestamp: Date.now() }),
-    runId,
-    sessionKey,
-    state: "delta",
-    ...fields,
-  };
-}
-
 suite.define(() => {
   it.each([
     { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1440 } },
@@ -51,24 +43,24 @@ suite.define(() => {
     const artifactDir = artifactDirParent
       ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
       : undefined;
-    const context = await suite.newBrowserContext({
-      hasTouch: mobile,
-      isMobile: mobile,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      historyMessages: [
-        { role: "assistant", content: "Earlier completed reply.", timestamp: Date.now() - 60_000 },
-        {
-          role: "assistant",
-          content: "Earlier final summary.\n\n[Source](https://example.com)",
-          timestamp: Date.now() - 59_000,
-        },
-      ],
-    });
+    const { context, page, gateway } = await chatFixture(
+      suite,
+      {
+        historyMessages: [
+          {
+            role: "assistant",
+            content: "Earlier completed reply.",
+            timestamp: Date.now() - 60_000,
+          },
+          {
+            role: "assistant",
+            content: "Earlier final summary.\n\n[Source](https://example.com)",
+            timestamp: Date.now() - 59_000,
+          },
+        ],
+      },
+      { hasTouch: mobile, isMobile: mobile, viewport },
+    );
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText("Earlier completed reply.").waitFor();
@@ -90,10 +82,21 @@ suite.define(() => {
       group
         .locator(":scope > .chat-group-footer .chat-group-footer-actions button")
         .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity));
+    const expectActionOpacities = (group: typeof earlierAssistant, values: string[]) =>
+      expect.poll(() => actionOpacities(group)).toEqual(values);
+    const expectActionsVisible = (group: typeof earlierAssistant) =>
+      expect
+        .poll(async () => (await actionOpacities(group)).map((value) => Number(value) > 0))
+        .toEqual([true, true]);
+    const expectFocus = (locator: typeof earlierAssistant) =>
+      expect.poll(() => locator.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+    const captureMetadata = async (name: string) => {
+      if (artifactDir && !mobile) {
+        await page.screenshot({ fullPage: true, path: path.join(artifactDir, name) });
+      }
+    };
     await page.mouse.move(0, 0);
-    await expect
-      .poll(() => actionOpacities(earlierAssistant))
-      .toEqual(mobile ? ["1", "1"] : ["0", "0"]);
+    await expectActionOpacities(earlierAssistant, mobile ? ["1", "1"] : ["0", "0"]);
     await expectFooter(earlierAssistant, mobile);
     await expect
       .poll(() =>
@@ -102,23 +105,12 @@ suite.define(() => {
           .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity)),
       )
       .toEqual(["0", "0"]);
-    if (artifactDir && !mobile) {
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "before-user-follow-up-metadata-hidden.png"),
-      });
-    }
-    await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
-    await page.getByRole("button", { name: "Send message" }).click();
+    await captureMetadata("before-user-follow-up-metadata-hidden.png");
+    await sendMessage(page, "show turn metadata");
     const sendRequest = await gateway.waitForRequest("chat.send");
     await page.mouse.move(0, 0);
     await expectFooter(earlierAssistant, false);
-    if (artifactDir && !mobile) {
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "after-user-follow-up-metadata-hidden.png"),
-      });
-    }
+    await captureMetadata("after-user-follow-up-metadata-hidden.png");
     const runId = requireString(
       requireRecord(sendRequest.params).idempotencyKey,
       "chat send idempotency key",
@@ -126,8 +118,7 @@ suite.define(() => {
     const streamingText = "This response is still streaming.";
     await gateway.emitGatewayEvent("chat", chatDelta(runId, streamingText, "main"));
 
-    const activeStream = page.locator(".chat-bubble.streaming");
-    await activeStream.waitFor({ state: "visible" });
+    await page.locator(".chat-bubble.streaming").waitFor({ state: "visible" });
     const activeGroup = page.locator(".chat-group.assistant").last();
     const reveal = async () => {
       if (mobile) {
@@ -142,19 +133,17 @@ suite.define(() => {
     await expectFooter(earlierAssistant, false);
 
     // Settled commentary is still part of an active turn while a tool runs.
-    await gateway.emitGatewayEvent("agent", {
-      data: {
-        args: { path: "README.md" },
-        name: "read",
-        phase: "start",
-        toolCallId: "footer-read",
-      },
-      runId,
-      seq: 1,
-      sessionKey: "main",
-      stream: "tool",
-      ts: Date.now(),
-    });
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(
+        runId,
+        "main",
+        "tool",
+        { args: { path: "README.md" }, name: "read", phase: "start", toolCallId: "footer-read" },
+        1,
+        Date.now(),
+      ),
+    );
     // The working indicator predates the tool event; wait for its deferred projection
     // before scrolling a bubble that the stream-to-tool render may replace.
     await page.locator('[data-message-id^="tool:assistant:footer-read"]').waitFor();
@@ -191,7 +180,7 @@ suite.define(() => {
     await page.mouse.move(0, 0);
     const footer = activeGroup.locator(".chat-group-footer");
     await expectFooter(activeGroup, mobile);
-    await expect.poll(() => actionOpacities(activeGroup)).toEqual(mobile ? ["1", "1"] : ["0", "0"]);
+    await expectActionOpacities(activeGroup, mobile ? ["1", "1"] : ["0", "0"]);
     expect(await footer.locator(".chat-sender-name").textContent()).toBe("OpenClaw");
     const timestamp = requireString(
       await footer.locator(".chat-group-timestamp").textContent(),
@@ -205,9 +194,7 @@ suite.define(() => {
       await footer.evaluate((element) => element.getBoundingClientRect().height),
     ).toBeGreaterThan(0);
     await reveal();
-    await expect
-      .poll(async () => (await actionOpacities(activeGroup)).map((opacity) => Number(opacity) > 0))
-      .toEqual([true, true]);
+    await expectActionsVisible(activeGroup);
     await expect
       .poll(() => footer.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
@@ -218,9 +205,7 @@ suite.define(() => {
       } else {
         await group.locator(".chat-bubble").last().hover();
       }
-      await expect
-        .poll(async () => (await actionOpacities(group)).map((opacity) => Number(opacity) > 0))
-        .toEqual([true, true]);
+      await expectActionsVisible(group);
       await expectFooter(group, true);
       expect(await group.evaluate((element) => element.getBoundingClientRect().height)).toBe(
         height,
@@ -232,14 +217,8 @@ suite.define(() => {
       const focusedActionOpacities = mobile ? ["1", "1"] : ["0.6", "0.6"];
       await actions.first().focus();
       await page.keyboard.press("Shift+Tab");
-      await expect
-        .poll(() =>
-          group
-            .getByRole("link", { name: "Source", exact: true })
-            .evaluate((link) => link.matches(":focus-visible")),
-        )
-        .toBe(true);
-      await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+      await expectFocus(group.getByRole("link", { name: "Source", exact: true }));
+      await expectActionOpacities(group, focusedActionOpacities);
       await expectFooter(group, true);
       if (group === earlierAssistant) {
         await expect
@@ -251,72 +230,52 @@ suite.define(() => {
           .toEqual(focusedActionOpacities);
       }
       await page.keyboard.press("Tab");
-      await expect
-        .poll(() => actions.first().evaluate((button) => button.matches(":focus-visible")))
-        .toBe(true);
+      await expectFocus(actions.first());
       await actions.nth(1).focus();
-      await expect
-        .poll(() => actions.nth(1).evaluate((button) => button.matches(":focus-visible")))
-        .toBe(true);
-      await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+      await expectFocus(actions.nth(1));
+      await expectActionOpacities(group, focusedActionOpacities);
       await page.keyboard.press("Shift+Tab");
-      await expect
-        .poll(() => actions.first().evaluate((button) => button.matches(":focus-visible")))
-        .toBe(true);
-      await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+      await expectFocus(actions.first());
+      await expectActionOpacities(group, focusedActionOpacities);
       await expectFooter(group, true);
       expect(await group.evaluate((element) => element.getBoundingClientRect().height)).toBe(
         height,
       );
-      await page.locator(".agent-chat__composer-combobox textarea").focus();
+      await chatComposer(page).focus();
     }
   });
 
   it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
+    const { page, gateway } = await chatFixture(suite);
     await page.goto(`${suite.server.baseUrl}chat`);
-
     await gateway.deferNext("chat.send");
-    await page.locator(".agent-chat__composer-combobox textarea").fill("render Unicode separators");
-    await page.getByRole("button", { name: "Send message" }).click();
-
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    const params = requireRecord(sendRequest.params);
+    const params = await sendChat(page, gateway, "render Unicode separators");
     const runId = requireString(params.idempotencyKey, "chat send idempotency key");
     const streamingText = "## Unicode stream\u2028\u2028working **tail";
     await gateway.emitGatewayEvent("chat", chatDelta(runId, streamingText, "main"));
 
-    await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
-      timeout: 10_000,
-    });
-    await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
-      timeout: 10_000,
-    });
+    await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({ timeout: 10_000 });
+    await page
+      .locator(".chat-bubble.streaming strong")
+      .getByText("tail")
+      .waitFor({ timeout: 10_000 });
     expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-    await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
-      timeout: 10_000,
-    });
+    await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({ timeout: 10_000 });
     await gateway.emitChatFinal({
       runId,
       text: "## Unicode final\u2028\u2028- first\u2029- **second**",
     });
 
-    await page.locator(".chat-thread h2").getByText("Unicode final").waitFor({
-      timeout: 10_000,
-    });
+    await page.locator(".chat-thread h2").getByText("Unicode final").waitFor({ timeout: 10_000 });
     await expect
       .poll(() => page.locator(".chat-thread li").allTextContents(), { timeout: 10_000 })
       .toEqual(["first", "second"]);
     await page.locator(".chat-thread strong").getByText("second").waitFor({ timeout: 10_000 });
     expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
     const finalChatText = await page.locator(".chat-thread .chat-text").last().textContent();
-    expect(finalChatText).not.toContain("\u2028");
-    expect(finalChatText).not.toContain("\u2029");
+    expect(finalChatText).not.toMatch(/[\u2028\u2029]/u);
   });
 
   it.each([
@@ -329,12 +288,10 @@ suite.define(() => {
       const artifactDir = artifactDirParent
         ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
         : undefined;
-      const context = await suite.newBrowserContext({
+      const { page, gateway } = await chatFixture(suite, undefined, {
         hasTouch: label === "mobile",
         isMobile: label === "mobile",
-        locale: "en-US",
         permissions: ["clipboard-read", "clipboard-write"],
-        serviceWorkers: "block",
         viewport,
         ...(artifactDir
           ? {
@@ -345,50 +302,45 @@ suite.define(() => {
             }
           : {}),
       });
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const prompt = "stream before terminal error";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
+      const params = await sendChat(page, gateway, prompt);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       const partialText = "Partial answer before gateway error.";
       await gateway.emitGatewayEvent("chat", chatDelta(runId, partialText, "main"));
-      await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
-      await gateway.emitGatewayEvent("agent", {
-        data: {
-          args: { path: "README.md" },
-          name: "read",
-          phase: "start",
-          toolCallId: "call-before-terminal-error",
-        },
-        runId,
-        seq: 1,
-        sessionKey: "main",
-        stream: "tool",
-        ts: Date.now(),
-      });
+      await chatTranscript(page).getByText(partialText).waitFor({ timeout: 10_000 });
+      await gateway.emitGatewayEvent(
+        "agent",
+        agentEvent(
+          runId,
+          "main",
+          "tool",
+          {
+            args: { path: "README.md" },
+            name: "read",
+            phase: "start",
+            toolCallId: "call-before-terminal-error",
+          },
+          1,
+          Date.now(),
+        ),
+      );
 
       const gatewayErrorText =
         "Agent failed before reply: Session became active in another runner; wait for it to finish before continuing.\nTo view logs, run `openclaw logs --follow` in a terminal.";
       const errorText = `Error: ${gatewayErrorText}`;
-      await gateway.emitGatewayEvent("chat", {
-        errorMessage: gatewayErrorText,
-        message: textMessage("assistant", gatewayErrorText, { timestamp: Date.now() }),
-        runId,
-        sessionKey: "main",
-        state: "error",
-      });
+      await gateway.emitGatewayEvent(
+        "chat",
+        chatEvent(runId, "main", "error", {
+          errorMessage: gatewayErrorText,
+          message: timedText("assistant", gatewayErrorText),
+        }),
+      );
 
-      await page.locator(".chat-thread-inner").getByText(partialText).waitFor({ timeout: 10_000 });
-      expect(
-        await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
-      ).toBe(1);
+      await chatTranscript(page).getByText(partialText).waitFor({ timeout: 10_000 });
+      expect(await chatTranscript(page).getByText(partialText, { exact: true }).count()).toBe(1);
       const alert = page.locator(".chat-error");
       await alert.waitFor();
       if (artifactDir) {
@@ -434,7 +386,7 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.send", 1);
       expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
       expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
-      expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
+      expect(await chatTranscript(page).getByText(errorText).count()).toBe(0);
       const [alertBox, composerBox] = await Promise.all([
         alert.boundingBox(),
         page.locator(".agent-chat__composer-shell").boundingBox(),
@@ -457,31 +409,23 @@ suite.define(() => {
         viewport.width,
       );
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
-      await page.getByRole("button", { name: "Send message" }).click();
+      await sendMessage(page, "retry after error");
       await waitForRequests(gateway, "chat.send", 2);
       await alert.waitFor({ state: "detached", timeout: 10_000 });
     },
   );
 
   it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const { page, gateway } = await chatFixture(suite);
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.deferNext("chat.send");
 
     const prompt = "hold this until the ack arrives";
-    await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await sendMessage(page, prompt);
 
     const sendRequest = await gateway.waitForRequest("chat.send");
-    await expect
-      .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue(), {
-        timeout: 10_000,
-      })
-      .toBe("");
+    await expect.poll(() => chatComposer(page).inputValue(), { timeout: 10_000 }).toBe("");
     const params = requireRecord(sendRequest.params);
     const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
@@ -500,58 +444,36 @@ suite.define(() => {
     if (!pendingRow) {
       throw new Error("expected pending working indicator virtual row");
     }
-    const pendingLayout = await pendingRow.evaluate((row) => {
-      const rect = row.getBoundingClientRect();
-      Reflect.set(window, "__openclawPendingWorkingRow", row);
-      return {
-        height: rect.height,
-        key: row.getAttribute("data-virtual-row-key"),
-        top: rect.top,
-      };
-    });
-    expect(pendingLayout.key).not.toBeNull();
-    await page.evaluate(() => {
-      const samples: WorkingRowSample[] = [];
-      Reflect.set(window, "__openclawWorkingRowSamples", samples);
-      let remaining = 20;
-      const sample = () => {
-        const originalRow = Reflect.get(window, "__openclawPendingWorkingRow");
-        const currentRow = document
-          .querySelector(".chat-reading-indicator")
-          ?.closest<HTMLElement>(".chat-virtual-row");
-        const rect = currentRow?.getBoundingClientRect();
-        samples.push({
-          height: rect?.height ?? null,
-          key: currentRow?.getAttribute("data-virtual-row-key") ?? null,
-          sameRow: currentRow === originalRow,
-          top: rect?.top ?? null,
-        });
-        remaining -= 1;
-        if (remaining > 0) {
-          requestAnimationFrame(sample);
-        }
-      };
-      sample();
-    });
-
+    const pendingKey = await pendingRow.getAttribute("data-virtual-row-key");
+    expect(pendingKey).not.toBeNull();
+    const sampling = await pendingRow.evaluateHandle((originalRow) => ({
+      samples: new Promise<WorkingRowSample[]>((resolve) => {
+        const samples: WorkingRowSample[] = [];
+        const sample = () => {
+          const row = document
+            .querySelector(".chat-reading-indicator")
+            ?.closest<HTMLElement>(".chat-virtual-row");
+          const rect = row?.getBoundingClientRect();
+          samples.push({
+            height: rect?.height ?? null,
+            key: row?.getAttribute("data-virtual-row-key") ?? null,
+            sameRow: row === originalRow,
+            top: rect?.top ?? null,
+          });
+          if (samples.length === 20) {
+            resolve(samples);
+          } else {
+            requestAnimationFrame(sample);
+          }
+        };
+        sample();
+      }),
+    }));
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
     await indicator.waitFor({ timeout: 10_000 });
-    const samples = await page.evaluate(
-      () =>
-        new Promise<WorkingRowSample[]>((resolve) => {
-          const read = () => {
-            const current = Reflect.get(window, "__openclawWorkingRowSamples");
-            if (Array.isArray(current) && current.length >= 20) {
-              resolve(current);
-              return;
-            }
-            requestAnimationFrame(read);
-          };
-          read();
-        }),
-    );
+    const samples = await sampling.evaluate((result) => result.samples);
+    await sampling.dispose();
     const layouts = samples.filter(
       (sample): sample is { height: number; key: string; sameRow: true; top: number } =>
         sample.sameRow &&
@@ -560,20 +482,16 @@ suite.define(() => {
         typeof sample.top === "number",
     );
     expect(layouts).toHaveLength(20);
-    expect(new Set(layouts.map((sample) => sample.key))).toEqual(new Set([pendingLayout.key]));
+    expect(new Set(layouts.map((sample) => sample.key))).toEqual(new Set([pendingKey]));
     const tops = layouts.map((sample) => sample.top);
     const heights = layouts.map((sample) => sample.height);
     expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
     expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1);
 
-    await gateway.emitGatewayEvent("agent", {
-      data: { outputTokens: 2_400 },
-      runId,
-      seq: 1,
-      sessionKey: "main",
-      stream: "usage",
-      ts: Date.now(),
-    });
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(runId, "main", "usage", { outputTokens: 2_400 }, 1, Date.now()),
+    );
     await expect
       .poll(async () =>
         (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
@@ -583,7 +501,7 @@ suite.define(() => {
     const response = "The streamed response is now visible.";
     await gateway.emitGatewayEvent("chat", chatDelta(runId, response, "main"));
 
-    await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
+    await chatTranscript(page).getByText(response).waitFor({ timeout: 10_000 });
     await indicator.waitFor({ state: "detached", timeout: 10_000 });
     const streamingLayout = await pendingRow.evaluate(
       (row, visibleResponse) => ({
@@ -598,23 +516,19 @@ suite.define(() => {
       connected: true,
       hasResponse: true,
       hasTokens: false,
-      key: pendingLayout.key,
+      key: pendingKey,
     });
     await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    expect(
-      await page.locator(".chat-thread-inner").getByText(response, { exact: true }).count(),
-    ).toBe(1);
+    expect(await chatTranscript(page).getByText(response, { exact: true }).count()).toBe(1);
   });
 
   it("refreshes history after a tool-call window disconnects and reconnects", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const { page, gateway } = await chatFixture(suite);
 
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const prompt = "use a tool then reconnect";
-    await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+    await chatComposer(page).fill(prompt);
     await gateway.deferNext("chat.send");
     await page.getByRole("button", { name: "Send message" }).click();
 
@@ -664,34 +578,27 @@ suite.define(() => {
     );
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
-    await gateway.emitGatewayEvent("agent", {
-      data: {
-        args: { query: "status" },
-        name: "status",
-        phase: "start",
-        toolCallId: "tool-1",
-      },
-      runId,
-      seq: 1,
-      sessionKey,
-      stream: "tool",
-      ts: Date.now(),
-    });
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(
+        runId,
+        sessionKey,
+        "tool",
+        { args: { query: "status" }, name: "status", phase: "start", toolCallId: "tool-1" },
+        1,
+        Date.now(),
+      ),
+    );
     await gateway.setHistoryMessages([
-      textMessage("user", prompt, {
-        __openclaw: { idempotencyKey: `${runId}:user` },
-        timestamp: Date.now(),
-      }),
-      textMessage("assistant", "Recovered from refreshed history.", { timestamp: Date.now() }),
+      persistedText("user", prompt, { idempotencyKey: `${runId}:user` }),
+      timedText("assistant", "Recovered from refreshed history."),
     ]);
 
-    // This scenario loses the connection during an already accepted tool run.
     expect(await page.locator(".chat-send-status").count()).toBe(0);
 
     await gateway.closeLatest(1006, "lost during tool call");
 
-    await page
-      .locator(".chat-thread-inner")
+    await chatTranscript(page)
       .getByText("Recovered from refreshed history.")
       .waitFor({ timeout: 15_000 });
     expect(await page.locator(".chat-queue").count()).toBe(0);
@@ -699,9 +606,7 @@ suite.define(() => {
   });
 
   it("keeps chat-only assistant text exact through tool activity and finalization", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const { page, gateway } = await chatFixture(suite);
 
     await page.goto(`${suite.server.baseUrl}chat`);
 
@@ -709,44 +614,37 @@ suite.define(() => {
     expect(requireRecord(connect.params).caps).toContain("chat-only-assistant-text");
 
     const prompt = "stream before tool";
-    await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
-
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    const params = requireRecord(sendRequest.params);
+    const params = await sendChat(page, gateway, prompt);
     const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
     const initialStream = `I will inspect the file. ${"Prior streamed output. ".repeat(20)}`;
     await gateway.emitGatewayEvent("chat", chatDelta(runId, initialStream, "main"));
-    const transcript = page.locator(".chat-thread-inner");
+    const transcript = chatTranscript(page);
     await transcript.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
 
-    await gateway.emitGatewayEvent("agent", {
-      data: {
-        name: "read",
-        phase: "result",
-        result: "file contents",
-        toolCallId: "call-read",
-      },
-      runId,
-      seq: 1,
-      sessionKey: "main",
-      stream: "tool",
-      ts: Date.now() - 10_000,
-    });
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(
+        runId,
+        "main",
+        "tool",
+        { name: "read", phase: "result", result: "file contents", toolCallId: "call-read" },
+        1,
+        Date.now() - 10_000,
+      ),
+    );
     const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
     await toolBubble.waitFor({ timeout: 10_000 });
 
     const nextStream = "\n\n```ts\nconst answer = 42;";
-    await gateway.emitGatewayEvent("chat", {
-      deltaText: nextStream,
-      runId,
-      sessionKey: "main",
-      state: "delta",
-    });
-    await expect
-      .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
-      .toContain("const answer = 42;");
+    await gateway.emitGatewayEvent(
+      "chat",
+      chatEvent(runId, "main", "delta", { deltaText: nextStream }),
+    );
+    await expectTextContains(
+      page.locator(".chat-bubble.streaming code.language-ts"),
+      "const answer = 42;",
+    );
 
     const stream = transcript.locator(".chat-bubble.streaming");
     expect(await stream.count()).toBe(1);
@@ -757,10 +655,7 @@ suite.define(() => {
     expect(await toolBubble.count()).toBe(1);
     expect(await transcript.getByText("I will inspect the file.").count()).toBe(1);
 
-    await gateway.emitChatFinal({
-      runId,
-      text: `${initialStream}${nextStream}\n\`\`\`\n\nDone.`,
-    });
+    await gateway.emitChatFinal({ runId, text: `${initialStream}${nextStream}\n\`\`\`\n\nDone.` });
     const finalReply = transcript.locator(".chat-bubble", {
       has: page.locator("code.language-ts"),
     });
@@ -776,13 +671,10 @@ suite.define(() => {
   });
 
   it("preserves normalized content across cumulative browser updates", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const { page, gateway } = await chatFixture(suite);
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.locator(".agent-chat__composer-combobox textarea").fill("prove prefix reuse");
-    await page.getByRole("button", { name: "Send message" }).click();
+    await sendMessage(page, "prove prefix reuse");
     const sendRequest = await gateway.waitForRequest("chat.send");
     const runId = requireString(
       requireRecord(sendRequest.params).idempotencyKey,
@@ -792,28 +684,22 @@ suite.define(() => {
     let cumulative = "";
     for (const chunk of chunks) {
       cumulative += chunk;
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: chunk,
-        message: textMessage("assistant", cumulative, { timestamp: Date.now() }),
-        runId,
-        sessionKey: "main",
-        state: "delta",
-      });
+      await gateway.emitGatewayEvent(
+        "chat",
+        chatEvent(runId, "main", "delta", {
+          deltaText: chunk,
+          message: timedText("assistant", cumulative),
+        }),
+      );
       const expectedTail = chunk
         .replace(/\r\n?|[\u2028\u2029]/g, "\n")
         .trim()
         .replace(/^## /, "");
-      await expect
-        .poll(() => page.locator(".chat-bubble.streaming").textContent())
-        .toContain(expectedTail);
+      await expectTextContains(page.locator(".chat-bubble.streaming"), expectedTail);
     }
 
     const stream = page.locator(".chat-bubble.streaming");
-    await expect.poll(() => stream.textContent()).toContain("fourth-line");
-    await expect.poll(() => stream.locator("h2").textContent()).toBe("reuse-proof");
-    console.info(
-      "stream-normalization-browser-proof",
-      JSON.stringify({ cumulativeLength: cumulative.length, updates: chunks.length }),
-    );
+    await expectTextContains(stream, "fourth-line");
+    await expectText(stream.locator("h2"), "reuse-proof");
   });
 });
