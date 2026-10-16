@@ -224,10 +224,10 @@ it.each([
     expect(payload?.text?.trim().length).toBeGreaterThan(0);
     if (errorMessage === RATE_LIMIT_ERROR_MESSAGE) {
       expect(countProviderAttempts("openai")).toBeGreaterThan(2);
-      expect(text).toContain("Rate-limit recovery stopped after");
-      expect(payload?.text).toContain("Rate-limit recovery stopped after");
-      expect(text).not.toContain("The AI service is temporarily rate-limited");
-      expect(payload?.text).not.toContain("The AI service is temporarily rate-limited");
+      for (const surfaced of [text, payload?.text]) {
+        expect(surfaced).toContain("Rate-limit recovery stopped after");
+        expect(surfaced).not.toContain("The AI service is temporarily rate-limited");
+      }
     } else if (loginCommand) {
       expect(countProviderAttempts(provider)).toBe(1);
       if (reservedProviders.includes(provider)) {
