@@ -14,6 +14,10 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -58,8 +62,8 @@ describe.skipIf(!connection)("family-scoped database port", () => {
     }
     client = new Client({ connectionString: connection });
     await client.connect();
-    await port({ family: "state", to: "postgres" });
-    await port({ family: "state", to: "sqlite" });
+    openOpenClawStateDatabase({ env: state.env });
+    await closeOpenClawStateDatabaseAsync();
   }, 120_000);
 
   afterEach(() => vi.restoreAllMocks());
@@ -92,35 +96,45 @@ describe.skipIf(!connection)("family-scoped database port", () => {
     await state?.cleanup();
   });
 
-  it.each(["state", "workboard"] as const)(
-    "round-trips %s with an unrelated PostgreSQL family",
-    async (family) => {
+  describe.each(["state", "workboard"] as const)(
+    "%s with an unrelated PostgreSQL family",
+    (family) => {
       const other = family === "state" ? "workboard" : "state";
-      const otherPath = family === "state" ? workboard : shared;
-      const selectedPath = family === "state" ? shared : workboard;
-      const before = canonical(workboard);
-      await port({ family: other, to: "postgres" });
-      const untouched = hash(otherPath);
-      await expect(port({ to: "postgres" })).rejects.toThrow("requires --family");
-      const result = await port({ family, to: "postgres" });
-      expect(result.stores).toEqual([selectedPath]);
-      expect(hash(otherPath)).toBe(untouched);
-      expect(config().database).toMatchObject({
-        engine: "sqlite",
-        families: {
-          [family]: { engine: "postgres" },
-          [other]: { engine: "postgres" },
-        },
-      });
-      await port({ family, to: "sqlite" });
-      expect(hash(otherPath)).toBe(untouched);
-      expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
-      expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
-      await port({ family: other, to: "sqlite" });
-      expect(config().database?.families).toBeUndefined();
-      expect(canonical(workboard)).toEqual(before);
+      let before: ReturnType<typeof canonical>;
+      let untouched: string;
+
+      beforeAll(async () => {
+        before = canonical(workboard);
+        await port({ family: other, to: "postgres" });
+        untouched = hash(family === "state" ? workboard : shared);
+      }, 120_000);
+
+      afterAll(async () => {
+        await port({ family: other, to: "sqlite" });
+        expect(config().database?.families).toBeUndefined();
+        expect(canonical(workboard)).toEqual(before);
+      }, 120_000);
+
+      it("round-trips the selected family", async () => {
+        const selectedPath = family === "state" ? shared : workboard;
+        const otherPath = family === "state" ? workboard : shared;
+        await expect(port({ to: "postgres" })).rejects.toThrow("requires --family");
+        const result = await port({ family, to: "postgres" });
+        expect(result.stores).toEqual([selectedPath]);
+        expect(hash(otherPath)).toBe(untouched);
+        expect(config().database).toMatchObject({
+          engine: "sqlite",
+          families: {
+            [family]: { engine: "postgres" },
+            [other]: { engine: "postgres" },
+          },
+        });
+        await port({ family, to: "sqlite" });
+        expect(hash(otherPath)).toBe(untouched);
+        expect(readBackupEngine(selectedPath).engine).toBe("sqlite");
+        expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
+      }, 120_000);
     },
-    120_000,
   );
 
   it("recovers and backs up scoped PostgreSQL agents with SQLite state", async () => {
