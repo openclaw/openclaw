@@ -377,10 +377,18 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
   return ranges;
 }
 
+const AUTH_COMPLETE_REFERENCE_VALUE_RE = /^(?:[a-z][a-z\d_-]*[ \t]+)?(?:\$\{[A-Za-z_$][\w$]*[^{}]*\}|\$[A-Za-z_$][\w$]*|process\.env\.[A-Za-z_$][\w$.]*|os\.environ(?:\.get)?\(\s*["']?[A-Za-z_$][\w$.]*["']?\s*\)?|os\.environ\[\s*["'][A-Za-z_$][\w$.]*["']\s*\]|os\.getenv\(\s*["'][A-Za-z_$][\w$.]*["']\s*\))$/i;
+
 export function redactStructuredAuthHeaders(value: string, replacement: string): string {
   const parts: string[] = [];
   let cursor = 0;
   for (const range of findStructuredAuthParamRanges(value)) {
+    // An auth parameter whose entire value is an environment/language reference is not a
+    // credential (e.g. `Authorization: Bearer $TOKEN`); keep it readable. Values that merely
+    // start with a reference keep masking (the complete-value rule from the review).
+    if (AUTH_COMPLETE_REFERENCE_VALUE_RE.test(value.slice(range.start, range.end))) {
+      continue;
+    }
     // Ranges follow header order; overlapping credentials share one replacement.
     if (parts.length === 0 || range.start > cursor) {
       parts.push(value.slice(cursor, range.start), replacement);
