@@ -18,7 +18,10 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -38,14 +41,17 @@ const catalog: ModelCatalogEntry[] = ["primary", "fallback", "restricted-model",
 
 function createFixture(
   catalogDiagnostics?: Parameters<typeof createModelsListTestContext>[0]["catalogDiagnostics"],
+  restrictedDefault = false,
 ) {
   const person = ensureProfileForEmail("model-reader@example.test");
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {
         model: {
-          primary: "example/primary",
-          fallbacks: ["example/restricted-model", "example/fallback"],
+          primary: restrictedDefault ? "example/restricted-model" : "example/primary",
+          fallbacks: restrictedDefault
+            ? ["example/fallback"]
+            : ["example/restricted-model", "example/fallback"],
         },
         models: { "example/custom": { alias: "custom-choice" } },
         modelPolicy: { allow: ["example/*"] },
@@ -126,7 +132,24 @@ function createFixture(
     });
     return respond;
   };
-  return { cfg, role, person, client, context, readChatMetadata, request };
+  const save = async (state: OpenClawTestState) => {
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+  };
+  const staff = () => {
+    setUserProfileRole(person.id, "staff");
+    invalidateOperatorRolePolicy(person.id);
+    client.connect.scopes = ["operator.admin", "operator.read", "operator.write"];
+  };
+  const tentative = () => {
+    const draft = structuredClone(cfg);
+    const draftRole = expectDefined(draft.gateway?.roles?.definitions.visitor, "tentative role");
+    delete draftRole.modelPolicy;
+    context.getRuntimeConfig = () => draft;
+    context.getCommittedRuntimeConfig = () => cfg;
+    return draftRole;
+  };
+  return { cfg, role, person, client, context, readChatMetadata, request, save, staff, tentative };
 }
 
 function response(respond: ReturnType<typeof vi.fn<RespondFn>>) {
@@ -162,14 +185,9 @@ describe("operator model discovery at registered reads", () => {
     },
   ])("keeps registered Default resets aligned with $defaultModel", async (expected) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = createFixture();
-      expectDefined(f.cfg.agents?.defaults, "agent defaults").model = {
-        primary: "example/restricted-model",
-        fallbacks: ["example/fallback"],
-      };
+      const f = createFixture(undefined, true);
       f.role.modelPolicy = expected.policy;
-      await state.writeConfig(f.cfg);
-      setRuntimeConfigSnapshot(f.cfg);
+      await f.save(state);
       const scope = { agentId: "main", sessionKey: "agent:main:model-default" };
       await upsertSessionEntryCore(scope, {
         sessionId: "model-default",
@@ -215,8 +233,7 @@ describe("operator model discovery at registered reads", () => {
         refreshFailed: true,
       };
       const f = createFixture(diagnostics);
-      await state.writeConfig(f.cfg);
-      setRuntimeConfigSnapshot(f.cfg);
+      await f.save(state);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(f.client);
       const read = async (method: "models.list" | "chat.metadata", view?: string) => {
@@ -237,11 +254,7 @@ describe("operator model discovery at registered reads", () => {
       }
       expect(modelIds(await read("chat.metadata"))).toEqual(["fallback", "primary"]);
 
-      const tentative = structuredClone(f.cfg);
-      delete expectDefined(tentative.gateway?.roles?.definitions.visitor, "tentative role")
-        .modelPolicy;
-      f.context.getRuntimeConfig = () => tentative;
-      f.context.getCommittedRuntimeConfig = () => f.cfg;
+      f.tentative();
       for (const view of ["default", "configured", "all", "provider-config"]) {
         expect(modelIds(await read("models.list", view))).toEqual(["fallback", "primary"]);
       }
@@ -292,9 +305,7 @@ describe("operator model discovery at registered reads", () => {
         providerOutcomes: [],
         refreshFailed: false,
       });
-      setUserProfileRole(f.person.id, "staff");
-      invalidateOperatorRolePolicy(f.person.id);
-      f.client.connect.scopes = ["operator.admin", "operator.read", "operator.write"];
+      f.staff();
       const staff = await read("models.list", "all");
       expect(modelIds(staff)).toEqual(["custom", "fallback", "primary", "restricted-model"]);
       expect(staff).not.toHaveProperty("modelSelectionPolicy");
@@ -313,8 +324,7 @@ describe("operator model discovery at registered reads", () => {
         expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
         expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
           "synthetic-key";
-        await state.writeConfig(f.cfg);
-        setRuntimeConfigSnapshot(f.cfg);
+        await f.save(state);
         const respond = await f.request("models.list", { agentId: "main", view: "configured" });
         expect(respond.mock.calls[0]?.[0]).toBe(true);
         const { defaultModels } = expectDefined(
@@ -338,8 +348,7 @@ describe("operator model discovery at registered reads", () => {
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
-      await state.writeConfig(f.cfg);
-      setRuntimeConfigSnapshot(f.cfg);
+      await f.save(state);
       const entered = createDeferred();
       const release = createDeferred();
       f.readChatMetadata.mockImplementationOnce(async () => {
@@ -370,18 +379,9 @@ describe("operator model discovery at registered reads", () => {
 
   it("hides forbidden historical models without rewriting stored selections or transcript content", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = createFixture();
-      expectDefined(f.cfg.agents?.defaults, "agent defaults").model = {
-        primary: "example/restricted-model",
-        fallbacks: ["example/fallback"],
-      };
-      await state.writeConfig(f.cfg);
-      setRuntimeConfigSnapshot(f.cfg);
-      const tentative = structuredClone(f.cfg);
-      const tentativeRole = expectDefined(tentative.gateway?.roles?.definitions.visitor, "role");
-      delete tentativeRole.modelPolicy;
-      f.context.getRuntimeConfig = () => tentative;
-      f.context.getCommittedRuntimeConfig = () => f.cfg;
+      const f = createFixture(undefined, true);
+      await f.save(state);
+      const tentativeRole = f.tentative();
       const scope = { agentId: "main", sessionKey: "agent:main:historical-model" };
       const budget = contextBudgetStatusFixture({
         provider: "example",
@@ -453,33 +453,22 @@ describe("operator model discovery at registered reads", () => {
 
       for (const staff of [false, true]) {
         if (staff) {
-          setUserProfileRole(f.person.id, "staff");
-          invalidateOperatorRolePolicy(f.person.id);
-          f.client.connect.scopes = ["operator.admin", "operator.read", "operator.write"];
+          f.staff();
         }
-        for (const method of [
-          "chat.history",
-          "chat.message.get",
-          "sessions.get",
-          "sessions.describe",
-          "sessions.list",
+        for (const [method, target, rowField, messageField] of [
+          ["chat.history", { sessionKey: scope.sessionKey }, "sessionInfo", "messages"],
+          [
+            "chat.message.get",
+            { sessionKey: scope.sessionKey, messageId: "historical-reply" },
+            null,
+            "message",
+          ],
+          ["sessions.get", { key: scope.sessionKey }, null, "messages"],
+          ["sessions.describe", { key: scope.sessionKey }, "session", null],
+          ["sessions.list", {}, "sessions", null],
         ] as const) {
-          const payload = response(
-            await f.request(method, {
-              agentId: scope.agentId,
-              ...(method.startsWith("chat.")
-                ? { sessionKey: scope.sessionKey }
-                : method === "sessions.list"
-                  ? {}
-                  : { key: scope.sessionKey }),
-              ...(method === "chat.message.get" ? { messageId: "historical-reply" } : {}),
-            }),
-          );
-          if (
-            method === "chat.history" ||
-            method === "sessions.describe" ||
-            method === "sessions.list"
-          ) {
+          const payload = response(await f.request(method, { agentId: scope.agentId, ...target }));
+          if (rowField) {
             if (method === "sessions.list" && !staff) {
               expect(payload.defaults).toMatchObject({
                 model: "fallback",
@@ -487,9 +476,9 @@ describe("operator model discovery at registered reads", () => {
               });
             }
             const row =
-              method === "sessions.list"
-                ? onlyRecord(payload.sessions)
-                : expectDefined(payload.sessionInfo ?? payload.session, `${method} row`);
+              rowField === "sessions"
+                ? onlyRecord(payload[rowField])
+                : expectDefined(payload[rowField], `${method} row`);
             expect(row).toMatchObject({ key: scope.sessionKey });
             if (staff) {
               expect(row).toMatchObject({ modelProvider: "example", model: "restricted-model" });
@@ -498,15 +487,11 @@ describe("operator model discovery at registered reads", () => {
               expectHidden(row, "model", "modelProvider", "contextBudgetStatus");
             }
           }
-          if (
-            method === "chat.history" ||
-            method === "chat.message.get" ||
-            method === "sessions.get"
-          ) {
+          if (messageField) {
             const message =
-              method === "chat.message.get"
-                ? expectDefined(payload.message, "exact message")
-                : onlyRecord(payload.messages);
+              messageField === "message"
+                ? expectDefined(payload[messageField], "exact message")
+                : onlyRecord(payload[messageField]);
             expect(message).toMatchObject({ role: "assistant", content });
             if (staff) {
               expect(message).toMatchObject({ provider: "example", model: "restricted-model" });

@@ -34,23 +34,21 @@ it.for([false, true])(
     const requests: string[] = [];
     let responseDelay = 7_000;
     let listingStatus = 200;
-    let heldCatalogResponse:
-      | { start: (response: ServerResponse) => void; release: Promise<void> }
-      | undefined;
-    const holdNextCatalogResponse = () => {
+    let heldCatalogResponse: ReturnType<typeof holdNextCatalogResponse> | undefined;
+    function holdNextCatalogResponse() {
       const held = { started: createDeferred<ServerResponse>(), release: createDeferred() };
-      heldCatalogResponse = { start: held.started.resolve, release: held.release.promise };
+      heldCatalogResponse = held;
       return held;
-    };
+    }
     const automaticRequestStarted = createDeferred();
     const releaseEarlyResponse = createDeferred();
     const endpoint = createServer((request, response) => {
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
+      const send = (data: unknown, code = 200) =>
+        response.writeHead(code).end(JSON.stringify(data));
       if (request.url === "/token" && request.method === "POST") {
-        response.end(
-          JSON.stringify({ access_token: "fixture-access", refresh_token: "fixture-refresh" }),
-        );
+        send({ access_token: "fixture-access", refresh_token: "fixture-refresh" });
       } else if (
         request.url === "/models" &&
         request.headers.authorization === "Bearer fixture-access"
@@ -60,24 +58,21 @@ it.for([false, true])(
         const held = heldCatalogResponse;
         if (held) {
           heldCatalogResponse = undefined;
-          responseReady = held.release;
-          held.start(response);
+          responseReady = held.release.promise;
+          held.started.resolve(response);
         } else {
           responseReady = delay(responseDelay).then(() => releaseEarlyResponse.promise);
         }
         void responseReady.then(() =>
-          response
-            .writeHead(listingStatus)
-            .end(
-              JSON.stringify(
-                listingStatus === 200
-                  ? [{ id: "account-exclusive", name: "Account exclusive" }]
-                  : { error: "unavailable" },
-              ),
-            ),
+          send(
+            listingStatus === 200
+              ? [{ id: "account-exclusive", name: "Account exclusive" }]
+              : { error: "unavailable" },
+            listingStatus,
+          ),
         );
       } else {
-        response.writeHead(401).end(JSON.stringify({ error: "unauthorized" }));
+        send({ error: "unauthorized" }, 401);
       }
     });
     try {
@@ -97,15 +92,7 @@ it.for([false, true])(
             [provider]: {
               baseUrl,
               api: "openai-completions",
-              models: [
-                {
-                  id: "known-chat",
-                  name: "Known chat",
-                  input: ["text"],
-                  contextWindow: 32768,
-                  maxTokens: 4096,
-                },
-              ],
+              models: [{ id: "known-chat", name: "Known chat" }],
             },
           },
         },
@@ -160,7 +147,6 @@ it.for([false, true])(
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },
       };
-      await state.writeConfig(cfg);
       const { client, server } = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
@@ -182,13 +168,26 @@ it.for([false, true])(
             result,
           };
         };
+        const waitFor = (
+          ready: (read: Awaited<ReturnType<typeof list>>) => boolean,
+          start?: () => ReturnType<typeof list>,
+        ) => waitForCatalogPublication({ signal, read: list, ready, start });
+        const waitForAccount = (start?: () => ReturnType<typeof list>) =>
+          waitFor(({ ids }) => ids.includes("account-exclusive"), start);
+        const holdRefresh = () => {
+          const held = holdNextCatalogResponse();
+          const request = client.request("models.list", {
+            agentId: "main",
+            provider,
+            refresh: true,
+          });
+          void request.catch((error: unknown) => held.started.reject(error));
+          return { ...held, request };
+        };
         expect((await list()).ids).not.toContain("account-exclusive");
         // A configured provider can queue this refresh behind startup discovery.
-        await waitForCatalogPublication({
-          signal,
-          start: () => list(true),
-          read: list,
-          ready: ({ result }) => {
+        await waitFor(
+          ({ result }) => {
             const { completedTasks, pendingTasks } = catalogWork.read();
             return (
               completedTasks > 0 &&
@@ -196,7 +195,8 @@ it.for([false, true])(
               !result.pendingProviders?.includes(provider)
             );
           },
-        });
+          () => list(true),
+        );
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -216,32 +216,31 @@ it.for([false, true])(
           });
         }
         expect(wizard.status, wizard.error).toBe("done");
-        const observePassiveReads = async (stage: "early" | "final") => {
+        const assertPassiveReads = async (stage: "early" | "final") => {
           const before = requests.filter((url) => url === "/models").length;
           const reads = await Promise.all([list(), list()]);
-          return {
-            stage,
-            before,
-            after: requests.filter((url) => url === "/models").length,
-            reads,
-          };
+          expect.soft(requests.filter((url) => url === "/models")).toHaveLength(before);
+          for (const read of reads) {
+            expect.soft(read.elapsedMs).toBeLessThan(1_000);
+            expect
+              .soft(read.ids)
+              .toEqual(stage === "early" ? ["known-chat"] : ["account-exclusive"]);
+            if (stage === "early") {
+              expect.soft(read.result.pendingProviders).toContain(provider);
+            }
+          }
         };
         await withTestTimeout(
           automaticRequestStarted.promise,
           10_000,
           "Login did not start automatic catalog discovery",
         );
-        const observations = [await observePassiveReads("early")];
-        await waitForCatalogPublication({
-          signal,
-          start: () => {
-            releaseEarlyResponse.resolve();
-            return list();
-          },
-          read: list,
-          ready: ({ ids }) => ids.includes("account-exclusive"),
+        await assertPassiveReads("early");
+        await waitForAccount(() => {
+          releaseEarlyResponse.resolve();
+          return list();
         });
-        observations.push(await observePassiveReads("final"));
+        await assertPassiveReads("final");
         expect(requests.filter((url) => url === "/models")).toHaveLength(1);
         expect(catalogWork.read()).toMatchObject({
           maxWorkers: 1,
@@ -257,15 +256,7 @@ it.for([false, true])(
           key: session.key,
           model: `${provider}/account-exclusive@${provider}:owner`,
         });
-        const selectedRefresh = holdNextCatalogResponse();
-        const refresh = client.request("models.list", {
-          agentId: "main",
-          provider,
-          refresh: true,
-        });
-        void refresh.catch((error: unknown) => {
-          selectedRefresh.started.reject(error);
-        });
+        const selectedRefresh = holdRefresh();
         try {
           const heldResponse = await selectedRefresh.started.promise;
           const selectedAccount = await client.request<ModelsListResult>("models.list", {
@@ -273,20 +264,15 @@ it.for([false, true])(
             view: "configured",
           });
           expect(selectedAccount.pendingProviders ?? []).not.toContain(provider);
-          expect(heldResponse.writableEnded).toBe(false);
-          expect(heldResponse.destroyed).toBe(false);
+          expect(heldResponse).toMatchObject({ writableEnded: false, destroyed: false });
         } finally {
           selectedRefresh.release.resolve();
-          await refresh;
+          await selectedRefresh.request;
         }
         // A listing started for the signed-out account must not republish its rows.
-        const staleRefresh = holdNextCatalogResponse();
-        const staleRefreshSettled = Promise.allSettled([
-          client.request("models.list", { agentId: "main", provider, refresh: true }),
-        ]);
-        void staleRefreshSettled.then(([outcome]) => {
-          staleRefresh.started.reject(outcome);
-        });
+        const staleRefresh = holdRefresh();
+        const staleRefreshSettled = Promise.allSettled([staleRefresh.request]);
+        void staleRefreshSettled.then(([outcome]) => staleRefresh.started.reject(outcome));
         await staleRefresh.started.promise;
         await client.request("models.authLogout", { provider, agentId: "main" });
         const signedOut = await list();
@@ -307,35 +293,15 @@ it.for([false, true])(
         const apiKeyPending = await list();
         apiKeyListing.release.resolve();
         expect(apiKeyPending.ids).toEqual(["known-chat"]);
-        const apiKeyFailed = await waitForCatalogPublication({
-          signal,
-          read: list,
-          ready: ({ result }) =>
+        const apiKeyFailed = await waitFor(
+          ({ result }) =>
             result.refreshFailed === true && !result.pendingProviders?.includes(provider),
-        });
+        );
         expect(apiKeyFailed.ids).toEqual(["known-chat"]);
         listingStatus = 200;
-        await waitForCatalogPublication({
-          signal,
-          start: () => list(true),
-          read: list,
-          ready: ({ ids }) => ids.includes("account-exclusive"),
-        });
+        await waitForAccount(() => list(true));
         expect(manualRefresh.ids).toContain("account-exclusive");
         expect(requests.filter((url) => url === "/token")).toHaveLength(1);
-        for (const observation of observations) {
-          expect.soft(observation.after).toBe(observation.before);
-          for (const read of observation.reads) {
-            expect.soft(read.elapsedMs).toBeLessThan(1_000);
-            if (observation.stage === "early") {
-              expect.soft(read.ids).toEqual(["known-chat"]);
-              expect.soft(read.result.pendingProviders).toContain(provider);
-            }
-            if (observation.stage === "final") {
-              expect.soft(read.ids).toEqual(["account-exclusive"]);
-            }
-          }
-        }
       } finally {
         releaseEarlyResponse.resolve();
         await disconnectGatewayClient(client);
