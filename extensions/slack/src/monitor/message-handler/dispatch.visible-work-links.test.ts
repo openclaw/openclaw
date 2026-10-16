@@ -20,10 +20,7 @@ import type { PreparedSlackMessage } from "./types.js";
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "171234.100";
 const PROGRESS_LINK_CONFIG = {
-  gateway: {
-    publicOrigin: "https://team.openclaw.ai",
-    controlUi: { basePath: "/openclaw" },
-  },
+  gateway: { publicOrigin: "https://team.openclaw.ai", controlUi: { basePath: "/openclaw" } },
 };
 const FIRST_WORK_SESSION = {
   sessionKey: "agent:agent-1:dashboard:10184088-first",

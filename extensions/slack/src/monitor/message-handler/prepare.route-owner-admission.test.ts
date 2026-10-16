@@ -91,10 +91,7 @@ it.each([
     });
   }
   setRuntimeConfigSnapshot(cfg);
-  const baseConversation: Conversation = {
-    ...address,
-    conversationId: baseId,
-  };
+  const baseConversation: Conversation = { ...address, conversationId: baseId };
   const childConversation: Conversation = {
     ...baseConversation,
     conversationId: threadTs,

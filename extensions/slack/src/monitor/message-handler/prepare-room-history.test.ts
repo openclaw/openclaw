@@ -42,9 +42,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     const replies = vi.fn().mockResolvedValue({ messages: [] });
     const cfg: OpenClawConfig = {
       session: { store: storePath },
-      channels: {
-        slack: { enabled: true, groupPolicy: "open", contextVisibility },
-      },
+      channels: { slack: { enabled: true, groupPolicy: "open", contextVisibility } },
     };
     const createContext = () => {
       const ctx = createInboundSlackTestContext({
@@ -229,9 +227,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       }));
       mediaFetchMock.mockImplementation(
         async () =>
-          new Response(Buffer.from("root image"), {
-            headers: { "content-type": "image/png" },
-          }),
+          new Response(Buffer.from("root image"), { headers: { "content-type": "image/png" } }),
       );
       const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
       const includeRoot = allowed || mode === "all";
@@ -249,9 +245,9 @@ describe("Slack platform-authoritative automatic room history", () => {
 
   it("uses only the event workspace client for a recovered channel window", async () => {
     const f = fixture();
-    const scopedHistory = vi.fn().mockResolvedValue({
-      messages: [{ ts: "19.000", user: "U1", text: "workspace two only" }],
-    });
+    const scopedHistory = vi
+      .fn()
+      .mockResolvedValue({ messages: [{ ts: "19.000", user: "U1", text: "workspace two only" }] });
     f.history.mockResolvedValue({
       messages: [{ ts: "19.000", user: "U1", text: "workspace one secret" }],
     });
@@ -375,11 +371,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
     expect(f.history).not.toHaveBeenCalled();
     expect(f.replies).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        channel: "C1",
-        ts: "10.000",
-        latest: "20.000",
-      }),
+      expect.objectContaining({ channel: "C1", ts: "10.000", latest: "20.000" }),
     );
   });
 
