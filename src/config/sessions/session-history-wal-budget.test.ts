@@ -67,16 +67,21 @@ const limit = (maxDiskBytes = 1, highWaterBytes = maxDiskBytes) =>
   resolveMaintenanceConfigFromInput({ mode: "enforce", maxDiskBytes, highWaterBytes });
 const contains = (facts: Record<string, unknown>) =>
   expect.arrayContaining([expect.objectContaining(facts)]);
+const noWork = { removedEntries: 0, removedFiles: 0 };
+const deferred = { deferredReason: "checkpoint-incomplete", removedFiles: 0 };
+type AgentDatabase = ReturnType<typeof openOpenClawAgentDatabase>;
+type BudgetOptions = Pick<
+  Parameters<typeof enforceSqliteSessionHistoryDiskBudget>[0],
+  "agentId" | "env"
+>;
 
-function budget(
-  storePath: string,
-  maintenance = limit(),
-  options: Pick<
-    Parameters<typeof enforceSqliteSessionHistoryDiskBudget>[0],
-    "agentId" | "env"
-  > = {},
-) {
-  const params = { ...options, storePath, mode: "enforce" as const, maintenance };
+function budget(storePath: string, maintenanceConfig = limit(), options: BudgetOptions = {}) {
+  const params = {
+    ...options,
+    storePath,
+    mode: "enforce" as const,
+    maintenance: maintenanceConfig,
+  };
   return {
     enforce: () => enforceSqliteSessionHistoryDiskBudget(params),
     inspect: () => inspectSqliteSessionHistoryDiskBudget(params),
@@ -86,7 +91,7 @@ function budget(
         kickSessionHistoryDiskBudgetMaintenance({
           ...options,
           storePath,
-          maintenanceConfig: maintenance,
+          maintenanceConfig,
           now,
           force,
         });
@@ -99,7 +104,7 @@ async function emptyState() {
   return path.join(state.sessionsDir(), "sessions.json");
 }
 
-function traffic(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+function traffic(database: AgentDatabase) {
   return database.db.prepare(
     "INSERT OR REPLACE INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,?)",
   );
@@ -107,6 +112,14 @@ function traffic(database: ReturnType<typeof openOpenClawAgentDatabase>) {
 
 function readTraffic(reader: ReturnType<typeof openNodeSqliteDatabase>) {
   return reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob;
+}
+
+function insertArchive(database: AgentDatabase, index: number, name: string, bytes = Buffer.of(0)) {
+  database.db
+    .prepare(
+      "INSERT INTO session_transcript_archives (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at,published_at) VALUES (?, 'generation', ?, 'deleted', 'identity', ?, ?, ?, 1, 1)",
+    )
+    .run(`archive-${index}`, `agent:main:archive-${index}`, bytes, "0".repeat(64), name);
 }
 
 async function fixture(scenario: "minimal" | "empty" = "minimal", prefix = "wal-budget-") {
@@ -172,16 +185,7 @@ it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handof
         );
         fs.writeFileSync(file, Buffer.alloc(256 * 1024, tick));
         if (canonical) {
-          database.db
-            .prepare(`INSERT INTO session_transcript_archives
-            (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at,published_at)
-            VALUES (?, 'generation', ?, 'deleted', 'identity', X'00', ?, ?, 1, 1)`)
-            .run(
-              `archive-${tick}`,
-              `agent:main:archive-${tick}`,
-              "0".repeat(64),
-              path.basename(file),
-            );
+          insertArchive(database, tick, path.basename(file));
         }
         const before = await measureSessionPhysicalDiskUsage(storePath);
         const { enforce } = budget(storePath, limit(before.totalBytes - 128 * 1024), options);
@@ -197,11 +201,7 @@ it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handof
           if (kind === "recovery-during-handoff") {
             pendingRecovery = recover;
           }
-          await expect(enforce()).resolves.toMatchObject({
-            deferredReason: "checkpoint-incomplete",
-            removedFiles: 0,
-            freedBytes: 0,
-          });
+          await expect(enforce()).resolves.toMatchObject({ ...deferred, freedBytes: 0 });
           expect(fs.existsSync(file)).toBe(true);
           if (kind === "recovery-during-handoff") {
             expect(pendingRecovery).toBeUndefined();
@@ -214,10 +214,7 @@ it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handof
         expect(result?.removedFiles).toBe(1);
         if (canonical) {
           const retry = await enforce();
-          expect(retry).toMatchObject({
-            removedFiles: 0,
-            overBudget: false,
-          });
+          expect(retry).toMatchObject({ removedFiles: 0, overBudget: false });
           expect(retry?.deferredReason).toBeUndefined();
         } else {
           expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
@@ -246,13 +243,10 @@ it.each(["transaction", "iterator"] as const)(
   async (kind) => {
     const { options, database, sessions, storePath } = await fixture();
     const databasePathKey = sqliteReaderDatabasePathKey(database.path);
-    const insert = database.db.prepare(`INSERT INTO session_transcript_archives
-      (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,archive_name,created_at,published_at)
-      VALUES (?, 'generation', ?, 'deleted', 'identity', ?, ?, ?, 1, 1)`);
     const files = Array.from({ length: 4 }, (_, index) => {
       const name = `wal-${index}.jsonl.deleted.2020-01-01T00-00-00.000Z`;
       const bytes = Buffer.alloc(256 * 1024, 65 + index);
-      insert.run(`archive-${index}`, `agent:main:archive-${index}`, bytes, "0".repeat(64), name);
+      insertArchive(database, index, name, bytes);
       fs.writeFileSync(path.join(sessions, name), bytes);
       return name;
     });
@@ -320,17 +314,13 @@ it.each(["transaction", "iterator"] as const)(
       expect(before.totalBytes - before.databaseWalBytes).toBeLessThan(maintenance.maxDiskBytes!);
       const blocked = await enforce();
       expect(blocked).toMatchObject({
-        removedEntries: 0,
-        removedFiles: 0,
+        ...noWork,
         deferredReason: "checkpoint-incomplete",
         totalBytesBefore: before.totalBytes,
         totalBytesAfter: before.totalBytes,
         walBytesBefore: before.databaseWalBytes,
         walBytesAfter: before.databaseWalBytes,
-        checkpoint: {
-          state: "blocked",
-          ...readerFacts,
-        },
+        checkpoint: { state: "blocked", ...readerFacts },
       });
       expect(diagnostics).toEqual([
         expect.objectContaining({
@@ -352,10 +342,7 @@ it.each(["transaction", "iterator"] as const)(
         },
       });
       for (let hour = 1; hour <= 3; hour++) {
-        await expect(enforce()).resolves.toMatchObject({
-          deferredReason: "checkpoint-incomplete",
-          removedFiles: 0,
-        });
+        await expect(enforce()).resolves.toMatchObject(deferred);
       }
       expect((await measure()).databaseWalBytes).toBe(before.databaseWalBytes);
       expect(files.every((name) => fs.existsSync(path.join(sessions, name)))).toBe(true);
@@ -369,7 +356,7 @@ it.each(["transaction", "iterator"] as const)(
       );
       expect(await inspect()).toMatchObject({
         wouldMutate: false,
-        diskBudget: { deferredReason: "checkpoint-incomplete" },
+        diskBudget: { deferredReason: deferred.deferredReason },
       });
       release();
       if (kind === "iterator") {
@@ -380,23 +367,9 @@ it.each(["transaction", "iterator"] as const)(
         expect((await measure()).totalBytes).toBeLessThanOrEqual(maintenance.highWaterBytes!);
       }
       const recovered = await enforce();
-      const recoveryFacts = {
-        blockedCheckpoint: blocked.checkpoint,
-        hostCheckpoint: database.walMaintenance.health,
-        recovered,
-        lastArchivePruning: diagnostics.at(-1),
-      };
-      expect(
-        recovered?.deferredReason,
-        recovered?.deferredReason === undefined
-          ? undefined
-          : JSON.stringify(recoveryFacts, (key, value) => (key === "error" ? undefined : value)),
-      ).toBeUndefined();
+      expect(recovered?.deferredReason).toBeUndefined();
       expect(recovered?.totalBytesAfter).toBeLessThanOrEqual(maintenance.highWaterBytes!);
-      expect(diagnostics.at(-1)).toMatchObject({
-        completed: true,
-        checkpointIncomplete: 0,
-      });
+      expect(diagnostics.at(-1)).toMatchObject({ completed: true, checkpointIncomplete: 0 });
       expect(() =>
         JSON.stringify({ blocked, recovered, diagnostics, health: database.walMaintenance.health }),
       ).not.toThrow();
@@ -419,11 +392,7 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
   const { enforce, inspect, measure, kick } = budget(storePath, limit(), options);
   try {
     await enforce();
-    await expect(enforce()).resolves.toMatchObject({
-      freedBytes: 0,
-      removedEntries: 0,
-      removedFiles: 0,
-    });
+    await expect(enforce()).resolves.toMatchObject({ ...noWork, freedBytes: 0 });
     expect(diagnostics.at(-1)).toMatchObject({
       checkpointCalls: 2,
       checkpointIncomplete: 0,
@@ -516,14 +485,9 @@ it("reclaims newly freed pages after rewriting a protected current transcript", 
   const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   expect(database.walMaintenance.checkpoint()).toBe(true);
   const { enforce, inspect, measure, kick } = budget(storePath);
-  await expect(enforce()).resolves.toMatchObject({
-    removedEntries: 0,
-    removedFiles: 0,
-  });
+  await expect(enforce()).resolves.toMatchObject(noWork);
   // Settle any initial allocation; this pass records protected pressure with no work left.
-  await expect(enforce()).resolves.toMatchObject({
-    freedBytes: 0,
-  });
+  await expect(enforce()).resolves.toMatchObject({ freedBytes: 0 });
   const before = await measure();
   const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "large-answer" });
   assert(anchor);

@@ -141,6 +141,18 @@ describe("SQLite historical session disk budget", () => {
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       archiveTranscript: true,
     });
+  const archiveSession = async (sessionId: string, updatedAt = 1) => {
+    const sessionKey = `agent:main:${sessionId}`;
+    await entry(sessionKey, { sessionId, updatedAt });
+    await append(sessionKey, sessionId, "archive");
+    return (await remove(sessionKey)).archivedTranscripts[0]?.archivedPath;
+  };
+  const expectRetainedHistory = (sessionId: string, sessionKey: string) => {
+    expect(readTranscript(sessionId, sessionKey)).not.toEqual([]);
+    expect(readArchiveNames(sessionId)).toEqual([]);
+  };
+  const defaultMaintenance = () =>
+    resolveMaintenanceConfigFromInput({ mode: "enforce", ...budget().maintenance });
 
   it.each([
     [64 * 1024, 1, false, "worker"],
@@ -150,8 +162,7 @@ describe("SQLite historical session disk budget", () => {
     async (oldestBytes, reclaimBytes, capArchive, execution) => {
       const run = async () => {
         const sessionKey = "agent:main:history-order";
-        const oldestContent = "oldest " + "x".repeat(oldestBytes);
-        await history("oldest-history", "newer-history", sessionKey, oldestContent, 10);
+        await history("oldest-history", "newer-history", sessionKey, "x".repeat(oldestBytes), 10);
         await append(sessionKey, "newer-history", "newer " + "y".repeat(64 * 1024));
         await reset(sessionKey, "live-history", 30);
         if (capArchive) {
@@ -168,7 +179,7 @@ describe("SQLite historical session disk budget", () => {
           ).toEqual(new Set(["oldest-history"]));
         }
         setSessionUpdatedAt("newer-history", 20);
-        if (execution === "worker" && oldestBytes === 64 * 1024 && !capArchive) {
+        if (execution === "worker") {
           database().db.exec(`
           WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 5000)
           INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
@@ -384,11 +395,7 @@ describe("SQLite historical session disk budget", () => {
 
   it("prunes the canonical archive row and its derived file before searchable history", async () => {
     const archivedSessionId = "canonical-archive";
-    const archivedSessionKey = "agent:main:canonical-archive";
-    await entry(archivedSessionKey, { sessionId: archivedSessionId, updatedAt: 1 });
-    await append(archivedSessionKey, archivedSessionId, "canonical archive pressure");
-    const deleted = await remove(archivedSessionKey);
-    const archivePath = deleted.archivedTranscripts[0]?.archivedPath;
+    const archivePath = await archiveSession(archivedSessionId);
     expect(archivePath).toBeTruthy();
 
     await seed("canonical", "keep searchable history", 2);
@@ -423,11 +430,7 @@ describe("SQLite historical session disk budget", () => {
 
   it("never prunes an unpublished canonical archive under disk pressure", async () => {
     const sessionId = "pending-pressure";
-    const sessionKey = "agent:main:pending-pressure";
-    await entry(sessionKey, { sessionId, updatedAt: Date.now() });
-    await append(sessionKey, sessionId, "sole crash-recovery copy");
-    const deleted = await remove(sessionKey);
-    const pendingArchivePath = deleted.archivedTranscripts[0]?.archivedPath;
+    const pendingArchivePath = await archiveSession(sessionId, Date.now());
     database()
       .db.prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
       .run(sessionId);
@@ -526,8 +529,7 @@ describe("SQLite historical session disk budget", () => {
       admission?.release();
     }
     expect(sessionExists(sessionId)).toBe(true);
-    expect(readTranscript(sessionId, sessionKey)).not.toEqual([]);
-    expect(readArchiveNames(sessionId)).toEqual([]);
+    expectRetainedHistory(sessionId, sessionKey);
   });
 
   it.each(["archivedAt", "pinnedAt", "age-retention", "manual", "recent"] as const)(
@@ -577,8 +579,7 @@ describe("SQLite historical session disk budget", () => {
       ).toMatchObject({ removedEntries: 0 });
       expect(historyRequests).toEqual(["race-old"]);
       expect(protectionChanged).toBe(true);
-      expect(readTranscript("race-old", sessionKey)).not.toEqual([]);
-      expect(readArchiveNames("race-old")).toEqual([]);
+      expectRetainedHistory("race-old", sessionKey);
       // An explicit operator delete still owns every generation, even when pinned or archived.
       expect(await remove(sessionKey)).toMatchObject({ deleted: true });
       expect(sessionExists("race-old")).toBe(false);
@@ -643,8 +644,7 @@ describe("SQLite historical session disk budget", () => {
         });
       expect(await enforce()).toMatchObject({ removedEntries: 0 });
       expect(materialization).toHaveBeenCalledOnce();
-      expect(readTranscript("reference-old", sessionKey)).not.toEqual([]);
-      expect(readArchiveNames("reference-old")).toEqual([]);
+      expectRetainedHistory("reference-old", sessionKey);
       // Excluding the deliberately deleted owner must not exclude a surviving reference.
       expect(await remove(sessionKey)).toMatchObject({ deleted: true });
       expect(sessionExists("reference-old")).toBe(true);
@@ -671,10 +671,7 @@ describe("SQLite historical session disk budget", () => {
     const references = vi.fn();
     const pruning = vi.spyOn(archivePruning, "pruneAllSessionTranscriptArchivesToHighWater");
     observeDiscovery(references, true);
-    const maintenanceConfig = resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      ...budget().maintenance,
-    });
+    const maintenanceConfig = defaultMaintenance();
     const kick = () =>
       kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
     const manualSweep = () =>
@@ -714,11 +711,7 @@ describe("SQLite historical session disk budget", () => {
     vi.spyOn(diskBudgetModule, "measureSessionPhysicalDiskUsage").mockRejectedValueOnce(
       new Error("sweep exploded"),
     );
-    const maintenanceConfig = resolveMaintenanceConfigFromInput({
-      mode: "enforce",
-      ...budget().maintenance,
-    });
-
+    const maintenanceConfig = defaultMaintenance();
     kickSessionHistoryDiskBudgetMaintenance({ storePath, force: true, maintenanceConfig });
     await vi.waitFor(() => {
       expect(evictionWarnSpy).toHaveBeenCalledWith(

@@ -63,6 +63,17 @@ function input() {
 }
 
 const workerReply = <T>(value: T) => ({ ok: true, value });
+const emptyInventory = () => ({ kind: "session-target-inventory", agents: [] });
+const throwError = (error: Error) => () => {
+  throw error;
+};
+function expectCustody(closed: number, retired: number, unregistered?: number) {
+  expect(observed.closeResources).toHaveBeenCalledTimes(closed);
+  expect(observed.rotate).toHaveBeenCalledTimes(retired);
+  if (unregistered !== undefined) {
+    expect(observed.unregister).toHaveBeenCalledTimes(unregistered);
+  }
+}
 const storeTarget = (database: { agentId: string; path: string }) => ({
   kind: "session-store-target",
   logicalAgentId: database.agentId,
@@ -126,13 +137,9 @@ beforeEach(() => {
     sqliteScope.resolveSqliteTranscriptReadScope(scope),
   );
   observed.deferredRun = undefined;
-  observed.post.mockReset();
-  observed.read.mockReset();
-  observed.delta.mockReset();
-  observed.lookup.mockReset();
-  observed.close.mockReset();
-  observed.run.mockReset();
-  observed.unregister.mockReset();
+  for (const key of ["post", "read", "delta", "lookup", "close", "run", "unregister"] as const) {
+    observed[key].mockReset();
+  }
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.closeResources.mockReset().mockResolvedValue(undefined);
 });
@@ -148,9 +155,9 @@ afterEach(async () => {
 function failingVisibilityDelta(resetFirst: boolean) {
   const scope = deltaTarget();
   observed.delta.mockReturnValue(createVisibilityFailureDelta(resetFirst));
-  observed.lookup.mockImplementation(() => {
-    throw canonicalSessionKeyMigrationRequiredError("invalid source metadata");
-  });
+  observed.lookup.mockImplementation(
+    throwError(canonicalSessionKeyMigrationRequiredError("invalid source metadata")),
+  );
   installWorkerTransport();
   return () =>
     readChatHistoryDelta({
@@ -169,9 +176,7 @@ it.each([
 ])("preserves visibility ordering (reset=%s, close failure=%s)", async (resetFirst, closeFails) => {
   const read = failingVisibilityDelta(resetFirst);
   if (closeFails) {
-    observed.close.mockImplementation(() => {
-      throw new Error("primary close failed");
-    });
+    observed.close.mockImplementation(throwError(new Error("primary close failed")));
     await expect(read()).rejects.toMatchObject({
       message: expect.stringContaining("primary close failed"),
     });
@@ -227,16 +232,13 @@ it.each(
   "retains $error.message through the worker round trip (close failure=$fails)",
   async ({ error, reply, fails }) => {
     const cleanup = new Error("database close failed");
-    observed.read.mockImplementation(() => {
-      throw error;
-    });
+    observed.read.mockImplementation(throwError(error));
     if (fails) {
-      observed.close.mockImplementation(() => {
-        throw cleanup;
-      });
+      observed.close.mockImplementation(throwError(cleanup));
     }
     const failure: unknown = await readThroughWorker().catch((caught: unknown) => caught);
     const primary: unknown = failure instanceof AggregateError ? failure.errors[0] : failure;
+    const expectedError = { name: error.name, message: error.message };
     if (
       !fails ||
       error instanceof SessionMetadataUnavailableError ||
@@ -244,7 +246,7 @@ it.each(
     ) {
       expect(primary).toBeInstanceOf(error.constructor);
     }
-    expect(primary).toMatchObject({ name: error.name, message: error.message });
+    expect(primary).toMatchObject(expectedError);
     if (error instanceof SessionMetadataUnavailableError) {
       expect(primary).toMatchObject({
         reason: "table-missing",
@@ -254,10 +256,7 @@ it.each(
     }
     if (fails) {
       assert(failure instanceof AggregateError);
-      expect(failure.errors).toMatchObject([
-        { name: error.name, message: error.message },
-        { message: cleanup.message },
-      ]);
+      expect(failure.errors).toMatchObject([expectedError, { message: cleanup.message }]);
       expect(failure.cause).toBe(failure.errors[1]);
       expect(failure.message).toContain(error.message);
       expect(failure.message).toContain(cleanup.message);
@@ -330,8 +329,7 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
   await retained.close();
-  expect(observed.closeResources).toHaveBeenCalledTimes(2);
-  expect(observed.rotate).not.toHaveBeenCalled();
+  expectCustody(2, 0);
 });
 
 it("settles candidate handles before registry continuation without retiring the worker", async () => {
@@ -339,7 +337,7 @@ it("settles candidate handles before registry continuation without retiring the 
   const cleanup = deferCleanup(true);
   observed.run
     .mockResolvedValueOnce(workerReply({ kind: "session-target-registry-required" }))
-    .mockResolvedValueOnce(workerReply({ kind: "session-target-inventory", agents: [] }));
+    .mockResolvedValueOnce(workerReply(emptyInventory()));
   let continued = false;
   const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
     expect(
@@ -349,10 +347,7 @@ it("settles candidate handles before registry continuation without retiring the 
       }),
     ).toEqual({ kind: "session-target-registry-required" });
     continued = true;
-    expect(await scope.readTargetInventory(inventory)).toEqual({
-      kind: "session-target-inventory",
-      agents: [],
-    });
+    expect(await scope.readTargetInventory(inventory)).toEqual(emptyInventory());
   });
   try {
     await Promise.race([cleanup.entered, discovery]);
@@ -364,10 +359,8 @@ it("settles candidate handles before registry continuation without retiring the 
     await discovery;
   }
   expect(continued).toBe(true);
-  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  expectCustody(2, 0, 1);
   expect(observed.closeResources).toHaveBeenCalledWith(JSON.stringify([{ path: database.path }]));
-  expect(observed.rotate).not.toHaveBeenCalled();
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
 });
 
 it.each([
@@ -392,8 +385,7 @@ it.each([
     await scope.readTargetInventory(inventory);
   });
   const retired = !capable;
-  expect(observed.closeResources).toHaveBeenCalledTimes(retired ? 0 : 1);
-  expect(observed.rotate).toHaveBeenCalledTimes(retired ? 1 : 0);
+  expectCustody(retired ? 0 : 1, retired ? 1 : 0);
 });
 
 it.each([
@@ -467,7 +459,7 @@ it.each([
         workerReply(
           kind === "store"
             ? storeTarget({ agentId: "main", path: original.physicalPath })
-            : { kind: "session-target-inventory", agents: [] },
+            : emptyInventory(),
         ),
       );
       await discovery;
@@ -477,8 +469,7 @@ it.each([
         JSON.stringify([{ path: original.physicalPath, scope: original.scope }]),
       );
     } else {
-      expect(observed.closeResources).not.toHaveBeenCalled();
-      expect(observed.rotate).toHaveBeenCalledOnce();
+      expectCustody(0, 1);
     }
   },
 );

@@ -14,8 +14,8 @@ import { loadTranscriptEventsSync, replaceSessionEntry } from "./session-accesso
 import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
-  enforceSqliteSessionHistoryDiskBudget as enforceBudget,
-  inspectSqliteSessionHistoryDiskBudget as inspectBudget,
+  enforceSqliteSessionHistoryDiskBudget as enforce,
+  inspectSqliteSessionHistoryDiskBudget as inspect,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -108,7 +108,7 @@ describe("SQLite historical session preservation", () => {
       const before = await measureSessionPhysicalDiskUsage(storePath);
       const preserveRecentMs = protection === "recent" ? 7 * dayMs : undefined;
       const result = await inspectHistoryReads(() =>
-        enforceBudget(input(preserveRecentMs, before.totalBytes - 1, 0)),
+        enforce(input(preserveRecentMs, before.totalBytes - 1, 0)),
       );
 
       expect(result?.removedEntries).toBe(1);
@@ -120,10 +120,10 @@ describe("SQLite historical session preservation", () => {
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const repeated = input(preserveRecentMs);
-      expect(await inspectHistoryReads(() => inspectBudget(repeated))).toMatchObject({
+      expect(await inspectHistoryReads(() => inspect(repeated))).toMatchObject({
         wouldMutate: false,
       });
-      expect(await inspectHistoryReads(() => enforceBudget(repeated))).toMatchObject({
+      expect(await inspectHistoryReads(() => enforce(repeated))).toMatchObject({
         removedEntries: 0,
       });
       for (const sessionId of ["recent-old", "recent-middle"]) {
@@ -186,12 +186,8 @@ describe("SQLite historical session preservation", () => {
       expect(readBytes()).toEqual(expectedBytes);
       settlePhysicalUsage();
       const preserved = input(7 * dayMs);
-      expect(await inspectBudget(preserved)).toMatchObject({
-        wouldMutate: false,
-      });
-      expect(await enforceBudget(preserved)).toMatchObject({
-        removedEntries: 0,
-      });
+      expect(await inspect(preserved)).toMatchObject({ wouldMutate: false });
+      expect(await enforce(preserved)).toMatchObject({ removedEntries: 0 });
       expect(["raw-old", "raw-live"].map(sessionExists)).toEqual([true, true]);
       expect(loadTranscriptEventsSync({ sessionId: "raw-old", sessionKey, storePath })).not.toEqual(
         [],

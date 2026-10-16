@@ -32,6 +32,7 @@ import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-evictio
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
 const maintenance = { mode: "enforce" as const, maxDiskBytes: 1, highWaterBytes: 1 };
+const noWork = { removedFiles: 0, removedEntries: 0 };
 const contains = (facts: Record<string, unknown>) =>
   expect.arrayContaining([expect.objectContaining(facts)]);
 vi.mock("../../logging/subsystem.js", async () => {
@@ -151,15 +152,15 @@ describe("SQLite post-commit history maintenance", () => {
   );
 
   it.each([
-    { operation: "delete", phase: "closed", committed: false },
-    { operation: "delete", phase: "rollback", committed: false },
-    { operation: "delete", phase: "complete", committed: true },
-    { operation: "delete", phase: "partial", committed: true },
-    { operation: "reset", phase: "closed", committed: false },
-    { operation: "reset", phase: "post-commit failure", committed: true },
+    ["delete", "closed", false, { live: true }],
+    ["delete", "rollback", false, { live: true }],
+    ["delete", "complete", true, { live: false }],
+    ["delete", "partial", true, { live: true, old: false }],
+    ["reset", "closed", false, { live: true }],
+    ["reset", "post-commit failure", true, { live: false, next: true }],
   ] as const)(
-    "defers post-commit maintenance until checkpoint recovery: $operation / $phase",
-    async ({ operation, phase, committed }) => {
+    "defers post-commit maintenance until checkpoint recovery: %s / %s",
+    async (operation, phase, committed, expectedSessions) => {
       const sessionKey = "agent:main:target";
       const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
       evictionWarnSpy.mockClear();
@@ -187,11 +188,7 @@ describe("SQLite post-commit history maintenance", () => {
         // sqlite-allow-raw -- a conflicting canonical row reaches the Worker's connection.
         owner.db
           .prepare(
-            `INSERT INTO session_transcript_archives (
-               session_id, generation, session_key, reason, encoding, archive_blob,
-               archive_sha256, archive_name, created_at, published_at
-             ) SELECT session_id, generation, ?, 'deleted', 'identity', ?, ?, ?, 1, NULL
-               FROM transcript_rewrite_watermarks WHERE session_id = 'target-old'`,
+            "INSERT INTO session_transcript_archives (session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256, archive_name, created_at, published_at) SELECT session_id, generation, ?, 'deleted', 'identity', ?, ?, ?, 1, NULL FROM transcript_rewrite_watermarks WHERE session_id = 'target-old'",
           )
           .run(
             sessionKey,
@@ -206,6 +203,7 @@ describe("SQLite post-commit history maintenance", () => {
       );
       reader.exec("BEGIN");
       reader.prepare("SELECT count(*) FROM session_windows").get();
+      const scoped = { storePath, target };
       try {
         if (phase === "closed") {
           admission.close();
@@ -213,8 +211,7 @@ describe("SQLite post-commit history maintenance", () => {
         const attempt =
           operation === "delete"
             ? deleteSessionEntryLifecycle({
-                storePath,
-                target,
+                ...scoped,
                 archiveTranscript: true,
                 commitGuard: () => {
                   if (phase === "partial" && !sessionExists("target-old")) {
@@ -226,8 +223,7 @@ describe("SQLite post-commit history maintenance", () => {
                 },
               })
             : resetSessionEntryLifecycle({
-                storePath,
-                target,
+                ...scoped,
                 buildNextEntry: () => {
                   assertActive();
                   // Keep the replacement live; age retention would protect its history windows.
@@ -270,9 +266,8 @@ describe("SQLite post-commit history maintenance", () => {
           committed
             ? [
                 expect.objectContaining({
+                  ...noWork,
                   deferredReason: deferred.reason,
-                  removedFiles: 0,
-                  removedEntries: 0,
                   checkpoint: deferred.checkpoint,
                 }),
               ]
@@ -309,15 +304,10 @@ describe("SQLite post-commit history maintenance", () => {
         expect.soft(fs.existsSync(archive)).toBe(!committed);
         expect.soft(sessionExists("unrelated-old")).toBe(!committed);
         expect.soft(sessionExists("unrelated-live")).toBe(true);
-        expect
-          .soft(sessionExists("target-live"))
-          .toBe(phase !== "complete" && !(operation === "reset" && committed));
-        if (phase === "partial") {
-          expect.soft(sessionExists("target-old")).toBe(false);
-        }
-        if (operation === "reset" && committed) {
-          expect.soft(sessionExists("target-next")).toBe(true);
-        }
+        const actualSessions = Object.fromEntries(
+          Object.keys(expectedSessions).map((id) => [id, sessionExists(`target-${id}`)]),
+        );
+        expect.soft(actualSessions).toEqual(expectedSessions);
       } finally {
         reader.close();
         admission.close();

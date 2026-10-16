@@ -43,11 +43,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 let state: OpenClawTestState;
-const listeners: Array<() => void> = [];
+let stopObserving: (() => void) | undefined;
 afterEach(async () => {
-  for (const unsubscribe of listeners.splice(0)) {
-    unsubscribe();
-  }
+  stopObserving?.();
+  stopObserving = undefined;
   try {
     await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest(state.root);
@@ -73,16 +72,18 @@ const transcriptCount = (databasePath: string, id: string) =>
     row(databasePath, "SELECT count(*) AS count FROM transcript_events WHERE session_id = ?", id)
       ?.count,
   );
+const registry = () =>
+  listOpenClawRegisteredAgentDatabases({ env: state.env })
+    .map(({ agentId, path: registeredPath }) => ({ agentId, path: registeredPath }))
+    .toSorted((a, b) => a.path.localeCompare(b.path));
 
 async function closeAndCheckLeases(testState: OpenClawTestState) {
   await closeOpenClawAgentDatabasesAsync(testState.root);
   closeOpenClawAgentDatabasesForTest(testState.root);
-  expect(
-    row(
-      resolveOpenClawStateSqlitePath(testState.env),
-      "SELECT count(*) AS count FROM agent_database_leases",
-    ),
-  ).toEqual({ count: 0 });
+  const statePath = resolveOpenClawStateSqlitePath(testState.env);
+  expect(row(statePath, "SELECT count(*) AS count FROM agent_database_leases")).toEqual({
+    count: 0,
+  });
 }
 
 function seedReceipt(agentId: string, sessionKey: string, sessionId: string): string {
@@ -142,11 +143,7 @@ function seedReceipt(agentId: string, sessionKey: string, sessionId: string): st
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshared", bare = false) {
-  state = await createOpenClawTestState({
-    prefix: "omitted-budget-owner-",
-    layout: "state-only",
-    scenario: "minimal",
-  });
+  state = await createOpenClawTestState({ layout: "state-only", scenario: "minimal" });
   const storePath =
     kind === "canonical-nonshared"
       ? path.join(state.sessionsDir("main"), "sessions.json")
@@ -165,10 +162,7 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
   const victimId = "owner-parity-victim";
   const survivorKey = "agent:main:main";
   const survivorId = "owner-parity-survivor";
-  const message = {
-    role: "user",
-    content: "retained owner parity transcript" + "x".repeat(64 * 1024),
-  };
+  const message = { role: "user", content: "owner parity transcript" };
   const archived = {
     sessionId: victimId,
     updatedAt: 1,
@@ -184,19 +178,11 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
     // Canonical low-level writers seed a foreign row rejected by public scope resolution.
     runOpenClawAgentWriteTransaction((database) => {
       writeSessionEntry(database, victimKey, archived);
-      const transcript = {
-        ...options,
-        sessionKey: victimKey,
-        sessionId: victimId,
-      };
+      const transcript = { ...options, sessionKey: victimKey, sessionId: victimId };
       ensureTranscriptHeader(database, transcript, state.root);
       expect(
         appendTranscriptEventsInTransaction(database, transcript, [
-          {
-            type: "message",
-            id: "owner-parity-message",
-            message,
-          },
+          { type: "message", id: "owner-parity-message", message },
         ]),
       ).toBe(1);
     }, options);
@@ -226,17 +212,13 @@ async function fixture(kind: "shared" | "canonical-nonshared" | "custom-nonshare
     agentId: "secondary",
     env: state.env,
   });
-  const registryBefore = listOpenClawRegisteredAgentDatabases({ env: state.env }).map(
-    ({ agentId, path: registeredPath }) => ({ agentId, path: registeredPath }),
-  );
+  const registryBefore = registry();
   expect(registryBefore).toContainEqual({ agentId: "main", path: databasePath });
   await closeAndCheckLeases(state);
   return {
-    state,
     storePath,
     databasePath,
     victimKey,
-    victimAgent,
     victimId,
     survivorKey,
     survivorId,
@@ -253,17 +235,15 @@ function observeVictim(f: Fixture) {
     rowExists: boolean;
     receiptExists: boolean;
   }> = [];
-  listeners.push(
-    onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(f.victimKey)) {
-        facts.push({
-          mutation,
-          rowExists: sessionNode(f.databasePath, f.victimKey) !== undefined,
-          receiptExists: readRepositoryGitHubPublication(f.victimReceipt) !== undefined,
-        });
-      }
-    }),
-  );
+  stopObserving = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(f.victimKey)) {
+      facts.push({
+        mutation,
+        rowExists: sessionNode(f.databasePath, f.victimKey) !== undefined,
+        receiptExists: readRepositoryGitHubPublication(f.victimReceipt) !== undefined,
+      });
+    }
+  });
   return facts;
 }
 
@@ -281,7 +261,7 @@ function enforce(f: Fixture, agentId?: string) {
 }
 
 async function assertCustody(f: Fixture) {
-  expect(process.env.OPENCLAW_STATE_DIR).toBe(f.state.stateDir);
+  expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
   expect(row(f.databasePath, "SELECT agent_id FROM schema_meta")).toEqual({ agent_id: "main" });
   expect(sessionNode(f.databasePath, f.survivorKey)).toEqual({ current_session_id: f.survivorId });
   expect(readRepositoryGitHubPublication(f.survivorReceipt)).toMatchObject({
@@ -290,13 +270,8 @@ async function assertCustody(f: Fixture) {
     session_id: f.survivorId,
   });
   expect(fs.existsSync(f.secondaryCanonicalPath)).toBe(false);
-  const registry = listOpenClawRegisteredAgentDatabases({ env: f.state.env }).map(
-    ({ agentId, path: registeredPath }) => ({ agentId, path: registeredPath }),
-  );
-  const sorted = (rows: Array<{ agentId: string; path: string }>) =>
-    rows.toSorted((a, b) => a.path.localeCompare(b.path));
-  expect(sorted(registry)).toEqual(sorted(f.registryBefore));
-  await closeAndCheckLeases(f.state);
+  expect(registry()).toEqual(f.registryBefore);
+  await closeAndCheckLeases(state);
 }
 
 describe("budget cap-entry logical ownership", () => {
@@ -310,9 +285,8 @@ describe("budget cap-entry logical ownership", () => {
       const f = await withSessionHistoryBudgetSweepsForTest(() => fixture("shared", scenario.bare));
       const file = fs.statSync(f.databasePath, { bigint: true });
       const facts = observeVictim(f);
-      await expect(enforce(f, scenario.explicit ? "secondary" : undefined)).resolves.toMatchObject({
-        removedEntries: 1,
-      });
+      const result = await enforce(f, scenario.explicit ? "secondary" : undefined);
+      expect(result?.removedEntries).toBe(1);
       expect(sessionNode(f.databasePath, f.victimKey)).toBeUndefined();
       expect(
         row(
@@ -321,10 +295,7 @@ describe("budget cap-entry logical ownership", () => {
           f.victimId,
         ),
       ).toBeUndefined();
-      expect(
-        readRepositoryGitHubPublication(f.victimReceipt),
-        "deleted logical owner must lose its retained publication receipt",
-      ).toBeUndefined();
+      expect(readRepositoryGitHubPublication(f.victimReceipt)).toBeUndefined();
       // agentId is fallback metadata for qualified keys, not authorization evidence.
       expect(facts).toEqual([
         {
@@ -351,7 +322,7 @@ describe("budget cap-entry logical ownership", () => {
         kind === "custom-nonshared"
           ? resolveSqliteTargetFromSessionStorePath(f.storePath, {
               agentId: "secondary",
-              env: f.state.env,
+              env: state.env,
             }).path
           : undefined;
       if (suffixPath) {

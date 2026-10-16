@@ -20,18 +20,13 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  appendTranscriptMessage,
-  loadSessionEntryReadOnly,
-  loadTranscriptEventsSync,
-  replaceSessionEntry,
-  resetSessionEntryLifecycle,
-} from "./session-accessor.js";
+import { loadSessionEntryReadOnly, loadTranscriptEventsSync } from "./session-accessor.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
+import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -135,14 +130,15 @@ it.each([
     const oldAt = Date.now() - 8 * dayMs;
     const currentScope = { sessionKey, storePath };
     const oldScope = { ...currentScope, sessionId: oldSessionId };
-    await replaceSessionEntry(currentScope, { sessionId: oldSessionId, updatedAt: oldAt });
-    await appendTranscriptMessage(oldScope, {
-      message: { role: "user", content: "x".repeat(64 * 1024) },
-    });
-    await resetSessionEntryLifecycle({
+    await createSessionHistoryBudgetFixture(() => ({
       storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      buildNextEntry: () => ({ sessionId: currentSessionId, updatedAt: oldAt + 1 }),
+      tempDir: sessionsDir,
+    })).createHistoricalTranscript({
+      sessionKey,
+      sessionId: oldSessionId,
+      nextSessionId: currentSessionId,
+      updatedAt: oldAt,
+      content: "x".repeat(64 * 1024),
     });
     const target = resolveSqliteTargetFromSessionStorePath(storePath);
     const options = { agentId: target.agentId ?? "main", path: target.path };
@@ -161,10 +157,6 @@ it.each([
     expect(historyBefore.length).toBeGreaterThan(0);
     const currentEntry = loadSessionEntryReadOnly(currentScope);
     expect(currentEntry).toMatchObject({ sessionId: currentSessionId });
-    // Synthetic bootstrap fixes victim age; it does not change the cleanup algorithm.
-    database.db
-      .prepare("UPDATE session_windows SET updated_at = ? WHERE session_id = ?")
-      .run(oldAt, oldSessionId);
     database.walMaintenance.checkpoint();
     const peerBytes = 2 * 1024 * 1024;
     fs.writeFileSync(path.join(sessionsDir, "synthetic-pressure.bin"), Buffer.alloc(peerBytes));
@@ -184,25 +176,24 @@ it.each([
 
     vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
       const opened = realOpen(pathname, openOptions);
-      if (pathname === database.path && !openOptions?.readOnly) {
-        const prepare = opened.prepare.bind(opened);
-        opened.prepare = (sql) => {
-          const statement = prepare(sql);
-          if (
-            sql === "PRAGMA integrity_check;" ||
-            sql === "PRAGMA integrity_check('sqlite_schema');"
-          ) {
-            const all = statement.all.bind(statement);
-            statement.all = () => {
-              if (observingAdmission) {
-                parentChecks += 1;
-              }
-              return all();
-            };
-          }
-          return statement;
-        };
+      if (pathname !== database.path || openOptions?.readOnly) {
+        return opened;
       }
+      const prepare = opened.prepare.bind(opened);
+      opened.prepare = (sql) => {
+        const statement = prepare(sql);
+        if (
+          sql === "PRAGMA integrity_check;" ||
+          sql === "PRAGMA integrity_check('sqlite_schema');"
+        ) {
+          const all = statement.all.bind(statement);
+          statement.all = () => {
+            parentChecks += Number(observingAdmission);
+            return all();
+          };
+        }
+        return statement;
+      };
       return opened;
     });
     const beforePreparation = async () => {
