@@ -68,7 +68,6 @@ export function createLazyCustomElementRequests(
   host: RenderHost = {},
   onClose?: () => void,
   retryStale = (canReload: () => boolean) => retryStaleChunkReloadWhenReachable({ canReload }),
-  cancelStale = () => cancelStaleChunkRecovery(),
 ) {
   let current: LazyCustomElementRequest | undefined;
   const preloads = new Set<string>();
@@ -165,7 +164,7 @@ export function createLazyCustomElementRequests(
       // A retired stale-chunk failure must not reload the page later (#130988);
       // surfaces that still show a failure re-arm recovery when they render.
       if ((current.status === "error" && current.stale) || current === staleRetry) {
-        cancelStale();
+        cancelStaleChunkRecovery();
       }
       current = undefined;
       notify();

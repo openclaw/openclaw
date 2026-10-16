@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
   createLazyCustomElementRequests,
 } from "./lazy-custom-element.ts";
+import * as staleRecovery from "./stale-chunk-reload.ts";
 
 let tagSequence = 0;
 
@@ -44,10 +45,16 @@ describe("optional custom element requests", () => {
   function createRequestHarness() {
     const host = { updateComplete: Promise.resolve(true) };
     const retryStale = vi
-      .fn<(canReload: () => boolean) => Promise<boolean>>()
+      .spyOn(staleRecovery, "retryStaleChunkReloadWhenReachable")
       .mockResolvedValue(false);
-    const cancelStale = vi.fn();
-    const requests = createLazyCustomElementRequests(host, undefined, retryStale, cancelStale);
+    const cancelStale = vi
+      .spyOn(staleRecovery, "cancelStaleChunkRecovery")
+      .mockImplementation(() => {});
+    onTestFinished(() => {
+      retryStale.mockRestore();
+      cancelStale.mockRestore();
+    });
+    const requests = createLazyCustomElementRequests(host);
     return { requests, retryStale, cancelStale };
   }
 
@@ -154,7 +161,7 @@ describe("optional custom element requests", () => {
       updateComplete: Promise.resolve(true),
       queryRenderedElement: (tagName: string) => rendered.get(tagName) ?? null,
     };
-    const requests = createLazyCustomElementRequests(host, undefined, async () => false);
+    const requests = createLazyCustomElementRequests(host);
     const action = vi.fn();
     const tagName = uniqueTag();
     const element = {
@@ -270,11 +277,11 @@ describe("optional custom element requests", () => {
     expect(requests.visibleState).toMatchObject({ stale: true });
 
     requests.retry();
-    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(true);
+    expect(retryStale.mock.calls[0]?.[0]?.canReload?.()).toBe(true);
 
     await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(retryStale).toHaveBeenCalledOnce();
-    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(false);
+    expect(retryStale.mock.calls[0]?.[0]?.canReload?.()).toBe(false);
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
 
