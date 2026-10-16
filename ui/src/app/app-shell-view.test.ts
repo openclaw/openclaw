@@ -65,6 +65,9 @@ it("updates native history buttons only while connected and refreshes them on re
   });
   const { owner, view } = await mountShell();
   owner.connect();
+  // This view fixture leaves the router stopped; restore its selected route after connection.
+  owner.routeState = { routeId: "chat" };
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(
       view.container.querySelector<HTMLButtonElement>(".macos-titlebar-controls__back")?.disabled,
@@ -95,6 +98,7 @@ it("updates native history buttons only while connected and refreshes them on re
   expect(forward.disabled).toBe(true);
 
   owner.connect();
+  owner.routeState = { routeId: "chat" };
   await waitForSolid(() => {
     expect(back.disabled).toBe(true);
     expect(forward.disabled).toBe(false);
