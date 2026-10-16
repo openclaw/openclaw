@@ -85,6 +85,21 @@ vi.mock("./shared.js", async (importOriginal) => ({
 const tempDirs = createTempDirTracker();
 const outputText = () => runtime.log.mock.calls.flat().join("\n");
 const jsonResult = () => runtime.writeJson.mock.lastCall?.[0];
+function expectOutput(...included: string[]) {
+  included.forEach((part) => expect(outputText()).toContain(part));
+}
+function mockImmutable(
+  immutable: NonNullable<Awaited<ReturnType<typeof updateCheck.checkUpdateStatus>>["immutable"]>,
+  latestVersion?: string,
+) {
+  vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+    root: immutable.currentPath,
+    installKind: "immutable",
+    packageManager: "unknown",
+    immutable,
+    ...(latestVersion ? { registry: { latestVersion } } : {}),
+  });
+}
 async function textStatus() {
   await updateStatus({});
   return outputText();
@@ -108,131 +123,118 @@ it.each([
   { json: true, remote: false },
   { json: false, remote: false },
   { json: true, remote: true },
-])(
-  "attributes recorded replacement only to the local Gateway (JSON: $json, remote: $remote)",
-  async ({ json, remote }) => {
-    const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
-    const completedAtMs = Date.UTC(2026, 8, 19, 12);
-    const bootId = (await beginGatewayBootLifecycle(process.env, completedAtMs - 1_000)).id;
-    await completeGatewayBootLifecycle(
-      bootId,
-      { outcome: "planned_restart", reason },
-      process.env,
-      completedAtMs,
+])("local replacement (JSON: $json, remote: $remote)", async ({ json, remote }) => {
+  const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+  const completedAtMs = Date.UTC(2026, 8, 19, 12);
+  const bootId = (await beginGatewayBootLifecycle(process.env, completedAtMs - 1_000)).id;
+  await completeGatewayBootLifecycle(
+    bootId,
+    { outcome: "planned_restart", reason },
+    process.env,
+    completedAtMs,
+  );
+  if (remote) {
+    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      gateway: { mode: "remote" },
+    });
+  }
+
+  await updateStatus({ json });
+
+  if (remote) {
+    expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
+  } else if (json) {
+    expect(jsonResult()).toMatchObject({
+      lastGatewayInstallationReplacement: { reason, completedAtMs },
+    });
+  } else {
+    expectOutput(
+      "Previous Gateway installation replacement",
+      new Date(completedAtMs).toISOString(),
+      reason,
     );
-    if (remote) {
-      vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
-        gateway: { mode: "remote" },
-      });
-    }
-
-    await updateStatus({ json });
-
-    if (remote) {
-      expect(jsonResult()).not.toHaveProperty("lastGatewayInstallationReplacement");
-    } else if (json) {
-      expect(jsonResult()).toMatchObject({
-        lastGatewayInstallationReplacement: { reason, completedAtMs },
-      });
-    } else {
-      const output = outputText();
-      expect(output).toContain("Previous Gateway installation replacement");
-      expect(output).toContain(new Date(completedAtMs).toISOString());
-      expect(output).toContain(reason);
-    }
-  },
-);
+  }
+});
 
 it.each([
   { json: false, failure: null },
   { json: true, failure: "read" },
   { json: true, failure: "audit" },
-])(
-  "reports service definition facts without losing availability (JSON: $json, failure: $failure)",
-  async ({ json, failure }) => {
-    const drift = [
-      { message: "Service.KillMode: missing; installer expects mixed." },
-      { message: "Service.ExecStartPre: unknown edit; preserved." },
-    ];
-    service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
-    service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
-    if (failure === "read") {
-      service.readCommand.mockRejectedValue(new Error("Service manager unavailable"));
-    } else if (failure === "audit") {
-      service.audit.mockResolvedValue({
-        ok: true,
-        issues: [],
-        definitionDriftError: "Service definition inspection failed: unit unreadable",
-      });
-    }
-
-    await updateStatus({ json });
-
-    if (failure) {
-      expect(jsonResult()).toMatchObject({
-        availability: expect.any(Object),
-        serviceDefinition: {
-          drift: [],
-          warnings: [expect.stringContaining("inspection failed")],
-        },
-      });
-    } else {
-      const output = outputText();
-      for (const fact of drift) {
-        expect(output).toContain(fact.message);
-      }
-    }
-  },
-);
-
-it.each([false, true])(
-  "reports immutable coverage without offering package updates (JSON: %s)",
-  async (json) => {
-    const immutable = {
-      root: "/opt/openclaw",
-      currentSha: "a".repeat(40),
-      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
-      prepared: {
-        sha: "b".repeat(40),
-        path: `/opt/openclaw/releases/${"b".repeat(40)}`,
-        buildDigest: "c".repeat(64),
-        preparedAtMs: 123,
-      },
-    };
-    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-      root: immutable.currentPath,
-      installKind: "immutable",
-      packageManager: "unknown",
-      immutable,
-      registry: { latestVersion: "99.0.0" },
+])("service facts (JSON: $json, failure: $failure)", async ({ json, failure }) => {
+  const drift = [
+    { message: "Service.KillMode: missing; installer expects mixed." },
+    { message: "Service.ExecStartPre: unknown edit; preserved." },
+  ];
+  service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
+  service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
+  if (failure === "read") {
+    service.readCommand.mockRejectedValue(new Error("Service manager unavailable"));
+  } else if (failure === "audit") {
+    service.audit.mockResolvedValue({
+      ok: true,
+      issues: [],
+      definitionDriftError: "Service definition inspection failed: unit unreadable",
     });
-    const coverage: immutableInspection.ImmutableUpdateCoverage = {
-      target: {
-        sha: immutable.prepared.sha,
-        preparation: "prepared",
-        schemaVersions: { state: 20, agent: 25 },
-      },
-      unsupportedReasons: [
-        "Immutable activation does not support the agent schema crossing 24 → 25.",
-      ],
-      warnings: [],
-    };
-    vi.spyOn(immutableInspection, "inspectImmutableUpdateCoverage").mockResolvedValue(coverage);
+  }
 
-    await updateStatus({ json });
-    if (json) {
-      expect(jsonResult()).toMatchObject({ immutableCoverage: coverage });
-      return;
-    }
+  await updateStatus({ json });
+
+  if (failure) {
+    expect(jsonResult()).toMatchObject({
+      availability: expect.any(Object),
+      serviceDefinition: {
+        drift: [],
+        warnings: [expect.stringContaining("inspection failed")],
+      },
+    });
+  } else {
     const output = outputText();
-    expect(output).toContain("immutable (/opt/openclaw)");
-    expect(output).toContain("aaaaaaaaaaaa");
-    expect(output).toContain("prepared bbbbbbbbbbbb");
-    expect(output).toContain("activation unavailable");
-    expect(output).toContain("agent schema crossing 24 → 25");
-    expect(output).not.toContain("npm update");
-  },
-);
+    for (const fact of drift) {
+      expect(output).toContain(fact.message);
+    }
+  }
+});
+
+it.each([false, true])("immutable coverage, not package updates (JSON: %s)", async (json) => {
+  const immutable = {
+    root: "/opt/openclaw",
+    currentSha: "a".repeat(40),
+    currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+    prepared: {
+      sha: "b".repeat(40),
+      path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+      buildDigest: "c".repeat(64),
+      preparedAtMs: 123,
+    },
+  };
+  mockImmutable(immutable, "99.0.0");
+  const coverage: immutableInspection.ImmutableUpdateCoverage = {
+    target: {
+      sha: immutable.prepared.sha,
+      preparation: "prepared",
+      schemaVersions: { state: 20, agent: 25 },
+    },
+    unsupportedReasons: [
+      "Immutable activation does not support the agent schema crossing 24 → 25.",
+    ],
+    warnings: [],
+  };
+  vi.spyOn(immutableInspection, "inspectImmutableUpdateCoverage").mockResolvedValue(coverage);
+
+  await updateStatus({ json });
+  if (json) {
+    expect(jsonResult()).toMatchObject({ immutableCoverage: coverage });
+    return;
+  }
+  expectOutput(
+    "immutable (/opt/openclaw)",
+    "aaaaaaaaaaaa",
+    "prepared bbbbbbbbbbbb",
+    "activation unavailable",
+    "agent schema crossing 24 → 25",
+  );
+  expect(outputText()).not.toContain("npm update");
+});
 
 it.each([
   { outcome: "succeeded", label: "accepted", pending: true, verified: true },
@@ -271,27 +273,20 @@ it.each([
           : undefined,
       },
     };
-    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-      root: immutable.currentPath,
-      installKind: "immutable",
-      packageManager: "unknown",
-      immutable,
-    });
-    const output = await textStatus();
-    expect(output).toContain(label);
-    expect(output).toContain("Last immutable activation");
-    expect(output).toContain("verified");
+    mockImmutable(immutable);
+    await textStatus();
+    expectOutput(label, "Last immutable activation", "verified");
     if (verified) {
-      expect(output).toContain("fixture-build");
-      expect(output).toContain("PID 4242");
-      expect(output).toContain("fixture-boot");
+      expectOutput("fixture-build", "PID 4242", "fixture-boot");
     } else {
-      expect(output).not.toContain("Last verified Gateway");
+      expect(outputText()).not.toContain("Last verified Gateway");
     }
     if (pending) {
-      expect(output).toContain("pending recovery · verifying");
-      expect(output).toContain("candidate-verification-pending");
-      expect(output).toContain("/usr/bin/node /opt/example.control/recovery.mjs");
+      expectOutput(
+        "pending recovery · verifying",
+        "candidate-verification-pending",
+        "/usr/bin/node /opt/example.control/recovery.mjs",
+      );
     }
     expect(await jsonStatus()).toMatchObject({ update: { immutable } });
   },
@@ -319,13 +314,9 @@ it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", 
     }),
   );
   if (json) {
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ channelIssues: [issue] }),
-    );
+    expect(jsonResult().channelIssues).toEqual([issue]);
   } else {
-    const output = outputText();
-    expect(output).toContain(`Channel feishu default: ${issue.message}`);
-    expect(output).toContain(issue.fix);
+    expectOutput(`Channel feishu default: ${issue.message}`, issue.fix);
   }
 });
 
@@ -386,21 +377,22 @@ it.each([true, false])(
       expect(result).toMatchObject({
         runStatusError: expect.any(String),
         runtimeFindings: [
-          expect.objectContaining({
+          {
             severity: "error",
             message: expect.stringContaining("SQLite 3.51.2"),
             fixHint: expect.stringContaining("nvm install 26"),
-          }),
+          },
         ],
       });
       expect([result?.activeRun, result?.lastRun]).toEqual([undefined, undefined]);
       expect(result).not.toHaveProperty("abandonedRun");
     } else {
-      const output = outputText();
-      expect(output).toContain("OpenClaw update status");
-      expect(output).toContain("Update run status unavailable:");
-      expect(output).toContain("SQLite 3.51.2");
-      expect(output).toContain("nvm install 26");
+      expectOutput(
+        "OpenClaw update status",
+        "Update run status unavailable:",
+        "SQLite 3.51.2",
+        "nvm install 26",
+      );
     }
     workerRead.mockRestore();
     prepare.mockRestore();
@@ -409,9 +401,9 @@ it.each([true, false])(
 );
 
 it.each([
-  { source: "gateway-service", version: "24.15.0", state: "admitted" },
-  { source: "gateway-service", version: "26.0.0", state: "unsupported" },
-])("reports $state $source Node $version", async ({ source, version, state }) => {
+  { version: "24.15.0", state: "admitted" },
+  { version: "26.0.0", state: "unsupported" },
+])("reports $state service Node $version", async ({ version, state }) => {
   vi.stubGlobal("process", {
     ...process,
     versions: { ...process.versions, node: "26.8.1" },
@@ -430,28 +422,23 @@ it.each([
   });
   if (state === "unsupported") {
     await updateStatus({ json: true });
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeFindings: [
-          expect.objectContaining({
-            source,
-            message: expect.stringContaining(version),
-            requirement: expect.stringContaining(">=24.16.0 <25, or >=26.1.0"),
-            fixHint: expect.stringContaining("https://openclaw.ai/install.sh"),
-          }),
-        ],
-      }),
-    );
+    expect(jsonResult()).toMatchObject({
+      runtimeFindings: [
+        {
+          source: "gateway-service",
+          message: expect.stringContaining(version),
+          requirement: expect.stringContaining(">=24.16.0 <25, or >=26.1.0"),
+          fixHint: expect.stringContaining("https://openclaw.ai/install.sh"),
+        },
+      ],
+    });
   }
   await updateStatus({});
   if (state === "admitted") {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability check passed"));
     expect(runtime.log).not.toHaveBeenCalledWith(undefined);
   } else {
-    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).toContain(version);
-    expect(output).toContain("npm");
-    expect(output).toContain("nvm install 26");
+    expectOutput(version, "npm", "nvm install 26");
   }
 });
 
@@ -503,34 +490,29 @@ it.each([false, true])(
   },
 );
 
-it.each([true, false])(
-  "reports unreadable pending migration status without losing availability (JSON: %s)",
-  async (json) => {
-    await recordMigrations({
-      pending: [
-        {
-          pluginId: "codex",
-          reason: "The configured plugin package is missing.",
-          command: "openclaw plugins install @openclaw/codex",
-        },
-      ],
-    });
-    openState()
-      .db.prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
-      .run("not-json", "deferred-plugin-migration:codex");
-    await expect(updateStatus({ json })).resolves.toBeUndefined();
-    if (json) {
-      const result = jsonResult();
-      expect(result).toHaveProperty("availability");
-      expect(result.migrationWarningsError).toEqual(expect.any(String));
-      expect(result).not.toHaveProperty("migrationWarnings");
-    } else {
-      const output = outputText();
-      expect(output).toContain("OpenClaw update status");
-      expect(output).toContain("Pending migration status unavailable:");
-    }
-  },
-);
+it.each([true, false])("unreadable migration preserves availability (JSON: %s)", async (json) => {
+  await recordMigrations({
+    pending: [
+      {
+        pluginId: "codex",
+        reason: "The configured plugin package is missing.",
+        command: "openclaw plugins install @openclaw/codex",
+      },
+    ],
+  });
+  openState()
+    .db.prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
+    .run("not-json", "deferred-plugin-migration:codex");
+  await expect(updateStatus({ json })).resolves.toBeUndefined();
+  if (json) {
+    const result = jsonResult();
+    expect(result).toHaveProperty("availability");
+    expect(result.migrationWarningsError).toEqual(expect.any(String));
+    expect(result).not.toHaveProperty("migrationWarnings");
+  } else {
+    expectOutput("OpenClaw update status", "Pending migration status unavailable:");
+  }
+});
 
 it("reports retained session migration warnings without an update ledger", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR!;
@@ -589,10 +571,9 @@ it("preserves readable history when reconciliation is refused", async () => {
     env: { ...process.env, OPENCLAW_SUPERVISOR_MODE: "external" },
   });
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
-  const output = await textStatus();
-  expect(output).toContain(run.runId);
-  expect(output).toContain("Update run reconciliation failed:");
-  expect(output).not.toContain("Update run status unavailable:");
+  await textStatus();
+  expectOutput(run.runId, "Update run reconciliation failed:");
+  expect(outputText()).not.toContain("Update run status unavailable:");
   expect(getUpdateRun(run.runId)).toEqual(run);
 });
 
@@ -625,7 +606,6 @@ it.each(["none", "active"])(
     expect(output.includes("Last recorded update (")).toBe(laterRun !== "active");
     expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
     expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
-    // A later read must still surface the advisory after the terminal write.
     const result = await jsonStatus();
     expect((result.activeRun ?? result.lastRun)?.runId).toBe(currentRunId);
     expect(result.advisories).toEqual([
@@ -670,35 +650,32 @@ it("does not publish partial history when the latest terminal row is unreadable"
   expect(() => listUpdateRuns({ limit: 1 })).toThrow();
 });
 
-it.each([undefined, "work"])(
-  "reports abandoned history read-only when its driver died (profile=%s)",
-  async (profile) => {
-    vi.stubEnv("OPENCLAW_PROFILE", profile);
-    const now = Date.now();
-    const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("Test process identity is unavailable");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(lastActivity);
-    const created = createUpdateRun({
-      trigger: "control-ui",
-      before: { version: "2026.9.2" },
-      origin: {
-        driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
-      },
-    });
-    const recorded = recordUpdateRunPhase(created.runId, "staging");
-    vi.mocked(Date.now).mockReturnValue(now);
-    await updateStatus({});
-    expect(getUpdateRun(created.runId)).toEqual(recorded);
-    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).not.toContain("update in progress:");
-    expect(output).toContain("Abandoned update detected;");
-    expect(output).toContain(
-      `Stop the Gateway first (openclaw${profile ? " --profile work" : ""} gateway stop)`,
-    );
-    expect(output).toContain(`openclaw${profile ? " --profile work" : ""} update repair`);
-    expect(output).not.toContain("update failed:");
-  },
-);
+it.each([undefined, "work"])("abandoned history stays read-only (profile=%s)", async (profile) => {
+  vi.stubEnv("OPENCLAW_PROFILE", profile);
+  const now = Date.now();
+  const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
+  const driver = readUpdateRunDriver();
+  if (!driver) {
+    throw new Error("Test process identity is unavailable");
+  }
+  vi.spyOn(Date, "now").mockReturnValue(lastActivity);
+  const created = createUpdateRun({
+    trigger: "control-ui",
+    before: { version: "2026.9.2" },
+    origin: {
+      driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
+    },
+  });
+  const recorded = recordUpdateRunPhase(created.runId, "staging");
+  vi.mocked(Date.now).mockReturnValue(now);
+  await updateStatus({});
+  expect(getUpdateRun(created.runId)).toEqual(recorded);
+  const cli = `openclaw${profile ? " --profile work" : ""}`;
+  expectOutput(
+    "Abandoned update detected;",
+    `Stop the Gateway first (${cli} gateway stop)`,
+    `${cli} update repair`,
+  );
+  expect(outputText()).not.toContain("update in progress:");
+  expect(outputText()).not.toContain("update failed:");
+});

@@ -13,6 +13,7 @@ import type {
 import { isMissingPathError } from "../../infra/errors.js";
 import { writeJsonFixture } from "./update-cli-package.test-support.js";
 import type { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 type PostCoreUpdateOptions = Parameters<typeof completePostCorePluginUpdate>[0];
 
@@ -21,20 +22,12 @@ export function createChangedPostCoreUpdateOptions(
 ): PostCoreUpdateOptions {
   return {
     root: "/tmp/openclaw-updated-root",
-    pluginUpdate: {
+    pluginUpdate: createPostCorePluginUpdateResult({
       status: "ok",
       changed: true,
       warnings: [],
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
       npm: { changed: true, outcomes: [] },
-      integrityDrifts: [],
-    },
+    }),
     yes: true,
     json: true,
     timeoutMs: 30_000,
