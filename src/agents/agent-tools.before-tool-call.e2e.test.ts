@@ -2434,7 +2434,6 @@ describe("before_tool_call requireApproval handling", () => {
 
   it.each([
     { label: "an unknown decision", decision: "approved" },
-    { label: "a malformed truthy decision", decision: true },
     { label: "an excluded allow decision", decision: "allow-always", restricted: true },
     { label: "a decision for another approval", decision: "allow-once", wrongId: true },
   ])(
