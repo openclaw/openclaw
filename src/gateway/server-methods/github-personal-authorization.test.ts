@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
@@ -195,6 +198,33 @@ describe("GitHub publication request discovery", () => {
       sessionKey: "main",
     });
     expect(fresh.currentSession().archivedAt).toBe(123);
+    expect(mocks.loadSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("prepares the new session store after an in-place config publication", async () => {
+    const config = getRuntimeConfigSnapshot()!;
+    const snapshot = sessionRead();
+    const pending = Promise.withResolvers<typeof snapshot>();
+    const entered = Promise.withResolvers<void>();
+    mocks.loadSession
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return pending.promise;
+      })
+      .mockReturnValue({
+        ...snapshot,
+        entry: { ...snapshot.entry, sessionId: "reloaded-session" },
+      });
+    const first = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    await entered.promise;
+    config.session = { store: "/test/reloaded/sessions.json" };
+    setRuntimeConfigSnapshot(config);
+    const second = prepareGitHubPublicationOptionsRead(createRequest(), { sessionKey: "main" });
+    await Promise.resolve();
+    pending.resolve(snapshot);
+    (await first).release();
+    using reloaded = await second;
+    expect(reloaded.currentSession().sessionId).toBe("reloaded-session");
     expect(mocks.loadSession).toHaveBeenCalledTimes(2);
   });
 

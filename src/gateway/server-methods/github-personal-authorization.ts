@@ -1,3 +1,4 @@
+import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
@@ -121,7 +122,7 @@ async function prepareOptionsSession(
     flights = new Map();
     optionsSessionFlights.set(cfg, flights);
   }
-  const key = JSON.stringify([agentId, sessionKey]);
+  const key = JSON.stringify([getRuntimeConfigSnapshotMetadata()?.revision, agentId, sessionKey]);
   let flight = flights.get(key);
   if (!flight) {
     flight = {
