@@ -43,7 +43,11 @@ import {
 } from "./mcp-connection-resolver.js";
 import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
+import {
+  buildMcpClientCapabilities,
+  sanitizeMcpMetadataText,
+  summarizeServerCapabilities,
+} from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import {
   connectWithMcpStartupBackoff,
@@ -712,12 +716,14 @@ function createServerMcpRuntime(
         );
         session.toolMetadata = normalizedTools.metadata;
         const exposedTools = normalizedTools.tools;
+        const instructions = sanitizeMcpMetadataText(session.client.getInstructions());
         const serverEntry: McpServerCatalog = {
           serverName,
           safeServerName,
           launchSummary: launchDescription,
           pluginId: loaded.pluginIdsByServer?.[serverName],
           title: session.client.getServerVersion()?.title,
+          ...(instructions ? { instructions } : {}),
           icons: readMcpAppIcons(session.client.getServerVersion()?.icons),
           settings: readMcpAppSettingsCapability(session.client.getServerCapabilities()),
           toolCount: exposedTools.length,

@@ -5,6 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
@@ -29,6 +30,21 @@ function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["prepared
     .map(({ alias, provider, model }) => `- ${alias}: ${provider}/${model}`);
 }
 
+// Derive from the effective tools so servers whose tools were all filtered or
+// denied contribute nothing.
+function buildMcpServerInstructions(tools: readonly object[]) {
+  const instructionsByServer = new Map<string, string>();
+  for (const tool of tools) {
+    const mcp = getPluginToolMeta(tool)?.mcp;
+    if (mcp?.serverInstructions) {
+      instructionsByServer.set(mcp.safeServerName, mcp.serverInstructions);
+    }
+  }
+  return [...instructionsByServer]
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([serverName, instructions]) => ({ serverName, instructions }));
+}
+
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
   const {
@@ -43,6 +59,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
+    renderParams.mcpServerInstructions = buildMcpServerInstructions(tools);
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);

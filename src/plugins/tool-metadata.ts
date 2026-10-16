@@ -11,6 +11,8 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  /** Sanitized server-wide guidance; the prompt shows it only for servers with effective tools. */
+  serverInstructions?: string;
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   /** Trusted requester OAuth sign-in bootstrap; exempt from per-call MCP approval. */
@@ -37,15 +39,15 @@ type PluginToolMeta = {
   mcp?: PluginToolMcpMeta;
 };
 
-const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const pluginToolMeta = new WeakMap<object, PluginToolMeta>();
 
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
   pluginToolMeta.set(tool, meta);
 }
 
-/** Reads plugin ownership metadata for a concrete agent tool instance. */
-export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
+/** Reads plugin ownership metadata by identity; plain tool descriptors have none. */
+export function getPluginToolMeta(tool: object): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
 }
 

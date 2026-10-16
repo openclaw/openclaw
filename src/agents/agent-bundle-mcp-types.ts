@@ -40,6 +40,8 @@ export type McpServerCatalog = {
   pluginId?: string;
   marketplace?: string;
   title?: string;
+  /** Sanitized `initialize` instructions; untrusted server guidance for its own tools. */
+  instructions?: string;
   icons?: McpAppIcon[];
   settings?: McpAppSettingsCapability;
   toolCount: number;
