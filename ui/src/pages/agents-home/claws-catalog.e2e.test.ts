@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -156,6 +158,22 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         expect(await card.textContent()).not.toContain("by @openclaw");
         expect(await card.textContent()).not.toContain("@openclaw/workflow-operator");
         expect(await page.locator("[data-claws-attention]").count()).toBe(0);
+        if (capture) {
+          const catalog = page.locator("[data-claws-explore]");
+          const toolbar = catalog.locator(".agents-home__explore-toolbar");
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            toolbar,
+            [
+              catalog.getByRole("heading", { level: 2, name: "Claws", exact: true }),
+              catalog.getByText("Purpose-built agents for your team.", { exact: true }),
+              catalog.getByRole("searchbox", { name: "Search Claws", exact: true }),
+            ],
+            { scrollTo: toolbar, animations: "disabled" },
+          );
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await writeFile(`${dir}/agents-claws.png`, frame.png);
+        }
         await card.getByRole("button", { name: "Add" }).click();
         await page.waitForURL(/\/agents\/claws\/workflow-operator$/u);
         const detail = page.locator(".plugin-catalog-detail");
