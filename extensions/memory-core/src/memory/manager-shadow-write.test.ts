@@ -14,6 +14,9 @@ import {
 } from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
 
+const snapshot = (db: DatabaseSync) =>
+  db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
 describe("private session source staging", () => {
@@ -51,7 +54,7 @@ describe("private session source staging", () => {
   it("rejects a tombstone recorded after native staging before publishing the shadow", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const publish = MemoryIndexDatabase.prototype.publishShadow;
     vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(function (
@@ -67,9 +70,7 @@ describe("private session source staging", () => {
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
       "retry the full reindex",
     );
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("releases publication capacity and retries cleanup after a close failure", async () => {
@@ -111,7 +112,7 @@ describe("private session source staging", () => {
   it("preserves publication and generation cleanup failures through sync", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const database: unknown = Reflect.get(manager, "publishedDatabase");
     if (!(database instanceof MemoryIndexDatabase)) {
       throw new Error("Expected the manager's published database owner");
@@ -138,13 +139,9 @@ describe("private session source staging", () => {
     expect(failure.errors[1]).toBe(cleanup);
     expect(String(failure)).toContain(original.message);
     expect(String(failure)).toContain(cleanup.message);
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("drains accepted staging before manager close releases its database", async () => {
@@ -284,8 +281,7 @@ describe("private session source staging", () => {
         throw new Error("Expected the retained shadow database");
       }
       const expectPendingSetup = () => {
-        expect(shadow.isOpen).toBe(true);
-        expect(replacementSettled).toBe(false);
+        expect([shadow.isOpen, replacementSettled]).toEqual([true, false]);
         expect(
           shadow
             .prepare(
@@ -319,7 +315,7 @@ describe("private session source staging", () => {
       "Violet transfer source.\n".repeat(30_000),
     );
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const transfer = await import("./manager-publication-transfer.js");
     const batches = transfer.memoryPublicationBatches;
     const rejectedTransfer = vi
@@ -339,14 +335,10 @@ describe("private session source staging", () => {
       code: "overloaded",
       message: "controlled accepted transfer failure",
     });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     rejectedTransfer.mockRestore();
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     const databasePath = db.location()!;
     await manager.close();
     const entries = await fs.readdir(path.dirname(databasePath));

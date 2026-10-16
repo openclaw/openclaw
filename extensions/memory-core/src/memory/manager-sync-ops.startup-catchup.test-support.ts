@@ -1,9 +1,9 @@
-// Shared harness and fixtures for manager sync-ops startup catch-up tests.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   resolveStateDir,
+  type onInternalSessionTranscriptUpdate,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -12,9 +12,9 @@ import {
   ensureMemoryIndexSchema,
   type MemorySource,
   type MemorySyncParams,
-  type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -23,33 +23,9 @@ import {
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
-
-type SyncParams = {
-  reason?: string;
-  force?: boolean;
-  sessions?: MemorySyncParams["sessions"];
-  archiveFiles?: string[];
-  progress?: (update: MemorySyncProgressUpdate) => void;
-};
-
-type MemorySessionTranscriptUpdate = {
-  agentId?: string;
-  sessionFile?: string;
-  sessionKey?: string;
-  target?: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-  };
-};
+type MemorySessionTranscriptUpdate = Parameters<
+  Parameters<typeof onInternalSessionTranscriptUpdate>[0]
+>[0];
 
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
 
@@ -99,32 +75,17 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
-    chunking: {
-      overlap: 0,
-      tokens: 256,
-    },
+    chunking: { overlap: 0, tokens: 256 },
     extraPaths: [],
-    multimodal: {
-      enabled: false,
-      modalities: [],
-      maxFileBytes: 0,
-    },
+    multimodal: { enabled: false, modalities: [], maxFileBytes: 0 },
     provider: "none",
     store: {
       databasePath: path.join(resolveStateDir(), "memory-index.sqlite"),
-      fts: {
-        tokenizer: "unicode61",
-      },
-      vector: {
-        enabled: false,
-      },
+      fts: { tokenizer: "unicode61" },
+      vector: { enabled: false },
     },
     sync: {
-      sessions: {
-        deltaBytes: 100_000,
-        deltaMessages: 50,
-        postCompactionForce: true,
-      },
+      sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true },
     },
   } as unknown as ResolvedMemorySearchConfig;
   protected readonly batch = {
@@ -139,7 +100,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
   protected publishedDatabase: MemoryIndexDatabase;
 
-  readonly syncCalls: SyncParams[] = [];
+  readonly syncCalls: MemorySyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
   readonly deletedSources: Array<{ path: string; source: MemorySource; expectedHash?: string }> =
@@ -199,31 +160,12 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     return row.count;
   }
 
-  async catchUp(): Promise<string[]> {
-    return await this.runSessionStartupCatchup();
-  }
-
-  async markStartupDirtyFiles(): Promise<string[]> {
-    return await this.markSessionStartupCatchupDirtyFiles();
-  }
-
-  async runSyncForTest(params?: MemorySyncParams): Promise<void> {
-    await this.runSync(params);
-  }
-
-  async runArchiveSyncForTest(): Promise<void> {
-    await this.syncArchiveFiles({
-      needsFullReindex: false,
-    });
-  }
-
-  getDirtyArchiveFiles(): string[] {
-    return Array.from(this.sessionsDirtyFiles);
-  }
-
-  getPendingArchiveFiles(): string[] {
-    return Array.from(this.sessionPendingFiles);
-  }
+  catchUp = () => this.runSessionStartupCatchup();
+  markStartupDirtyFiles = () => this.markSessionStartupCatchupDirtyFiles();
+  runSyncForTest = (params?: MemorySyncParams) => this.runSync(params);
+  runArchiveSyncForTest = () => this.syncArchiveFiles({ needsFullReindex: false });
+  getDirtyArchiveFiles = () => Array.from(this.sessionsDirtyFiles);
+  getPendingArchiveFiles = () => Array.from(this.sessionPendingFiles);
 
   addPendingSessionTarget(target: NonNullable<MemorySyncParams["sessions"]>[number]): void {
     this.sessionPendingTargets.set(
@@ -245,17 +187,13 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     await Promise.resolve();
   }
 
-  async waitForSessionSync(): Promise<void> {
-    await this.pendingSyncWork;
-  }
+  waitForSessionSync = () => this.pendingSyncWork;
 
   afterNextCorpusListForTest(callback: () => Promise<void>): void {
     this.afterNextCorpusList = callback;
   }
 
-  isSessionsDirty(): boolean {
-    return this.sessionsDirty;
-  }
+  isSessionsDirty = () => this.sessionsDirty;
 
   startTranscriptListener(): void {
     this.ensureSessionListener();
@@ -311,18 +249,12 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.pendingSyncWork = this.indexSessionUpdates
       ? hasTargetedSessionSyncParams(params)
         ? this.runSync(params).then(() => undefined)
-        : this.syncArchiveFiles({
-            needsFullReindex: false,
-          }).then(() => undefined)
+        : this.syncArchiveFiles({ needsFullReindex: false }).then(() => undefined)
       : Promise.resolve();
     await this.pendingSyncWork;
   }
 
-  protected async withTimeout<T>(
-    promise: Promise<T>,
-    _timeoutMs: number,
-    _message: string,
-  ): Promise<T> {
+  protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
     return await promise;
   }
 
