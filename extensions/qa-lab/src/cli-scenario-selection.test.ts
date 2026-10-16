@@ -18,10 +18,7 @@ vi.mock("./cli.runtime.js", () => ({
 
 import { registerQaLabCli } from "./cli.js";
 import { resolveQaRunProfileMembership } from "./profile-planning.js";
-import {
-  qaMaturityTaxonomyIdentity,
-  type QaScorecardTaxonomyReport,
-} from "./scorecard-taxonomy.js";
+import type { QaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -68,16 +65,7 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
           const scorecardReport = {
             taxonomyPath: "taxonomy.yaml",
             title: "Selection fixture",
-            taxonomy: {
-              sourcePath: "taxonomy.yaml",
-              identity: qaMaturityTaxonomyIdentity({
-                version: 1,
-                title: "Selection fixture",
-                profiles: [],
-                levels: [],
-                surfaces: [],
-              }),
-            },
+            taxonomy: null,
             profileCount: 1,
             profiles: [
               {
@@ -96,7 +84,7 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
             requiredCoverageIdCount: 1,
             inventoriedCoverageIdCount: 1,
             coverageIdInventoryPercent: 100,
-            inventoryRefCount: 1,
+            inventoryRefCount: 0,
             scenarioCoverageIdCount: 1,
             unknownCoverageIdCount: 0,
             unknownCoverageIds: [],
@@ -109,18 +97,10 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
                 taxonomyCategoryName: "selection",
                 inventoryStatus: "complete",
                 profiles: ["selection-profile"],
-                features: [{ name: "Selection", coverageIds: ["test.selection"] }],
+                features: [],
                 coverageIds: ["test.selection"],
                 inventoriedCoverageIds: ["test.selection"],
-                inventoryRefs: [
-                  {
-                    coverageId: "test.selection",
-                    kind: "qa-scenario",
-                    path: null,
-                    role: "primary",
-                    scenarioRefs,
-                  },
-                ],
+                inventoryRefs: [],
                 scenarioRefs,
                 missingCoverageIds: [],
                 missingInventoryRefs: [],

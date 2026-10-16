@@ -26,7 +26,12 @@ async function fixture() {
     await writeFile(file, typeof value === "string" ? value : JSON.stringify(value), "utf8");
   };
   await write("package.json", { name: "openclaw", type: "module" });
-  return { repoRoot, tempRoot, write };
+  const files = async (entries: Record<string, unknown>) => {
+    for (const [file, value] of Object.entries(entries)) {
+      await write(file, value);
+    }
+  };
+  return { repoRoot, tempRoot, write, files };
 }
 
 const providerConfig = {
@@ -38,50 +43,42 @@ const providerConfig = {
 describe("qa bundled plugin dir", () => {
   it("stages a scoped mixed-source tree with working SDK, chunks, and dependency links", async () => {
     const f = await fixture();
-    await f.write("package.json", {
-      name: "openclaw",
-      type: "module",
-      exports: { "./plugin-sdk/account-id": { default: "./dist/plugin-sdk/account-id.js" } },
+    const sdkImport = 'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";';
+    await f.files({
+      "package.json": {
+        name: "openclaw",
+        type: "module",
+        exports: { "./plugin-sdk/account-id": { default: "./dist/plugin-sdk/account-id.js" } },
+      },
+      "dist/plugin-sdk/account-id.js": "export const normalizeAccountId = (v) => v.toLowerCase();",
+      "dist/extensions/qa-channel/index.js": [
+        sdkImport,
+        'export const accountId = normalizeAccountId("QA");',
+      ].join("\n"),
+      "extensions/qa-channel/openclaw.plugin.json": {
+        id: "qa-channel",
+        toolMetadata: { qa_read: { replaySafe: true } },
+      },
+      "dist/shared-chunk.js": "export {};",
+      "dist-runtime/runtime-chunk.js": 'export const marker = "runtime";',
+      "dist-runtime/extensions/runtime-only/package.json": { type: "module" },
+      "dist-runtime/extensions/runtime-only/index.js":
+        'export { marker } from "../../runtime-chunk.js";',
+      "extensions/source-only/package.json": { type: "module" },
+      "extensions/source-only/index.ts": [
+        sdkImport,
+        'import { marker } from "fake-dep";',
+        'export const accountId = `${normalizeAccountId("QA")}:${marker}`;',
+      ].join("\n"),
+      "store/fake-dep/package.json": { name: "fake-dep", type: "module" },
+      "store/fake-dep/index.js": 'export const marker = "ok";',
     });
-    await f.write(
-      "dist/plugin-sdk/account-id.js",
-      "export const normalizeAccountId = (v) => v.toLowerCase();",
-    );
     for (const id of ["qa-channel", "memory-core", "image-generation-core", "unused-plugin"]) {
       await f.write(`dist/extensions/${id}/package.json`, {
         name: `@openclaw/${id}`,
         type: "module",
       });
     }
-    await f.write(
-      "dist/extensions/qa-channel/index.js",
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'export const accountId = normalizeAccountId("QA");',
-      ].join("\n"),
-    );
-    await f.write("extensions/qa-channel/openclaw.plugin.json", {
-      id: "qa-channel",
-      toolMetadata: { qa_read: { replaySafe: true } },
-    });
-    await f.write("dist/shared-chunk.js", "export {};");
-    await f.write("dist-runtime/runtime-chunk.js", 'export const marker = "runtime";');
-    await f.write("dist-runtime/extensions/runtime-only/package.json", { type: "module" });
-    await f.write(
-      "dist-runtime/extensions/runtime-only/index.js",
-      'export { marker } from "../../runtime-chunk.js";',
-    );
-    await f.write("extensions/source-only/package.json", { type: "module" });
-    await f.write(
-      "extensions/source-only/index.ts",
-      [
-        'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";',
-        'import { marker } from "fake-dep";',
-        'export const accountId = `${normalizeAccountId("QA")}:${marker}`;',
-      ].join("\n"),
-    );
-    await f.write("store/fake-dep/package.json", { name: "fake-dep", type: "module" });
-    await f.write("store/fake-dep/index.js", 'export const marker = "ok";');
     await mkdir(path.join(f.repoRoot, "node_modules"));
     await symlink(
       path.join(f.repoRoot, "store/fake-dep"),
@@ -119,18 +116,16 @@ describe("qa bundled plugin dir", () => {
     for (const id of ["qa-channel", "memory-core", "image-generation-core"]) {
       expect((await lstat(path.join(bundledPluginsDir, id))).isDirectory()).toBe(true);
     }
-    const compiled: { accountId: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "qa-channel/index.js")).href
-    );
-    const runtime: { marker: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "runtime-only/index.js")).href
-    );
-    const source: { accountId: string } = await import(
-      pathToFileURL(path.join(bundledPluginsDir, "source-only/index.ts")).href
-    );
-    expect(compiled.accountId).toBe("qa");
-    expect(runtime.marker).toBe("runtime");
-    expect(source.accountId).toBe("qa:ok");
+    for (const [file, key, expected] of [
+      ["qa-channel/index.js", "accountId", "qa"],
+      ["runtime-only/index.js", "marker", "runtime"],
+      ["source-only/index.ts", "accountId", "qa:ok"],
+    ] as const) {
+      const loaded: Record<string, unknown> = await import(
+        pathToFileURL(path.join(bundledPluginsDir, file)).href
+      );
+      expect(loaded[key]).toBe(expected);
+    }
     for (const file of ["shared-chunk.js", "runtime-chunk.js"]) {
       const stat = await lstat(path.join(stagedRoot, "dist", file));
       expect(stat.isFile() || stat.isSymbolicLink()).toBe(true);

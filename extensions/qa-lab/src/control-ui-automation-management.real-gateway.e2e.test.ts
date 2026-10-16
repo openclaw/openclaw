@@ -3,11 +3,12 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
-import { createQaGatewayChild } from "./gateway-child.ts";
+import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.ts";
 import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
@@ -184,6 +185,107 @@ function managementArgs(action: AutomationAction, jobId: string) {
   };
 }
 
+function disabledJob(name: string, message: string) {
+  return {
+    action: "add",
+    job: {
+      name,
+      enabled: false,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message },
+      delivery: { mode: "none" },
+    },
+  };
+}
+
+function startGateway(
+  owner: ReturnType<typeof createQaGatewayChild>,
+  providerBaseUrl: string,
+  transport?: Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>,
+) {
+  const repoRoot = process.cwd();
+  return owner.start({
+    repoRoot,
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
+      cwd: repoRoot,
+      usePackagedPlugins: true,
+    },
+    providerMode: "mock-openai",
+    providerBaseUrl,
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    forcedRuntime: "openclaw",
+    transport,
+    transportBaseUrl: "http://127.0.0.1",
+    controlUiEnabled: false,
+    controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
+    mutateConfig: (cfg) => ({
+      ...cfg,
+      ...(transport
+        ? {
+            // Admission includes a non-owner; automation authority still belongs to configured owners.
+            commands: { ...cfg.commands, ownerAllowFrom: ["telegram:100001", "telegram:100002"] },
+            session: { ...cfg.session, dmScope: "per-channel-peer" as const },
+          }
+        : {}),
+      plugins: { ...cfg.plugins, slots: { ...cfg.plugins?.slots, memory: "none" } },
+      memory: { ...cfg.memory, search: { ...cfg.memory?.search, enabled: false } },
+      tools: {
+        profile: "full",
+        allow: ["automations", "session_status"],
+        codeMode: false,
+        toolSearch: false,
+        // Ordinary full-access recovery retains non-replay-safe automations.
+        ...(!transport ? { exec: { mode: "full" as const } } : {}),
+      },
+      agents: {
+        ...cfg.agents,
+        entries: {
+          ...cfg.agents?.entries,
+          qa: {
+            ...cfg.agents?.entries?.qa,
+            identity: { name: transport ? "Automation proof" : "Recovery proof" },
+            tools: { profile: "full", allow: ["automations", "session_status"] },
+          },
+        },
+      },
+    }),
+  });
+}
+
+function withChat(gateway: QaGatewayChild, sessionKey: string, run: (page: Page) => Promise<void>) {
+  return suite.withPage(
+    {
+      locale: "en-US",
+      viewport: { width: 1280, height: 900 },
+      serviceWorkers: "block",
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    },
+    async ({ page }) => {
+      await page.addInitScript(
+        ({ gatewayUrl, token }) => {
+          (
+            window as Window & {
+              __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
+            }
+          )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
+        },
+        { gatewayUrl: gateway.wsUrl, token: gateway.token },
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await run(page);
+    },
+  );
+}
+
+const writeVerdict = (file: string, value: unknown) =>
+  writeFile(path.join(suite.artifactDir, file), `${JSON.stringify(value, null, 2)}\n`);
+
 suite.define(() => {
   it.skipIf(process.platform === "win32")(
     "an ordinary Control UI turn creates a disabled automation after its Gateway is replaced",
@@ -195,214 +297,133 @@ suite.define(() => {
       const marker = "recovered-create";
       const checkpoint = provider.holdInitialRequestForRestart(marker);
       const jobName = "Disabled restart recovery proof";
-      provider.requests.set(marker, {
-        action: "add",
-        job: {
-          name: jobName,
-          enabled: false,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "Synthetic disabled recovery reminder." },
-          delivery: { mode: "none" },
-        },
-      });
+      provider.requests.set(marker, disabledJob(jobName, "Synthetic disabled recovery reminder."));
       const errors: unknown[] = [];
       try {
-        const repoRoot = process.cwd();
-        const gateway = await owner.start({
-          repoRoot,
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-            cwd: repoRoot,
-            usePackagedPlugins: true,
-          },
-          providerMode: "mock-openai",
-          providerBaseUrl: provider.baseUrl,
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          forcedRuntime: "openclaw",
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
-          mutateConfig: (cfg) => ({
-            ...cfg,
-            plugins: { ...cfg.plugins, slots: { ...cfg.plugins?.slots, memory: "none" } },
-            memory: { ...cfg.memory, search: { ...cfg.memory?.search, enabled: false } },
-            // Ordinary full-access continuation retains non-replay-safe tools.
-            // Explicit restartSafe execution would intentionally hide automations.
-            tools: {
-              profile: "full",
-              allow: ["automations", "session_status"],
-              exec: { mode: "full" },
-              codeMode: false,
-              toolSearch: false,
-            },
-            agents: {
-              ...cfg.agents,
-              entries: {
-                ...cfg.agents?.entries,
-                qa: {
-                  ...cfg.agents?.entries?.qa,
-                  identity: { name: "Recovery proof" },
-                  tools: { profile: "full", allow: ["automations", "session_status"] },
-                },
-              },
-            },
-          }),
-        });
+        const gateway = await startGateway(owner, provider.baseUrl);
         const sessionKey = `agent:qa:dashboard:operator-recovery-${randomUUID()}`;
         await gateway.call("sessions.create", {
           key: sessionKey,
           label: "Restart automation proof",
         });
-        await suite.withPage(
-          {
-            locale: "en-US",
-            ...(captureUiProof
-              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
-              : {}),
-            viewport: { width: 1280, height: 900 },
-            serviceWorkers: "block",
-          },
-          async ({ page }) => {
-            await page.addInitScript(
-              ({ gatewayUrl, token }) => {
-                (
-                  window as Window & {
-                    __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
-                  }
-                )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
+        await withChat(gateway, sessionKey, async (page) => {
+          const prompt = `Create one disabled hourly reminder after continuing this turn. [automation-proof:${marker}]`;
+          await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+          await page.getByRole("button", { name: "Send message" }).click();
+          await expect
+            .poll(() => checkpoint.originalRequestReached, { timeout: 60_000 })
+            .toBe(true);
+          await expect
+            .poll(
+              async () => {
+                const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
+                const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
+                return (
+                  Boolean(entry?.restartRecoveryDeliveryRunId) && transcript.userMessageCount === 1
+                );
               },
-              { gatewayUrl: gateway.wsUrl, token: gateway.token },
-            );
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-            const prompt = `Create one disabled hourly reminder after continuing this turn. [automation-proof:${marker}]`;
-            await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-            await page.getByRole("button", { name: "Send message" }).click();
-            await expect
-              .poll(() => checkpoint.originalRequestReached, { timeout: 60_000 })
-              .toBe(true);
-            await expect
-              .poll(
-                async () => {
-                  const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-                  const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
-                  return (
-                    Boolean(entry?.restartRecoveryDeliveryRunId) &&
-                    transcript.userMessageCount === 1
-                  );
-                },
-                { timeout: 30_000 },
-              )
-              .toBe(true);
-            expect(provider.results.has(marker)).toBe(false);
-            const before = (await readRawQaSessionStore({ gateway }))[sessionKey];
-            if (!before?.restartRecoveryDeliveryRunId) {
-              throw new Error("Original Control UI admission lost its recovery claim");
-            }
-            const originalRunId = before.restartRecoveryDeliveryRunId;
-            if (captureUiProof) {
-              await page.screenshot({ path: path.join(proofDir, "recovery-before-restart.png") });
-            }
-            const originalPid = gateway.pid;
-            if (originalPid === null) {
-              throw new Error("Owned Gateway has no process identity");
-            }
-            // Replace the exact owned process group, not an operator service.
-            // Startup reconciles the real chat admission; no claim is seeded.
-            expect(signalQaPosixProcessGroup(originalPid, "SIGKILL")).toBeUndefined();
-            await expect
-              .poll(() => isQaPosixProcessGroupAlive(originalPid), {
-                timeout: 30_000,
-              })
-              .toBe(false);
-            checkpoint.allowRecoveredRequests();
-            await gateway.restartAfterStateMutation(async () => {});
-            expect(gateway.pid).not.toBe(originalPid);
-            await expect.poll(() => provider.results.has(marker), { timeout: 90_000 }).toBe(true);
-            const created = readResult(provider.results.get(marker) ?? "null");
-            expect(created).toMatchObject({ name: jobName, enabled: false });
-            expect(typeof created.id).toBe("string");
-            expect(await gateway.call("cron.get", { id: String(created.id) })).toMatchObject({
-              id: created.id,
-              name: jobName,
-              enabled: false,
-              owner: { sessionKey },
+              { timeout: 30_000 },
+            )
+            .toBe(true);
+          expect(provider.results.has(marker)).toBe(false);
+          const before = (await readRawQaSessionStore({ gateway }))[sessionKey];
+          if (!before?.restartRecoveryDeliveryRunId) {
+            throw new Error("Original Control UI admission lost its recovery claim");
+          }
+          const originalRunId = before.restartRecoveryDeliveryRunId;
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(proofDir, "recovery-before-restart.png") });
+          }
+          const originalPid = gateway.pid;
+          if (originalPid === null) {
+            throw new Error("Owned Gateway has no process identity");
+          }
+          // Replace the exact owned process group, not an operator service.
+          // Startup reconciles the real chat admission; no claim is seeded.
+          expect(signalQaPosixProcessGroup(originalPid, "SIGKILL")).toBeUndefined();
+          await expect
+            .poll(() => isQaPosixProcessGroupAlive(originalPid), {
+              timeout: 30_000,
+            })
+            .toBe(false);
+          checkpoint.allowRecoveredRequests();
+          await gateway.restartAfterStateMutation(async () => {});
+          expect(gateway.pid).not.toBe(originalPid);
+          await expect.poll(() => provider.results.has(marker), { timeout: 90_000 }).toBe(true);
+          const created = readResult(provider.results.get(marker) ?? "null");
+          expect(created).toMatchObject({ name: jobName, enabled: false });
+          expect(typeof created.id).toBe("string");
+          expect(await gateway.call("cron.get", { id: String(created.id) })).toMatchObject({
+            id: created.id,
+            name: jobName,
+            enabled: false,
+            owner: { sessionKey },
+          });
+          await expect
+            .poll(
+              async () => {
+                const after = (await readRawQaSessionStore({ gateway }))[sessionKey];
+                return {
+                  sessionId: after?.sessionId,
+                  status: after?.status,
+                  originalTurnSettled:
+                    after?.restartRecoveryTerminalRunIds?.includes(originalRunId),
+                  recoveryClaimCleared: after?.restartRecoveryDeliveryRunId === undefined,
+                };
+              },
+              { timeout: 30_000 },
+            )
+            .toEqual({
+              sessionId: before.sessionId,
+              status: "done",
+              originalTurnSettled: true,
+              recoveryClaimCleared: true,
             });
-            await expect
-              .poll(
-                async () => {
-                  const after = (await readRawQaSessionStore({ gateway }))[sessionKey];
-                  return {
-                    sessionId: after?.sessionId,
-                    status: after?.status,
-                    originalTurnSettled:
-                      after?.restartRecoveryTerminalRunIds?.includes(originalRunId),
-                    recoveryClaimCleared: after?.restartRecoveryDeliveryRunId === undefined,
-                  };
-                },
-                { timeout: 30_000 },
-              )
-              .toEqual({
-                sessionId: before.sessionId,
-                status: "done",
-                originalTurnSettled: true,
-                recoveryClaimCleared: true,
-              });
-            const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
-            if (!isRecord(history) || !Array.isArray(history.messages)) {
-              throw new Error("Recovered session returned no history");
+          const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
+          if (!isRecord(history) || !Array.isArray(history.messages)) {
+            throw new Error("Recovered session returned no history");
+          }
+          // Recovery persists an internal continuation as role:user too; count
+          // the exact original ingress, not every user-shaped system input.
+          const originalInputs = history.messages.filter((message) => {
+            if (!isRecord(message) || message.role !== "user") {
+              return false;
             }
-            // Recovery persists an internal continuation as role:user too; count
-            // the exact original ingress, not every user-shaped system input.
-            const originalInputs = history.messages.filter((message) => {
-              if (!isRecord(message) || message.role !== "user") {
-                return false;
-              }
-              const text =
-                typeof message.content === "string"
+            const text =
+              typeof message.content === "string"
+                ? message.content
+                : Array.isArray(message.content)
                   ? message.content
-                  : Array.isArray(message.content)
-                    ? message.content
-                        .flatMap((block) =>
-                          isRecord(block) && block.type === "text" && typeof block.text === "string"
-                            ? [block.text]
-                            : [],
-                        )
-                        .join("\n")
-                    : undefined;
-              return text === prompt;
+                      .flatMap((block) =>
+                        isRecord(block) && block.type === "text" && typeof block.text === "string"
+                          ? [block.text]
+                          : [],
+                      )
+                      .join("\n")
+                  : undefined;
+            return text === prompt;
+          });
+          expect(originalInputs).toHaveLength(1);
+          await page
+            .getByText(new RegExp(`^${marker}:`, "u"))
+            .first()
+            .waitFor();
+          if (captureUiProof) {
+            await page.screenshot({
+              path: path.join(proofDir, "recovery-created-disabled-automation.png"),
             });
-            expect(originalInputs).toHaveLength(1);
-            await page
-              .getByText(new RegExp(`^${marker}:`, "u"))
-              .first()
-              .waitFor();
-            if (captureUiProof) {
-              await page.screenshot({
-                path: path.join(proofDir, "recovery-created-disabled-automation.png"),
-              });
-            }
-            await writeFile(
-              path.join(proofDir, "recovery-verdict.json"),
-              `${JSON.stringify(
-                {
-                  gateway: "real isolated Gateway process replacement",
-                  provider: "deterministic local Responses API; only model behavior is synthetic",
-                  ingress: "ordinary authenticated Control UI chat send",
-                  originalUserTurns: 1,
-                  recovery: "automatic; no second user turn or injected claim",
-                  automation: { name: created.name, enabled: created.enabled, persisted: true },
-                  operatorAdmin:
-                    "recovered automation creation succeeded through real tool/RPC scope checks",
-                },
-                null,
-                2,
-              )}\n`,
-            );
-          },
-        );
+          }
+          await writeVerdict("recovery-verdict.json", {
+            gateway: "real isolated Gateway process replacement",
+            provider: "deterministic local Responses API; only model behavior is synthetic",
+            ingress: "ordinary authenticated Control UI chat send",
+            originalUserTurns: 1,
+            recovery: "automatic; no second user turn or injected claim",
+            automation: { name: created.name, enabled: created.enabled, persisted: true },
+            operatorAdmin:
+              "recovered automation creation succeeded through real tool/RPC scope checks",
+          });
+        });
       } catch (error) {
         errors.push(error);
       }
@@ -440,63 +461,12 @@ suite.define(() => {
       });
       const errors: unknown[] = [];
       try {
-        const repoRoot = process.cwd();
-        const gateway = await owner.start({
-          repoRoot,
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-            cwd: repoRoot,
-            usePackagedPlugins: true,
-          },
-          providerMode: "mock-openai",
-          providerBaseUrl: provider.baseUrl,
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          forcedRuntime: "openclaw",
-          transport,
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
-          mutateConfig: (cfg) => ({
-            ...cfg,
-            // Channel admission includes a non-owner; only configured owners get automation tools.
-            commands: { ...cfg.commands, ownerAllowFrom: ["telegram:100001", "telegram:100002"] },
-            session: { ...cfg.session, dmScope: "per-channel-peer" },
-            plugins: { ...cfg.plugins, slots: { ...cfg.plugins?.slots, memory: "none" } },
-            memory: { ...cfg.memory, search: { ...cfg.memory?.search, enabled: false } },
-            // Keep a regular tool available so non-owner turns reach the provider.
-            tools: {
-              profile: "full",
-              allow: ["automations", "session_status"],
-              codeMode: false,
-              toolSearch: false,
-            },
-            agents: {
-              ...cfg.agents,
-              entries: {
-                ...cfg.agents?.entries,
-                qa: {
-                  ...cfg.agents?.entries?.qa,
-                  identity: { name: "Automation proof" },
-                  tools: { profile: "full", allow: ["automations", "session_status"] },
-                },
-              },
-            },
-          }),
-        });
+        const gateway = await startGateway(owner, provider.baseUrl, transport);
         await transport.waitReady({ gateway });
-        provider.requests.set("create", {
-          action: "add",
-          job: {
-            name: automationName,
-            enabled: false,
-            schedule: { kind: "every", everyMs: 3_600_000 },
-            sessionTarget: "isolated",
-            payload: { kind: "agentTurn", message: "Complete this synthetic reminder." },
-            delivery: { mode: "none" },
-          },
-        });
+        provider.requests.set(
+          "create",
+          disabledJob(automationName, "Complete this synthetic reminder."),
+        );
         await transport.sendInbound({
           accountId: transport.accountId,
           conversation: { id: "100001", kind: "direct" },
@@ -583,126 +553,96 @@ suite.define(() => {
         });
         const adminResults: Record<string, string> = {};
         let observedCronRuns: string | undefined;
-        await suite.withPage(
-          {
-            locale: "en-US",
-            ...(captureUiProof
-              ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } }
-              : {}),
-            viewport: { width: 1280, height: 900 },
-            serviceWorkers: "block",
-          },
-          async ({ page }) => {
-            await page.addInitScript(
-              ({ gatewayUrl, token }) => {
-                (
-                  window as Window & {
-                    __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
-                  }
-                )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
-              },
-              { gatewayUrl: gateway.wsUrl, token: gateway.token },
-            );
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-            for (const action of actions) {
-              const marker = `admin-${action}`;
-              provider.requests.set(marker, managementArgs(action, jobId));
-              await page
-                .locator(".agent-chat__composer-combobox textarea")
-                .fill(`${action} the Telegram-created reminder. [automation-proof:${marker}]`);
-              if (captureUiProof) {
-                await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
-              }
-              await page.getByRole("button", { name: "Send message" }).click();
-              try {
-                await expect
-                  .poll(() => provider.results.has(marker), { timeout: 60_000 })
-                  .toBe(true);
-              } catch (error) {
-                throw new Error(
-                  `Automation ${marker} did not complete: ${JSON.stringify({
-                    completed: Object.keys(adminResults),
-                    toolAvailability: [...provider.toolAvailability],
-                    results: [...provider.results.keys()],
-                    observations: provider.observations,
-                  })}`,
-                  { cause: error },
-                );
-              }
-              const result = readResult(provider.results.get(marker) ?? "null");
-              if (action === "list") {
-                expect(result.jobs).toEqual(
-                  expect.arrayContaining([expect.objectContaining({ id: jobId })]),
-                );
-              } else if (action === "get") {
-                expect(result).toMatchObject({ id: jobId, name: automationName });
-              } else if (action === "update") {
-                const updatedJob = {
-                  id: jobId,
-                  name: "Reminder updated from Control UI",
-                  payload: { ...creatorPayload, message: updatedReminderMessage },
-                  owner: created.owner,
-                  scheduledToolPolicy: created.scheduledToolPolicy,
-                };
-                expect(result).toEqual(expect.objectContaining(updatedJob));
-                expect(await gateway.call("cron.get", { id: jobId })).toEqual(
-                  expect.objectContaining(updatedJob),
-                );
-              } else if (action === "run") {
-                expect(result).toMatchObject({ ok: true, enqueued: true });
-                await expect
-                  .poll(
-                    async () => {
-                      const runs = await gateway.call("cron.runs", { id: jobId });
-                      observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
-                      return {
-                        succeeded:
-                          isRecord(runs) &&
-                          Array.isArray(runs.entries) &&
-                          runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
-                        runs: observedCronRuns,
-                      };
-                    },
-                    { timeout: 60_000 },
-                  )
-                  .toMatchObject({ succeeded: true });
-              } else {
-                expect(result).toMatchObject({ removed: true });
-              }
-              await page
-                .getByText(new RegExp(`^${marker}:`, "u"))
-                .first()
-                .waitFor();
-              if (captureUiProof) {
-                await page.screenshot({ path: path.join(proofDir, `${marker}-result.png`) });
-              }
-              adminResults[action] = "succeeded";
+        await withChat(gateway, sessionKey, async (page) => {
+          for (const action of actions) {
+            const marker = `admin-${action}`;
+            provider.requests.set(marker, managementArgs(action, jobId));
+            await page
+              .locator(".agent-chat__composer-combobox textarea")
+              .fill(`${action} the Telegram-created reminder. [automation-proof:${marker}]`);
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, `${marker}-request.png`) });
             }
-          },
-        );
+            await page.getByRole("button", { name: "Send message" }).click();
+            try {
+              await expect.poll(() => provider.results.has(marker), { timeout: 60_000 }).toBe(true);
+            } catch (error) {
+              throw new Error(
+                `Automation ${marker} did not complete: ${JSON.stringify({
+                  completed: Object.keys(adminResults),
+                  toolAvailability: [...provider.toolAvailability],
+                  results: [...provider.results.keys()],
+                  observations: provider.observations,
+                })}`,
+                { cause: error },
+              );
+            }
+            const result = readResult(provider.results.get(marker) ?? "null");
+            if (action === "list") {
+              expect(result.jobs).toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: jobId })]),
+              );
+            } else if (action === "get") {
+              expect(result).toMatchObject({ id: jobId, name: automationName });
+            } else if (action === "update") {
+              const updatedJob = {
+                id: jobId,
+                name: "Reminder updated from Control UI",
+                payload: { ...creatorPayload, message: updatedReminderMessage },
+                owner: created.owner,
+                scheduledToolPolicy: created.scheduledToolPolicy,
+              };
+              expect(result).toEqual(expect.objectContaining(updatedJob));
+              expect(await gateway.call("cron.get", { id: jobId })).toEqual(
+                expect.objectContaining(updatedJob),
+              );
+            } else if (action === "run") {
+              expect(result).toMatchObject({ ok: true, enqueued: true });
+              await expect
+                .poll(
+                  async () => {
+                    const runs = await gateway.call("cron.runs", { id: jobId });
+                    observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
+                    return {
+                      succeeded:
+                        isRecord(runs) &&
+                        Array.isArray(runs.entries) &&
+                        runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
+                      runs: observedCronRuns,
+                    };
+                  },
+                  { timeout: 60_000 },
+                )
+                .toMatchObject({ succeeded: true });
+            } else {
+              expect(result).toMatchObject({ removed: true });
+            }
+            await page
+              .getByText(new RegExp(`^${marker}:`, "u"))
+              .first()
+              .waitFor();
+            if (captureUiProof) {
+              await page.screenshot({ path: path.join(proofDir, `${marker}-result.png`) });
+            }
+            adminResults[action] = "succeeded";
+          }
+        });
         const auditEvents = managementAuditEvents();
         expect(auditEvents).toHaveLength(actions.length + 2);
-        await writeFile(
-          path.join(proofDir, "verdict.json"),
-          `${JSON.stringify(
-            {
-              gateway: "real isolated Gateway",
-              channel: "real Telegram plugin with synthetic Crabline Bot API",
-              provider: "deterministic local Responses API",
-              creator: "Telegram conversation",
-              admin: adminResults,
-              cronRuns: observedCronRuns,
-              configuredTelegramOwner: ownerResults,
-              nonOwnerTelegramConversation: {
-                automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
-                remove: "unavailable visibly; job and runs unchanged",
-              },
-              adminManagementAuditEvents: auditEvents.length,
-            },
-            null,
-            2,
-          )}\n`,
-        );
+        await writeVerdict("verdict.json", {
+          gateway: "real isolated Gateway",
+          channel: "real Telegram plugin with synthetic Crabline Bot API",
+          provider: "deterministic local Responses API",
+          creator: "Telegram conversation",
+          admin: adminResults,
+          cronRuns: observedCronRuns,
+          configuredTelegramOwner: ownerResults,
+          nonOwnerTelegramConversation: {
+            automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
+            remove: "unavailable visibly; job and runs unchanged",
+          },
+          adminManagementAuditEvents: auditEvents.length,
+        });
       } catch (error) {
         errors.push(error);
       }
