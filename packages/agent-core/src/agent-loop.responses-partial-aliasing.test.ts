@@ -2,7 +2,10 @@ import type { Server } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
+import {
+  appendAssistantThinking,
+  readAssistantThinkingAppend,
+} from "@openclaw/llm-core/event-stream";
 import { describe, expect, it, vi } from "vitest";
 import { streamOpenAIResponses } from "../../ai/src/providers/openai-responses.js";
 import { runAgentLoop } from "./agent-loop.js";
@@ -169,7 +172,7 @@ describe("agent loop over openai-responses partial snapshots", () => {
 
 // Exercise batching through the agent's real event boundary, with
 // a paced provider so the stream's existing unread-queue merging cannot help.
-async function streamingFixture() {
+async function streamingFixture(observe?: (event: AgentEvent) => void) {
   const stream = createAssistantMessageEventStream();
   const events: AgentEvent[] = [];
   const abort = new AbortController();
@@ -179,6 +182,7 @@ async function streamingFixture() {
     { systemPrompt: "", messages: [], tools: [] },
     config,
     (event) => {
+      observe?.(event);
       events.push(structuredClone(event));
     },
     abort.signal,
@@ -201,7 +205,21 @@ async function streamingFixture() {
 it("batches paced text and native reasoning within 32 ms and flushes block boundaries", async () => {
   vi.useFakeTimers();
   try {
-    const run = await streamingFixture();
+    const appends: Array<string | undefined> = [];
+    let previous = "";
+    const run = await streamingFixture((event) => {
+      if (
+        event.type === "message_update" &&
+        event.assistantMessageEvent.type === "thinking_delta"
+      ) {
+        const delta = event.assistantMessageEvent;
+        const block = delta.partial.content[delta.contentIndex];
+        if (block?.type === "thinking") {
+          appends.push(readAssistantThinkingAppend(block, previous));
+          previous = block.thinking;
+        }
+      }
+    });
     for (const delta of ["one", " two", " three"]) {
       run.stream.push({ type: "text_delta", contentIndex: 0, delta });
       await vi.advanceTimersByTimeAsync(10);
@@ -219,6 +237,15 @@ it("batches paced text and native reasoning within 32 ms and flushes block bound
       run.stream.push({ type: "thinking_delta", contentIndex: 1, delta, partial: run.message });
       await vi.advanceTimersByTimeAsync(10);
     }
+    await vi.advanceTimersByTimeAsync(12);
+    appendAssistantThinking(thinking, " again");
+    run.stream.push({
+      type: "thinking_delta",
+      contentIndex: 1,
+      delta: " again",
+      partial: run.message,
+    });
+    await vi.advanceTimersByTimeAsync(10);
     run.stream.push({
       type: "thinking_end",
       contentIndex: 1,
@@ -230,12 +257,14 @@ it("batches paced text and native reasoning within 32 ms and flushes block bound
       "text_delta",
       "thinking_start",
       "thinking_delta",
+      "thinking_delta",
       "thinking_end",
     ]);
     expect(run.updates()[2]).toMatchObject({
       delta: "reason carefully",
       partial: { content: [{ type: "text" }, { thinking: "reason carefully" }] },
     });
+    expect(appends).toEqual(["reason carefully", " again"]);
     run.message.content[0] = { type: "text", text: "one two three" };
     await run.finish();
     expect(

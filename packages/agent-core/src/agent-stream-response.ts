@@ -14,7 +14,10 @@ import type {
   Context,
   ToolResultMessage,
 } from "@openclaw/llm-core";
-import { readAssistantThinkingAppend } from "@openclaw/llm-core/event-stream";
+import {
+  appendAssistantThinking,
+  readAssistantThinkingAppend,
+} from "@openclaw/llm-core/event-stream";
 import { uuidv7 } from "./harness/session/uuid.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
@@ -83,12 +86,34 @@ async function* coalesceStreamDeltas(
   let pending: Delta | undefined;
   let thinking: ThinkingContent | undefined;
   let thinkingText = "";
+  let thinkingBefore = "";
   let thinkingSignature: string | undefined;
   let thinkingRedacted: boolean | undefined;
   let deadline: Promise<undefined> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let wake: (() => void) | undefined;
   let ended = false;
+  const projectBatch = (batch: Delta): Delta => {
+    if (batch.type !== "thinking_delta") {
+      return batch;
+    }
+    // The batch owns this projection and its append fact. Reusing the mutable
+    // provider block loses the combined append and makes rendering rescan it.
+    const block: ThinkingContent = {
+      type: "thinking",
+      thinking: thinkingBefore,
+      thinkingSignature,
+      redacted: thinkingRedacted,
+    };
+    appendAssistantThinking(block, batch.delta);
+    return {
+      ...batch,
+      partial: {
+        ...batch.partial,
+        content: batch.partial.content.with(batch.contentIndex, block),
+      },
+    };
+  };
   const clearDeadline = () => {
     clearTimeout(timer);
     timer = undefined;
@@ -106,7 +131,7 @@ async function* coalesceStreamDeltas(
         pending = undefined;
         clearDeadline();
         if (batch) {
-          yield batch;
+          yield projectBatch(batch);
         }
         continue;
       }
@@ -115,7 +140,7 @@ async function* coalesceStreamDeltas(
         ended = true;
         if (pending) {
           clearDeadline();
-          yield pending;
+          yield projectBatch(pending);
         }
         return;
       }
@@ -150,7 +175,7 @@ async function* coalesceStreamDeltas(
         const batch = pending;
         pending = undefined;
         clearDeadline();
-        yield batch;
+        yield projectBatch(batch);
       }
       if (!batchable || signal.aborted) {
         if (block?.type === "thinking") {
@@ -161,6 +186,7 @@ async function* coalesceStreamDeltas(
       }
       pending = event;
       thinking = block?.type === "thinking" ? block : undefined;
+      thinkingBefore = thinkingText;
       thinkingText = thinking?.thinking ?? "";
       thinkingSignature = thinking?.thinkingSignature;
       thinkingRedacted = thinking?.redacted;
@@ -171,7 +197,7 @@ async function* coalesceStreamDeltas(
     }
   } catch (error) {
     if (pending) {
-      yield pending;
+      yield projectBatch(pending);
     }
     throw error;
   } finally {
