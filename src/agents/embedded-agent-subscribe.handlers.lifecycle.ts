@@ -12,7 +12,6 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {
   classifyAssistantFailoverReason,
@@ -210,23 +209,21 @@ export function handleAgentEnd(
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
-    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const rawErrorConsoleSuffix =
-      safeRawErrorPreview &&
-      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
-        ? ` rawError=${safeRawErrorPreview}`
-        : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
       runId: ctx.params.runId,
       isError: true,
-      error: safeErrorText,
       failoverReason,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
-      ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
+      rawErrorHash: observedError.rawErrorHash,
+      rawErrorFingerprint: observedError.rawErrorFingerprint,
+      httpCode: observedError.httpCode,
+      providerRuntimeFailureKind: observedError.providerRuntimeFailureKind,
+      providerErrorType: observedError.providerErrorType,
+      requestIdHash: observedError.requestIdHash,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} failoverReason=${failoverReason ?? "unknown"}`,
     });
   }
 
