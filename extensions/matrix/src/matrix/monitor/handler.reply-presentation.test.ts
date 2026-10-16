@@ -231,8 +231,8 @@ describe("matrix monitor handler reply presentation", () => {
         context.roomId,
         "$draft1",
         payload.text,
-        expect.objectContaining({
-          ...(kind === "controls"
+        expect.objectContaining(
+          kind === "controls"
             ? {
                 extraContent: {
                   "com.openclaw.presentation": expect.objectContaining({
@@ -242,8 +242,8 @@ describe("matrix monitor handler reply presentation", () => {
                   }),
                 },
               }
-            : {}),
-        }),
+            : {},
+        ),
       );
       expect(finalizeLive).not.toHaveBeenCalled();
       expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();

@@ -93,7 +93,7 @@ describe("projectSessionDisplayMessage", () => {
     ['"NO_REPLY"', '"NO_REPLY"'],
     ['{"action":"NO_REPLY"}', '{"action":"NO_REPLY"}'],
     ["no_reply", "no_reply"],
-    ["Done\nNO_REPLY", "Done\nNO_REPLY"],
+    ["Done\nNO_REPLY", "Done"],
     ["NO_REPLY\nREADY", "READY"],
     ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
     ["NO_REPLY\nNO_REPLY\nREADY", "NO_REPLY\nREADY"],
