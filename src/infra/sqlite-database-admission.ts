@@ -17,7 +17,6 @@ import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission
 import {
   SqliteDatabaseGenerationSlot,
   SqliteDatabaseAdmissionRegistry,
-  hasSqliteDatabaseSchemaAdmission,
   type SqliteDatabaseAdmissionCursor,
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseAdmissionIdentity as identity,
@@ -39,7 +38,6 @@ import {
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
-import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -78,17 +76,19 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissio
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
   const currentIdentity = prepareSqliteDatabaseAdmission(location);
-  const record = pathAdmission(location);
-  return (
-    record !== undefined &&
-    record.identity === currentIdentity &&
-    Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent) === 1
+  return withPathAdmission(
+    location,
+    (record) =>
+      record !== undefined &&
+      record.identity === currentIdentity &&
+      Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent) ===
+        1,
   );
 }
 
 /** Maintenance can invalidate restart proof while retaining its freshly checked runtime facts. */
 export function invalidateSqliteDatabaseCleanClose(location: string): void {
-  state.seals.invalidate(location, pathAdmission(location));
+  withPathAdmission(location, (record) => state.seals.invalidate(location, record));
 }
 
 export function readSqliteDatabaseIntegrityVerification(
@@ -114,9 +114,27 @@ export function prepareSqliteDatabaseCleanClose(database: DatabaseSync) {
   );
 }
 
-const scopedWrites = createSqliteDatabaseWriteReceipts({
+const reader = createSqliteDatabaseAdmissionReader({
+  state,
   admission,
   pathAdmission,
+  exchange,
+  publishFact,
+  retain: retainReference,
+  release: releaseReference,
+});
+const { activePathAdmission, withPathAdmission } = reader;
+export const {
+  getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} = reader;
+
+const scopedWrites = createSqliteDatabaseWriteReceipts({
+  admission,
+  pathAdmission: activePathAdmission,
   writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
@@ -183,7 +201,7 @@ export function retainSqliteDatabaseAdmissionLocation(location: string): void {
   if (threadId !== 0) {
     return;
   }
-  const descriptor = state.registry.descriptors.get(key) ?? fs.openSync(location, "r");
+  const descriptor = state.registry.descriptors.get(key)?.descriptor ?? fs.openSync(location, "r");
   // Never close a source descriptor while another native connection may hold POSIX locks.
   const opened = fs.fstatSync(descriptor, { bigint: true });
   if (!opened.isFile() || identity(opened) !== key) {
@@ -397,7 +415,7 @@ function retainConnection(database: DatabaseSync, record: Admission): Admission 
   }
 }
 
-/** Native close has settled; keep only descriptor custody, never the closed database's payloads. */
+/** Native close retires row receipts while descriptor custody retains opted-in physical facts. */
 export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   const record = state.connections.get(database);
   if (state.openedIdentities.delete(database) && record) {
@@ -413,12 +431,15 @@ function releaseReference(record: Admission): void {
   }
 }
 
-export const { getSqliteDatabaseAdmission, getOrLoadSqliteDatabaseAdmissionForPath } =
-  createSqliteDatabaseAdmissionReader({ state, admission, pathAdmission, exchange, publishFact });
+function retainReference(record: Admission): void {
+  if (state.registry.changeReferences(record, 1)) {
+    exchange(record);
+  }
+}
 
 function publishFact<T>(
   record: Admission,
-  key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "writer">,
+  key: Pick<SqliteDatabaseAdmissionKey<T>, "name" | "schemaDependent" | "lifetime" | "writer">,
   value: T,
   revision: number,
 ): void {
@@ -673,6 +694,10 @@ function revoke(record: Admission | undefined, location = record?.location): voi
     state.seals.invalidate(location, record);
   }
   if (record) {
+    // A corruption report can follow native close; shared cells also revoke retained physical facts.
+    for (const fact of record.facts.values()) {
+      Atomics.store(new Int32Array(fact.current), 0, 0);
+    }
     advanceSqliteDatabaseGeneration(record, "schemaRevision");
     advanceSqliteDatabaseGeneration(record, "factRevision");
   }
@@ -685,7 +710,7 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
 }
 
 export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
-  revoke(pathAdmission(location), location);
+  withPathAdmission(location, (record) => revoke(record, location));
 }
 
 /** Explicit removal or maintenance calls this only after its owner has joined native consumers. */
@@ -720,24 +745,6 @@ export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended
   } else {
     state.suspended.delete(database);
   }
-}
-
-export function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
-  return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
-}
-
-/** Admission owns the descriptor's immutable identity; callers do not re-stat its pathname. */
-export function getSqliteDatabaseAdmissionIdentityForPath(
-  location: string,
-): DatabaseFileIdentity | undefined {
-  return state.registry.forLocation(location)?.physicalIdentity;
-}
-
-/** Consume the already captured physical identity without another filesystem lookup. */
-export function hasSqliteDatabaseSchemaAdmissionForIdentity(
-  physicalIdentity: DatabaseFileIdentity,
-): boolean {
-  return state.registry.hasSchemaAdmissionForIdentity(physicalIdentity);
 }
 
 export function captureSqliteDatabaseAdmissions(

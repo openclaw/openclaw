@@ -31,6 +31,7 @@ export type AdmissionFact = {
   value: unknown;
   revision: number;
   schemaDependent: boolean;
+  lifetime?: "process";
   publication: string;
   current: SharedArrayBuffer;
 };
@@ -64,6 +65,8 @@ export type SqliteDatabaseAdmissionKey<T> = {
   name: string;
   read(this: void, value: unknown): T | undefined;
   schemaDependent?: boolean;
+  /** Physical validation and owner-published decisions survive ordinary native close. */
+  lifetime?: "process";
   writer?: "host";
 };
 export type SqliteDatabaseAdmissionExchange = (
@@ -118,7 +121,7 @@ export function advanceSqliteDatabaseGeneration(
 }
 export function publishSqliteDatabaseFact(
   record: Admission,
-  key: { name: string; schemaDependent?: boolean; writer?: "host" },
+  key: { name: string; schemaDependent?: boolean; lifetime?: "process"; writer?: "host" },
   value: unknown,
   revision: number,
   publication: string,
@@ -140,6 +143,7 @@ export function publishSqliteDatabaseFact(
     value,
     revision,
     schemaDependent: key.schemaDependent === true,
+    lifetime: key.lifetime,
     publication,
     current,
   });
@@ -247,7 +251,10 @@ export class SqliteDatabaseAdmissionRegistry {
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
-  readonly descriptors = new Map<string, number>();
+  readonly descriptors = new Map<
+    string,
+    { descriptor: number; facts: Map<string, AdmissionFact> }
+  >();
   private revision = 0;
 
   changeReferences(record: Admission, change: 1 | -1): boolean {
@@ -270,20 +277,29 @@ export class SqliteDatabaseAdmissionRegistry {
   private retireUnreferenced(record: Admission): void {
     if (
       threadId !== 0 ||
+      isSqliteDatabaseAdmissionRetired(record) ||
       [...record.references.values()].some(
         (references) => Atomics.load(new Int32Array(references), 0) > 0,
       )
     ) {
       return;
     }
-    // Closed metadata releases its payloads; only explicit retirement closes descriptor custody.
+    for (const [name, fact] of record.facts) {
+      if (fact.lifetime !== "process" || !isSqliteDatabaseAdmissionFactCurrent(record, fact)) {
+        record.facts.delete(name);
+      }
+    }
+    const custody = this.descriptors.get(record.identity);
+    if (custody) {
+      custody.facts = record.facts;
+    }
+    // Row facts, pathname bindings and receipts retire; physical facts stay with descriptor custody.
     Atomics.compareExchange(
       new Int32Array(record.generation),
       SqliteDatabaseGenerationSlot.retired,
       0,
       2,
     );
-    record.facts.clear();
     record.writeScopes.clear();
   }
 
@@ -329,6 +345,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
+    const retained = this.descriptors.get(readSqliteDatabaseAdmissionIdentity(opened));
     const record: Admission = {
       identity: readSqliteDatabaseAdmissionIdentity(opened),
       physicalIdentity: {
@@ -345,10 +362,17 @@ export class SqliteDatabaseAdmissionRegistry {
       writeScopes: new Map(),
       writeScopeRevision: 0,
       references: new Map(),
-      facts: new Map(),
+      facts: new Map(
+        [...(retained?.facts ?? [])]
+          .filter(([, fact]) => Atomics.load(new Int32Array(fact.current), 0) === 1)
+          .map(([name, fact]) => [name, { ...fact, revision: 0 }]),
+      ),
     };
     this.records.set(record.identity, record);
-    this.descriptors.set(record.identity, descriptor);
+    this.descriptors.set(record.identity, {
+      descriptor,
+      facts: new Map(),
+    });
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
@@ -357,7 +381,7 @@ export class SqliteDatabaseAdmissionRegistry {
   /** Only the joined lifecycle owner may release a retained descriptor. */
   retireDescriptor(identity: string, options: { requireSoleDescriptor?: boolean }): boolean {
     const record = this.records.get(identity);
-    const descriptor = this.descriptors.get(identity) ?? record?.descriptor;
+    const descriptor = this.descriptors.get(identity)?.descriptor ?? record?.descriptor;
     if (descriptor === undefined) {
       return false;
     }
