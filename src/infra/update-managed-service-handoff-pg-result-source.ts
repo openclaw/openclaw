@@ -17,6 +17,7 @@ process.on("disconnect", () => {
   clearTimeout(pending.timer);
   pending.reject(new Error("Parent sentinel owner disconnected before its reply"));
 });
+process.channel?.unref();
 
 async function runSentinelOperation(operation) {
   if (!ownsManagedUpdateLease()) throw new Error("Managed handoff sentinel lease lost");

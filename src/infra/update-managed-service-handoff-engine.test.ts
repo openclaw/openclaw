@@ -76,9 +76,9 @@ it("recognizes an offline PostgreSQL anchor through its inspection worker", asyn
   await expect(resolveManagedHandoffStateEngine(env)).resolves.toBe("postgres");
 });
 
-itUnix(
-  "lets the PostgreSQL parent exit naturally while its transferred helper is busy",
-  async ({ signal }) => {
+itUnix.for(["transfer", "cancel"] as const)(
+  "settles PostgreSQL %s without retaining parent or helper IPC",
+  async (mode, { signal }) => {
     const root = await fs.realpath(tempDirs.make("handoff-parent-exit-"));
     const release = path.join(root, "release-updater");
     const transferred = path.join(root, "transferred.json");
@@ -106,6 +106,11 @@ itUnix(
       `
     import fs from "node:fs";
     import assert from "node:assert/strict";
+    const mode = ${JSON.stringify(mode)};
+    if (mode === "cancel") {
+      process.stdin.resume();
+      process.stdin.on("end", () => process.exit(0));
+    }
     const { registerSealedRuntime } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.sealedRegistry).href)});
     registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(root)} });
     const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
@@ -114,7 +119,9 @@ itUnix(
       env: process.env, restartDrainTimeoutMs: 300000, meta: {},
     });
     assert.equal(result.status, "started");
-    assert(await handoff.transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...result }));
+    const identity = { kind: "managed-update-handoff", ...result };
+    if (mode === "cancel") assert.equal(await handoff.cancelManagedServiceUpdateHandoff(identity), "restored-in-process");
+    else assert(await handoff.transferManagedServiceUpdateHandoff(identity));
     fs.writeFileSync(${JSON.stringify(transferred)}, JSON.stringify(result));
   `,
     );
@@ -126,7 +133,7 @@ itUnix(
         OPENCLAW_STATE_DIR: root,
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: [mode === "cancel" ? "pipe" : "ignore", "ignore", "pipe"],
     });
     let stderr = "";
     parent.stderr.on("data", (chunk) => {
@@ -137,10 +144,16 @@ itUnix(
     try {
       await waitForFile(transferred, signal);
       helperPid = JSON.parse(await fs.readFile(transferred, "utf8")).pid;
-      expect(await withinTest(closed, signal), stderr).toEqual([0, null]);
+      if (mode === "cancel") {
+        expect(parent.exitCode, stderr).toBeNull();
+        await waitForDead(helperPid!, signal);
+      } else {
+        expect(await withinTest(closed, signal), stderr).toEqual([0, null]);
+      }
     } finally {
       // Release the real updater even when a referenced IPC channel prevents parent exit.
       await fs.writeFile(release, "finish");
+      parent.stdin?.end();
       await closed;
       if (helperPid) {
         await waitForDead(helperPid, AbortSignal.timeout(30_000));
