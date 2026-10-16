@@ -339,7 +339,9 @@ describe("chat composer suggestion accessibility", () => {
 
 it("completes mobile local commands without executing them from the menu", async () => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   replaceSlashCommands([
     { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
   ]);

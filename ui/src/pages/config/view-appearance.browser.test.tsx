@@ -666,7 +666,9 @@ describe("config appearance preferences", () => {
 
 it("keeps the desktop send preference out of mobile settings without rewriting it", () => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const { container, props } = renderAppearance({ chatSendShortcut: "modifier-enter" });
   expect(container.querySelector("[data-settings-send-shortcut]")).toBeNull();
   expect(container.textContent).not.toContain("Send shortcut");
