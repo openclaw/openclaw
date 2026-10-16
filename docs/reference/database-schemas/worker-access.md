@@ -4254,6 +4254,15 @@ another registered path observes the executor's single maintenance claim. Alias
 registrations retain cleanup locators without creating independent maintenance
 owners, so a nested scope cannot close an executor retained by its parent.
 
+Losing an already-open native execution worker retires that native generation,
+not the logical database references held by unrelated active chats. The failed
+operation is returned without replay, and previously captured native claims stay
+invalid. Later work can open a replacement only after native exit and lease
+cleanup settle, under the same physical-file constraints and current caller
+authority. Initial opening failures retain their conservative logical retirement;
+explicit database or shared-state revocation remains terminal. Worker-backed
+adapters still receive their terminal-loss notification after accepted work settles.
+
 Personal skill-library catalog, revision disclosure, and fresh selection reads use
 the shared-state read worker. The host captures the physical store, profile and
 role authority before yielding; prepared defaults and activation check the
