@@ -11,7 +11,7 @@ import {
   findActiveCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
-import type { CronRunReceiptHandle, CronRunReceiptOwnerObservation } from "./run-receipt.types.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export function inspectActiveCronRunReceipt(params: { storePath: string; jobId: string }) {
   return runOpenClawStateWriteTransaction(({ db }) =>
@@ -63,7 +63,6 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
     claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId!,
     }),
   );
 }
@@ -71,19 +70,16 @@ export function claimCronRunReceiptForTest(storePath: string, job: CronJob, star
 export function claimCronRunReceiptInDatabaseForTest(params: {
   database: Parameters<typeof claimCronRunReceiptInDatabase>[0]["database"];
   prepared: ReturnType<typeof prepareCronRunReceiptClaim>;
-  resolveAgentId: (job: CronJob) => string;
 }) {
   const { handle: preparedHandle } = params.prepared;
   const handle = claimCronRunReceiptInDatabase({
     database: params.database,
     handle: preparedHandle,
-    job: loadedCronStoreFromRows(
-      loadCronRows(params.database, preparedHandle.storeKey, new Set([preparedHandle.jobId])),
-    ).store.jobs[0],
     requestRunId: params.prepared.requestRunId,
-    resolveAgentId: params.resolveAgentId,
-    receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
   });
+  if (!handle) {
+    throw new Error("Fixture cron receipt is already claimed");
+  }
   return handle;
 }
 
@@ -113,7 +109,9 @@ export function prepareCronRunReceiptClaim(params: {
   agentId: string;
   startedAtMs: number;
   requestRunId?: string;
-  observed: CronRunReceiptOwnerObservation | undefined;
+  observed:
+    | Pick<CronRunReceiptHandle, "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs">
+    | undefined;
 }) {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   const storeKey = cronStoreKey(params.storePath);

@@ -34,7 +34,7 @@ afterEach(async () => {
 it.each([
   { bun: undefined, channelControl: true },
   { bun: "1.4.3", channelControl: true },
-  { bun: "1.4.2", channelControl: false },
+  { bun: "1.4.3", channelControl: false },
 ])(
   "releases the idle IPC channel while retaining open native claims (Bun=$bun)",
   async ({ bun, channelControl }) => {

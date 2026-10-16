@@ -2,7 +2,11 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationContextRequest,
+} from "../../../app/context.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
@@ -73,12 +77,14 @@ async function mount(
   } as unknown as ApplicationContext;
   // Only the preview consumes this Gateway-only fixture; sibling catalogs need a full app.
   panel.addEventListener("context-request", (event) => {
+    // SAFETY: This listener handles the native application context protocol.
+    const contextRequest = event as ApplicationContextRequest;
     if (
-      event.context === applicationContext &&
-      event.contextTarget.localName === "openclaw-chat-html-preview"
+      contextRequest.context === applicationContext &&
+      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
     ) {
       event.stopPropagation();
-      event.callback(previewContext);
+      contextRequest.callback(previewContext);
     }
   });
   panel.style.cssText = "width:100%;height:600px";

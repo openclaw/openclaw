@@ -4,6 +4,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   readRecentSessionTranscriptActiveEvents,
@@ -88,7 +89,7 @@ it("converges an older current-watermark rebuild and a following append without 
     runOpenClawAgentWriteTransaction((database) => {
       expect(appendTranscriptEventsInTransaction(database, scope, entries)).toBe(entries.length);
     }, scope);
-    const { db } = openOpenClawAgentDatabase(scope);
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
     const expectedRows = projectionRows(db);
     expect(expectedRows.map((row) => row.context_eligible)).toEqual([1, 1, 0, 1]);
     expect(readRecentSessionTranscriptActiveEvents(scope, 3)).toEqual([
@@ -153,7 +154,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
       sessionKey: "agent:main:eligibility",
     };
     await replaceTranscriptEvents(scope, [...entries]);
-    const { db } = openOpenClawAgentDatabase(scope);
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
     for (const excludeFromContext of [false, true]) {
       const before = rawRows(db);
       const row = before[2];
@@ -192,7 +193,7 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", asyn
       sessionKey: "agent:main:eligibility",
     };
     await replaceTranscriptEvents(scope, [...entries]);
-    const { db } = openOpenClawAgentDatabase(scope);
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
     const plan = prepareSessionTranscriptProjection(db, sessionId);
     if (!plan) {
       throw new Error("missing prepared projection");
@@ -239,7 +240,7 @@ it.each(["interrupted", "rewrite", "delete"])(
         sessionKey: "agent:main:eligibility",
       };
       await replaceTranscriptEvents(scope, [...entries]);
-      const { db } = openOpenClawAgentDatabase(scope);
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db);
       db.prepare(
         "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
       ).run(sessionId);

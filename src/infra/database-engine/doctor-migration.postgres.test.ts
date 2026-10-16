@@ -1,0 +1,768 @@
+import fs from "node:fs";
+import "./backup-worker.test-support.js";
+import path from "node:path";
+import { getEnvironmentData } from "node:worker_threads";
+import { Client } from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { recordUpdateDatabaseWrites } from "../../cli/update-cli/update-command-database-receipts.js";
+import { prepareDoctorDatabaseMigrations } from "../../commands/doctor-schema-migrations.js";
+import {
+  preparePostgresRestore,
+  readBackupEngine,
+  verifyMatchedPostgresBackup,
+} from "../../snapshot/database-backup.js";
+import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
+import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
+import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createMockStateReadSource } from "../../state/openclaw-state-read-mock.test-support.js";
+import type * as StateReadWorker from "../../state/openclaw-state-read-worker.js";
+import type {
+  OpenClawStateReadCommand,
+  OpenClawStateReadLocation,
+} from "../../state/openclaw-state-read.types.js";
+import { stateBootstrapReadOperations } from "../../state/state-bootstrap-read.worker.js";
+import { acquireGatewayLock } from "../gateway-lock.js";
+import { inspectGatewayOwnerLease } from "../gateway-owner-lease.worker.js";
+import { defaultPayload } from "../gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "../gateway-state-owner.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
+import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
+import { createUpdateDatabaseBackup } from "../update-database-backup.js";
+import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../update-doctor-result.js";
+import { createUpdateRun, recordUpdateRunPhase } from "../update-run-ledger.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
+import { agentPortProvider } from "./agent-port.js";
+import { installDatabaseEngineSelection } from "./context.js";
+import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import type { StoreSchema } from "./contract.js";
+import { openEngineStore } from "./open.js";
+import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import type { PortDescriptor } from "./port-descriptor.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
+import { statePortProvider } from "./state-port.js";
+
+// Keep the actual read contracts in-process so all consumers see the
+// synthetic migration registration; retain the real reply decoder.
+const reads = vi.hoisted(() => ({
+  capture: vi.fn<typeof StateReadWorker.captureOpenClawStateReadSource>(),
+  decode: vi.fn<typeof StateReadWorker.decodeOpenClawStateReadReply>(),
+  retire: vi.fn<typeof StateReadWorker.retireIdleOpenClawStateReadWorkers>(),
+}));
+// mock-isolation: Install transport before cyclic state imports; load the real decoder afterward so the synthetic migration stays in-process.
+vi.mock("../../state/openclaw-state-read-worker.js", () => ({
+  captureOpenClawStateReadSource: reads.capture,
+  decodeOpenClawStateReadReply: reads.decode,
+  retireIdleOpenClawStateReadWorkers: reads.retire,
+}));
+
+async function readInProcess(command: OpenClawStateReadCommand, source: OpenClawStateReadLocation) {
+  const databasePath = source.context.admission.databasePath;
+  if (command.type === "stateBootstrap.inspect" || command.type === "stateBootstrap.ownership") {
+    return withEngineStoreAdmission(() =>
+      withOpenClawStateReadOnlyLocation(
+        ({ db }) => ({
+          ok: true as const,
+          sourceAdmitted: true as const,
+          ...(command.type === "stateBootstrap.inspect"
+            ? stateBootstrapReadOperations[command.type](command.input, db)
+            : stateBootstrapReadOperations[command.type](command.input, db)),
+        }),
+        databasePath,
+        source.location,
+      ),
+    );
+  }
+  if (command.type !== "gatewayOwnerLease.read") {
+    throw new Error(`Unexpected fixture read: ${command.type}`);
+  }
+  const lease = withEngineStoreAdmission(() =>
+    inspectGatewayOwnerLease({ ...source, databasePath }, () => {}, command.schemaMaintenance),
+  );
+  return { ok: true as const, type: command.type, sourceAdmitted: true as const, lease };
+}
+
+const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
+const connection = typeof configured === "string" ? configured : undefined;
+const dirs = useAutoCleanupTempDirTracker(afterAll);
+
+describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
+  const client = new Client({ connectionString: connection });
+  const namespaces = new Set<string>();
+  const target = stateEngineSchema.version;
+  const originalMigrations = stateEngineSchema.postgresMigrations;
+  let env: NodeJS.ProcessEnv;
+  let pathname: string;
+  let namespace: string;
+  let predecessor: StoreSchema;
+  let backup: PortDescriptor;
+  let indexSql: string;
+  let targetFingerprint: unknown;
+  const config = {
+    database: { engine: "postgres" as const, postgres: { connection: connection! } },
+  };
+  const readRows = async () =>
+    (
+      await client.query(
+        `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
+      )
+    ).rows;
+  const readMeta = async () =>
+    (await client.query(`SELECT version, fingerprint FROM "${namespace}".openclaw_schema_meta`))
+      .rows[0];
+  const archives = () =>
+    fs.readdirSync(path.dirname(pathname)).filter((name) => name.endsWith(".postgres.bak"));
+
+  function admit(schema: StoreSchema, file = pathname) {
+    return withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(file);
+      const db = openEngineStore({
+        anchor,
+        schema,
+        input: { connection: connection!, schemaPrefix: "doctor_fixture" },
+        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: true }),
+        prepareAnchor() {},
+        openSqlite() {
+          throw new Error("Expected PostgreSQL");
+        },
+        existingOnly: true,
+      });
+      try {
+        return getPostgresPhysicalFacts(db);
+      } finally {
+        db.close();
+      }
+    });
+  }
+
+  beforeAll(async () => {
+    const worker = await vi.importActual<typeof StateReadWorker>(
+      "../../state/openclaw-state-read-worker.js",
+    );
+    reads.decode.mockImplementation(worker.decodeOpenClawStateReadReply);
+    reads.retire.mockImplementation(worker.retireIdleOpenClawStateReadWorkers);
+    reads.capture.mockImplementation(() => ({
+      own: () => () => {},
+      service() {},
+      createTransport: (command) =>
+        createMockStateReadSource({
+          read: async (source) => reads.decode(await readInProcess(command, source)),
+          async close() {},
+        }).createTransport(command),
+    }));
+    await client.connect();
+    env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("doctor-pg-migration-") };
+    pathname = resolveOpenClawStateSqlitePath(env);
+    installDatabaseEngineSelection({
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "doctor_fixture" },
+    });
+    namespace = withEngineStoreAdmission(() =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          expect(isPostgresSqlConnection(db)).toBe(true);
+          return getPostgresPhysicalFacts(db)!.namespace;
+        },
+        { env },
+      ),
+    );
+    namespaces.add(namespace);
+    closeOpenClawStateDatabaseForTest();
+    targetFingerprint = (await readMeta()).fingerprint;
+    indexSql = stateEngineSchema.postgres!.match(/CREATE INDEX "idx_state_leases_owner"[^;]+;/)![0];
+    predecessor = {
+      ...stateEngineSchema,
+      version: target - 1,
+      postgres: stateEngineSchema.postgres!.replace(indexSql, ""),
+    };
+    const descriptor = await statePortProvider.loadDescriptor();
+    backup = {
+      ...descriptor,
+      version: target - 1,
+      admit: undefined,
+      sqlite: descriptor.sqlite.replace(/CREATE INDEX[^;]*idx_state_leases_owner[^;]*;/, ""),
+      postData: descriptor.postData.replace(indexSql, ""),
+      expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+        fact.table === "state_leases" && fact.kind === "indexes"
+          ? { table: "state_leases", kind: "indexes", value: 2 }
+          : fact,
+      ),
+    };
+  });
+
+  afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
+    stateEngineSchema.postgresMigrations = originalMigrations;
+    resetDatabaseEngineSelectionForTest();
+    vi.restoreAllMocks();
+    for (const owned of namespaces) {
+      await client.query(`DROP SCHEMA IF EXISTS "${owned}" CASCADE`);
+    }
+    await client.end();
+  });
+
+  async function prepare(fail = false) {
+    closeOpenClawStateDatabaseForTest();
+    await client.query(`DROP INDEX IF EXISTS "${namespace}".idx_state_leases_owner;
+      UPDATE "${namespace}".openclaw_schema_meta SET version = ${target - 1}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
+      UPDATE "${namespace}".schema_meta SET schema_version = ${target - 1};
+      UPDATE "${namespace}".config_machine_state SET value_json = '${target - 1}' WHERE state_key = 'state.schema.contentVersion';
+      INSERT INTO "${namespace}".config_machine_state VALUES ('doctor.fixture', '"before"', 1) ON CONFLICT (state_key) DO UPDATE SET value_json = '"before"';`);
+    // R2 compares and seals the predecessor against its complete DDL.
+    using anchor = openNodeSqliteDatabase(pathname);
+    publishSqliteDatabaseSchemaChange(anchor);
+    admit(predecessor);
+    stateEngineSchema.postgresMigrations = [
+      {
+        version: target,
+        fromSchema: {
+          postgres: predecessor.postgres!,
+          postgresFragments: predecessor.postgresFragments,
+        },
+        schema: {
+          postgres: stateEngineSchema.postgres!,
+          postgresFragments: stateEngineSchema.postgresFragments,
+        },
+        backup,
+        sql: `${indexSql} UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'doctor.fixture'; ${fail ? "SELECT doctor_fixture_midway_failure;" : ""} UPDATE schema_meta SET schema_version = ${target}; UPDATE config_machine_state SET value_json = '${target}' WHERE state_key = 'state.schema.contentVersion';`,
+      },
+    ];
+  }
+
+  async function runDoctor() {
+    const lock = await acquireGatewayLock({
+      env,
+      allowInTests: true,
+      role: "sqlite-maintenance",
+      timeoutMs: 0,
+    });
+    expect(lock).not.toBeNull();
+    try {
+      return await lock!.run(async () => {
+        const preflight = await preflightOpenClawDatabaseSchemas({ env, scope: "state" });
+        expect(preflight.incompatible).toEqual([]);
+        expect(preflight.indeterminate).toEqual([]);
+        expect(preflight.pendingMigrations).toEqual([
+          { kind: "state", path: pathname, foundVersion: target - 1, supportedVersion: target },
+        ]);
+        return prepareDoctorDatabaseMigrations({
+          env,
+          pendingDatabasePaths: [pathname],
+          databasePaths: [pathname],
+          pendingMigrations: preflight.pendingMigrations,
+        });
+      });
+    } finally {
+      await lock!.release();
+    }
+  }
+
+  it("captures the predecessor before migration, re-admits exact DDL, and publishes", async () => {
+    await prepare();
+    const original = await readMeta();
+    const anchorBytes = fs.readFileSync(pathname);
+    const before = new Set(archives());
+    const result = await runDoctor();
+    expect(result.warnings).toEqual([]);
+    expect(await readRows()).toEqual([{ value_json: '"after"' }]);
+    expect(await readMeta()).toEqual({ version: String(target), fingerprint: targetFingerprint });
+    expect(admit(stateEngineSchema)?.version).toBe(target);
+    const directory = path.join(
+      path.dirname(pathname),
+      archives().find((entry) => !before.has(entry))!,
+    );
+    const manifest = await verifyMatchedPostgresBackup(directory, "exact");
+    expect(manifest.source).toMatchObject({ owner: "state", schemaVersion: target - 1, namespace });
+    using image = openNodeSqliteDatabase(path.join(directory, "database.sqlite"));
+    expect(
+      image
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'doctor.fixture'")
+        .get(),
+    ).toEqual({ value_json: '"before"' });
+    expect(original.fingerprint).not.toBe(targetFingerprint);
+    expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
+  });
+
+  it("rolls back partial DDL and data, retaining an exact restorable predecessor", async () => {
+    await prepare(true);
+    const original = await readMeta();
+    const before = new Set(archives());
+    await expect(runDoctor()).rejects.toThrow("doctor_fixture_midway_failure");
+    expect(await readRows()).toEqual([{ value_json: '"before"' }]);
+    expect(await readMeta()).toEqual(original);
+    expect(admit(predecessor)?.version).toBe(target - 1);
+    const directory = path.join(
+      path.dirname(pathname),
+      archives().find((entry) => !before.has(entry))!,
+    );
+    await verifyMatchedPostgresBackup(directory, "exact");
+    const restored = await preparePostgresRestore({
+      directory,
+      anchorPath: path.join(env.OPENCLAW_STATE_DIR!, "restored.sqlite"),
+      config,
+      profile: "exact",
+      assertCurrent() {},
+    });
+    namespaces.add(restored.namespace);
+    expect(admit(predecessor, path.join(env.OPENCLAW_STATE_DIR!, "restored.sqlite"))?.version).toBe(
+      target - 1,
+    );
+    expect(
+      (
+        await client.query(
+          `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'doctor.fixture'`,
+        )
+      ).rows,
+    ).toEqual([{ value_json: '"before"' }]);
+  });
+
+  it("refuses live Gateway custody before creating a backup or running a migration", async () => {
+    await prepare();
+    // Use the Gateway's physical owner primitive without booting a newer
+    // runtime, which would itself run the registered forward migration.
+    const gateway = acquireGatewayStateOwner({
+      databasePath: pathname,
+      payload: { ...defaultPayload(pathname), role: "gateway", port: 19483 },
+    });
+    expect(await readMeta()).toMatchObject({ version: String(target - 1) });
+    expect(await readRows()).toEqual([{ value_json: '"before"' }]);
+    try {
+      const original = await readMeta();
+      const originalRows = await readRows();
+      const before = archives();
+      await expect(runDoctor()).rejects.toThrow(/Gateway|owner|lock/i);
+      expect(archives()).toEqual(before);
+      expect(await readMeta()).toEqual(original);
+      expect(await readRows()).toEqual(originalRows);
+    } finally {
+      gateway.release();
+    }
+  });
+  it.each([false, true])(
+    "keeps installed-driver schema rollback exact (foreign write: %s)",
+    async (foreignWrite) => {
+      await prepare();
+      await runDoctor();
+      closeOpenClawStateDatabaseForTest();
+      const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify(config));
+      const updateEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
+      vi.stubEnv("OPENCLAW_STATE_DIR", updateEnv.OPENCLAW_STATE_DIR);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const anchorBytes = fs.readFileSync(pathname);
+      const run = createUpdateRun({ trigger: "cli", origin: {} }, { env: updateEnv });
+      expect(run.phase).toBe("requested");
+      recordUpdateRunPhase(run.runId, "validating", {}, { env: updateEnv });
+      expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
+      closeOpenClawStateDatabaseForTest();
+      await client.query(
+        `UPDATE "${namespace}".config_machine_state SET value_json = '"before"' WHERE state_key = 'doctor.fixture';
+         SELECT setval('"${namespace}".audit_events_sequence_seq', 71, true);`,
+      );
+      const installed = { ...stateEngineSchema };
+      const descriptor = await statePortProvider.loadDescriptor();
+      const lock = await acquireGatewayLock({
+        env: updateEnv,
+        allowInTests: true,
+        role: "sqlite-maintenance",
+        timeoutMs: 0,
+      });
+      expect(lock).not.toBeNull();
+      let saved: Awaited<ReturnType<typeof createUpdateDatabaseBackup>>;
+      const warnings: string[] = [];
+      try {
+        try {
+          saved = await lock!.run(() =>
+            createUpdateDatabaseBackup({
+              backupRoot: path.join(env.OPENCLAW_STATE_DIR!, `update-capture-${foreignWrite}`),
+              stateDir: env.OPENCLAW_STATE_DIR!,
+              config,
+              env: updateEnv,
+              acquisition: { mode: "maintenance-owner" },
+            }),
+          );
+          expect(saved.warnings).toEqual([]);
+          const capture = createUpdateDoctorDatabaseWriteCapture(saved.sourceGenerations, {
+            env: updateEnv,
+            signal: new AbortController().signal,
+            assertCurrent: () => lock!.assertCurrent(),
+            warn: (message) => warnings.push(message),
+          })!;
+          await lock!.run(() => capture.admit());
+          const futureIndex =
+            'CREATE INDEX "idx_doctor_future" ON config_machine_state(updated_at_ms);';
+          const futureSchema = `${installed.postgres}\n${futureIndex}`;
+          Object.assign(stateEngineSchema, {
+            version: target + 1,
+            postgres: futureSchema,
+            postgresMigrations: [
+              {
+                version: target + 1,
+                fromSchema: {
+                  postgres: installed.postgres!,
+                  postgresFragments: installed.postgresFragments,
+                },
+                schema: { postgres: futureSchema, postgresFragments: installed.postgresFragments },
+                backup: descriptor,
+                sql: `${futureIndex}
+                UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'doctor.fixture';
+                SELECT nextval('audit_events_sequence_seq');
+                UPDATE schema_meta SET schema_version = ${target + 1};
+                UPDATE config_machine_state SET value_json = '${target + 1}' WHERE state_key = 'state.schema.contentVersion';`,
+              },
+            ],
+          });
+          await lock!.run(() =>
+            capture.run(() =>
+              prepareDoctorDatabaseMigrations({
+                env: updateEnv,
+                pendingDatabasePaths: [pathname],
+                databasePaths: [pathname],
+                pendingMigrations: [
+                  {
+                    kind: "state",
+                    path: pathname,
+                    foundVersion: target,
+                    supportedVersion: target + 1,
+                  },
+                ],
+              }),
+            ),
+          );
+          closeOpenClawStateDatabaseForTest();
+          expect(await readRows()).toEqual([{ value_json: '"after"' }]);
+          expect(await readMeta()).toMatchObject({ version: String(target + 1) });
+          expect(
+            (
+              await client.query(
+                `SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`,
+              )
+            ).rows,
+          ).toEqual([{ last_value: "72", is_called: true }]);
+          if (foreignWrite) {
+            await client.query(
+              `UPDATE "${namespace}".config_machine_state SET value_json = '"foreign"' WHERE state_key = 'doctor.fixture'`,
+            );
+          }
+          // The installed driver's descriptor has no knowledge of the candidate's schema.
+          Object.assign(stateEngineSchema, installed);
+          await lock!.run(() => capture.settle());
+          expect(warnings).toEqual([]);
+          expect(capture.receipt?.unchanged).toBe(!foreignWrite);
+          const step = {
+            name: "candidate Doctor",
+            command: "doctor --fix",
+            cwd: env.OPENCLAW_STATE_DIR!,
+            durationMs: 0,
+            exitCode: 0,
+          };
+          recordUpdateDatabaseWrites(saved, capture.receipt, step);
+          expect(saved.restoreRefusal !== undefined).toBe(foreignWrite);
+          if (!foreignWrite) {
+            expect(saved.migration?.to).toEqual(capture.receipt?.generations);
+          }
+        } finally {
+          Object.assign(stateEngineSchema, installed);
+          closeOpenClawStateDatabaseForTest();
+          await lock!.release();
+        }
+        const result = await restoreUpdateDatabaseBackup({
+          backup: saved!,
+          runId: run.runId,
+          env: updateEnv,
+          assertCurrent() {},
+          expectedGenerations: saved!.migration?.to ?? saved!.sourceGenerations,
+        });
+        if (foreignWrite) {
+          expect(result).toBeNull();
+          expect(await readRows()).toEqual([{ value_json: '"foreign"' }]);
+          return;
+        }
+        expect(result).not.toBeNull();
+        const restored = readBackupEngine(pathname);
+        expect(restored.engine).toBe("postgres");
+        if (restored.engine !== "postgres") {
+          throw new Error("Rollback did not retain its PostgreSQL anchor");
+        }
+        namespaces.add(restored.namespace);
+        namespace = restored.namespace;
+        expect(await readRows()).toEqual([{ value_json: '"before"' }]);
+        expect(await readMeta()).toMatchObject({ version: String(target) });
+        // Relocation reseals the catalog for its new namespace under the installed schema.
+        expect(admit(installed)?.version).toBe(target);
+        expect(
+          (
+            await client.query(
+              `SELECT last_value, is_called FROM "${namespace}".audit_events_sequence_seq`,
+            )
+          ).rows,
+        ).toEqual([{ last_value: "71", is_called: true }]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+  it.each([false, true])(
+    "keeps agent forward-schema rollback exact (foreign write: %s)",
+    async (foreignWrite) => {
+      // The preceding foreign-write case deliberately retains the candidate state schema.
+      closeOpenClawStateDatabaseForTest();
+      await client.query(`DROP INDEX IF EXISTS "${namespace}".idx_doctor_future`);
+      await prepare();
+      await runDoctor();
+      closeOpenClawStateDatabaseForTest();
+      const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify(config));
+      const updateEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
+      vi.stubEnv("OPENCLAW_STATE_DIR", updateEnv.OPENCLAW_STATE_DIR);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const agentPath = path.join(env.OPENCLAW_STATE_DIR!, `agent-${foreignWrite}.sqlite`);
+      const installed = { ...agentEngineSchema };
+      const descriptor = await agentPortProvider.loadDescriptor();
+      let agentNamespace = withEngineStoreAdmission(() => {
+        using anchor = openNodeSqliteDatabase(agentPath);
+        const engine = openAgentEngineStore(anchor, "main", agentPath);
+        try {
+          return getPostgresPhysicalFacts(engine)!.namespace;
+        } finally {
+          engine.close();
+        }
+      });
+      namespaces.add(agentNamespace);
+      await client.query(`
+        INSERT INTO "${agentNamespace}".session_nodes
+          (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:main:main', 'session', '{"sessionId":"session"}', 1);
+        INSERT INTO "${agentNamespace}".session_windows
+          (session_id, session_key, created_at, updated_at, transcript_updated_at)
+          VALUES ('session', 'agent:main:main', 1, 1, 1);
+        INSERT INTO "${agentNamespace}".context_engine_turn_outbox
+          (enqueue_sequence, advancement_key, engine_id, session_id, payload_json, created_at)
+          VALUES (9, 'retained', 'engine', 'session', '{}', 1);
+        INSERT INTO "${agentNamespace}".cache_entries
+          (scope, key, value_json, updated_at) VALUES ('fixture', 'migration', '"before"', 1);
+        SELECT setval('"${agentNamespace}".context_engine_turn_outbox_enqueue_sequence_seq', 71, true);
+      `);
+      const { runId } = createUpdateRun({ trigger: "cli", origin: {} }, { env: updateEnv });
+      withEngineStoreAdmission(() => {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(`INSERT INTO agent_databases
+            (agent_id, path, schema_version, last_seen_at) VALUES ('main', ?, ?, 1)`).run(
+              agentPath,
+              installed.version,
+            );
+          },
+          { env: updateEnv },
+        );
+      });
+      closeOpenClawStateDatabaseForTest();
+      const readAgent = async () =>
+        (
+          await client.query(`SELECT value_json FROM "${agentNamespace}".cache_entries
+          WHERE scope = 'fixture' AND key = 'migration'`)
+        ).rows;
+      const readAllocation = async () =>
+        (
+          await client.query(`SELECT last_value, is_called
+          FROM "${agentNamespace}".context_engine_turn_outbox_enqueue_sequence_seq`)
+        ).rows;
+      const readIndexes = async () =>
+        (
+          await client.query<{ indexname: string; indexdef: string }>(
+            `SELECT indexname, indexdef
+          FROM pg_indexes WHERE schemaname = $1 AND indexname IN
+          ('idx_agent_transcript_event_parent', 'idx_agent_session_windows_session_key')
+          ORDER BY indexname`,
+            [agentNamespace],
+          )
+        ).rows.map(({ indexname, indexdef }) => ({
+          indexname,
+          indexdef: indexdef.replaceAll(agentNamespace, "fixture_namespace"),
+        }));
+      const beforeIndexes = await readIndexes();
+      expect(beforeIndexes).toHaveLength(2);
+      const parentIndex = installed.postgres!.match(
+        /CREATE INDEX "idx_agent_transcript_event_parent"[^;]+;/,
+      )![0];
+      const windowIndex = installed.postgres!.match(
+        /CREATE INDEX "idx_agent_session_windows_session_key"[^;]+;/,
+      )![0];
+      const narrowed =
+        'CREATE INDEX "idx_agent_session_windows_session_key" ON "session_windows" ("session_key");';
+      const futureSchema = installed
+        .postgres!.replace(parentIndex, "")
+        .replace(windowIndex, narrowed);
+      const lock = await acquireGatewayLock({
+        env: updateEnv,
+        allowInTests: true,
+        role: "sqlite-maintenance",
+        timeoutMs: 0,
+      });
+      expect(lock).not.toBeNull();
+      let saved: Awaited<ReturnType<typeof createUpdateDatabaseBackup>>;
+      const warnings: string[] = [];
+      try {
+        try {
+          saved = await lock!.run(() =>
+            createUpdateDatabaseBackup({
+              backupRoot: path.join(env.OPENCLAW_STATE_DIR!, `agent-capture-${foreignWrite}`),
+              stateDir: env.OPENCLAW_STATE_DIR!,
+              config,
+              env: updateEnv,
+              acquisition: { mode: "maintenance-owner" },
+            }),
+          );
+          expect(saved.warnings).toEqual([]);
+          expect(saved.databases.find((database) => database.path === agentPath)).toMatchObject({
+            engine: "postgres",
+            namespace: agentNamespace,
+          });
+          const capture = createUpdateDoctorDatabaseWriteCapture(saved.sourceGenerations, {
+            env: updateEnv,
+            signal: new AbortController().signal,
+            assertCurrent: () => lock!.assertCurrent(),
+            warn: (message) => warnings.push(message),
+          })!;
+          await lock!.run(() => capture.admit());
+          Object.assign(agentEngineSchema, {
+            version: installed.version + 1,
+            postgres: futureSchema,
+            postgresMigrations: [
+              {
+                version: installed.version + 1,
+                fromSchema: { postgres: installed.postgres! },
+                schema: { postgres: futureSchema },
+                backup: descriptor,
+                sql: `DROP INDEX "idx_agent_transcript_event_parent";
+                DROP INDEX "idx_agent_session_windows_session_key";
+                ${narrowed}
+                UPDATE cache_entries SET value_json = '"after"' WHERE scope = 'fixture';
+                SELECT nextval('context_engine_turn_outbox_enqueue_sequence_seq');
+                UPDATE schema_meta SET schema_version = ${installed.version + 1};`,
+              },
+            ],
+          });
+          if (!foreignWrite) {
+            expect(() =>
+              withEngineStoreAdmission(() => {
+                using anchor = openNodeSqliteDatabase(agentPath);
+                const engine = openAgentEngineStore(anchor, "main", agentPath, true);
+                engine.close();
+              }),
+            ).toThrow(/stopped-writer maintenance/);
+            expect(await readAgent()).toEqual([{ value_json: '"before"' }]);
+            expect(await readIndexes()).toEqual(beforeIndexes);
+          }
+          const result = await lock!.run(() =>
+            capture.run(() =>
+              prepareDoctorDatabaseMigrations({
+                env: updateEnv,
+                pendingDatabasePaths: [agentPath],
+                databasePaths: [pathname, agentPath],
+                agentDatabaseTargets: [
+                  { agentId: "main", path: agentPath, realPath: agentPath, source: "registry" },
+                ],
+                pendingMigrations: [
+                  {
+                    kind: "agent",
+                    path: agentPath,
+                    foundVersion: installed.version,
+                    supportedVersion: installed.version + 1,
+                  },
+                ],
+              }),
+            ),
+          );
+          expect(result.warnings).toEqual([]);
+          closeOpenClawStateDatabaseForTest();
+          expect(await readAgent()).toEqual([{ value_json: '"after"' }]);
+          expect(
+            (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`))
+              .rows,
+          ).toEqual([{ version: String(installed.version + 1) }]);
+          expect(await readAllocation()).toEqual([{ last_value: "72", is_called: true }]);
+          expect(await readIndexes()).toEqual([
+            {
+              indexname: "idx_agent_session_windows_session_key",
+              indexdef:
+                "CREATE INDEX idx_agent_session_windows_session_key ON fixture_namespace.session_windows USING btree (session_key)",
+            },
+          ]);
+          if (foreignWrite) {
+            await client.query(`UPDATE "${agentNamespace}".cache_entries
+              SET value_json = '"foreign"' WHERE scope = 'fixture'`);
+          }
+          Object.assign(agentEngineSchema, installed);
+          await lock!.run(() => capture.settle());
+          expect(warnings).toEqual([]);
+          expect(capture.receipt?.unchanged).toBe(!foreignWrite);
+          recordUpdateDatabaseWrites(saved, capture.receipt, {
+            name: "candidate agent Doctor",
+            command: "doctor --fix",
+            cwd: env.OPENCLAW_STATE_DIR!,
+            durationMs: 0,
+            exitCode: 0,
+          });
+          expect(saved.restoreRefusal !== undefined).toBe(foreignWrite);
+        } finally {
+          Object.assign(agentEngineSchema, installed);
+          closeOpenClawStateDatabaseForTest();
+          await lock!.release();
+        }
+        const restored = await restoreUpdateDatabaseBackup({
+          backup: saved!,
+          runId,
+          env: updateEnv,
+          assertCurrent() {},
+          expectedGenerations: saved!.migration?.to ?? saved!.sourceGenerations,
+        });
+        if (foreignWrite) {
+          expect(restored).toBeNull();
+          expect(await readAgent()).toEqual([{ value_json: '"foreign"' }]);
+          expect(await readAllocation()).toEqual([{ last_value: "72", is_called: true }]);
+          return;
+        }
+        expect(restored).not.toBeNull();
+        const anchor = readBackupEngine(agentPath);
+        if (anchor.engine !== "postgres") {
+          throw new Error("Agent rollback did not retain its PostgreSQL anchor");
+        }
+        agentNamespace = anchor.namespace;
+        namespaces.add(agentNamespace);
+        const state = readBackupEngine(pathname);
+        if (state.engine === "postgres") {
+          namespace = state.namespace;
+          namespaces.add(namespace);
+        }
+        expect(await readAgent()).toEqual([{ value_json: '"before"' }]);
+        expect(
+          (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).rows,
+        ).toEqual([{ version: String(installed.version) }]);
+        expect(await readAllocation()).toEqual([{ last_value: "71", is_called: true }]);
+        expect(await readIndexes()).toEqual(beforeIndexes);
+        expect(
+          (
+            await client.query(`SELECT enqueue_sequence, advancement_key
+          FROM "${agentNamespace}".context_engine_turn_outbox`)
+          ).rows,
+        ).toEqual([{ enqueue_sequence: "9", advancement_key: "retained" }]);
+        await descriptor.admit!(agentPath, {
+          connection: connection!,
+          schemaPrefix: "doctor_fixture",
+        });
+      } finally {
+        Object.assign(agentEngineSchema, installed);
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+});

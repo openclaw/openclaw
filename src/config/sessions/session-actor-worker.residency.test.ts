@@ -10,7 +10,7 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-it("retains an oversized sole actor across commits and accounts its bytes when another actor arrives", async () => {
+it("retains one oversized actor across competing small actors and replaces it with a second oversized actor", async () => {
   await withActor(async (f) => {
     const largeLabel = "x".repeat(9 * 1024 * 1024);
     const other = { ...f.target, sessionKey: "agent:main:byte-budget-other" };
@@ -63,12 +63,80 @@ it("retains an oversized sole actor across commits and accounts its bytes when a
     expect(current.entry?.label === largeLabel).toBe(true);
 
     const competing = f.read(other);
+    expect(f.read().version).toEqual(current.version);
+    expect(f.read(other).version).toEqual(competing.version);
+    const neighboring = f.read(companion);
+    expect(f.read(other).version).toEqual(competing.version);
+    expect(f.read(companion).version).toEqual(neighboring.version);
+
+    expect(
+      f.mutate({
+        ...command,
+        input: { ...command.input, expected: current.version, commandId: "competing-activity" },
+      }).kind,
+    ).toBe("committed");
+
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, companion.sessionKey, {
+        sessionId: "byte-budget-companion",
+        updatedAt: 2,
+        label: largeLabel,
+      });
+    });
+    const secondOversized = f.read(companion);
+    expect(secondOversized.version.epoch).not.toBe(neighboring.version.epoch);
+    expect(f.read(other).version).toEqual(competing.version);
     const rehydrated = f.read();
     expect(rehydrated.version.epoch).not.toBe(current.version.epoch);
     expect(rehydrated.entry?.updatedAt).toBe(2);
     expect(rehydrated.entry?.label === largeLabel).toBe(true);
-    const displaced = f.read(other);
-    expect(displaced.version.epoch).not.toBe(competing.version.epoch);
-    expect(displaced.entry).toMatchObject({ sessionId: "byte-budget-other", updatedAt: 1 });
+    expect(f.read(other).version).toEqual(competing.version);
+    expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
+
+    f.read();
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        sessionId: f.scope.sessionId,
+        updatedAt: 3,
+        label: "small replacement",
+      });
+    });
+    const smaller = f.read();
+    f.read(other);
+    f.read(companion);
+    expect(f.read().version).toEqual(smaller.version);
+    expect(f.read().entry?.label).toBe("small replacement");
+  });
+});
+
+it("evicts ordinary actors under byte pressure while keeping the oversized working set", async () => {
+  await withActor((f) => {
+    const ordinary = { ...f.target, sessionKey: "agent:main:ordinary" };
+    const newcomers = Array.from({ length: 3 }, (_, index) => ({
+      ...f.target,
+      sessionKey: `agent:main:newcomer-${index}`,
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      // Stored JSON, parsed rows, and hot entries together exceed the ordinary budget.
+      for (const [target, mib] of [
+        [f.target, 9],
+        [ordinary, 1],
+        ...newcomers.map((newcomer) => [newcomer, 1] as const),
+      ] as const) {
+        writeSessionEntry(f.database, target.sessionKey, {
+          sessionId: target.sessionKey,
+          updatedAt: 1,
+          label: "x".repeat(mib * 1024 * 1024),
+        });
+      }
+    });
+    const oversizedVersion = f.read().version;
+    const ordinaryVersion = f.read(ordinary).version;
+    for (const newcomer of newcomers) {
+      f.read(newcomer);
+    }
+    expect(f.read().version).toEqual(oversizedVersion);
+    expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
+    expect(f.read().version).toEqual(oversizedVersion);
   });
 });

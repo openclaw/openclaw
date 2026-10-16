@@ -358,7 +358,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(fs.readFileSync(pathname)).toEqual(bytes);
-  expect(fs.readdirSync(external)).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
+  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
   const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   try {
     expect(
@@ -710,3 +710,66 @@ it.runIf(process.platform === "linux")(
     }
   },
 );
+
+it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
+  const fixture = () => ({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-peers-")) },
+  });
+  const source = createNativeSource(() => {});
+  const peers = [];
+  const options = [];
+  // Retained agents share broker workers with the next native opener.
+  for (let index = 0; index < 4; index += 1) {
+    const target = fixture();
+    options.push(target);
+    const peer = captureOpenClawAgentDatabaseExecution(target);
+    await peer.prepare(source);
+    peers.push(peer);
+  }
+  const target = fixture();
+  options.push(target);
+  const execution = captureOpenClawAgentDatabaseExecution(target);
+  let closing: Promise<void> | undefined;
+  const preparing = execution.prepare({
+    ...source,
+    createAdmission(binding) {
+      return source.createAdmission({
+        ...binding,
+        authorize(request) {
+          if (
+            !closing &&
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "agent-open-resume"
+          ) {
+            closing = closeOpenClawAgentDatabasesAsync();
+            void closing.catch(() => {});
+          }
+          binding.authorize(request);
+        },
+      });
+    },
+  });
+  try {
+    await expect(preparing).rejects.toThrow("Agent database execution admission is closed");
+    expect(closing).toBeDefined();
+    await closing;
+    for (const owner of options) {
+      expect(
+        openOpenClawStateDatabase({ env: owner.env })
+          .db.prepare("SELECT lease_id FROM agent_database_leases")
+          .all(),
+      ).toEqual([]);
+    }
+  } finally {
+    await Promise.allSettled([
+      preparing,
+      closing,
+      execution.release(),
+      ...peers.map((peer) => peer.release()),
+    ]);
+  }
+});

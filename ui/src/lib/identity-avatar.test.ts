@@ -327,9 +327,13 @@ describe("authenticated profile avatar cache", () => {
       vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:profile-uploaded");
 
       const missing = resolveAvatarImageUrl("/api/users/profile-ada/avatar");
+      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBe(missing);
       await expect(missing).resolves.toBeNull();
       clock.mockReturnValue(59_999);
-      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBe(missing);
+      expect(resolveAvatarImageUrl("/api/users/profile-ada/avatar")).toBeNull();
+      expect(
+        resolveAvatarImageUrl("/api/users/profile-ada/avatar", "/api/users/profile-ada/avatar"),
+      ).toBeNull();
       expect(fetchAvatar).toHaveBeenCalledOnce();
 
       clock.mockReturnValue(60_000);
@@ -416,7 +420,7 @@ describe("authenticated profile avatar cache", () => {
       Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar`)),
     );
     expect(await Promise.all(pending)).toEqual(Array.from({ length: 130 }, () => null));
-    expect(resolveAvatarImageUrl("/api/users/profile-129/avatar")).toBe(pending[129]);
+    expect(resolveAvatarImageUrl("/api/users/profile-129/avatar")).toBeNull();
     expect(fetchAvatar).toHaveBeenCalledTimes(130);
 
     await expect(resolveAvatarImageUrl("/api/users/profile-0/avatar")).resolves.toBeNull();

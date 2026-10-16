@@ -19,7 +19,6 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramBotCore } from "./bot-core.js";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
@@ -43,6 +42,19 @@ const from = { id: chat.id, is_bot: false, first_name: "Alice" } as const;
 const conversation = { channel: "telegram", accountId, conversationId: String(chat.id) };
 const token = "123456:synthetic_disabled_binding_test";
 type DisabledScope = "channel" | "account";
+
+const { readRuntimeConfig } = vi.hoisted(() => ({
+  readRuntimeConfig:
+    vi.fn<typeof import("openclaw/plugin-sdk/runtime-config-snapshot").readRuntimeConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: (...args: Parameters<typeof readRuntimeConfig>) => readRuntimeConfig(...args),
+}));
+vi.mock("./bot-native-command-menu.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bot-native-command-menu.js")>()),
+  syncTelegramMenuCommands: vi.fn(async () => {}),
+}));
 
 describe("Telegram startup with disabled thread bindings", () => {
   let state: OpenClawTestState;
@@ -166,6 +178,7 @@ describe("Telegram startup with disabled thread bindings", () => {
   }
 
   async function createBot(cfg: OpenClawConfig, botToken = token) {
+    readRuntimeConfig.mockReturnValue(cfg);
     const bot = await createTelegramBotCore({
       token: botToken,
       accountId,
@@ -176,11 +189,6 @@ describe("Telegram startup with disabled thread bindings", () => {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
         close: async () => {},
-      },
-      telegramDeps: {
-        ...defaultTelegramBotDeps,
-        getRuntimeConfig: () => cfg,
-        syncTelegramMenuCommands: async () => {},
       },
       // Keep startup, inbound assembly, core gather, and delivery real; isolate model execution.
       dispatchReplyFromConfig: (params) => dispatchInboundMessage({ ...params, replyResolver }),

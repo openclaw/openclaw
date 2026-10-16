@@ -140,6 +140,11 @@ before updating; current Doctor leaves that file untouched. See the
 
 Treat the workspace as private memory. Put it in a **private** git repo so it is backed up and recoverable.
 
+Git is optional. An empty `.git` directory is treated as a non-Git workspace and
+left untouched. Partial Git metadata or a linked worktree whose metadata is missing
+still blocks Git operations with checkout-preservation guidance; repair the original
+repository metadata before retrying.
+
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 
 <Steps>

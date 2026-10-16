@@ -54,6 +54,7 @@ import {
 import { resolveOfficialPluginCohortNpmSpecs } from "../plugins/plugin-version-drift.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
+  createOperatorManagedPluginUpdateOutcome,
   isClawHubTrustSkippedOutcome,
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
@@ -271,6 +272,7 @@ async function runPluginUpdateCommandUnlocked(
   });
   const installOwnerByPluginId = new Map<string, string>();
   const rejectedPluginIds = new Map<string, string>();
+  const operatorManagedOutcomes = new Map<string, PluginUpdateOutcome>();
   const ownershipResolver = createInstalledPluginOwnershipResolver(installedPluginIndex);
   for (const pluginId of new Set([
     ...installedPluginIndex.plugins.map((plugin) => plugin.pluginId),
@@ -279,9 +281,16 @@ async function runPluginUpdateCommandUnlocked(
     if (sourceBundledIds.has(pluginId)) {
       continue;
     }
-    const ownership = ownershipResolver.resolveLifecycle(pluginId);
+    const ownership = ownershipResolver.resolveUpdate(pluginId);
     if (!ownership.ok) {
       rejectedPluginIds.set(pluginId, ownership.error);
+      continue;
+    }
+    if (ownership.value.kind === "operator-managed") {
+      operatorManagedOutcomes.set(
+        pluginId,
+        createOperatorManagedPluginUpdateOutcome(ownership.value, VERSION),
+      );
       continue;
     }
     installOwnerByPluginId.set(pluginId, ownership.value.installOwner);
@@ -300,12 +309,20 @@ async function runPluginUpdateCommandUnlocked(
     installs: pluginInstallRecords,
     installOwnerByPluginId,
     rejectedPluginIds,
+    skippedPluginIds: new Set(operatorManagedOutcomes.keys()),
     rawIds: params.ids,
     all: params.opts.all,
   });
   if (pluginSelection.error) {
     defaultRuntime.error(pluginSelection.error);
     return 1;
+  }
+  const skippedOutcomes = new Map<string, PluginUpdateOutcome>();
+  for (const id of pluginSelection.skippedIds ?? []) {
+    const outcome = operatorManagedOutcomes.get(id);
+    if (outcome) {
+      skippedOutcomes.set(outcome.pluginId, outcome);
+    }
   }
   const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
@@ -343,9 +360,13 @@ async function runPluginUpdateCommandUnlocked(
       [...ownership.pluginIds],
     ]),
   );
+  logPluginUpdateOutcomes([...skippedOutcomes.values()]);
   if (pluginSelection.pluginIds.length === 0 && hookSelection.hookIds.length === 0) {
     if (params.opts.all) {
       defaultRuntime.log("No tracked plugins or hook packs to update.");
+      return 0;
+    }
+    if (skippedOutcomes.size > 0) {
       return 0;
     }
     defaultRuntime.error("Provide plugin or hook-pack ids, or use --all.");

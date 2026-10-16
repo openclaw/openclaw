@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -31,6 +32,7 @@ function makeCheckpointFixture() {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
   ]) {
     writeFileSync(
@@ -45,7 +47,7 @@ function makeCheckpointFixture() {
   writeFileSync(
     fake,
     `#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys, zipfile
+import json, os, pathlib, plistlib, shutil, sys, zipfile
 root = pathlib.Path(__file__).resolve().parents[1]
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 with (root / "events").open("a") as log:
@@ -86,9 +88,21 @@ elif name == "ditto":
     else: archive(source, target)
 elif name == "create-dmg.sh": pathlib.Path(args[1]).write_bytes(b"dmg")
 elif name == "hdiutil":
-    if args[0] == "attach":
+    attached = root / "attached-image"
+    if args[0] == "attach" and (root / "attach-eagain").exists():
+        # Busy hosts can fail with EAGAIN after creating the image devices.
+        attached.write_text((root / "attach-eagain").read_text())
+        sys.exit("hdiutil: attach failed - Resource temporarily unavailable")
+    elif args[0] == "attach":
         mount = pathlib.Path(args[args.index("-mountpoint") + 1])
         with zipfile.ZipFile(root / "dist/macos-notarization-recovery/app.zip") as z: z.extractall(mount)
+    elif args[0] == "info":
+        devices = ["/dev/disk8", "/dev/disk8s1", "/dev/disk11", "/dev/disk11s1"]
+        images = [{"image-path": attached.read_text(), "system-entities": [{"dev-entry": d} for d in devices]}] if attached.exists() else []
+        sys.stdout.buffer.write(plistlib.dumps({"images": images}))
+    elif args[:2] == ["detach", "-quiet"]:
+        if (root / "detach-fails").exists(): sys.exit(1)
+        attached.unlink()
     else: shutil.rmtree(pathlib.Path(args[1]) / "OpenClaw.app")
 elif name == "audit-async-sleep-frames.py":
     if (root / "reject-audit").exists(): sys.exit("async frame allocation is undersized")
@@ -252,6 +266,54 @@ describe("macOS packaging checkpoint boundary", () => {
     },
   );
 
+  it.each([false, true])(
+    "detaches a retained DMG that a failed audit attach left without a mount (detach fails: %s)",
+    (detachFails) => {
+      const f = makeCheckpointFixture();
+      const built = f.run("--checkpoint-only");
+      expect(built.status, built.stderr).toBe(0);
+      const dmg = path.join(f.checkpoint, "app.dmg");
+      const alias = path.join(f.root, "recovery alias");
+      symlinkSync(f.checkpoint, alias, "dir");
+      // The fake reports another spelling of the image path; cleanup matches real paths.
+      writeFileSync(path.join(f.root, "attach-eagain"), path.join(alias, "app.dmg"));
+      if (detachFails) {
+        writeFileSync(path.join(f.root, "detach-fails"), "");
+      }
+
+      const resumed = f.run("--resume-notarization");
+
+      expect(resumed.status).toBe(1);
+      const [attach, ...cleanup] = f
+        .events()
+        .split("\n")
+        .filter((line) => line.startsWith("hdiutil "));
+      expect(attach).toMatch(
+        /^hdiutil attach -readonly -nobrowse -mountpoint \S+\/\.notary-dmg\.\w+ /,
+      );
+      expect(attach?.endsWith(` ${dmg}`)).toBe(true);
+      expect(cleanup).toEqual([
+        "hdiutil info -plist",
+        "hdiutil detach -quiet /dev/disk8",
+        "hdiutil info -plist",
+      ]);
+      expect(f.events()).not.toContain("notarize-mac-artifact.sh");
+      expect(existsSync(path.join(f.root, "attached-image"))).toBe(detachFails);
+      expect(existsSync(dmg)).toBe(true);
+      expect(
+        readdirSync(path.join(f.root, "dist")).filter((name) => name.startsWith(".notary-dmg.")),
+      ).toEqual([]);
+      expect(resumed.stderr).toContain("hdiutil: attach failed - Resource temporarily unavailable");
+      if (detachFails) {
+        expect(resumed.stderr).toContain(
+          `ERROR: disk image ${dmg} is still attached; detach it with: hdiutil detach /dev/disk8\n`,
+        );
+      } else {
+        expect(resumed.stderr).not.toContain("still attached");
+      }
+    },
+  );
+
   it("fails the frame audit before creating a checkpoint", () => {
     const f = makeCheckpointFixture();
     writeFileSync(path.join(f.root, "reject-audit"), "");
@@ -275,6 +337,7 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
     "notarize-mac-artifact.sh",
     "lib/mac-notarization-recovery.py",
     "lib/plistbuddy.sh",
+    "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
     "lib/swift-toolchain.sh",
   ]) {
@@ -506,28 +569,6 @@ describe("package-mac-dist plist validation", () => {
 
     expect(releaseMarkerIndex).toBeGreaterThanOrEqual(0);
     expect(packageAppIndex).toBeGreaterThan(releaseMarkerIndex);
-  });
-
-  it("does not mask canonical Sparkle build failures for release packaging", () => {
-    const script = readFileSync(scriptPath, "utf8");
-
-    expect(script).toContain("ensure_sparkle_build_deps()");
-    expect(script).toContain(
-      "run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2",
-    );
-    expect(script).toContain(
-      '(cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")',
-    );
-    expect(script).toContain('if [[ "$SPARKLE_BUILD_DEPS_RETRIED" == "1" ]]');
-    expect(script).toContain("require_canonical_sparkle_build()");
-    expect(script).toContain(
-      'CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$APP_VERSION_INPUT")"',
-    );
-    expect(script).toContain('CANONICAL_APP_BUILD="$(require_canonical_sparkle_build "$VERSION")"');
-    expect(script).not.toContain(
-      'canonical_sparkle_build "$APP_VERSION_INPUT" 2>/dev/null || true',
-    );
-    expect(script).not.toContain('canonical_sparkle_build "$VERSION" 2>/dev/null || true');
   });
 
   it("fails on old Swift before reading package metadata", () => {

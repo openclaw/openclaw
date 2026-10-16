@@ -224,6 +224,41 @@ describe("native subagent completion worker admission", () => {
     });
   });
 
+  it("admits a raw-key completion independently of another agent's newer run", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const { subagent, queueEntry, expected } = records();
+      for (const entry of [subagent, expected]) {
+        entry.childSessionKey = "global";
+        entry.childAgentId = "main";
+      }
+      const other = {
+        ...structuredClone(expected),
+        runId: "other-agent-run",
+        childAgentId: "other",
+        generation: 2,
+      };
+      seedSubagentCompletionOwner({ subagent: expected, databaseOptions: { database } });
+      seedSubagentCompletionOwner({ subagent: other, databaseOptions: { database } });
+      const otherBefore = expectDefined(
+        readSubagentRun(database, other.runId),
+        "other agent's completion owner",
+      );
+      const context = captureOpenClawStateWorkerContext();
+      const result = await admitSubagentCompletionDelivery({
+        runId: expected.runId,
+        plan: () => ({ subagent, queueEntry }),
+        context,
+        assertCurrent: () => {},
+      });
+
+      expect(result).toMatchObject({ claimed: true, status: "pending" });
+      expect((await loadPendingSessionDeliveries(context)).map((entry) => entry.id)).toEqual([
+        queueEntry.id,
+      ]);
+      expect(readSubagentRun(database, other.runId)).toEqual(otherBefore);
+    });
+  });
+
   it.each(["transaction", "commit"] as const)(
     "refuses revoked authority at worker %s admission",
     async (stage) => {
@@ -433,9 +468,9 @@ it("settles a requester cohort after concurrently admitted children complete", a
       for (const [index, input] of inputs.entries()) {
         expect(currentCompletionRun(input)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },
-          completion: { resultText: `child result ${index}` },
           delivery: { status: "delivered" },
         });
+        expect(currentCompletionRun(input).completion?.resultText).toBeUndefined();
         expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
         expect(stored.get(input.subagent.runId)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },

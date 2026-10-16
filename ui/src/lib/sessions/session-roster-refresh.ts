@@ -31,6 +31,7 @@ import {
   sessionListAgentMatcher,
   sessionListEventMatcher,
   sessionListsNeedingEventRefresh,
+  sessionListReadNeedsEventRefresh,
   type ManagedSessionList,
   type QueuedSessionRefresh,
   type SessionRefreshAttempt,
@@ -97,6 +98,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     managedLists,
     managedList,
     host.onWarmListsRetired,
+    host.readState,
   );
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) =>
     primaryWindows.invalidate(matches, lastListOptions);
@@ -244,6 +246,18 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
       primaryList.scope = append ? lastListOptions : durableListOptions;
       nextResult = host.decorate(nextResult, primaryList);
+      if (
+        sessionListReadNeedsEventRefresh(
+          currentResult,
+          result,
+          nextResult,
+          issuedRevision,
+          durableListOptions,
+          observations.rowRevision,
+        )
+      ) {
+        eventRefreshCoordinator.schedule();
+      }
       const notifyObserved = observations.stageObservedRows(
         result?.sessions ?? [],
         scope,
@@ -466,6 +480,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return;
     }
     if (!queuedRefresh) {
+      eventRefreshCoordinator.absorb();
       await startRefresh({ ...lastListOptions, force: true });
     }
   };
@@ -530,6 +545,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         payload,
         matches,
         observations.observedRow,
+        scope?.epoch ?? null,
+        host.snapshot().selfUser?.id,
       );
       return {
         revision,
@@ -544,20 +561,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return requestRevision;
     },
     list: listReader.list,
-    listSnapshot(this: void, scope: SessionListScope): SessionListSnapshot {
-      if (isPrimarySessionListQuery(scope)) {
-        const { result, agentId, loading, error, startupPending } = host.readState();
-        return { result, agentId, loading, error, startupPending };
-      }
-      return (
-        managedLists.get(sessionListQueryKey(scope))?.snapshot ?? {
-          result: null,
-          agentId: null,
-          loading: false,
-          error: null,
-        }
-      );
-    },
+    listSnapshot: primaryWindows.snapshot,
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
       return primaryWindows.subscribe(managedList(scope), listener, pageActive);
     },
@@ -627,12 +631,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (result !== state.result) {
         host.publish({ ...state, result });
       }
-      for (const entry of managedLists.values()) {
-        const decorated = host.decorate(entry.snapshot.result, entry);
-        if (decorated !== entry.snapshot.result) {
-          publishManagedList(entry, { ...entry.snapshot, result: decorated });
-        }
-      }
       staged.notify();
     },
     lastOptions: () => lastListOptions,
@@ -644,7 +642,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         : null;
     },
     canApplyPrimarySnapshot(payload: unknown) {
-      const state = !inFlight && host.readState();
+      const state = host.readState();
       return (
         state &&
         state.error === null &&
@@ -655,6 +653,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           lastListOptions,
           "updatedAt",
           observations.observedRow,
+          host.snapshot().selfUser?.id,
         )
       );
     },
@@ -706,7 +705,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         entry.startupRetryAttempt = 0;
         entry.pending = entry.queued = null;
         if (entry.listeners.size === 0) {
-          entry.coordinator.dispose();
           managedLists.delete(entry.key);
           continue;
         }

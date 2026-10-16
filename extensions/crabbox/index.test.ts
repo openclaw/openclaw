@@ -160,11 +160,11 @@ describe("Crabbox plugin generation lifecycle", () => {
       try {
         // Classless profiles reserve placement-enabled preparation/capture and the
         // complete diagnostics, Stop and child-settlement cleanup envelope. Native
-        // capture adds 45m plus seven 10s command settlements to the former budgets.
+        // capture includes eight 2m lifetime calls and 15m of runtime preparation.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          217 * 60_000 + 25_000,
+          248 * 60_000 + 25_000,
         );
-        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
+        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(105 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
@@ -193,7 +193,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           generation.provider.destroy({ leaseId: lease.leaseId, profile }),
         ).resolves.toBeUndefined();
         const calls = runCommand.mock.calls.map(([argv]) => argv);
-        expect(calls.map((argv) => argv[1])).toEqual([
+        expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
           "providers",
           ...(backend === "aws" ? ["config"] : []),
           "warmup",

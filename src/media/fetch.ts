@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -531,6 +532,21 @@ async function saveOkMediaResponse(
       params.originalFilename,
       detectionFilePathHint,
     );
+    // Keep the response decoder hint when staging an attachment for a channel.
+    // MIME sniffing still owns the type; it must not erase the charset.
+    if (contentType && saved.contentType) {
+      try {
+        const headerMime = new MIMEType(contentType);
+        const charset = headerMime.params.get("charset");
+        if (charset !== null) {
+          const storedMime = new MIMEType(saved.contentType);
+          storedMime.params.set("charset", charset);
+          saved.contentType = storedMime.toString();
+        }
+      } catch {
+        // Malformed metadata does not invalidate successfully downloaded media.
+      }
+    }
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
     if (err instanceof MediaFetchError) {
@@ -643,7 +659,9 @@ async function withGuardedMediaResponse<T>(
 }
 
 /** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
-export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
+export async function readRemoteMediaBufferWithHeaders(
+  options: FetchMediaOptions,
+): Promise<FetchMediaResult & { headerContentType?: string }> {
   return await withGuardedMediaResponse(options, async ({ response: res, finalUrl, sourceUrl }) => {
     const effectiveMaxBytes = options.maxBytes ?? MAX_DOCUMENT_BYTES;
     assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
@@ -671,9 +689,10 @@ export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise
 
     const fileNameExt = fileName ? extnameFromAnyPath(fileName) : undefined;
     const filePathForMime = fileNameExt ? fileName : (options.filePathHint ?? finalUrl);
+    const headerContentType = res.headers.get("content-type") ?? undefined;
     const contentType = await detectMime({
       buffer,
-      headerMime: res.headers.get("content-type"),
+      headerMime: headerContentType,
       filePath: filePathForMime,
     });
     if (fileName && !fileNameExt && contentType) {
@@ -686,9 +705,16 @@ export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise
     return {
       buffer,
       contentType: contentType ?? undefined,
+      headerContentType,
       fileName,
     };
   });
+}
+
+/** Preserve the public buffer result while internal text consumers retain decoder metadata. */
+export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
+  const { buffer, contentType, fileName } = await readRemoteMediaBufferWithHeaders(options);
+  return { buffer, contentType, fileName };
 }
 
 /** @deprecated Use `readRemoteMediaBuffer` for buffer reads or `saveRemoteMedia` for URL-to-store. */

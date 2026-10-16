@@ -20,6 +20,8 @@ This reference covers supported Node.js lines, why the minimum versions exist, a
 
 The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the documented support policy and the `package.json` engine range used by package managers.
 
+The Bun opt-in runtime requires **Bun 1.4.3+** or the pinned OpenClaw fork; see [Bun compatibility](/install/bun-compatibility).
+
 ## How the gate decides
 
 Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The check uses an in-memory database and caches the current process result; checks of another executable run the same check in that executable with a bounded timeout. A build within the supported version table is refused if the check fails.

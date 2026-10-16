@@ -318,7 +318,7 @@ export function renderUsage(props: UsageProps) {
                 />
                 <button
                   class="btn btn--sm primary"
-                  onClick={() => props.callbacks.filters.onRefresh()}
+                  onClick={() => void props.callbacks.filters.onRefresh()}
                   disabled={props.data.loading}
                 >
                   {t("common.refresh")}
@@ -383,7 +383,7 @@ export function renderUsage(props: UsageProps) {
                     {
                       id: "daily-csv",
                       label: t("usage.export.dailyCsv"),
-                      disabled: props.data.costDaily.length === 0,
+                      disabled: props.data.exporting || props.data.costDaily.length === 0,
                     },
                     {
                       id: "json",
@@ -461,7 +461,7 @@ export function renderUsage(props: UsageProps) {
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(props.callbacks.filters.onRefresh)
+          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
         ) : (
           <>
             <Show

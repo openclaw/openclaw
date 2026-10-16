@@ -7,11 +7,8 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
-} from "./provider-types.js";
+import { createSpeechDirectiveParser } from "./directive-parser.js";
+import type { SpeechProviderConfig } from "./provider-types.js";
 
 type OpenAiCompatibleSpeechProviderBaseConfig = {
   apiKey?: string;
@@ -96,35 +93,6 @@ function readModelProviderConfig(
   return asOptionalRecord(providers?.[providerConfigKey]);
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-  providerConfigKey: string,
-): { handled: boolean; overrides?: SpeechProviderOverrides } {
-  const compactProviderKey = providerConfigKey.replace(/[^a-z0-9]+/giu, "").toLowerCase();
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case `${providerConfigKey}_voice`:
-    case `${compactProviderKey}voice`:
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { voice: ctx.value } };
-    case "model":
-    case "model_id":
-    case "modelid":
-    case `${providerConfigKey}_model`:
-    case `${compactProviderKey}model`:
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { model: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
-
 function buildExtraJsonBodyFields<ExtraConfig extends Record<string, unknown>>(
   config: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>,
   fields: readonly OpenAiCompatibleSpeechProviderExtraJsonBodyField<ExtraConfig>[] | undefined,
@@ -144,6 +112,17 @@ export function createOpenAiCompatibleSpeechProvider<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 >(options: OpenAiCompatibleSpeechProviderOptions<ExtraConfig>): SpeechProviderPlugin {
   const providerConfigKey = options.configKey ?? options.id;
+  const compactProviderKey = providerConfigKey.replace(/[^a-z0-9]+/giu, "").toLowerCase();
+  const parseDirectiveToken = createSpeechDirectiveParser({
+    voice: [
+      "allowVoice",
+      ["voice", "voice_id", "voiceid", `${providerConfigKey}_voice`, `${compactProviderKey}voice`],
+    ],
+    model: [
+      "allowModelId",
+      ["model", "model_id", "modelid", `${providerConfigKey}_model`, `${compactProviderKey}model`],
+    ],
+  });
   const normalizeModel =
     options.normalizeModel ?? ((value, fallback) => trimToUndefined(value) ?? fallback);
   const readExtraConfig = options.readExtraConfig ?? (() => ({}) as ExtraConfig);
@@ -228,7 +207,7 @@ export function createOpenAiCompatibleSpeechProvider<
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
-    parseDirectiveToken: (ctx) => parseDirectiveToken(ctx, providerConfigKey),
+    parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeConfig(baseTtsConfig);
       const responseFormat = normalizeResponseFormat(talkProviderConfig.responseFormat);

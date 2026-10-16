@@ -26,6 +26,7 @@ export function createMountedPanes(
     Record<
       | "chat.history"
       | "chat.startup"
+      | "models.authStatus"
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
@@ -38,6 +39,7 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.authStatus" ||
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
@@ -72,6 +74,9 @@ export function createMountedPanes(
         rows.filter((entry) => entry.agentId === "main"),
         1,
       );
+    }
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
     }
     if (method === "sessions.describe") {
       await readBarrier;

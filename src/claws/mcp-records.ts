@@ -2,6 +2,7 @@ import type { Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
 export const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
@@ -70,8 +71,22 @@ export function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
     independentOwner: sqliteNumber(row.independent_owner) === 1,
     // SAFETY: Existing inventory exposes stored status without additional validation.
     status: row.status as PersistedClawMcpServerRef["status"],
-    ...(row.error ? { error: row.error } : {}),
+    ...(row.error !== null ? { error: row.error } : {}),
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
+}
+
+export function readAllClawMcpServerRefsInDatabase(
+  db: EngineConnection,
+): PersistedClawMcpServerRef[] {
+  if (!tableExists(db, "claw_mcp_server_refs")) {
+    return [];
+  }
+  const query = selectMcpRefs(db).orderBy("agent_id").orderBy("name").compile();
+  const rows = db /* sqlite-allow-raw: read-only Claw MCP reference inventory. */
+    .prepare(query.sql)
+    // SAFETY: the query projects every persisted Claw MCP reference column.
+    .all() as McpRefRow[];
+  return rows.map(rowToRef);
 }

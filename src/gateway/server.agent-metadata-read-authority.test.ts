@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as sessionMeta from "../acp/runtime/session-meta.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
 import { encodePngRgb } from "../media/png-encode.js";
@@ -113,7 +112,6 @@ describe("agent RPC metadata-read authority", () => {
             cfg: f.context.getRuntimeConfig(),
             request: { message: params.message, idempotencyKey: f.runId },
             runId: f.runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             agentDedupeKeys: [`agent:${f.runId}`],
             suppressVisibleSessionEffects: false,
             context: f.context,

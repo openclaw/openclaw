@@ -189,7 +189,9 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       canonicalBytes(unsigned),
       decodeKey(options.senderSigningPublicKey),
     );
-  } catch {}
+  } catch {
+    // Malformed signature/key material follows the same BadSignatureError path as a mismatch.
+  }
   if (!validSignature) {
     throw new BadSignatureError();
   }

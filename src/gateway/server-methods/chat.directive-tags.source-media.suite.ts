@@ -3,7 +3,8 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { buildSourceReplyPayloadState } from "../../agents/embedded-agent-runner/run/source-reply-payloads.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { appendUsageLine } from "../../auto-reply/reply/agent-runner-usage-line.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -72,6 +73,53 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
     setAgentRunReplies,
     writeSavedPng,
   } = fixture;
+  it.each([
+    { metadata: { assistantMessageIndex: 1 }, status: false, usage: false },
+    { metadata: { assistantTranscriptOwned: true }, status: false, usage: false },
+    { metadata: { assistantMessageIndex: 1 }, status: true, usage: false },
+    { metadata: { assistantMessageIndex: 1 }, status: false, usage: true },
+  ])(
+    "settles transcript-owned queued text without another answer ($metadata, status=$status, usage=$usage)",
+    async ({ metadata, status, usage }) => {
+      await withTranscriptFixtureState("openclaw-chat-send-queued-answer-", async () => {
+        const { scope } = fixture.session();
+        const text = "The queued request is complete.";
+        await appendTranscriptMessage(scope, {
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        });
+        const before = loadTranscriptEventsSync(scope);
+        const footer = "Usage: 12 in / 3 out";
+        const replies = [setReplyPayloadMetadata({ text }, metadata)];
+        const canvas: Omit<ChatCanvasBlock, "type"> = {
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "result",
+            url: "/__openclaw__/canvas/documents/result/index.html",
+          },
+          rawText: null,
+        };
+        const broadcast = await fixture.sendLate({
+          runId: "queued-answer-run",
+          payloads: usage
+            ? appendUsageLine(replies, footer)
+            : [...replies, ...(status ? [{ text, isStatusNotice: true }] : [])],
+          canvas,
+          bufferCurrent: true,
+        });
+        expect(broadcast).toMatchObject({ state: "final", runId: "queued-answer-run" });
+        expect(getMessageContent(broadcast)).toEqual([
+          ...(status ? [{ type: "text", text, openclawStatusNotice: true }] : []),
+          ...(usage ? [{ type: "text", text: footer }] : []),
+          { type: "canvas", ...canvas },
+        ]);
+        expect(loadTranscriptEventsSync(scope)).toEqual(before);
+        expect(await readActiveAssistantTranscriptMessages()).toHaveLength(1);
+      });
+    },
+  );
+
   it.each([
     { count: 1, delivery: "direct" },
     { count: 2, delivery: "direct" },
@@ -221,10 +269,9 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const replyText = "Source reply with media";
         writeSavedPng(fixtureDir, "source-reply-deduped.png");
         const mirrorIdempotencyKey = "idem-agent-source-reply-deduped:internal-source-reply:0";
-        await appendSourceReplyMirrorEntry({
-          text:
-            resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media",
-        });
+        const originalText =
+          resolveMirroredTranscriptText({ text: replyText, mediaUrls: [mediaUrl] }) ?? "media";
+        await appendSourceReplyMirrorEntry({ text: originalText });
         setAgentRunReplies([
           createMainSourceReply({
             idempotencyKey: mirrorIdempotencyKey,
@@ -243,14 +290,14 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        for (const message of [
-          assistantEntries[0],
-          ...(await readRawActiveAssistantTranscriptMessages()),
-        ]) {
-          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
-            { type: "text", text: replyText },
-          ]);
-        }
+        expect(
+          getMessageContent({ message: assistantEntries[0] }).filter(
+            (block) => block.type === "text",
+          ),
+        ).toEqual([{ type: "text", text: replyText }]);
+        expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+          { type: "text", text: originalText },
+        ]);
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },

@@ -42,7 +42,7 @@ import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";

@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import {
@@ -50,6 +51,10 @@ describe("SQLite session deletion receipts", () => {
   const sessionId = "cleanup-session";
 
   beforeEach(() => {
+    resetConfigRuntimeState();
+    // Automatic upkeep is separate from the scoped deletion receipt contract.
+    const config = { session: { maintenance: { mode: "warn" as const } } };
+    setRuntimeConfigSnapshot(config, config);
     const tempDir = tempDirs.make("openclaw-session-deletion-receipts-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
@@ -62,6 +67,7 @@ describe("SQLite session deletion receipts", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    resetConfigRuntimeState();
   });
 
   async function seed(key = sessionKey) {

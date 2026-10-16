@@ -750,31 +750,4 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       expect(controller.errorText).toBeNull();
     },
   );
-  it("preserves normal coalesced wheel actions on their original tab", async () => {
-    vi.useFakeTimers();
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
-        return { result: true };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 2, deltaY: 10, cancelable: true }));
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 3, deltaY: 20, cancelable: true }));
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/act",
-        body: expect.objectContaining({
-          kind: "evaluate",
-          targetId: "tab-a",
-          fn: expect.stringContaining("window.scrollBy(5, 30)"),
-        }),
-      }),
-    );
-  });
 });

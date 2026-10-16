@@ -13,7 +13,10 @@ import {
   resolveAgentHarnessPreparedRouteSupport,
 } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { resolveModelExtraParamSources } from "../../model-extra-params.js";
+import {
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+} from "../../model-extra-params.js";
 import { resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
 import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
@@ -50,18 +53,27 @@ export function resolveEmbeddedRunEffectiveModel(
       modelId: params.modelId,
       agentId: params.runParams.agentId,
     });
-  const requestExtraParams = {
-    ...defaultParams,
-    ...modelParams,
-    ...agentModelParams,
-    ...agentParams,
-    ...Object.fromEntries(
+  const sources = [
+    defaultParams,
+    modelParams,
+    agentModelParams,
+    agentParams,
+    Object.fromEntries(
       Object.entries(params.runParams.streamParams ?? {}).filter(
         ([, value]) => value !== undefined,
       ),
     ),
-    ...(params.runParams.fastMode === undefined ? {} : { fastMode: params.runParams.fastMode }),
-  };
+    ...(params.runParams.fastMode === undefined ? [] : [{ fastMode: params.runParams.fastMode }]),
+  ];
+  const requestExtraParams: Record<string, unknown> = Object.assign({}, ...sources);
+  // Budget the same winning aliases that request assembly sends.
+  requestExtraParams.serviceTier = resolveAliasedParamValue(sources, [
+    "serviceTier",
+    "service_tier",
+  ]);
+  requestExtraParams.fastMode = resolveAliasedParamValue(sources, ["fastMode", "fast_mode"]);
+  delete requestExtraParams.service_tier;
+  delete requestExtraParams.fast_mode;
   const requestServiceTiers =
     params.nativeModelOwned || params.provider !== "openai"
       ? undefined
@@ -83,20 +95,6 @@ export function resolveEmbeddedRunEffectiveModel(
               baseUrl: params.runtimeModel.baseUrl,
             }),
         });
-  const resolved = resolveEmbeddedRuntimeModelPolicy({
-    cfg: params.runParams.config,
-    provider: params.provider,
-    contextConfigProvider,
-    modelId: params.modelId,
-    runtimeModel: params.runtimeModel,
-    nativeModelOwned: params.nativeModelOwned,
-    requestExtraParams,
-    requestServiceTiers,
-    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
-    ...(params.runParams.contextTokenBudget === undefined
-      ? {}
-      : { contextTokenBudget: params.runParams.contextTokenBudget }),
-  });
   const authoredContextTokenCap =
     params.pinnedHarnessId || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
       ? undefined
@@ -105,6 +103,21 @@ export function resolveEmbeddedRunEffectiveModel(
           provider: contextConfigProvider,
           model: params.modelId,
         });
+  const resolved = resolveEmbeddedRuntimeModelPolicy({
+    cfg: params.runParams.config,
+    provider: params.provider,
+    contextConfigProvider,
+    modelId: params.modelId,
+    runtimeModel: params.runtimeModel,
+    nativeModelOwned: params.nativeModelOwned,
+    authoredContextTokenCap,
+    requestExtraParams,
+    requestServiceTiers,
+    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
+    ...(params.runParams.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: params.runParams.contextTokenBudget }),
+  });
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),

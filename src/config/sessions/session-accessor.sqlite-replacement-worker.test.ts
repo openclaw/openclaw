@@ -31,6 +31,7 @@ import {
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
@@ -303,7 +304,7 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     let readerDatabase: DatabaseSync | undefined;
     reader.read(
       (opened) => {
-        readerDatabase = opened.db;
+        readerDatabase = requireNativeSqliteDatabase(opened.db);
         return readSessionEntryCache(opened, { cache: true });
       },
       { agentId: "main", path: database.path },

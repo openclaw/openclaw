@@ -5,7 +5,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -15,7 +14,7 @@ import {
   requireRecord,
 } from "./chat-host.test-support.ts";
 import {
-  ChatProviderReviewController,
+  createChatProviderReview,
   ChatProviderReviewNotice,
   ChatProviderReviewDialog,
 } from "./chat-provider-review-controller.tsx";
@@ -58,45 +57,41 @@ function fixture(review = row.providerReview) {
     .mockResolvedValue({ status: "refreshed" });
   const container = document.createElement("div");
   document.body.append(container);
-  const [revision, setRevision] = createSignal(0);
-  const paint = () => {
-    controller.sync(true);
-    setRevision((value) => value + 1);
-    flush();
-  };
-  const lifecycle = new ControllerHost();
-  const controller = new ChatProviderReviewController(lifecycle, () => state, paint);
+  const input = { state, canWrite: true };
+  let owner!: ReturnType<typeof createChatProviderReview>;
+  let publishSource = () => flush();
   const mounted = mountSolid(
-    () => [
-      createComponent(ChatProviderReviewNotice, {
-        controller,
-        get revision() {
-          return revision();
-        },
-      }),
-      createComponent(ChatProviderReviewDialog, {
-        controller,
-        get revision() {
-          return revision();
-        },
-      }),
-    ],
+    () => {
+      const [source, setSource] = createSignal({ ...input });
+      publishSource = () => {
+        setSource({ ...input });
+        flush();
+      };
+      owner = createChatProviderReview({ source, readState: () => state });
+      return [
+        createComponent(ChatProviderReviewNotice, { owner }),
+        createComponent(ChatProviderReviewDialog, { owner }),
+      ];
+    },
     { container },
   );
   containers.push({ element: container, dispose: mounted.unmount });
-  paint();
-  const click = (text: string) => {
+  flush();
+  const click = (text: string, settle = true) => {
     const button = [...container.querySelectorAll("button")].find(
       (candidate) => candidate.textContent?.trim() === text,
     );
     expect(button, text).toBeDefined();
     button!.click();
+    if (settle) {
+      flush();
+    }
     return button!;
   };
   const open = async () => {
     click("Review findings");
     await vi.dynamicImportSettled();
-    paint();
+    flush();
   };
   const calls = () => requestCalls(request, "sessions.providerReview.continue");
   const acknowledge = async () => {
@@ -107,7 +102,9 @@ function fixture(review = row.providerReview) {
   return {
     state,
     container,
-    paint,
+    input,
+    owner,
+    publishSource,
     click,
     open,
     acknowledge,
@@ -115,7 +112,7 @@ function fixture(review = row.providerReview) {
     outcome,
     request,
     refresh,
-    lifecycle,
+    unmount: mounted.unmount,
   };
 }
 
@@ -164,12 +161,14 @@ it.each(["connection", "session", "review", "disconnection"] as const)(
       2,
     );
     if (replacement === "disconnection") {
-      f.lifecycle.disconnect();
+      f.unmount();
+    } else {
+      f.publishSource();
     }
-    f.paint();
     f.outcome.reject(new Error("Old connection failed"));
     await f.outcome.promise.catch(() => {});
     await Promise.resolve();
+    flush();
     expect(f.container.textContent).not.toContain("Old connection failed");
     expect(f.container.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(f.state.sessions.reconcileMutation).not.toHaveBeenCalled();
@@ -192,6 +191,22 @@ it.each([
   expect(f.calls()).toHaveLength(0);
 });
 
+it("rechecks rendered write permission before continuing a reviewed session", async () => {
+  const f = fixture();
+  await f.open();
+  f.input.canWrite = false;
+  f.publishSource();
+  await f.owner.acknowledge();
+  expect(f.calls()).toHaveLength(0);
+
+  f.input.canWrite = true;
+  f.publishSource();
+  const continuation = f.owner.acknowledge();
+  expect(f.calls()).toHaveLength(1);
+  f.outcome.resolve({ runId: "resumed", status: "started" });
+  await continuation;
+});
+
 it("requires explicit safe review, retains the pause, and retries status without replaying ACK", async () => {
   const f = fixture();
   const firstRefresh = createDeferred<SessionRefreshOutcome>();
@@ -206,7 +221,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   expect(f.calls()).toHaveLength(0);
   await f.open();
   const dialog = f.container.querySelector("openclaw-modal-dialog");
-  f.paint();
+  f.publishSource();
   expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
   expect(f.container.textContent).toContain(row.providerReview!.explanation);
   expect(f.container.querySelector("img")).toBeNull();
@@ -214,7 +229,9 @@ it("requires explicit safe review, retains the pause, and retries status without
     row.providerReview!.continuationMessage,
   );
   expect(f.calls()).toHaveLength(0);
-  f.click("Acknowledge findings and continue");
+  const continueButton = f.click("Acknowledge findings and continue", false);
+  continueButton.click();
+  flush();
   f.click("Requesting continuation…");
   const calls = f.calls();
   expect(calls).toHaveLength(1);
@@ -229,6 +246,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   await firstRefreshStarted.promise;
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
+  flush();
   expect(f.container.textContent).toContain(
     "Continuation was requested, but its status could not be refreshed.",
   );
@@ -241,11 +259,16 @@ it("requires explicit safe review, retains the pause, and retries status without
   expect(f.calls()).toHaveLength(1);
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
+  flush();
   expect(f.container.textContent).toContain("Waiting for the provider to accept it.");
   expect(f.container.textContent).not.toContain("status could not be refreshed");
   expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
   expect(f.state.sessionsResult?.sessions[0]?.providerReview).toEqual(row.providerReview);
   expect(f.calls()).toHaveLength(1);
+  f.state.sessionsResult = sessionsResult([{ ...row, providerReview: undefined }], 2);
+  f.publishSource();
+  expect(f.container.querySelector(".chat-provider-review")).toBeNull();
+  expect(f.container.querySelector("openclaw-modal-dialog")).toBeNull();
 });
 
 it.each([
@@ -283,7 +306,7 @@ it.each([
         2,
       );
     }
-    f.paint();
+    f.publishSource();
     expect(f.container.textContent).toContain("Continuation was not accepted.");
     if (source === "row") {
       expect(f.container.textContent).toContain(
@@ -319,7 +342,7 @@ it.each(["acknowledgment", "refresh"] as const)(
       [{ ...row, lastRunId: runId, status: "failed", hasActiveRun: false, activeRunIds: [] }],
       2,
     );
-    f.paint();
+    f.publishSource();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
     expect(f.calls()).toHaveLength(1);
     f.outcome.resolve({ runId, status: "started" });
@@ -327,7 +350,7 @@ it.each(["acknowledgment", "refresh"] as const)(
     refresh.resolve({ status: "refreshed" });
     await refresh.promise;
     await Promise.resolve();
-    f.paint();
+    f.publishSource();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(false);
     expect(f.container.textContent).toContain("Continuation was not accepted.");
     expect(f.calls()).toHaveLength(1);
@@ -357,7 +380,7 @@ it.each(["missing", "foreign", "active", "active-ids", "running"] as const)(
       ],
       2,
     );
-    f.paint();
+    f.publishSource();
     expect(f.container.querySelector("button.primary")?.hasAttribute("disabled")).toBe(true);
     f.click("Acknowledge findings and continue");
     expect(f.calls()).toHaveLength(1);
@@ -371,7 +394,7 @@ it("preserves the same idempotency key after an uncertain transport failure with
   f.outcome.reject(new Error("Connection closed before acknowledgment"));
   await f.outcome.promise.catch(() => {});
   await Promise.resolve();
-  f.paint();
+  f.publishSource();
   f.click("Acknowledge findings and continue");
   const calls = f.calls();
   expect(calls).toHaveLength(2);

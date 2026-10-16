@@ -269,7 +269,7 @@ export function BoardModal(props: {
               {visibleError()}
             </div>
           ) : undefined}
-          <div class="workboard-modal__actions">
+          <openclaw-modal-actions class="workboard-modal__actions">
             <button
               class="btn"
               type="button"
@@ -285,7 +285,7 @@ export function BoardModal(props: {
             >
               {t(draft().create ? "common.create" : "common.save")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </form>
         <WorkboardErrorToast
           owner={draft().error ? draft() : props.toastOwner}

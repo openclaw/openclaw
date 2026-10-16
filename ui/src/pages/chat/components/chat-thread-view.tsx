@@ -20,22 +20,19 @@ import {
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
-import {
-  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-  renderChatHistoryBoundary,
-} from "./chat-history-boundary.ts";
+import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { ChatWelcome } from "./chat-welcome.tsx";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -49,10 +46,7 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
-export function ChatThread(input: {
-  props: ChatThreadProps;
-  transcript: ChatTranscriptController;
-}) {
+export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTranscript }) {
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   onCleanup(() => {
@@ -98,7 +92,7 @@ export function ChatThread(input: {
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: renderChatHistoryBoundary(input.props.historyPagination),
+          props: input.props.historyPagination,
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;
@@ -112,14 +106,14 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() ? (
-            <LitContent value={historyHeader()?.template} />
+          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
+            <ChatHistoryBoundary {...input.props.historyPagination} />
           ) : undefined}
           {showLoadingSkeleton() ? (
             <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <LitContent value={renderWelcomeState({ ...input.props, onModelSetup: undefined })} />
+            <ChatWelcome {...input.props} onModelSetup={undefined} />
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>

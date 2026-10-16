@@ -392,12 +392,11 @@ push_prep_head_to_pr_branch() {
   pr_head_sha_after=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
   verify_pr_publication_identity "$pr" "$observation" "$PR_OBSERVATION" || return 1
 
-  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr-verify" "$PR_OBSERVATION" || return 1
+  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr" "$PR_OBSERVATION" || return 1
   local local_prep_tree
   local remote_prep_tree
   local_prep_tree=$(pr_git rev-parse "${local_prep_head_sha}^{tree}")
-  remote_prep_tree=$(pr_git rev-parse "pr-$pr-verify^{tree}")
-  pr_git branch -D "pr-$pr-verify" 2>/dev/null || true
+  remote_prep_tree=$(pr_git rev-parse "pr-$pr^{tree}")
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1

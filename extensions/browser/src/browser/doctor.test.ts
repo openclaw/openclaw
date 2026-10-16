@@ -102,7 +102,7 @@ describe("buildBrowserDoctorReport", () => {
     );
   });
 
-  it("reports Linux no-display fallback without a display warning", () => {
+  it("reports default headless mode without a display warning", () => {
     const report = buildBrowserDoctorReport({
       platform: "linux",
       env: {},
@@ -111,7 +111,7 @@ describe("buildBrowserDoctorReport", () => {
         detectedBrowser: "chrome",
         detectedExecutablePath: "/usr/bin/google-chrome-stable",
         headless: true,
-        headlessSource: "linux-display-fallback",
+        headlessSource: "default",
       }),
     });
 

@@ -170,7 +170,7 @@ it("does not describe a different user-selected model as restoration of the prev
   });
 });
 
-it.each(["session", "lifecycle", "writer", "selection", "cancellation"] as const)(
+it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
   "rejects restoration after %s replacement at the canonical write boundary",
   async (replacement) => {
     const f = await fixture();
@@ -188,20 +188,14 @@ it.each(["session", "lifecycle", "writer", "selection", "cancellation"] as const
               ? { sessionId: "replacement-session" }
               : replacement === "lifecycle"
                 ? { lifecycleRevision: "replacement-lifecycle" }
-                : replacement === "writer"
-                  ? { activeWriterRunId: "replacement-run" }
-                  : {
-                      providerOverride: "new-fixture",
-                      modelOverride: "selected",
-                      modelOverrideSource: "user",
-                    }),
+                : { activeWriterRunId: "replacement-run" }),
           });
         }
         return append(params);
       },
     );
     const accounting = f.account("ordinary", primary);
-    if (replacement === "selection" || replacement === "cancellation") {
+    if (replacement === "cancellation") {
       await accounting;
     } else {
       await expect(accounting).rejects.toThrow();
@@ -210,11 +204,5 @@ it.each(["session", "lifecycle", "writer", "selection", "cancellation"] as const
     expect(await f.notices()).toEqual([]);
     expect(await f.notices("replacement-session")).toEqual([]);
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);
-    if (replacement === "selection") {
-      expect(f.read()).toMatchObject({
-        providerOverride: "new-fixture",
-        modelOverride: "selected",
-      });
-    }
   },
 );

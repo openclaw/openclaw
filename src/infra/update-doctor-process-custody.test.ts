@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as groups from "../process/child-process-tree.js";
 import type { CommandProcessIdentity } from "../process/command-process-custody.types.js";
 import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
+import * as birthIdentity from "../shared/pid-alive.js";
 import * as packageRoot from "./openclaw-root.js";
 import {
   createUpdateDoctorProcessCustody,
@@ -22,6 +23,93 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps a completed child's original reservation until its spawning owner settles it",
+  async () => {
+    const root = fs.realpathSync(directories.make("doctor-terminal-before-binding-"));
+    const native = await nativeCustody.createManagedCommandProcessCustody({
+      roots: [root],
+      runId: "terminal-before-binding",
+      databasePath: path.join(root, "handoffs.sqlite"),
+    });
+    const store = createManagedHandoffLeaseStore({
+      databasePath: native.databasePath,
+      existingIdentity: native.databaseIdentity,
+      serviceManagerEnv: {},
+    });
+    const argv = [process.execPath, "-e", ""];
+    const reservation = native.custody.reserve(argv);
+    const child = spawnSync(argv[0]!, argv.slice(1));
+    try {
+      expect(child.status).toBe(0);
+      expect(groups.isChildProcessTreeAlive({ pid: child.pid })).toBe(false);
+      expect(() => reservation.spawned({ pid: child.pid, startedAt: null })).not.toThrow();
+      expect(store.readCommandChildren([root])).toMatchObject([
+        { action: { custody: "reserved" } },
+      ]);
+    } finally {
+      reservation.settled();
+      native.releaseAnchors();
+    }
+    expect(store.readCommandChildren([root])).toEqual([]);
+  },
+);
+
+it.skipIf(process.platform === "win32").each([true, false])(
+  "uses a captured child birth without treating a live unknown birth as complete (captured: %s)",
+  async (captured) => {
+    const root = fs.realpathSync(directories.make("doctor-captured-before-binding-"));
+    const native = await nativeCustody.createManagedCommandProcessCustody({
+      roots: [root],
+      runId: "captured-before-binding",
+      databasePath: path.join(root, "handoffs.sqlite"),
+    });
+    const store = createManagedHandoffLeaseStore({
+      databasePath: native.databasePath,
+      existingIdentity: native.databaseIdentity,
+      serviceManagerEnv: {},
+    });
+    const argv = [process.execPath, "-e", "process.stdin.resume()"];
+    const reservation = native.custody.reserve(argv);
+    const child = spawn(argv[0]!, argv.slice(1), {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const closed = once(child, "close");
+    await once(child, "spawn");
+    const pid = child.pid!;
+    const startedAt = birthIdentity.getProcessInstanceStartTime(pid);
+    expect(startedAt).not.toBeNull();
+    const readBirth = birthIdentity.getFileLockProcessStartTime;
+    const probe = vi
+      .spyOn(birthIdentity, "getFileLockProcessStartTime")
+      .mockImplementation((queried, ...args) =>
+        queried === pid ? null : readBirth(queried, ...args),
+      );
+    try {
+      const bind = () => reservation.spawned({ pid, startedAt: captured ? startedAt : null });
+      if (captured) {
+        expect(bind).not.toThrow();
+        expect(store.readCommandChildren([root])).toMatchObject([
+          { executor: { pid }, action: { custody: "bound" } },
+        ]);
+      } else {
+        expect(bind).toThrow("managed handoff process start identity is unavailable");
+        expect(store.readCommandChildren([root])).toMatchObject([
+          { action: { custody: "reserved" } },
+        ]);
+      }
+    } finally {
+      probe.mockRestore();
+      child.stdin!.end();
+      await closed;
+      reservation.settled();
+      native.releaseAnchors();
+    }
+    expect(store.readCommandChildren([root])).toEqual([]);
+  },
+);
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "retains a real Doctor child's identity across a failed bind (settlement fails: %s)",

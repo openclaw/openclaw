@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
@@ -72,20 +73,18 @@ export async function loadChatRequestIdentityKeyAsync(
   return null;
 }
 
-/** Read the captured identity on the shared worker without creating SQLite state. */
+/** Read the admitted snapshot without creating SQLite state or joining the writer. */
 export async function loadDeviceIdentityIfPresentAsync(
   options: DeviceIdentityStoreOptions = {},
 ): Promise<DeviceIdentity | null> {
   const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const context = captureOpenClawStateWorkerContext({ ...options, path: databasePath });
-  const identity = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "deviceIdentity.read", input: { identityKey } }),
-    { existingOnly: true },
+  const reply = await executeExistingOpenClawStateRead(
+    { path: databasePath, env: options.env },
+    { type: "deviceIdentity.read", input: { identityKey } },
   );
-  if (identity !== undefined) {
-    return identity;
+  const identity = reply?.identity ?? null;
+  if (!identity) {
+    assertNoPendingLegacyIdentity({ path: databasePath, identityKey });
   }
-  assertNoPendingLegacyIdentity({ path: databasePath, identityKey });
-  return null;
+  return identity;
 }

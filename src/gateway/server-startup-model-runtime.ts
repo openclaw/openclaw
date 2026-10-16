@@ -82,6 +82,7 @@ export async function publishConfiguredModelRuntimeSnapshots(params: {
   await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
     gatewayLifecycle: true,
     startup: true,
+    joinSupersedingPublication: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
     ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),

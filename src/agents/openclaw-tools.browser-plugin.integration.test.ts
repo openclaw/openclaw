@@ -17,6 +17,8 @@ import {
 import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
 import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { loadWebMediaRaw } from "../media/web-media.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -512,6 +514,36 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(params.hasAuthForProvider?.("acme")).toBe(true);
     expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
     await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("env-only-key");
+  });
+
+  it("does not borrow agent credentials when tool preparation excludes plugin-owned auth", async () => {
+    const config = { ...authConfig("ACME_API_KEY"), auth: { order: { acme: ["acme:profile"] } } };
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "acme",
+          providers: ["acme"],
+          modelCatalog: { providers: { acme: { authScope: "plugin", models: [] } } },
+        },
+      ],
+    });
+    await withPluginMetadataSnapshotScope(
+      metadata,
+      async () => {
+        const params = resolveTools({
+          config,
+          agentDir: TEST_AGENT_DIR,
+          authProfileStore: {
+            version: 1,
+            profiles: { "acme:profile": { type: "api_key", provider: "acme", key: "profile-key" } },
+          },
+        });
+        expect(params.hasAuthForProvider?.("acme")).toBe(false);
+        expect(params.context.hasAuthForProvider?.("acme")).toBe(false);
+        await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBeUndefined();
+      },
+      { config, trustConfigIdentity: true },
+    );
   });
 
   it("keeps ordered profile precedence when runtime auth is also available", async () => {

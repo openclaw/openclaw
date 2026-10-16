@@ -166,9 +166,17 @@ export function startGatewayMaintenanceTimers(params: {
     // Inspection and admission commit are synchronous: no new work can enter
     // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
-    const admission = tryBeginGatewaySuspendAdmission(() => {
-      invalidated = true;
-    });
+    const admission = tryBeginGatewaySuspendAdmission(
+      () => {
+        invalidated = true;
+      },
+      {
+        owner: "host-thaw-recovery",
+        leaseId: `host-thaw-${scheduler.now()}`,
+        caller: "maintenance:host-thaw",
+        reason: mode,
+      },
+    );
     if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
@@ -314,7 +322,7 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
-    pruneExpiredArtifactDownloads(params.clients, now);
+    pruneExpiredArtifactDownloads(now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);

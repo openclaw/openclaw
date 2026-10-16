@@ -14,6 +14,7 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
+import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -92,8 +93,74 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each(
+    (["npm", "pnpm", "bun"] as const).flatMap((mode) =>
+      (["ready", "starting", "old-version"] as const).map((state) => ({ mode, state })),
+    ),
+  )(
+    "observes a package watcher restart without failing --no-restart ($mode, $state)",
+    async ({ mode, state }) => {
+      mockProcessPlatform("linux");
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+        makeGatewayService({ status: "running", pid: 8000 }),
+      );
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        state === "starting"
+          ? async () => {
+              throw new Error("gateway timeout after 3000ms");
+            }
+          : gatewayHealthResponse({
+              server: {
+                version: state === "ready" ? "2026.9.8" : "2026.9.7",
+                buildId: "candidate",
+                bootId: "watcher-successor",
+              },
+            }),
+      );
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode,
+        after: { version: "2026.9.8" },
+        steps: [],
+        durationMs: 0,
+      };
+      const outcome = await maybeRestartService({
+        result,
+        opts: { json: true, restart: false, run: { runId: "watcher-restart", env: {} } },
+        shouldRestart: false,
+        observePackageReplacement: true,
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen(),
+        timeoutMs: 1000,
+      });
+      expect(outcome).toBe("ok");
+      expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+      expect(result.status).toBe("ok");
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0]?.failureFacts).toBeUndefined();
+      expect(result.steps[0]?.termination).toBeUndefined();
+      expect(result.steps[0]?.advisory?.message).toEqual(
+        state === "ready" ? undefined : expect.stringContaining("--no-restart"),
+      );
+      expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+        "watcher-restart",
+        expect.objectContaining({
+          versionMatch: state === "starting" ? undefined : state === "ready",
+        }),
+        expect.anything(),
+      );
+    },
+  );
+
   it.each(["transient-timeout", "mixed"])(
-    "records collection warnings without accepting definitive channel failures (%s)",
+    "records collection and channel probe warnings after core verification (%s)",
     async (kind) => {
       mockProcessPlatform("linux");
       const service = makeGatewayService({ status: "running", pid: 8000 });
@@ -140,26 +207,22 @@ describe("update readiness generation", () => {
         settle: { probes: 2 },
         onVerified,
       });
-      const failed = kind === "negative" || kind === "mixed";
-      expect(verification.ok).toBe(!failed);
-      expect(onVerified).toHaveBeenCalledTimes(failed ? 0 : 1);
-      expect(result.steps[0]?.exitCode).toBe(failed ? 1 : 0);
-      if (failed) {
-        expect(result.steps[0]?.failureFacts).toContainEqual(
-          expect.objectContaining({ code: "channel-errors" }),
-        );
-      } else {
-        expect(recordUpdateRunVerification).toHaveBeenCalledWith(
-          "collection-timeout",
-          expect.objectContaining({
-            serviceRunning: true,
-            versionMatch: true,
-            readyz: true,
-            settled: true,
-          }),
-          expect.anything(),
-        );
-      }
+      expect(verification.ok).toBe(true);
+      expect(onVerified).toHaveBeenCalledOnce();
+      expect(result.steps[0]?.exitCode).toBe(0);
+      expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+        "collection-timeout",
+        expect.objectContaining({
+          serviceRunning: true,
+          versionMatch: true,
+          readyz: true,
+          settled: true,
+          channelsReady: true,
+        }),
+        expect.anything(),
+      );
+      const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+      expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
       if (kind !== "negative") {
         expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
           "telegram: health collection timed out after 7000ms",

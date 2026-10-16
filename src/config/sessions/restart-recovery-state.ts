@@ -60,6 +60,22 @@ export function isMainRestartRecoveryCandidate(
   );
 }
 
+/** A final intent can acknowledge only its admitted source on the same captured route. */
+export function getRestartRecoveryPendingFinalSourceRunId(
+  entry: SessionEntry,
+  context: DeliveryContext | undefined,
+): string | undefined {
+  const sourceRunId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const original = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  return normalizeRunId(entry.restartRecoveryDeliveryRunId) &&
+    sourceRunId &&
+    original?.channel &&
+    original.to &&
+    isDeepStrictEqual(original, normalizeDeliveryContext(context))
+    ? sourceRunId
+    : undefined;
+}
+
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
@@ -332,7 +348,12 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const previousIndex = evidence.findIndex((entry) => entry.runId === runId);
+    // Queue receipts are immutable facts. Later terminal cleanup can carry an
+    // older capture, but cannot erase a send or reassign it to another route.
     if (previousIndex >= 0) {
+      if (evidence[previousIndex]?.durableFinalReceipt) {
+        continue;
+      }
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
@@ -357,8 +378,14 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       runId,
       ...result,
       ...(transcriptRunId ? { transcriptRunId } : {}),
-      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
-      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion } : {}),
+      ...(deliveryContext ? { deliveryContext } : {}),
+      ...((item.harnessCompletion === undefined || harnessCompletion?.sourceRunId === runId) &&
+      deliveryContext?.channel &&
+      deliveryContext.to &&
+      intentId &&
+      deliveryId &&
+      platformMessageId
         ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
         : {}),
     });

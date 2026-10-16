@@ -35,6 +35,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -57,6 +58,7 @@ import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-pol
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 beforeEach(() => {
+  installWatcherMock();
   registrySnapshot = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(registry);
   resetGatewayRestartStateForInProcessRestart();

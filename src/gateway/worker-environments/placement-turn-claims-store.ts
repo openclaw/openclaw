@@ -85,6 +85,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         }
       : undefined;
     const command = { ...input };
+    const localTurn =
+      (command.type === "placementTurns.claim" ||
+        command.type === "placementTurns.release" ||
+        command.type === "placementTurns.releaseIfOwned") &&
+      command.input.claim.owner.kind === "local" &&
+      command.input.claim.owner.environmentId === undefined;
     const sessionId =
       "claim" in input.input
         ? input.input.claim.sessionId
@@ -142,6 +148,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         label: "Placement claim",
         nativeLocation: runtime.path,
         assertCurrent,
+        stageFromReceipt: localTurn,
         admissionFacts(request) {
           if (request.stage !== "transaction" && request.stage !== "commit") {
             return request.facts;
@@ -150,7 +157,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
           if (!isReceipt(admitted.facts)) {
             throw new Error("Placement admission has no current placement facts");
           }
-          if (request.stage === "transaction") {
+          if (request.stage === "transaction" || localTurn) {
             previousState = admitted.facts.placement ? admitted.facts.placement.state : null;
           }
           current?.assertPlacementCurrent(admitted.facts.placement, admitted.facts.placementMove);
@@ -344,6 +351,27 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             throw error;
           }
           const placement = reply.result.projection.placements.get(command.input.claim.sessionId);
+          if (localTurn && command.type === "placementTurns.claim") {
+            const persisted = placement?.turnClaim;
+            if (
+              placement &&
+              persisted?.owner === "local" &&
+              persisted.claimId === command.input.claim.claimId &&
+              persisted.runId === command.input.claim.runId
+            ) {
+              return {
+                placement,
+                projection: reply.result.projection,
+                claim: {
+                  sessionId: command.input.claim.sessionId,
+                  claimId: persisted.claimId,
+                  runId: persisted.runId,
+                  owner: command.input.claim.owner,
+                  placementGeneration: persisted.generation,
+                },
+              };
+            }
+          }
           if (
             command.type === "placementTurns.claim"
               ? placement &&
@@ -351,6 +379,9 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
                 isCurrentPlacementTurnClaim(placement, prepared.claim)
               : !placement || !isCurrentPlacementTurnClaim(placement, command.input.claim)
           ) {
+            if (localTurn) {
+              return { placement, projection: reply.result.projection };
+            }
             if (prepared) {
               return prepared;
             }
@@ -365,12 +396,12 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
         if (
           command.type === "placementTurns.releaseIfOwned" &&
           !mutation.transactionGranted &&
-          !mutation.commitGranted &&
+          (!mutation.commitGranted || localTurn) &&
           mutation.settlement?.kind !== "unknown" &&
           isSqliteLockError(error)
         ) {
-          // The worker never admitted a commit. Keep this exact cleanup owner alive;
-          // SQLite waits in the worker before every new transaction attempt.
+          // A busy local autocommit statement has no effect even after admission.
+          // Keep this cleanup owner alive; SQLite waits in the worker on each attempt.
           // Never replay startup, a claim, an uncertain write, or a replaced database.
           context.admission.assertCurrent();
           if (!reportedContention) {

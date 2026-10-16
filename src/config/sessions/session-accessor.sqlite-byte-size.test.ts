@@ -4,6 +4,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import {
@@ -107,7 +108,9 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
       ],
       touchSessionEntry: false,
     });
-    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env }).db,
+    );
     const table = db
       .prepare(
         "SELECT rootpage FROM sqlite_schema WHERE type = 'table' AND name = 'transcript_events'",
@@ -200,10 +203,13 @@ it("bounds display delta sizing before its byte limit and resumes in order", asy
     const limits = { maxBytes: 1, maxEvents: 1_000 };
     read(scope, limits);
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const counter = trackSqliteStatementExecutions(db, ["metadata"], (query) =>
-      query.includes('from "transcript_events"') && query.includes("serialized_bytes")
-        ? "metadata"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["metadata"],
+      (query) =>
+        query.includes('from "transcript_events"') && query.includes("serialized_bytes")
+          ? "metadata"
+          : null,
     );
     try {
       const blocked = read(scope, limits);
@@ -398,12 +404,15 @@ it("bounds history tail sizing while retaining an oversized newest event", async
     const options = { maxBytes: 1024, maxLines: 1_000, maxMessages: 1_000 };
     read(scope, options);
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const counter = trackSqliteStatementExecutions(db, ["metadata"], (sql) =>
-      sql.includes("session_transcript_active_events") &&
-      sql.includes("message_position") &&
-      sql.includes("serialized_bytes")
-        ? "metadata"
-        : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["metadata"],
+      (sql) =>
+        sql.includes("session_transcript_active_events") &&
+        sql.includes("message_position") &&
+        sql.includes("serialized_bytes")
+          ? "metadata"
+          : null,
     );
     try {
       for (let attempt = 0; attempt < 3; attempt++) {

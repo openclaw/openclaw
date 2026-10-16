@@ -3,6 +3,7 @@ import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   normalizeVideoGenerationDuration,
   resolveVideoGenerationSupportedDurations,
+  selectSupportedVideoDuration,
 } from "./duration-support.js";
 import type {
   VideoGenerationIgnoredOverride,
@@ -62,16 +63,8 @@ export function resolveVideoGenerationOverrides(params: {
     watermark = undefined;
   }
 
-  const requestedDurationSeconds =
-    typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
-      ? Math.max(1, Math.round(params.durationSeconds))
-      : undefined;
-  const durationSeconds = normalizeVideoGenerationDuration({
-    provider: params.provider,
-    model: params.model,
-    durationSeconds: requestedDurationSeconds,
-    inputImageCount: params.inputImageCount ?? 0,
-    inputVideoCount: params.inputVideoCount ?? 0,
+  const requestedDurationSeconds = normalizeVideoGenerationDuration({
+    durationSeconds: params.durationSeconds,
   });
   const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
     provider: params.provider,
@@ -79,6 +72,10 @@ export function resolveVideoGenerationOverrides(params: {
     inputImageCount: params.inputImageCount ?? 0,
     inputVideoCount: params.inputVideoCount ?? 0,
   });
+  const durationSeconds =
+    requestedDurationSeconds !== undefined && supportedDurationSeconds
+      ? selectSupportedVideoDuration(requestedDurationSeconds, supportedDurationSeconds)
+      : requestedDurationSeconds;
 
   if (
     typeof requestedDurationSeconds === "number" &&

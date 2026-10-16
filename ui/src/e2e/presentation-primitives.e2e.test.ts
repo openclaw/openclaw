@@ -175,111 +175,104 @@ async function assertShadowParentStyles(page: Page, tag: string, selector: strin
 }
 
 suite.define(() => {
-  for (const renderer of ["Lit", "Solid"]) {
-    for (const theme of ["light", "dark"] as const) {
-      for (const viewport of [
-        { width: 1280, height: 900, name: "desktop" },
-        { width: 390, height: 844, name: "mobile" },
-      ]) {
-        it(`${renderer} preserves presentation contracts in ${theme} ${viewport.name}`, async () => {
-          await suite.withPage(
-            {
-              colorScheme: theme,
-              viewport,
-              locale: "en-US",
-              reducedMotion: "reduce",
-              serviceWorkers: "block",
-            },
-            async ({ page }) => {
-              await page.clock.install();
-              await pauseVirtualClock(page);
-              await page.addInitScript(() => {
-                Object.defineProperty(navigator, "clipboard", {
-                  configurable: true,
-                  value: { writeText: async () => {} },
-                });
+  for (const theme of ["light", "dark"] as const) {
+    for (const viewport of [
+      { width: 1280, height: 900, name: "desktop" },
+      { width: 390, height: 844, name: "mobile" },
+    ]) {
+      it(`Solid preserves presentation contracts in ${theme} ${viewport.name}`, async () => {
+        await suite.withPage(
+          {
+            colorScheme: theme,
+            viewport,
+            locale: "en-US",
+            reducedMotion: "reduce",
+            serviceWorkers: "block",
+          },
+          async ({ page }) => {
+            await page.clock.install();
+            await pauseVirtualClock(page);
+            await page.addInitScript(() => {
+              Object.defineProperty(navigator, "clipboard", {
+                configurable: true,
+                value: { writeText: async () => {} },
               });
-              for (const group of groups) {
-                await page.goto(
-                  `${suite.server.baseUrl}src/test-helpers/presentation-primitives-fixture.html?renderer=${renderer.toLowerCase()}&group=${group}&theme=${theme}`,
-                );
-                const surface = page.locator('.presentation-fixture[data-ready="true"]');
-                await surface.waitFor();
-                const brightness = await surface.evaluate((element) => {
-                  const channels = getComputedStyle(element).backgroundColor.match(/\d+/g)!;
-                  return channels.slice(0, 3).reduce((sum, value) => sum + Number(value), 0) / 3;
-                });
-                expect(theme === "light" ? brightness > 200 : brightness < 70).toBe(true);
-                expect(await surface.locator("h1").first().textContent()).toBe(group);
-                if (group === "settings") {
-                  expect(
-                    await page
-                      .getByRole("heading", { name: "Presentation settings", exact: true })
-                      .count(),
-                  ).toBe(1);
-                  expect(
-                    await page
-                      .getByRole("status", { name: "Loading settings", exact: true })
-                      .getAttribute("aria-busy"),
-                  ).toBe("true");
-                  await page.getByRole("button", { name: /Advanced/ }).click();
-                  expect(await page.locator("#fixture-outcome").textContent()).toBe("advanced");
-                } else if (group === "icons") {
-                  expect(
-                    await surface
-                      .locator("svg")
-                      .evaluateAll((icons) =>
-                        icons.every(
-                          (icon) =>
-                            icon.namespaceURI === "http://www.w3.org/2000/svg" &&
-                            icon.getBoundingClientRect().width > 0 &&
-                            icon.childElementCount > 0,
-                        ),
+            });
+            for (const group of groups) {
+              await page.goto(
+                `${suite.server.baseUrl}src/test-helpers/presentation-primitives-fixture.html?group=${group}&theme=${theme}`,
+              );
+              const surface = page.locator('.presentation-fixture[data-ready="true"]');
+              await surface.waitFor();
+              const brightness = await surface.evaluate((element) => {
+                const channels = getComputedStyle(element).backgroundColor.match(/\d+/g)!;
+                return channels.slice(0, 3).reduce((sum, value) => sum + Number(value), 0) / 3;
+              });
+              expect(theme === "light" ? brightness > 200 : brightness < 70).toBe(true);
+              expect(await surface.locator("h1").first().textContent()).toBe(group);
+              if (group === "settings") {
+                expect(
+                  await page
+                    .getByRole("heading", { name: "Presentation settings", exact: true })
+                    .count(),
+                ).toBe(1);
+                expect(
+                  await page
+                    .getByRole("status", { name: "Loading settings", exact: true })
+                    .getAttribute("aria-busy"),
+                ).toBe("true");
+                await page.getByRole("button", { name: /Advanced/ }).click();
+                expect(await page.locator("#fixture-outcome").textContent()).toBe("advanced");
+              } else if (group === "icons") {
+                expect(
+                  await surface
+                    .locator("svg")
+                    .evaluateAll((icons) =>
+                      icons.every(
+                        (icon) =>
+                          icon.namespaceURI === "http://www.w3.org/2000/svg" &&
+                          icon.getBoundingClientRect().width > 0 &&
+                          icon.childElementCount > 0,
                       ),
-                  ).toBe(true);
-                  expect(await surface.locator('[data-provider-icon="gemini"]').count()).toBe(1);
-                  expect(await surface.locator('[data-provider-icon="gcp"]').count()).toBe(1);
-                } else if (group.startsWith("skeleton-")) {
-                  const skeletons = surface.locator("openclaw-panel-loading-skeleton");
-                  expect(await skeletons.count()).toBe(
-                    group === "skeleton-content" ? 4 : group === "skeleton-conversation" ? 5 : 3,
-                  );
-                  expect(await skeletons.first().getAttribute("aria-busy")).toBe("true");
-                }
-                await captureGroup(page, `${renderer}-${theme}-${viewport.name}-${group}`);
-                if (group === "controls") {
-                  await assertControlledInputs(page);
-                  if (renderer === "Solid") {
-                    await assertSecretInput(page);
-                  }
-                  await captureGroup(
-                    page,
-                    `${renderer}-${theme}-${viewport.name}-controls-changed`,
-                  );
-                  await page.evaluate(() => {
-                    document.documentElement.dir = "rtl";
-                  });
-                  await captureGroup(page, `${renderer}-${theme}-${viewport.name}-controls-rtl`);
-                } else if (group === "feedback") {
-                  await assertFeedback(page);
-                  await captureGroup(page, `${renderer}-${theme}-${viewport.name}-feedback-active`);
-                  await assertShadowParentStyles(
-                    page,
-                    "openclaw-panel-empty-state",
-                    ".empty-state__title",
-                  );
-                } else if (group === "skeleton-content") {
-                  await assertShadowParentStyles(
-                    page,
-                    "openclaw-panel-loading-skeleton",
-                    ".skeleton.line",
-                  );
-                }
+                    ),
+                ).toBe(true);
+                expect(await surface.locator('[data-provider-icon="gemini"]').count()).toBe(1);
+                expect(await surface.locator('[data-provider-icon="gcp"]').count()).toBe(1);
+              } else if (group.startsWith("skeleton-")) {
+                const skeletons = surface.locator("openclaw-panel-loading-skeleton");
+                expect(await skeletons.count()).toBe(
+                  group === "skeleton-content" ? 4 : group === "skeleton-conversation" ? 5 : 3,
+                );
+                expect(await skeletons.first().getAttribute("aria-busy")).toBe("true");
               }
-            },
-          );
-        });
-      }
+              await captureGroup(page, `Solid-${theme}-${viewport.name}-${group}`);
+              if (group === "controls") {
+                await assertControlledInputs(page);
+                await assertSecretInput(page);
+                await captureGroup(page, `Solid-${theme}-${viewport.name}-controls-changed`);
+                await page.evaluate(() => {
+                  document.documentElement.dir = "rtl";
+                });
+                await captureGroup(page, `Solid-${theme}-${viewport.name}-controls-rtl`);
+              } else if (group === "feedback") {
+                await assertFeedback(page);
+                await captureGroup(page, `Solid-${theme}-${viewport.name}-feedback-active`);
+                await assertShadowParentStyles(
+                  page,
+                  "openclaw-panel-empty-state",
+                  ".empty-state__title",
+                );
+              } else if (group === "skeleton-content") {
+                await assertShadowParentStyles(
+                  page,
+                  "openclaw-panel-loading-skeleton",
+                  ".skeleton.line",
+                );
+              }
+            }
+          },
+        );
+      });
     }
   }
 });

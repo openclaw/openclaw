@@ -1,4 +1,5 @@
-import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import type { TextQuery } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FtsCanonicalTokenizer = "unicode61" | "trigram";
@@ -110,17 +111,17 @@ export function buildMatchQueryFromTerms(
   terms: string[],
   canonicalTokenizer?: FtsCanonicalTokenizer,
   matchAny = false,
-): string | null {
+): TextQuery | null {
   if (terms.length === 0) {
     return null;
   }
-  const quoted = uniqueStrings(terms).map((term) => {
+  const clauses: TextQuery[] = uniqueStrings(terms).map((term) => {
     const forms = canonicalTermForms(term, canonicalTokenizer);
-    const alternatives = forms.map((form) => `"${form.replaceAll('"', "")}"`);
+    const alternatives: TextQuery[] = forms.map((text) => ({ kind: "term", text }));
     // Alternatives belong to each word: one document can mix NFC and NFD words.
-    return alternatives.length === 1 ? alternatives[0] : `(${alternatives.join(" OR ")})`;
+    return alternatives.length === 1 ? alternatives[0]! : { kind: "any", clauses: alternatives };
   });
-  return quoted.join(matchAny ? " OR " : " AND ");
+  return { kind: matchAny ? "any" : "all", clauses };
 }
 
 export function planKeywordSearch(params: {
@@ -129,7 +130,7 @@ export function planKeywordSearch(params: {
   includeLeadingMarks?: boolean;
   canonicalVariants?: boolean;
   matchAny?: boolean;
-}): { matchQuery: string | null; substringTerms: string[]; tokens: string[] } {
+}): { matchQuery: TextQuery | null; substringTerms: string[]; tokens: string[] } {
   const canonicalTokenizer = params.canonicalVariants
     ? (params.ftsTokenizer ?? "unicode61")
     : undefined;

@@ -68,7 +68,11 @@ describe("X spend reservations", () => {
         };
       },
     };
-    const second = openXSpend({ state: replacement }, "default", () => test.limits);
+    const second = openXSpend(
+      { ...test.runtime, state: replacement },
+      "default",
+      () => test.limits,
+    );
     const firstCall = test.spend.reserve(600_000);
     await entered.promise;
     const secondCall = second.reserve(600_000);
@@ -112,7 +116,7 @@ describe("X spend reservations", () => {
           };
         },
       };
-      openXSpend({ state: replacement }, "default", () => test.limits);
+      openXSpend({ ...test.runtime, state: replacement }, "default", () => test.limits);
       await expect(reservation.settle(100_000)).rejects.toThrow("synthetic disk failure");
       await expect(test.spend.reserve(100_000)).rejects.toThrow("accounting unavailable");
       expect(
@@ -181,7 +185,7 @@ describe("X spend period boundaries", () => {
         };
       },
     };
-    openXSpend({ state: replacement }, "default", () => test.limits);
+    openXSpend({ ...test.runtime, state: replacement }, "default", () => test.limits);
     const blocked = test.spend.reserve(0);
     await entered.promise;
     const charged = test.spend.charge(5_000);

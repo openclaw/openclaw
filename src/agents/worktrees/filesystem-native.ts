@@ -11,6 +11,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
@@ -82,9 +83,8 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
   assertActive(options);
   // A process owns its descriptor table. Never terminate a JS worker while
   // fs-safe's native task still borrows descriptors opened by that worker.
-  const result = await runCommandBuffersWithTimeout(
-    [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())],
-    {
+  const result = await withChildProcessOperation("worktree.filesystem", () =>
+    runCommandBuffersWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl())], {
       input: JSON.stringify(command),
       beforeInput: () => assertActive(options),
       signal: options.signal,
@@ -93,7 +93,7 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
       killProcessTree: true,
       requireProcessTreeExtinction: true,
       maxOutputBytes: 64 * 1024,
-    },
+    }),
   );
   assertActive(options);
   if (result.code !== 0 || result.termination !== "exit") {

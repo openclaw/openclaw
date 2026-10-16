@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const adapters = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -37,18 +37,7 @@ class FixtureChild extends EventEmitter {
   }
 }
 
-type Denial = {
-  status: string;
-  reason?: string;
-  after: { version: string };
-  postUpdate: {
-    plugins: {
-      status: string;
-      warnings: Array<{ pluginId: string; reason: string }>;
-      npm: { outcomes: Array<{ pluginId: string; status: string; code: string }> };
-    };
-  };
-};
+type Denial = ReturnType<typeof makeDenial>;
 const pluginId = "update-consent-fixture";
 const packageName = `@acme/${pluginId}`;
 const consentCode = "PLUGIN_CAPABILITY_CONSENT_REQUIRED";
@@ -65,12 +54,35 @@ let timeoutExit: number | undefined;
 let mutateDenial: ((result: Denial, repair: boolean, child: FixtureChild) => void) | undefined;
 const packages = new Map<number, { code: string; integrity: string }>();
 const coreVersions = new Map<string, string>();
+const tagUpdates: string[][] = [];
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const hostPackagePath = () => path.resolve(path.dirname(entry), "..", "package.json");
+const toolsFor = (version: number) =>
+  Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
+function writeOutput(descriptor: unknown, output: string) {
+  if (typeof descriptor !== "number") {
+    throw new Error("expected scenario-owned output descriptor");
+  }
+  fs.writeSync(descriptor, output);
+}
+
+function makeDenial(coreVersion: string, repair: boolean) {
+  return {
+    status: repair ? "warning" : "ok",
+    after: { version: coreVersion },
+    postUpdate: {
+      plugins: {
+        status: "warning",
+        warnings: [{ pluginId, reason: "requires capability consent" }],
+        npm: { outcomes: [{ pluginId, status: "error", code: consentCode }] },
+      },
+    },
+  };
+}
 
 function saveConfig() {
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({ plugins: { entries: { [pluginId]: { enabled } } } }),
-  );
+  writeJson(configPath, { plugins: { entries: { [pluginId]: { enabled } } } });
 }
 
 function install(version: number) {
@@ -78,19 +90,15 @@ function install(version: number) {
   if (!artifact) {
     throw new Error(`unprepared fixture ${version}`);
   }
-  const tools = Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
-  const surface = {
-    channels: [],
-    providers: [],
-    tools,
-    contracts: tools.map((tool) => `tools: ${tool}`),
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  };
+  const tools = toolsFor(version);
+  // The key order is part of the scenario's surface hash.
+  const surface: Record<string, string[]> = Object.fromEntries(
+    "channels providers tools contracts hooks mcpServers cliCommands cliBackends skills dangerousConfigFlags"
+      .split(" ")
+      .map((key) => [key, []]),
+  );
+  surface.tools = tools;
+  surface.contracts = tools.map((tool) => `tools: ${tool}`);
   record = {
     version: `${version}.0.0`,
     installPath,
@@ -104,10 +112,7 @@ function install(version: number) {
   installed = version;
   fs.mkdirSync(installPath, { recursive: true });
   fs.writeFileSync(path.join(installPath, "index.js"), artifact.code);
-  fs.writeFileSync(
-    path.join(installPath, "package.json"),
-    JSON.stringify({ version: `${version}.0.0` }),
-  );
+  writeJson(path.join(installPath, "package.json"), { version: `${version}.0.0` });
   saveConfig();
 }
 
@@ -122,13 +127,7 @@ function cliReply(args: string[], child: FixtureChild): string {
       return JSON.stringify({
         plugin: { status: enabled ? "loaded" : "disabled", enabled },
         install: record,
-        tools: [
-          {
-            names: enabled
-              ? Array.from({ length: installed }, (_, i) => `consent_tool_${i + 1}`)
-              : [],
-          },
-        ],
+        tools: [{ names: enabled ? toolsFor(installed) : [] }],
       });
     }
     if (args[1] === "disable" || args[1] === "enable") {
@@ -154,34 +153,21 @@ function cliReply(args: string[], child: FixtureChild): string {
   }
   const repair = args[1] === "repair";
   const coreVersion: string | undefined = repair
-    ? JSON.parse(fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"))
-        .version
+    ? readJson(hostPackagePath()).version
     : coreVersions.get(args[args.indexOf("--tag") + 1] ?? "");
   if (!coreVersion) {
     throw new Error("unprepared core update");
   }
   if (!repair) {
-    fs.writeFileSync(
-      path.resolve(path.dirname(entry), "..", "package.json"),
-      JSON.stringify({ version: coreVersion }),
-    );
+    tagUpdates.push(args);
+    writeJson(hostPackagePath(), { version: coreVersion });
     child.observation.children.push({ argv: ["node", "update", "post-core"], postCore: true });
   }
   if (args.includes("--accept-capabilities")) {
     install(available);
     return JSON.stringify({ status: "ok", after: { version: coreVersion } });
   }
-  const result: Denial = {
-    status: repair ? "warning" : "ok",
-    after: { version: coreVersion },
-    postUpdate: {
-      plugins: {
-        status: "warning",
-        warnings: [{ pluginId, reason: "requires capability consent" }],
-        npm: { outcomes: [{ pluginId, status: "error", code: consentCode }] },
-      },
-    },
-  };
+  const result = makeDenial(coreVersion, repair);
   mutateDenial?.(result, repair, child);
   return JSON.stringify(result);
 }
@@ -190,6 +176,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   packages.clear();
   coreVersions.clear();
+  tagUpdates.length = 0;
   mutateDenial = undefined;
   timeoutExit = undefined;
   vi.stubEnv("OPENCLAW_E2E_COMMAND_TIMEOUT", "");
@@ -201,6 +188,7 @@ beforeEach(() => {
   roots.push(root);
   entry = path.join(root, "host", "dist", "entry.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
+  writeJson(hostPackagePath(), { version: "2026.9.5" });
   coreTarball = path.join(root, "core.tgz");
   fs.writeFileSync(coreTarball, "core artifact placeholder; no archive reader is exercised");
   const stateDir = path.join(root, "state");
@@ -224,11 +212,7 @@ beforeEach(() => {
   adapters.pack.mockImplementation((command: string, args: string[], options: { cwd: string }) => {
     expect(command).toBe("npm");
     expect(args.slice(0, 2)).toEqual(["pack", "--pack-destination"]);
-    const version = Number(
-      JSON.parse(fs.readFileSync(path.join(options.cwd, "package.json"), "utf8")).version.split(
-        ".",
-      )[0],
-    );
+    const version = Number(readJson(path.join(options.cwd, "package.json")).version.split(".")[0]);
     const artifactRoot = args[2];
     if (!artifactRoot || path.dirname(artifactRoot) !== os.tmpdir()) {
       throw new Error("expected isolated scenario artifact root");
@@ -246,7 +230,7 @@ beforeEach(() => {
     return filename;
   });
   adapters.spawn.mockImplementation(
-    (command: string, args: string[], options: { stdio: unknown[]; env: NodeJS.ProcessEnv }) => {
+    (command: string, args: string[], options: { stdio: unknown[] }) => {
       const child = new FixtureChild();
       if (
         command === process.execPath &&
@@ -266,21 +250,14 @@ beforeEach(() => {
       const entryIndex = args.indexOf(entry);
       expect(entryIndex).toBeGreaterThan(0);
       const cliArgs = args.slice(entryIndex + 1);
-      if (timeoutExit && cliArgs[0] === "update" && cliArgs.includes("--tag")) {
-        child.observation.code = timeoutExit;
-        const stderr = options.stdio[2];
-        if (typeof stderr !== "number") {
-          throw new Error("expected scenario-owned stderr descriptor");
-        }
-        fs.writeSync(stderr, "package replacement still running");
-        return child;
+      const code = cliArgs[0] === "update" && cliArgs.includes("--tag") ? timeoutExit : undefined;
+      if (code) {
+        child.observation.code = code;
       }
-      const output = cliReply(cliArgs, child);
-      const descriptor = options.stdio[1];
-      if (typeof descriptor !== "number") {
-        throw new Error("expected scenario-owned stdout descriptor");
-      }
-      fs.writeSync(descriptor, output);
+      writeOutput(
+        options.stdio[code ? 2 : 1],
+        code ? "package replacement still running" : cliReply(cliArgs, child),
+      );
       return child;
     },
   );
@@ -294,71 +271,65 @@ afterEach(() => {
   }
 });
 
-describe("installed-CLI consent scenario report contract", () => {
-  it("accepts successful core updates with explicit plugin refusal warnings and preserves consent boundaries", async () => {
-    await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
-    expect(installed).toBe(3);
-    expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
-  });
+const runScenario = (options?: Parameters<typeof runConsentScenario>[2]) =>
+  runConsentScenario(entry, coreTarball, options);
 
-  it.each([124])(
-    "reports a core update timeout (exit %s) with retained diagnostics",
-    async (code) => {
-      timeoutExit = code;
-      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
-        /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
-      );
-      const scenarioRoot = roots.find((root) =>
-        path.basename(root).startsWith("openclaw-update-consent-"),
-      );
-      if (!scenarioRoot) {
-        throw new Error("missing scenario evidence root");
-      }
-      const runs = JSON.parse(fs.readFileSync(path.join(scenarioRoot, "runs.json"), "utf8"));
-      expect(runs.at(-1)).toMatchObject({ label: "update-denied", code });
-      const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
-      expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
-    },
-  );
-
-  it("retains plugin consent proof when a frozen target predates core update consent", async () => {
+it.each(["current", "extended-stable", "frozen"])(
+  "preserves consent through the %s update scenario",
+  async (host) => {
+    if (host === "extended-stable") {
+      writeJson(hostPackagePath(), { version: "2026.9.33" });
+    }
     await expect(
-      runConsentScenario(entry, coreTarball, { coreUpdateConsent: false }),
+      runScenario(host === "frozen" ? { coreUpdateConsent: false } : undefined),
     ).resolves.toBeUndefined();
-    expect(installed).toBe(2);
-    expect(adapters.future).not.toHaveBeenCalled();
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
-  });
+    expect(installed).toBe(host === "frozen" ? 2 : 3);
+    expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
+    if (host === "extended-stable") {
+      expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
+      expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
+    } else if (host === "frozen") {
+      expect(adapters.future).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
+    }
+  },
+);
 
-  it("rejects a consent warning attributed to another plugin", async () => {
-    mutateDenial = (result) => {
-      result.postUpdate.plugins.warnings = [
-        { pluginId: "another-plugin", reason: "requires capability consent" },
-      ];
-    };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
-  });
-
-  it.each([false, true])(
-    "rejects payload widening despite a warning (repair: %s)",
-    async (repairStep) => {
-      mutateDenial = (_result, repair) => {
-        if (repair === repairStep) {
-          install(available);
-        }
-      };
-      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
-    },
+it("reports a core update timeout (exit 124) with retained diagnostics", async () => {
+  timeoutExit = 124;
+  await expect(runScenario()).rejects.toThrow(
+    /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
   );
+  const scenarioRoot = roots.find((root) =>
+    path.basename(root).startsWith("openclaw-update-consent-"),
+  );
+  if (!scenarioRoot) {
+    throw new Error("missing scenario evidence root");
+  }
+  const runs = readJson(path.join(scenarioRoot, "runs.json"));
+  expect(runs.at(-1)).toMatchObject({ label: "update-denied", code: 124 });
+  const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
+  expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
+});
 
-  it("still rejects a restart after a denied plugin update", async () => {
-    mutateDenial = (_result, repair, child) => {
-      if (!repair) {
-        child.observation.children.push({ argv: ["gateway", "restart"], postCore: false });
+it.each(["another plugin", "update widening", "repair widening", "restart"])(
+  "rejects invalid consent handling: %s",
+  async (fault) => {
+    mutateDenial = (result, repair, child) => {
+      if (fault === "another plugin") {
+        result.postUpdate.plugins.warnings = [
+          { pluginId: "another-plugin", reason: "requires capability consent" },
+        ];
+      } else if (fault === "restart") {
+        if (!repair) {
+          child.observation.children.push({ argv: ["gateway", "restart"], postCore: false });
+        }
+      } else if (repair === (fault === "repair widening")) {
+        install(available);
       }
     };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
-      "denied update attempted a Gateway restart",
+    await expect(runScenario()).rejects.toThrow(
+      fault === "restart" ? "denied update attempted a Gateway restart" : undefined,
     );
-  });
-});
+  },
+);

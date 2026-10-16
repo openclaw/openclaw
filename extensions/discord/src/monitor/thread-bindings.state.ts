@@ -62,8 +62,6 @@ export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
   THREAD_BINDINGS_STATE_KEY,
   createThreadBindingsGlobalState,
 );
-// Source-plugin reloads retain the previous generation's shared registry.
-THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -136,10 +134,7 @@ export function resolveBindingRecordKey(params: {
   return toBindingRecordKey({ accountId: params.accountId, threadId });
 }
 
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
+function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }

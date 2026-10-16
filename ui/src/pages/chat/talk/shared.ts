@@ -10,11 +10,14 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
 } from "../../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../../src/talk/agent-run-control-shared.js";
-import type { RealtimeVoiceBrowserSession } from "../../../../../src/talk/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceCloseOptions,
+} from "../../../../../src/talk/provider-types.js";
 import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import type { RealtimeTalkInputController } from "./input.ts";
+import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -81,7 +84,7 @@ export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
 export type RealtimeTalkTransport = {
   start(): Promise<RealtimeTalkTransportStartResult>;
   activate?: () => void;
-  stop(options?: { emitClosed?: boolean }): void | Promise<void>;
+  stop(options?: RealtimeVoiceCloseOptions & { emitClosed?: boolean }): void | Promise<void>;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
   switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
@@ -92,7 +95,7 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
+  input: Pick<RealtimeTalkInputOwner, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
 };
 
@@ -241,6 +244,7 @@ export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;
+  timeoutMessage?: string;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -250,7 +254,7 @@ export function waitForChatResult(params: {
       return;
     }
     const timer = window.setTimeout(() => {
-      settle(new Error("OpenClaw tool call timed out"));
+      settle(new Error(params.timeoutMessage ?? "OpenClaw tool call timed out"));
     }, params.timeoutMs);
     let settled = false;
     let emptyFinalWaitStarted = false;

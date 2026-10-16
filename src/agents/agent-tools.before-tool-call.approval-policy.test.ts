@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../logging/diagnostic-run-activity.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -18,6 +19,7 @@ import {
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const hookRunner = vi.hoisted(() => ({
@@ -46,6 +48,33 @@ afterEach(() => {
 });
 
 describe("plugin approval policy subject and setup guidance", () => {
+  it("uses one request for an in-process tool approval without reviewer scope", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Review diff",
+        description: "Review selected tool call",
+        pluginId: "diffs",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:approved", decision: "allow-once" });
+    const gatewayContext = {} as GatewayRequestContext;
+
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "main",
+        gatewayContextResolver: () => gatewayContext,
+      },
+      () => runBeforeToolCallHook({ toolName: "diffs", params: {}, ctx: { agentId: "main" } }),
+    );
+
+    expect(result.blocked).toBe(false);
+    expect(mockCallGateway).toHaveBeenCalledTimes(1);
+    expect(mockCallGateway.mock.calls[0]?.[0]).toBe("plugin.approval.request");
+    expect(mockCallGateway.mock.calls[0]?.[2]).toMatchObject({ twoPhase: false });
+    expect(mockCallGateway.mock.calls[0]?.[3]).toEqual({ expectFinal: true });
+  });
+
   it.each(["wrapped", "adapted"] as const)(
     "binds a %s tool approval to its registered owner rather than the approval hook owner",
     async (path) => {

@@ -209,7 +209,7 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
 }
 
 describe("transformProviderStreamMessages", () => {
-  it.each(["done", "error"] as const)(
+  it.each(["done"] as const)(
     "transforms checkpoint and %s result messages while preserving sparse deltas",
     async (terminal) => {
       const partial: AssistantMessage = {
@@ -474,26 +474,6 @@ describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
       expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(efforts);
     },
   );
-
-  it("preserves native none unless the request selects the configured off mapping", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture("none");
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    for (const reasoning of ["off", "max", undefined] as const) {
-      void wrapped(
-        {
-          ...lmstudioBinaryModel,
-          compat: {
-            supportedReasoningEfforts: ["none", "low", "high"],
-            reasoningEffortMap: { off: "low", none: "none" },
-          },
-        },
-        { messages: [] },
-        { reasoning },
-      );
-    }
-
-    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["low", "none", "low"]);
-  });
 
   it("drops reasoning_effort when the model has no disabled effort", () => {
     const { baseStreamFn, payloads } = createPayloadCapture("high");

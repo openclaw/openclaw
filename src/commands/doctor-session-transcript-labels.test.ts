@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import {
@@ -17,6 +19,8 @@ import {
   prepareTranscriptPayload,
 } from "../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveZstdCodec } from "../infra/zstd-codec.js";
 import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -224,16 +228,83 @@ describe("doctor SQLite session transcript label migration", () => {
     await state.cleanup();
   });
 
+  it("skips compressed tool bodies and repairs duplicate-key user and assistant labels", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const legacyContent =
+      "Conversation info (untrusted metadata):\n```json\n{}\n```\n" + "retained text ".repeat(100);
+    const database = appendTranscriptFixture(databaseOptions, [
+      createSessionEvent(),
+      {
+        type: "message",
+        id: "tool-result",
+        message: { role: "toolResult", content: [{ type: "text", text: legacyContent }] },
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    const storedTool = database.db
+      .prepare("SELECT * FROM transcript_events WHERE session_id = ? AND seq = 1")
+      .get(SESSION_ID);
+    expect(storedTool?.event_zstd).toBeInstanceOf(Uint8Array);
+    const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
+    await runTranscriptLabelHealth(state, false);
+    expect(decompress).not.toHaveBeenCalled();
+    decompress.mockRestore();
+
+    appendTranscriptFixture(databaseOptions, [
+      createMessageEvent({ id: "last-role-user", content: "placeholder" }),
+      createMessageEvent({ id: "last-message-assistant", content: "placeholder" }),
+    ]);
+    const rawEvents = [
+      `{"type":"custom","type":"message","id":"last-role-user","message":{"role":"toolResult","role":"user","content":${JSON.stringify(legacyContent)}}}`,
+      `{"type":"message","id":"last-message-assistant","message":{"role":"toolResult"},"message":{"role":"assistant","content":${JSON.stringify(legacyContent)}}}`,
+    ];
+    agentDatabase.runOpenClawAgentWriteTransaction((db) => {
+      const update = createTranscriptPayloadUpdater(db.db, SESSION_ID);
+      for (const [index, eventJson] of rawEvents.entries()) {
+        const payload = prepareTranscriptPayload(db.db, eventJson);
+        expect(payload.event_zstd).toBeInstanceOf(Uint8Array);
+        expect(payload.message_role).toBe("toolResult");
+        update({ seq: index + 2, ...payload });
+      }
+    }, databaseOptions);
+
+    await runTranscriptLabelHealth(state, true);
+
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
+    for (const id of ["last-role-user", "last-message-assistant"]) {
+      expect(findMessageContent(repaired.events, id)).toContain(
+        `Conversation info: ${INBOUND_CONTEXT_MARKER}`,
+      );
+    }
+    expect(
+      database.db
+        .prepare("SELECT * FROM transcript_events WHERE session_id = ? AND seq = 1")
+        .get(SESSION_ID),
+    ).toEqual(storedTool);
+    expect(note).toHaveBeenCalledWith(
+      "- Rewrote legacy inbound-context labels in 1 session (2 events).",
+      "Session transcript labels",
+    );
+  });
+
   it("detects and idempotently rewrites legacy labels in user events", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const database = seedLegacyLabelTranscript(databaseOptions);
     const before = readTranscriptSnapshot(database, SESSION_ID);
+    const originalStorage = database.db
+      .prepare("SELECT * FROM transcript_events ORDER BY seq")
+      .all();
+    const recoveryDirectories = () =>
+      fs
+        .readdirSync(path.dirname(database.path))
+        .filter((name) => name.startsWith("openclaw-transcript-labels-recovery-"));
     const assistantJson = findEventJson(before.events, before.rows, "assistant");
     const midLineJson = findEventJson(before.events, before.rows, "mid-line-user");
 
     await runTranscriptLabelHealth(state, false);
 
     expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(before.rows);
+    expect(recoveryDirectories()).toEqual([]);
     expect(note).toHaveBeenCalledWith(
       '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
       "Session transcript labels",
@@ -241,6 +312,20 @@ describe("doctor SQLite session transcript label migration", () => {
 
     note.mockClear();
     await runTranscriptLabelHealth(state, true);
+
+    const backups = recoveryDirectories();
+    expect(backups).toHaveLength(1);
+    const backup = openNodeSqliteDatabase(
+      path.join(path.dirname(database.path), backups[0]!, "database.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      expect(backup.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
+        originalStorage,
+      );
+    } finally {
+      backup.close();
+    }
 
     const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "legacy-user");
@@ -290,6 +375,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
+    expect(recoveryDirectories()).toEqual(backups);
   });
 
   it("rejects a sibling change between detection and label repair", async () => {

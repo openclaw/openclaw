@@ -55,9 +55,7 @@ export class CodexNativeSubagentRecoveryCoordinator {
     try {
       return await recovery;
     } finally {
-      if (childState.recoveryInFlight === recovery) {
-        childState.recoveryInFlight = undefined;
-      }
+      childState.recoveryInFlight = undefined;
     }
   }
 

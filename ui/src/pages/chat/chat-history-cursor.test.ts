@@ -540,7 +540,7 @@ describe("chat history cursor revalidation", () => {
     { terminal: "error", historyFirst: false },
     { terminal: "final", historyFirst: true },
   ] as const)(
-    "adopts commentary once across $terminal and cursor catch-up (history first: $historyFirst)",
+    "adopts live commentary once across $terminal and cursor catch-up (history first: $historyFirst)",
     async ({ terminal, historyFirst }) => {
       const runId = "commentary-run";
       const text = "Checking the workspace.";
@@ -587,7 +587,8 @@ describe("chat history cursor revalidation", () => {
         data: { kind: "preamble", itemId: "item-1", progressText: text },
       });
       applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: runId });
-      expect(state.chatMessages).toEqual([prompt]);
+      expect(state.chatMessages).toEqual([prompt, commentary]);
+      expect(state.chatStreamSegments).toEqual([]);
       if (historyFirst) {
         await loadChatHistory(state);
       }

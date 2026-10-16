@@ -18,17 +18,17 @@ const added = (slot: number, overrides: Record<string, unknown> = {}) => ({
 
 describe("Responses terminal tool completion", () => {
   it.each([
-    { ending: "completed", admission: true },
-    { ending: "completed-without-ciphertext", admission: true },
-    { ending: "completed-null-ciphertext", admission: true },
-    { ending: "length", admission: true },
-    { ending: "output-limit-active", admission: true },
-    { ending: "output-limit-rejected", admission: true },
-    { ending: "conflicting-status", admission: false },
-    { ending: "malformed-sibling", admission: false },
-    { ending: "content-filter", admission: false },
-    { ending: "failed", admission: false },
-  ])("settles deferred async admission on $ending", async ({ ending, admission }) => {
+    "completed",
+    "completed-without-ciphertext",
+    "completed-null-ciphertext",
+    "length",
+    "output-limit-active",
+    "output-limit-rejected",
+    "conflicting-status",
+    "malformed-sibling",
+    "content-filter",
+    "failed",
+  ])("delivers already-completed async calls on %s", async (ending) => {
     const reasoning = { type: "reasoning", id: "rs_deferred", summary: [] };
     const encrypted = !ending.startsWith("completed-");
     const completedReasoning = {
@@ -98,18 +98,19 @@ describe("Responses terminal tool completion", () => {
       ],
       { asyncToolExecution: true },
     );
-    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual(
-      admission ? [{ type: "toolcall_end", contentIndex: 1 }] : [],
-    );
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
+      { type: "toolcall_end", contentIndex: 1 },
+    ]);
     expect(result.error === null).toBe(
       ending.startsWith("completed") || ending === "length" || ending === "content-filter",
     );
     if (ending === "content-filter") {
       expect(result.stopReason).toBe("error");
     }
-    if (admission) {
-      expect(result.content[0]).toMatchObject({ type: "thinking", encrypted });
-    }
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      encrypted: ending === "failed" ? false : encrypted,
+    });
   });
 
   it("does not publish anonymous unindexed completions before ambiguous terminal matching", async () => {

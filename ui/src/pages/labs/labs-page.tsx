@@ -21,8 +21,6 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
   labFeatureMergePatch,
@@ -32,7 +30,7 @@ import {
   type LabFeature,
 } from "./labs-registry.ts";
 
-function LabsPageContent() {
+export function LabsPage() {
   const context = useApplication();
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
   const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
@@ -186,6 +184,28 @@ function LabsPageContent() {
           : null;
     return executor === "quickjs" ? "quickjs" : "node";
   }
+  function predictionModel() {
+    const gateway = editableConfig()?.gateway;
+    const controlUi = isRecord(gateway) ? gateway.controlUi : undefined;
+    const experimental = isRecord(controlUi) ? controlUi.experimental : undefined;
+    const prediction = isRecord(experimental) ? experimental.composerPredictions : undefined;
+    const current = currentPending();
+    const value =
+      current?.featureId === "predictionModel"
+        ? current.value
+        : isRecord(prediction)
+          ? prediction.model
+          : undefined;
+    return value === "conversation" || value === "default" ? value : "utility";
+  }
+  function setPredictionModel(model: string) {
+    if (model !== "utility" && model !== "conversation" && model !== "default") {
+      return;
+    }
+    void updateSetting("predictionModel", model, {
+      gateway: { controlUi: { experimental: { composerPredictions: { model } } } },
+    });
+  }
   function PluginSettingsLink(props: { pluginId: string; featureTitle: string }) {
     const location = () =>
       pluginDetailLocation(
@@ -286,6 +306,32 @@ function LabsPageContent() {
             }
           />
         )}
+        {props.feature.id === "composerPredictions" ? (
+          <SettingsRow
+            nested
+            title={t("labsPage.composerPredictions.model")}
+            description={t("labsPage.composerPredictions.modelDescription")}
+            control={
+              <select
+                class="settings-select"
+                aria-label={t("labsPage.composerPredictions.model")}
+                value={predictionModel()}
+                disabled={!canToggle()}
+                onChange={(event) => setPredictionModel(event.currentTarget.value)}
+              >
+                <option value="utility" selected={predictionModel() === "utility"}>
+                  {t("labsPage.composerPredictions.utility")}
+                </option>
+                <option value="conversation" selected={predictionModel() === "conversation"}>
+                  {t("labsPage.composerPredictions.conversation")}
+                </option>
+                <option value="default" selected={predictionModel() === "default"}>
+                  {t("labsPage.composerPredictions.default")}
+                </option>
+              </select>
+            }
+          />
+        ) : null}
         {props.feature.id === "codeMode" ? (
           <SettingsRow
             nested
@@ -313,7 +359,7 @@ function LabsPageContent() {
     );
   }
   return (
-    <>
+    <openclaw-labs-page>
       <SettingsPageHeader
         title={t("tabs.labs")}
         subtitle={
@@ -339,16 +385,6 @@ function LabsPageContent() {
           </SettingsSection>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-labs-page>
   );
 }
-
-export const LabsPage = defineSolidBridge(
-  "openclaw-labs-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <LabsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

@@ -7,10 +7,14 @@ export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "agent.identity.get",
   "agents.list",
+  "artifacts.list",
+  "artifacts.get",
+  "artifacts.download",
   "canvas.document.preview",
   "models.list",
   "progressCard.get",
   "projects.list",
+  "projects.checkoutOptions",
   "session.suggestions.list",
   "session.reactions.list",
   "sessions.groups.list",
@@ -30,6 +34,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.search",
   "sessions.files.list",
   "sessions.files.get",
+  "sessions.files.download",
   "sessions.files.assets",
   "sessions.setInvolvement",
   "chat.history",
@@ -41,6 +46,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "themes.get",
   "themes.list",
   "users.prefs.get",
+  "users.prefs.set",
   "users.self",
 ]);
 

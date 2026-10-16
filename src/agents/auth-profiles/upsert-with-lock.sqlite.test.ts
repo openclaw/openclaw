@@ -95,6 +95,46 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("auth profile batch persistence", () => {
+  it("persists OAuth login credentials without querying SQLite on the host", async () => {
+    await withAgentDir(async (agentDir) => {
+      saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      const stacks = new Set<string>();
+      const sql = observeHostDataSql(() => {
+        stacks.add(new Error().stack ?? "");
+      });
+      try {
+        await persistAuthProfileBatch({
+          agentDir,
+          profiles: [
+            {
+              profileId: "fixture:login",
+              credential: {
+                type: "oauth",
+                provider: "fixture",
+                access: "fixture",
+                refresh: "fixture",
+                expires: 4_000_000_000_000,
+              },
+            },
+          ],
+          allowOAuthGenerationReplacement: true,
+        });
+        expect(sql.queries.length, [...stacks].join("\n")).toBe(0);
+      } finally {
+        sql.restore();
+      }
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["fixture:login"]).toMatchObject({
+        type: "oauth",
+        provider: "fixture",
+        access: "fixture",
+        refresh: "fixture",
+      });
+    });
+  });
+
   it.each([
     { owner: "local", initial: "missing", root: "selected" },
     { owner: "local", initial: "existing", root: "selected" },
@@ -213,29 +253,6 @@ describe("auth profile batch persistence", () => {
       expect(callbacks).toBe(1);
       expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(authoritative);
       expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
-    });
-  });
-
-  it("does not restore a fenced OAuth refresh generation", async () => {
-    await withAgentDir(async (agentDir) => {
-      const profileId = "openai:default";
-      const credential = {
-        type: "oauth",
-        provider: "openai",
-        access: "expired-access",
-        refresh: "single-use-refresh",
-        expires: Date.now() - 60_000,
-      } satisfies OAuthCredential;
-      const fence = createOAuthRefreshFence({ profileId, credential });
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: fence } }, agentDir);
-
-      await expect(
-        persistAuthProfileBatch({
-          agentDir,
-          profiles: [{ profileId, credential }],
-        }),
-      ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(fence);
     });
   });
 

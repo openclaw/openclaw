@@ -116,7 +116,7 @@ function ResourceMeter(props: { resource: Resource; age?: string }) {
       ? props.resource.title
       : `${props.resource.title} · ${t("devices.inventory.lastKnown", { time: props.age })}`;
   return (
-    <span class={`device-resource device-resource--${props.resource.name}`} title={title()}>
+    <span class={["device-resource", `device-resource--${props.resource.name}`]} title={title()}>
       <span class="device-resource__label">
         {props.resource.label}
         {props.age === undefined ? "" : ` · ${props.age}`}

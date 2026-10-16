@@ -121,7 +121,7 @@ Avoid these policy shapes unless you also maintain the matching upgrade rule:
 - Freezing OpenClaw-owned plugins to one exact old version (for example, only
   `@openclaw/*@2026.5.3`).
 - Blocking by source kind alone (every npm, network, or `request.mode:
-"update"` request).
+  "update"` request).
 - Treating the policy command as optional: when `security.installPolicy` is
   enabled, a missing, slow, unreadable, or permission-blocked policy
   executable blocks the install.

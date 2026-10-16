@@ -459,23 +459,18 @@
   height: 15px;
 }
 
-.chat-queue__overflow::part(panel) {
-  width: 132px;
+.chat-queue__overflow .oc-menu {
   min-width: 132px;
 }
 
-.chat-queue__overflow wa-dropdown-item {
+.chat-queue__overflow .oc-menu-item {
   width: 100%;
   min-height: 32px;
   padding: 5px 8px;
   font-size: 12px;
 }
 
-.chat-queue__overflow wa-dropdown-item span[slot="icon"] {
-  display: inline-flex;
-}
-
-.chat-queue__overflow wa-dropdown-item svg {
+.chat-queue__overflow .oc-menu-item svg {
   width: 14px;
   height: 14px;
 }

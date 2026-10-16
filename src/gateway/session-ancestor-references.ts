@@ -60,14 +60,16 @@ export class SessionAncestorReferences {
     }
   }
 
-  prepare(rows: ReturnType<typeof prepareSessionAncestor>[]) {
+  prepare(rows: ReturnType<typeof prepareSessionAncestor>[], revision = randomUUID()) {
     const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
+    const deliveryKeys: string[] = [];
     let updates: Map<string, DeliveredAncestor | undefined> | undefined;
     for (const { row, identity, content, chars } of rows) {
       const snapshotAt = row.snapshotAt;
       const previous = this.#rows.get(identity);
       if (previous?.content === content && snapshotAt !== undefined) {
+        deliveryKeys.push(previous.revision);
         ancestorSessionRefs.push({
           key: row.key,
           sessionId: row.sessionId,
@@ -77,7 +79,7 @@ export class SessionAncestorReferences {
         });
         continue;
       }
-      const revision = randomUUID();
+      deliveryKeys.push("");
       ancestorSessions.push({ ...row, ancestorRevision: revision });
       (updates ??= new Map()).set(
         identity,
@@ -87,6 +89,8 @@ export class SessionAncestorReferences {
       );
     }
     return {
+      // The caller owns the rows and full-row revision; only baseline references vary.
+      deliveryKey: JSON.stringify(deliveryKeys),
       ancestorSessions,
       ...(ancestorSessionRefs.length ? { ancestorSessionRefs } : {}),
       delivered: () => {

@@ -1,23 +1,34 @@
 import "../../worker-heap-flag.mjs";
+import { channel } from "node:diagnostics_channel";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, Worker } from "node:worker_threads";
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
-import { normalizeDiagnosticWorkerScript } from "./worker-diagnostic-script.js";
+import {
+  MAX_DIAGNOSTIC_WORKER_SLOTS,
+  normalizeDiagnosticWorkerScript,
+} from "./worker-diagnostic-script.js";
+import type { WorkerGcStorm } from "./worker-memory.js";
 import {
   recordWorkerMessage,
   observeWorkerMessage,
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
+
+type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & {
+  heapSizeLimitBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -31,6 +42,7 @@ type WorkerSource = {
   internalMessages?: true;
   lifecycleMessages?: boolean;
   poolId?: number;
+  workerSlot?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -38,6 +50,8 @@ type WorkerSource = {
     value: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external"> & {
       arrayBuffers?: number;
       heapSizeLimitBytes?: number;
+      heapSpaces?: WorkerMemorySample["heapSpaces"];
+      retainedData?: WorkerMemorySample["retainedData"];
     };
     sampledAt: number;
   };
@@ -55,7 +69,7 @@ function workerScriptName(filename: string | URL, evalSource = false): string {
     return "other";
   }
   const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?ts$/u,
+    /\.[cm]?[jt]s$/u,
     ".js",
   );
   return normalizeDiagnosticWorkerScript(name);
@@ -68,7 +82,9 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   process.on("worker", trackWorker);
   return {
     // SAFETY: The optional callback starts unset and only receives the typed observer below.
-    gcObserver: undefined as ((samples: GcSample[], thread: string) => void) | undefined,
+    gcObserver: undefined as
+      | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
+      | undefined,
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -97,6 +113,16 @@ export function trackNativeWorkerForCpu(
   trackWorker(worker);
   const source = trackedWorkers.workers.get(worker)!;
   source.script = workerScriptName(filename, evalSource);
+  if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
+    // Reuse slots only after native exit; overflow keeps the script-level attribution.
+    const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
+    for (let slot = 1; slot <= MAX_DIAGNOSTIC_WORKER_SLOTS; slot++) {
+      if (!occupied.has(slot)) {
+        source.workerSlot = slot;
+        break;
+      }
+    }
+  }
   // Heartbeat verification shares SQLite's id/ok reply shape; its owner identifies the protocol.
   source.lifecycleMessages =
     source.script === "openclaw-state-lease-heartbeat.worker.js" ||
@@ -235,6 +261,12 @@ function trackWorker(worker: WorkerCpuHandle): void {
     // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "error" && source.script === "code-mode-node.worker.js") {
+        // Capture native failure before the pool's generic failure/close cleanup runs.
+        const error = args[0];
+        source.retirementReason ??=
+          isRecord(error) && error.code === "ERR_CODE_MODE_GC_THRASH" ? "gc-thrash" : "crash";
+      }
       if (event === "message") {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
@@ -318,7 +350,7 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
 
 /** Heartbeat demand also applies to workers attaching after observer activation. */
 export function setTrackedWorkerGcObserver(
-  observer: ((samples: GcSample[], thread: string) => void) | undefined,
+  observer: ((samples: GcSample[], thread: string, workerSlot?: number) => void) | undefined,
 ): void {
   const wasEnabled = Boolean(trackedWorkers.gcObserver);
   trackedWorkers.gcObserver = observer;
@@ -327,7 +359,7 @@ export function setTrackedWorkerGcObserver(
     for (const source of trackedWorkers.workers.values()) {
       if (source.memoryPort) {
         source.memoryPort.postMessage({ gc: enabled }, []);
-        recordWorkerMessage("memory", "to_worker");
+        recordWorkerMessage("memory", "to_worker", 1);
       }
     }
   }
@@ -354,29 +386,96 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   };
   port.on(
     "message",
-    (record: Partial<NodeJS.MemoryUsage> & { heapSizeLimitBytes?: number; gc?: GcSample[] }) => {
-      recordWorkerMessage("memory", "from_worker");
+    (
+      record:
+        | WorkerMemorySample
+        | { gc: GcSample[] }
+        | { gcStorm: WorkerGcStorm }
+        | { retireWorkerId: string },
+    ) => {
+      if ("retireWorkerId" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        channel("openclaw.code-mode.gc-storm").publish(record.retireWorkerId);
+        return;
+      }
+      if ("gcStorm" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        // Capture registry-owned identity before a native exit can free this slot.
+        const workerThreadId = worker.threadId;
+        const workerSlot = source.workerSlot;
+        void import("../logging/subsystem.js").then(async ({ createSubsystemLogger }) => {
+          const { profiles, ...storm } = record.gcStorm;
+          const metadata = {
+            ...storm,
+            workerThreadId,
+            workerSlot,
+          };
+          const log = createSubsystemLogger("agents/code-mode");
+          if (profiles) {
+            try {
+              const { writeWorkerGcProfiles } =
+                await import("../logging/diagnostic-worker-gc-profile.js");
+              const profileFiles = await writeWorkerGcProfiles(profiles);
+              log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
+            } catch {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "profile-write-failed",
+              });
+            }
+          } else {
+            log.warn("Code Mode worker GC storm", metadata);
+          }
+          if (storm.captureStatus === "requested") {
+            // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
+            const { getEnabledCategories } = await import("node:trace_events");
+            if (getEnabledCategories()) {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "tracing-active",
+              });
+            } else if (source.memoryPort === port) {
+              port.postMessage({ captureGcProfile: storm });
+            }
+          }
+        });
+        return;
+      }
+      // Known numeric payload bytes; object envelopes and diagnostic labels are excluded.
+      recordWorkerMessage(
+        "memory",
+        "from_worker",
+        ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          ("heapUsed" in record ? (record.heapSpaces?.length ?? 0) * 8 : 0) +
+          ("heapUsed" in record
+            ? (record.retainedData?.reduce(
+                (bytes, entry) =>
+                  bytes +
+                  16 +
+                  (entry.stringBytes === undefined ? 0 : 8) +
+                  (entry.objects === undefined ? 0 : 8) +
+                  (entry.generations === undefined ? 0 : 8) +
+                  (entry.providers === undefined ? 0 : 8) +
+                  (entry.accounts === undefined ? 0 : 8) +
+                  (entry.truncated === undefined ? 0 : 1),
+                0,
+              ) ?? 0)
+            : 0) +
+          (record.gc?.length ?? 0) * 8,
+      );
       // This private port is handed off by our isolate telemetry owner, not task input.
       if (record.gc) {
-        trackedWorkers.gcObserver?.(record.gc, source.script);
+        trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
+      }
+      if (!("heapUsed" in record)) {
         return;
       }
-      const heapUsed = asNonNegativeFiniteNumber(record.heapUsed);
-      const heapTotal = asNonNegativeFiniteNumber(record.heapTotal);
-      const external = asNonNegativeFiniteNumber(record.external);
-      const arrayBuffers = asNonNegativeFiniteNumber(record.arrayBuffers);
-      const heapSizeLimitBytes = asPositiveFiniteNumber(record.heapSizeLimitBytes);
-      if (
-        heapUsed === undefined ||
-        heapTotal === undefined ||
-        external === undefined ||
-        arrayBuffers === undefined
-      ) {
-        close();
-        return;
-      }
+      // The private producer supplies native counters; retain the cloned sample as-is.
+      delete record.gc;
       source.heap = {
-        value: { heapUsed, heapTotal, external, arrayBuffers, heapSizeLimitBytes },
+        value: record,
         sampledAt: performance.now(),
       };
       source.memoryPending = false;
@@ -388,7 +487,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   port.unref();
   if (trackedWorkers.gcObserver) {
     port.postMessage({ gc: true });
-    recordWorkerMessage("memory", "to_worker");
+    recordWorkerMessage("memory", "to_worker", 1);
   }
   return true;
 }
@@ -437,6 +536,7 @@ export function sampleTrackedWorkerMemory() {
       memory.workerHeaps.push({
         script: source.script,
         threadId: worker.threadId,
+        workerSlot: source.workerSlot,
         ...source.heap.value,
         sampleAgeMs: Math.round(sampleAgeMs),
       });

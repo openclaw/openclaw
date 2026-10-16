@@ -25,8 +25,15 @@ import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
-export function prepareConfigReloadTest({ task, signal }: TestContext) {
+export function prepareConfigReloadTest(
+  { task, signal }: TestContext,
+  options: { mockWatcher?: boolean } = {},
+) {
   currentTest = { timeout: task.timeout, signal };
+  if (options.mockWatcher) {
+    const watcher = installWatcherMock();
+    onTestFinished(() => watcher.restore());
+  }
 }
 
 export function createConfigReloadTestClock() {

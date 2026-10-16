@@ -42,7 +42,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
-/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Retained during stable deprecation. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
@@ -194,11 +194,7 @@ export { stripInternalRuntimeContext } from "../../../../src/agents/internal-run
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
 export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-export {
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-  isSilentReplyPayloadText,
-} from "../../../../src/auto-reply/tokens.js";
+export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
 export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
@@ -222,6 +218,7 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
 /**
  * Returns an opaque revision that changes for every canonical transcript mutation.
@@ -301,7 +298,7 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
 export {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
-} from "./session-transcript-corpus-policy.js";
+} from "./openclaw-runtime-paths.js";
 
 export async function readSessionResetRecallCutoffInWorker(
   ...args: Parameters<

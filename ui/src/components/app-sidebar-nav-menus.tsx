@@ -9,8 +9,10 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 
 type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
@@ -56,8 +58,8 @@ export type SidebarDropdownProps = {
 
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
-  let removeListeners: (() => void) | undefined;
-  onCleanup(() => removeListeners?.());
+  let removeListeners: (() => void)[] = [];
+  onCleanup(() => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       id={`sidebar-menu-${id}`}
@@ -66,23 +68,13 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
       open
       items={params.items}
       placement={params.position.bottom === undefined ? "bottom-start" : "top-start"}
-      triggerAttributes={{
-        tabindex: -1,
-        "aria-hidden": "true",
-        style: {
-          position: "fixed",
-          left: `${params.position.x}px`,
-          top:
-            params.position.bottom === undefined
-              ? `${params.position.top ?? params.position.y}px`
-              : undefined,
-          bottom: params.position.bottom === undefined ? undefined : `${params.position.bottom}px`,
-          width: "1px",
-          height: "1px",
-          opacity: 0,
-          "pointer-events": "none",
+      triggerAttributes={pointMenuTriggerAttributes(
+        {
+          x: params.position.x,
+          y: params.position.bottom ?? params.position.top ?? params.position.y,
         },
-      }}
+        params.position.bottom === undefined ? "top" : "bottom",
+      )}
       ref={(handle) => {
         const { overlay } = handle;
         overlay.surface.dataset.chatAutotypeExempt = "";
@@ -94,14 +86,10 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
             overlay.surface.style.setProperty(property, String(value));
           }
         }
-        const enter = () => params.onPointerEnter?.();
-        const leave = () => params.onPointerLeave?.();
-        overlay.surface.addEventListener("pointerenter", enter);
-        overlay.surface.addEventListener("pointerleave", leave);
-        removeListeners = () => {
-          overlay.surface.removeEventListener("pointerenter", enter);
-          overlay.surface.removeEventListener("pointerleave", leave);
-        };
+        removeListeners = [
+          listen(overlay.surface, "pointerenter", () => params.onPointerEnter?.()),
+          listen(overlay.surface, "pointerleave", () => params.onPointerLeave?.()),
+        ];
         overlay.request(true, params.focusOnOpen === false ? "none" : "first");
       }}
       tabFocusTarget={params.tabFocusTarget}

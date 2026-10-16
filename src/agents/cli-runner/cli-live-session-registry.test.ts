@@ -561,9 +561,9 @@ describe("generic plugin-owned live session registry", () => {
     expect(resumed.grant?.adoptProcessToken.mock.invocationCallOrder[0]).toBeLessThan(
       resumed.beginCapture.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(Object.keys(resumed.capability)).not.toEqual(
-      expect.arrayContaining(["ownerKey", "transportToken", "captureKey"]),
-    );
+    expect(resumed.capability).not.toHaveProperty("ownerKey");
+    expect(resumed.capability).not.toHaveProperty("transportToken");
+    expect(resumed.capability).not.toHaveProperty("captureKey");
 
     resumed.capability.remove(original.session);
     resumed.capability.remove(original.session);

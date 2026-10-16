@@ -1,20 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenAIResponsesServerCompactionPlan } from "./openai-responses-payload-policy.js";
+import {
+  resolveOpenAIResponsesRequestContextTokens,
+  resolveOpenAIResponsesServerCompactionPlan,
+} from "./openai-responses-payload-policy.js";
+
+describe("OpenAI Responses request context", () => {
+  it.each([
+    { fastMode: undefined, expected: 260_000 },
+    { fastMode: () => undefined, expected: 260_000 },
+    { fastMode: "auto", expected: 260_000 },
+    { fastMode: false, expected: undefined },
+    { fastMode: true, expected: undefined },
+    { fastMode: "ultrafast", expected: undefined },
+  ])(
+    "preserves authored tiers but restricts explicit speed: $fastMode",
+    ({ fastMode, expected }) => {
+      expect(
+        resolveOpenAIResponsesRequestContextTokens(
+          { provider: "openai", api: "openai-responses" },
+          { serviceTier: "ultrafast", fastMode },
+          ["default", "priority"],
+        ),
+      ).toBe(expected);
+    },
+  );
+});
 
 describe("OpenAI Responses compact threshold", () => {
   it.each([
     { params: { fastMode: "ultrafast" }, threshold: 260_000 },
     { params: { fast_mode: "ultrafast" }, threshold: 260_000 },
     { params: { fastMode: () => "ultrafast" }, threshold: 260_000 },
-    { params: { serviceTier: "ultrafast", fastMode: false }, threshold: 260_000 },
+    { params: { serviceTier: "ultrafast", fastMode: false }, threshold: 700_000 },
     { params: { service_tier: "ultrafast" }, threshold: 260_000 },
     { params: { fastMode: true }, threshold: 700_000 },
     { params: { fastMode: false }, threshold: 700_000 },
     { params: { fastMode: "auto" }, threshold: 700_000 },
-    { params: { fastMode: "ultrafast", serviceTier: "priority" }, threshold: 700_000 },
-    { params: { fastMode: "ultrafast", serviceTier: "default" }, threshold: 700_000 },
-    { params: { fastMode: "ultrafast", serviceTier: "flex" }, threshold: 700_000 },
-    { params: { fastMode: "ultrafast", serviceTier: "auto" }, threshold: 700_000 },
+    { params: { fastMode: "ultrafast", serviceTier: "priority" }, threshold: 260_000 },
+    { params: { fastMode: "ultrafast", serviceTier: "default" }, threshold: 260_000 },
+    { params: { fastMode: "ultrafast", serviceTier: "flex" }, threshold: 260_000 },
+    { params: { fastMode: "ultrafast", serviceTier: "auto" }, threshold: 260_000 },
     { params: { fastMode: "ultrafast", responsesCompactThreshold: 120_000 }, threshold: 120_000 },
   ])("resolves tier/config precedence for $params", ({ params, threshold }) => {
     expect(

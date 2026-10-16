@@ -26,11 +26,13 @@ export async function resolveTalkFileTranscriptionConfig(
   if (!cfg.tools?.media?.models?.length || cfg.tools.media.audio?.enabled === false) {
     return undefined;
   }
-  const [{ buildMediaUnderstandingRegistry, normalizeMediaProviderId }, { resolveModelEntries }] =
-    await Promise.all([
-      import("../../media-understanding/provider-registry.js"),
-      import("../../media-understanding/resolve.js"),
-    ]);
+  const [
+    { buildMediaUnderstandingRegistry, normalizeMediaProviderId },
+    { resolveModelEntries, resolveMaxBytes },
+  ] = await Promise.all([
+    import("../../media-understanding/provider-registry.js"),
+    import("../../media-understanding/resolve.js"),
+  ]);
   const registry = buildMediaUnderstandingRegistry(undefined, cfg);
   const entries = resolveModelEntries({
     cfg,
@@ -52,8 +54,13 @@ export async function resolveTalkFileTranscriptionConfig(
   const providers = new Map<string, { models: string[]; configured: boolean }>();
   const providerId = (id: string) => registry.get(normalizeMediaProviderId(id))?.id ?? id;
   let ready = false;
+  let maxBytes = 0;
   let selectedProvider: string | undefined;
   for (const { entry, secretOwnerId } of entries) {
+    maxBytes = Math.max(
+      maxBytes,
+      resolveMaxBytes({ cfg, capability: "audio", config: cfg.tools.media.audio, entry }),
+    );
     const configured = await isAudioModelEntryAvailable({
       cfg,
       ...scope,
@@ -76,18 +83,14 @@ export async function resolveTalkFileTranscriptionConfig(
     }
     providers.set(id, state);
   }
-  const { resolveAudioInputBudget } = await import("../../media-understanding/runtime.js");
-  const budget = await resolveAudioInputBudget({ cfg });
-  return budget.enabled
-    ? {
-        cfg,
-        ...scope,
-        maxBytes: budget.maxBytes,
-        ready,
-        provider: selectedProvider,
-        providers: Array.from(providers, ([id, state]) => ({ id, ...state })),
-      }
-    : undefined;
+  return {
+    cfg,
+    ...scope,
+    maxBytes,
+    ready,
+    provider: selectedProvider,
+    providers: Array.from(providers, ([id, state]) => ({ id, ...state })),
+  };
 }
 
 function encodeWav(audio: Buffer): Buffer {

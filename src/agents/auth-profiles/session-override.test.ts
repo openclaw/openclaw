@@ -9,6 +9,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
 import { authProfilesLog } from "./constants.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
@@ -23,6 +25,7 @@ import {
   TEST_SECONDARY_PROFILE_ID,
   withAuthState,
 } from "./session-override.test-support.js";
+import { isProfileInCooldown } from "./usage-state.js";
 
 describe("resolveSessionAuthProfileOverride", () => {
   it("returns early when no auth sources exist", async () => {
@@ -387,6 +390,49 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
+  it("keeps an automatic pin for a sibling of a managed provider's blocked model", async () => {
+    await withAuthState(async (state) => {
+      const profileId = "openrouter:manual";
+      const agentDir = await prepareCooldownAuthState(state, { profileIds: [profileId] });
+      authStoreMocks.state.store = {
+        version: 1,
+        profiles: { [profileId]: createApiKeyCredential("openrouter", "sk-test") },
+        order: { openrouter: [profileId] },
+        usageStats: {
+          [profileId]: {
+            cooldownUntil: Date.now() + 60_000,
+            cooldownReason: "rate_limit",
+            blockedUntil: Date.now() + 60_000,
+            blockedScope: "model",
+            blockedModel: "model-x",
+            blockedReason: "subscription_limit",
+          },
+        },
+      };
+      authStoreMocks.isProfileInCooldown.mockImplementation(isProfileInCooldown);
+      const sessionEntry = createAutomaticSessionEntry({
+        authProfileOverride: profileId,
+        model: "model-y",
+      });
+      const snapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true }],
+      });
+      const resolved = await withPluginMetadataSnapshotScope(
+        snapshot,
+        () =>
+          resolveSession({
+            agentDir,
+            provider: "openrouter",
+            sessionEntry,
+            sessionStore: { "agent:main:main": sessionEntry },
+          }),
+        { trustConfigIdentity: true },
+      );
+      expect(resolved).toBe(profileId);
+      expect(sessionEntry.authProfileOverride).toBe(profileId);
+    });
+  });
+
   it("does not persist an automatic override when every auth profile is in cooldown", async () => {
     await withAuthState(async (state) => {
       const agentDir = await prepareCooldownAuthState(state);
@@ -401,51 +447,34 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it.each([
-    { name: "missing", profile: undefined },
-    {
-      name: "provider-mismatched",
-      profile: { type: "api_key" as const, provider: "anthropic", key: "sk-mismatched" },
-    },
-  ])(
-    "does not replace a $name user override with an auth profile in cooldown",
-    async ({ profile }) => {
-      await withAuthState(async (state) => {
-        const warn = profile
-          ? undefined
-          : vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
-        const agentDir = await prepareCooldownAuthState(state);
-        if (profile) {
-          authStoreMocks.state.store.profiles["anthropic:stale"] = profile;
-        }
+  it("does not replace a missing user override with an auth profile in cooldown", async () => {
+    await withAuthState(async (state) => {
+      const warn = vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
+      const agentDir = await prepareCooldownAuthState(state);
 
-        const sessionEntry: SessionEntry = {
-          sessionId: "s1",
-          updatedAt: 1,
-          authProfileOverride: profile ? "anthropic:stale" : "openai:missing",
-          authProfileOverrideSource: "user",
-          authProfileOverrideCompactionCount: 2,
-        };
-        const sessionStore = { "agent:main:main": sessionEntry };
-        const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        authProfileOverride: "openai:missing",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+      const resolved = await resolveSession({ agentDir, sessionEntry, sessionStore });
 
-        const expectedProfile = profile ? undefined : "openai:missing";
-        expect(resolved).toBe(expectedProfile);
-        expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
-        expect(sessionEntry.authProfileOverrideSource).toBe(profile ? undefined : "user");
-        expect(sessionEntry.authProfileOverrideCompactionCount).toBe(profile ? undefined : 2);
-        if (!profile) {
-          expect(warn).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.objectContaining({
-              event: "session_auth_profile_unavailable",
-              profileId: "openai:missing",
-            }),
-          );
-        }
-      });
-    },
-  );
+      expect(resolved).toBe("openai:missing");
+      expect(sessionEntry.authProfileOverride).toBe("openai:missing");
+      expect(sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(2);
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          event: "session_auth_profile_unavailable",
+          profileId: "openai:missing",
+        }),
+      );
+    });
+  });
 });
 
 const OPENAI_MODEL_ID = "gpt-5.6-sol";

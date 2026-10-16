@@ -25,6 +25,7 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentModelFallbackValues } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -170,15 +171,19 @@ function configuredRefIsEffectiveForAgent(params: {
   ) {
     return params.selectedModelRefs.has(params.value);
   }
-  const agent = resolveAgentConfig(params.cfg, params.agentId);
   if (params.path.endsWith(".heartbeat.model")) {
+    const agent = resolveAgentConfig(params.cfg, params.agentId);
     const heartbeat =
       agent?.heartbeat?.model?.trim() || params.cfg.agents?.defaults?.heartbeat?.model?.trim();
     return heartbeat === params.value;
   }
-  if (params.path.endsWith(".utilityModel")) {
-    const utilityModel = (agent?.utilityModel ?? params.cfg.agents?.defaults?.utilityModel)?.trim();
-    return utilityModel === params.value;
+  if (/\.utilityModel(?:\.|$)/.test(params.path)) {
+    const utility = readUtilityModelSetting(params.cfg, params.agentId);
+    return (
+      utility.kind !== "disabled" &&
+      ((utility.kind === "explicit" && utility.modelRef === params.value) ||
+        utility.fallbacks.some((ref) => ref.trim() === params.value))
+    );
   }
   return true;
 }

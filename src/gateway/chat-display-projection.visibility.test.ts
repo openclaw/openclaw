@@ -14,6 +14,67 @@ const userTextMessage = (text: string) => ({
 });
 
 describe("internal history display projection", () => {
+  it("projects plugin steering only when requested without changing canonical input", () => {
+    const steering = {
+      ...userTextMessage("Private model-facing steering prefix.\n\nUse the smaller change."),
+      display: false,
+      provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
+      __openclaw: {
+        seq: 2,
+        pluginSteering: {
+          pluginId: "reviewer",
+          pluginName: "Review Helper",
+          displayText: "Use the smaller change.",
+        },
+      },
+    };
+    const original = structuredClone(steering);
+    const unrelated = [
+      { ...steering, provenance: { kind: "internal_system", sourceTool: "exec" } },
+      { ...steering, provenance: { kind: "internal_system", sourceTool: "plugin:" } },
+      { ...steering, provenance: { kind: "external_user", sourceTool: "plugin:reviewer" } },
+      { ...steering, role: "assistant" },
+    ];
+    expect(projectChatDisplayMessages([steering, ...unrelated])).toEqual([]);
+    expect(
+      projectChatDisplayMessages([steering, ...unrelated], { includePluginSteering: true }),
+    ).toMatchObject([
+      {
+        role: "user",
+        display: true,
+        content: [{ type: "text", text: "Use the smaller change." }],
+        __openclaw: {
+          pluginSteering: {
+            pluginId: "reviewer",
+            pluginName: "Review Helper",
+          },
+        },
+      },
+    ]);
+    expect(steering).toEqual(original);
+    const [capped] = projectChatDisplayMessages([steering], {
+      includePluginSteering: true,
+      maxChars: 8,
+    });
+    expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
+  });
+
+  it("derives metadata for older plugin steering rows without guessing plugin-specific prose", () => {
+    const raw = {
+      ...userTextMessage("Legacy plugin prefix\n\nOriginal note"),
+      display: false,
+      provenance: { kind: "internal_system", sourceTool: "plugin:legacy-plugin" },
+    };
+    expect(projectChatDisplayMessages([raw], { includePluginSteering: true })).toMatchObject([
+      {
+        display: true,
+        content: raw.content,
+        __openclaw: { pluginSteering: { pluginId: "legacy-plugin" } },
+      },
+    ]);
+    expect(projectChatDisplayMessages([raw], { includePluginSteering: false })).toEqual([]);
+  });
+
   it("hides attributed child coordination without hiding peer messages or parent answers", () => {
     const child = {
       role: "user",

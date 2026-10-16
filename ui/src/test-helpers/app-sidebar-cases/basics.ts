@@ -20,114 +20,109 @@ import "../../components/app-sidebar.tsx";
 
 await import("../../components/viewer-facepile.ts");
 
-describe("AppSidebar invitation admission", () => {
-  it.each([
-    { field: "draggingSessionKey", value: "agent:main:task", finish: "finishSessionDrag" },
-    { field: "draggingSidebarSection", value: "ungrouped", finish: "finishSidebarSectionDrag" },
-    { field: "draggingSidebarEntry", value: "route:home", finish: "finishSidebarEntryDrag" },
-  ] as const)(
-    "waits for $field to finish even without hover or focus",
-    async ({ field, value, finish }) => {
-      const { sidebar, context } = await mountSidebar(
-        createGateway({} as GatewayBrowserClient),
-        createSessions("main", ["agent:main:main", "agent:main:task"]),
-      );
-      expect(sidebar.matches(":hover, :focus-within")).toBe(false);
-      sidebar.sessionOrganizer[field] = value;
-      const fetch = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
-      try {
+describe("AppSidebar community entry", () => {
+  it("follows the deployment flag without using the old invitation dismissal", async () => {
+    const { sidebar, context } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+    );
+    localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
+    const fetch = vi.spyOn(globalThis, "fetch");
+    try {
+      for (const enabled of [true, false]) {
+        fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
         await context.config.refresh();
         await sidebar.updateComplete;
-        expect(context.config.current.communityInvite).toBe(true);
-        expect(sidebar.querySelector(".community-invite-card")).toBeNull();
-        sidebar.sessionOrganizer[finish]();
-        await sidebar.updateComplete;
-        expect(sidebar.querySelector(".community-invite-card")).not.toBeNull();
-      } finally {
-        fetch.mockRestore();
+        expect(Boolean(sidebar.querySelector(".sidebar-community__entry"))).toBe(enabled);
       }
-    },
-  );
+    } finally {
+      fetch.mockRestore();
+      localStorage.removeItem("openclaw:control-ui:community-invite:v2");
+    }
+  });
 });
 
 describe("AppSidebar new session navigation", () => {
-  it("opens new-session links for the expanded agent without intercepting browser gestures", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "research" }],
-    } as AgentsListResult;
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("research", ["agent:research:main", "agent:research:task"]),
-      "panel",
-      agentsList,
-    );
-    const onOpenNewSession = vi.fn();
-    const onOpenPalette = vi.fn();
-    const onToggleSidebar = vi.fn();
-    sidebar.basePath = "/control";
-    sidebar.connected = false;
-    sidebar.onOpenNewSession = onOpenNewSession;
-    sidebar.onOpenPalette = onOpenPalette;
-    sidebar.onToggleSidebar = onToggleSidebar;
-    await sidebar.updateComplete;
+  it.each(["chip", "roster"] as const)(
+    "opens new-session links directly in %s mode without intercepting browser gestures",
+    async (mode) => {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const agentsList = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "research" }],
+      } as AgentsListResult;
+      const { sidebar } = await mountSidebar(
+        gateway,
+        createSessions("research", ["agent:research:main", "agent:research:task"]),
+        "panel",
+        agentsList,
+      );
+      const onOpenNewSession = vi.fn();
+      const onOpenPalette = vi.fn();
+      const onToggleSidebar = vi.fn();
+      sidebar.basePath = "/control";
+      sidebar.sidebarAgentsMode = mode;
+      sidebar.connected = false;
+      sidebar.onOpenNewSession = onOpenNewSession;
+      sidebar.onOpenPalette = onOpenPalette;
+      sidebar.onToggleSidebar = onToggleSidebar;
+      await sidebar.updateComplete;
+      await settleRoster(sidebar);
 
-    const newSessionLink = sidebar.querySelector<HTMLAnchorElement>(
-      ".sidebar-rail .sidebar-new-session",
-    );
-    expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
-    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="sessions"]')?.click();
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
-    expect(onToggleSidebar).toHaveBeenCalledOnce();
-    expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
-    expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
-    expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
-    expect(newSessionLink?.hasAttribute("href")).toBe(false);
-    expect(newSessionLink?.tabIndex).toBe(-1);
-    newSessionLink?.click();
-    expect(onOpenNewSession).not.toHaveBeenCalled();
-
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
-    expect(link.getAttribute("aria-label")).toBe("New conversation");
-    expect(link.getAttribute("href")).toBe("/control/new?agent=research");
-    expect(link.hasAttribute("aria-disabled")).toBe(false);
-    for (const modifiers of [
-      { metaKey: true },
-      { ctrlKey: true },
-      { shiftKey: true },
-      { button: 1 },
-    ]) {
-      const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
-      link.dispatchEvent(event);
-      expect(event.defaultPrevented).toBe(false);
+      const newSessionLink = sidebar.querySelector<HTMLAnchorElement>(
+        ".sidebar-rail .sidebar-new-session",
+      );
+      expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
+      expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
+      sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="sessions"]')?.click();
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
+      expect(onToggleSidebar).toHaveBeenCalledOnce();
+      expect(onOpenPalette).toHaveBeenCalledOnce();
+      expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+      expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
+      expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
+      expect(newSessionLink?.hasAttribute("href")).toBe(false);
+      expect(newSessionLink?.tabIndex).toBe(-1);
+      newSessionLink?.click();
       expect(onOpenNewSession).not.toHaveBeenCalled();
-    }
-    for (const view of ["pages", "sessions", "online"] as const) {
-      for (const collapsed of [false, true]) {
-        sidebar.navigationView = view;
-        sidebar.navigationCollapsed = collapsed;
-        await sidebar.updateComplete;
-        const current = sidebar.querySelector<HTMLAnchorElement>(
-          ".sidebar-rail .sidebar-new-session",
-        );
-        expect(current).toBe(link);
-        expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
-        expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
-        current!.click();
-        expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
-        onOpenNewSession.mockClear();
+
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      const link = sidebar.querySelector<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
+      expect(link.getAttribute("aria-label")).toBe("New conversation");
+      expect(link.getAttribute("href")).toBe("/control/new?agent=research");
+      expect(link.hasAttribute("aria-disabled")).toBe(false);
+      for (const modifiers of [
+        { metaKey: true },
+        { ctrlKey: true },
+        { shiftKey: true },
+        { button: 1 },
+      ]) {
+        const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifiers });
+        link.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(onOpenNewSession).not.toHaveBeenCalled();
       }
-    }
-  });
+      for (const view of ["pages", "sessions", "online"] as const) {
+        for (const collapsed of [false, true]) {
+          sidebar.navigationView = view;
+          sidebar.navigationCollapsed = collapsed;
+          await sidebar.updateComplete;
+          const current = sidebar.querySelector<HTMLAnchorElement>(
+            ".sidebar-rail .sidebar-new-session",
+          );
+          expect(current).toBe(link);
+          expect(sidebar.querySelectorAll(".sidebar-new-session")).toHaveLength(1);
+          expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
+          current!.click();
+          expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+          onOpenNewSession.mockClear();
+        }
+      }
+    },
+  );
 
   it("opens a catalog-targeted draft from its new-session action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);

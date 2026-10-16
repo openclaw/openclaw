@@ -41,6 +41,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       socket.terminate();
       return;
     }
+    let batched = false;
+    Object.assign(socket, {
+      batchWrites() {
+        if (batched) {
+          return;
+        }
+        batched = true;
+        upgradeReq.socket.cork();
+        process.nextTick(() => {
+          batched = false;
+          upgradeReq.socket.uncork();
+        });
+      },
+    });
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =

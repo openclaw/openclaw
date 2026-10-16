@@ -995,16 +995,16 @@ it("bounds stored and compressed cache payloads while keeping other sessions ava
       const lock = prepareSessionCostUsageRefreshLock(agentId);
       try {
         expect(await lock.acquire()).toBe(true);
-        expect(
-          await lock.writeRollup({
+        await lock.writeRollup([
+          {
             rollupId: row.key,
             valueJson: new TextEncoder().encode(encoded.valueJson),
             blob: encoded.blob,
             partitions: encoded.partitions,
             replacePartitions: true,
             updatedAt: row.updatedAt,
-          }),
-        ).toBe(true);
+          },
+        ]);
       } finally {
         await lock.release();
       }

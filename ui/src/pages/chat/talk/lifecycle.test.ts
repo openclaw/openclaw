@@ -292,7 +292,7 @@ describe("RealtimeTalkSession lifecycle", () => {
     await expect(session.start()).rejects.toThrow("activation stopped");
 
     expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
-    expect(transportMock.relayStops[0]).toHaveBeenCalledWith();
+    expect(transportMock.relayStops[0]).toHaveBeenCalledWith({ disposition: "detach" });
     expect(transportMock.relayStops[1]).toHaveBeenCalledOnce();
     void session.stop();
     expect(transportMock.relayStops[0]).toHaveBeenCalledOnce();
@@ -326,7 +326,10 @@ describe("RealtimeTalkSession lifecycle", () => {
     activeContext.callbacks.onTranscript?.({ role: "user", text: "active", final: true });
     await activeContext.flushTranscriptWrites?.();
     expect(transcriptEntryIds).toEqual(["1"]);
-    expect(transportMock.webRtcStops[1]).toHaveBeenCalledWith({ emitClosed: false });
+    expect(transportMock.webRtcStops[1]).toHaveBeenCalledWith({
+      disposition: "detach",
+      emitClosed: false,
+    });
 
     firstReplacementStart.resolve("ready");
     await firstReplacement;
@@ -455,7 +458,7 @@ describe("RealtimeTalkSession lifecycle", () => {
     await Promise.resolve();
     expect(transcriptEntryIds).toEqual(["1"]);
     expect(transportMock.webRtcStops[0]).toHaveBeenCalledOnce();
-    expect(transportMock.webRtcStops[0]).toHaveBeenCalledWith();
+    expect(transportMock.webRtcStops[0]).toHaveBeenCalledWith({ disposition: "detach" });
     expect(transportMock.webRtcStops[1]).toHaveBeenCalledWith({ emitClosed: false });
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "talk.client.close")).toHaveLength(

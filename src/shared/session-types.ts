@@ -87,6 +87,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   rowsRevision?: string;
   /** Only the rows are omitted; counts, defaults and facets remain current. */
   rowsUnchanged?: true;
+  /** Complete window indexes into the base rows followed by this response's changed rows. */
+  rowsDelta?: { baseRevision: string; order: number[] };
   sessions: TRow[];
 };
 

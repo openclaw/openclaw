@@ -240,11 +240,9 @@ describe("queued WebChat follow-up delivery", () => {
             stream: "assistant",
             data: {
               text:
-                name === "canvas" || name === "suppressed-canvas"
+                name === "canvas" || name === "suppressed-canvas" || name === "silent-canvas"
                   ? ""
-                  : name === "silent-canvas"
-                    ? "NO_REPLY"
-                    : "late answer arrived over the live WebSocket",
+                  : "late answer arrived over the live WebSocket",
             },
           });
           if (completion.kind === "failed" || completion.kind === "aborted") {
@@ -263,6 +261,7 @@ describe("queued WebChat follow-up delivery", () => {
             data: {
               phase: completion.kind === "failed" ? "error" : "end",
               executionSettled: true,
+              ...(name === "silent-canvas" ? { terminalReply: { disposition: "silent" } } : {}),
               ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
             },
           });
@@ -285,12 +284,12 @@ describe("queued WebChat follow-up delivery", () => {
           if (name === "abort") {
             expect(completed.payload).toMatchObject({ stopReason: "restart" });
           }
-          if (name === "canvas" || name === "abort") {
+          if (name === "canvas" || name === "silent-canvas" || name === "abort") {
             expect(completed.payload?.message).toMatchObject({
               content: expect.arrayContaining([expect.objectContaining({ type: "canvas" })]),
             });
           }
-          if (name === "silent-canvas" || name === "suppressed-canvas") {
+          if (name === "suppressed-canvas") {
             expect(completed.payload?.message).toBeUndefined();
           }
           if (name === "text") {

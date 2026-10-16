@@ -442,6 +442,7 @@ describe("PanelTabStrip", () => {
       expect(tabStrip(container)?.dataset.draggedPanelTab).toBe(sourceId);
       expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
       dispatchDrag(target!, "dragover", 110);
+      flush();
       // The indicator must preview the same edge the drop will use; `drop` clears
       // it, so the class is read while the drag is still over the target.
       const previewed = target?.classList.contains(`is-drop-${placement}`);

@@ -1,9 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   parseRemoteModelCatalogBundle,
   parseRemoteModelCatalogBundleV2,
+  parseRemoteModelCatalogBundleV3,
   validateAndSanitizeRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundleV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3,
 } from "./remote-catalog-bundle.js";
 
 const contextWindows = [
@@ -24,6 +26,7 @@ const validBundle = {
       models: [
         {
           id: "claude-test",
+          input: ["text", "image", "video"],
           ...transport,
           contextWindows,
           contextWindowDefault: "1m",
@@ -38,7 +41,7 @@ const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
 const firstModel = {
   id: "vendor/model",
   provider: "first",
-  input: ["text"],
+  input: ["text", "video"],
   pricing: { ...knownPrice, source: "native-feed", input: 0, output: 0 },
 };
 const validBundleV2 = {
@@ -146,6 +149,7 @@ it("accepts v1 metadata while deeply stripping transport overrides", () => {
   expect(anthropic?.models[0]).not.toHaveProperty("baseUrl");
   expect(anthropic?.models[0]).not.toHaveProperty("headers");
   expect(anthropic?.models[0]).toMatchObject({
+    input: ["text", "image", "video"],
     contextWindows,
     contextWindowDefault: "1m",
     compat: { nested: {} },
@@ -156,6 +160,109 @@ it("accepts v1 metadata while deeply stripping transport overrides", () => {
     output: 10,
     cacheRead: 1.25,
   });
+});
+
+it.each([1, 2] as const)(
+  "ingests v%i rows independently and warns once per affected row",
+  (version) => {
+    const warn = vi.fn();
+    const rows = [
+      { id: "kept", input: ["text", "audio", "image", "future", "video", "document"] },
+      { id: "future-only", input: ["audio"] },
+      { id: "bad-input", input: ["text", 42] },
+      { id: "bad-api", api: "future-api" },
+      { id: "bad-limit", contextWindow: -1 },
+      { id: "bad-context", contextWindowDefault: "missing" },
+      { id: " " },
+      {},
+      { id: "kept" },
+      { id: "last", input: ["text"] },
+    ];
+    const bundle =
+      version === 1
+        ? validateAndSanitizeRemoteModelCatalogBundle(
+            {
+              ...validBundle,
+              providers: {
+                first: { models: rows },
+                second: { models: [{ id: "kept" }] },
+                empty: { models: [] },
+              },
+            },
+            warn,
+          )
+        : validateAndSanitizeRemoteModelCatalogBundleV2(
+            {
+              ...validBundleV2,
+              providers: { first: { recommendedModels: ["bad-api", "kept"] }, second: {} },
+              models: [
+                ...rows.map((row) =>
+                  Object.assign({}, row, {
+                    provider: "first",
+                    pricing: { status: "unknown" },
+                  }),
+                ),
+                { id: "kept", provider: "second", pricing: { status: "unknown" } },
+              ],
+            },
+            warn,
+          );
+    const models =
+      bundle.schemaVersion === 1 ? (bundle.providers.first?.models ?? []) : bundle.models;
+    expect(models.slice(0, 2).map(({ id, input }) => ({ id, input }))).toEqual([
+      { id: "kept", input: ["text", "image", "video", "document"] },
+      { id: "last", input: ["text"] },
+    ]);
+    expect(
+      bundle.schemaVersion === 1 ? bundle.providers.second?.models : models.slice(2),
+    ).toMatchObject([{ id: "kept" }]);
+    if (bundle.schemaVersion === 2) {
+      expect(bundle.providers.first?.recommendedModels).toEqual(["kept"]);
+    } else {
+      expect(bundle.providers).not.toHaveProperty("empty");
+    }
+    expect(warn).toHaveBeenCalledTimes(9);
+    const rowPath = version === 1 ? "providers.first.models" : "models";
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      `remote model catalog: dropped unknown input modalities from ${rowPath}.0 (kept)`,
+    );
+    expect(warn).toHaveBeenNthCalledWith(
+      3,
+      `remote model catalog: skipped invalid row ${rowPath}.2 (bad-input)`,
+    );
+    warn.mockClear();
+    if (bundle.schemaVersion === 1) {
+      expect(validateAndSanitizeRemoteModelCatalogBundle(bundle, warn)).toEqual(bundle);
+    } else {
+      expect(validateAndSanitizeRemoteModelCatalogBundleV2(bundle, warn)).toEqual(bundle);
+    }
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  {
+    parse: validateAndSanitizeRemoteModelCatalogBundle,
+    bundle: validBundle,
+    rows: (models: unknown[]) => ({ providers: { first: { models } } }),
+  },
+  {
+    parse: validateAndSanitizeRemoteModelCatalogBundleV2,
+    bundle: validBundleV2,
+    rows: (models: unknown[]) => ({ models }),
+  },
+])("rejects invalid envelopes and catalogs with no usable rows", ({ parse, bundle, rows }) => {
+  for (const patch of [
+    { sourceCommit: undefined },
+    { generatedAt: "today" },
+    { providers: null },
+  ]) {
+    expect(() => parse({ ...bundle, ...patch })).toThrow();
+  }
+  for (const models of [[], [{ id: "" }]]) {
+    expect(() => parse({ ...bundle, ...rows(models) }, vi.fn())).toThrow("no valid models");
+  }
 });
 
 it("preserves ordered v2 recommendations and provider-scoped model identities and prices", () => {
@@ -223,4 +330,42 @@ it("strips v2 transport metadata while preserving transport-like provider identi
   });
   expect(bundle.models[0]?.compat).toEqual({ supportsTools: true, nested: {} });
   expect(() => parseRemoteModelCatalogBundleV2(bundle)).not.toThrow();
+});
+
+it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: false } },
+      billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0, output: 0 } },
+    },
+  };
+  const native = { ...firstModel, inference, compat: { nested: transport } };
+  const candidate = { ...validBundleV2, schemaVersion: 3, models: [native] };
+  expect(() => parseRemoteModelCatalogBundleV2(candidate)).toThrow();
+  expect(() => parseRemoteModelCatalogBundleV2({ ...candidate, schemaVersion: 2 })).toThrow();
+  expect(parseRemoteModelCatalogBundleV3(candidate).models[0]?.inference).toEqual(inference);
+  const warn = vi.fn();
+  const admitted = validateAndSanitizeRemoteModelCatalogBundleV3(
+    {
+      ...candidate,
+      models: [
+        native,
+        {
+          ...native,
+          id: "invalid",
+          inference: {
+            ...inference,
+            decision: { ...inference.decision, protocol: "invalid protocol" },
+          },
+        },
+      ],
+    },
+    warn,
+  );
+  expect(admitted.models).toHaveLength(1);
+  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
+  expect(warn).toHaveBeenCalledOnce();
 });

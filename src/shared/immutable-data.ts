@@ -63,9 +63,7 @@ function inspectPlainData(value: unknown, freeze: boolean, requireFrozen = true)
     }
   }
   // A cycle is proven only when every reachable member passes, not on a back edge.
-  if (plain && freeze) {
-    deeplyFrozenPlainData.add(value);
-  } else if (plain && requireFrozen) {
+  if (plain && (freeze || requireFrozen)) {
     for (const candidate of inspected) {
       deeplyFrozenPlainData.add(candidate);
     }
@@ -86,5 +84,28 @@ export function isDeeplyFrozenPlainData(value: unknown): boolean {
 /** Freeze an owner's cloned JSON snapshot without executing opaque members. */
 export function freezeJsonSnapshot<T>(value: T): T {
   inspectPlainData(value, true);
+  return value;
+}
+
+/** Freeze decoded/internal JSON only; callers own the plain-data guarantee. */
+export function freezeTrustedJsonSnapshot<T>(value: T): T {
+  if (!value || typeof value !== "object" || deeplyFrozenPlainData.has(value)) {
+    return value;
+  }
+  const pending: unknown[] = [value];
+  while (pending.length) {
+    const candidate = pending.pop();
+    if (!candidate || typeof candidate !== "object" || deeplyFrozenPlainData.has(candidate)) {
+      continue;
+    }
+    Object.freeze(candidate);
+    deeplyFrozenPlainData.add(candidate);
+    for (const key in candidate) {
+      const child: unknown = Reflect.get(candidate, key);
+      if (child && typeof child === "object") {
+        pending.push(child);
+      }
+    }
+  }
   return value;
 }

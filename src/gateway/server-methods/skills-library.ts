@@ -49,10 +49,7 @@ import {
   prepareProjectedSessionSharing,
   prepareSessionSharingProfiles,
 } from "../session-sharing-read.js";
-import {
-  authorizeSessionSharingTarget,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -282,29 +279,26 @@ async function selectedSession(
       }
     },
   );
+  if (!actorFacts) {
+    throw new SkillLibraryError("NOT_FOUND", "Session not found.");
+  }
   const assertRouting = captureSessionMutationRouting(sourceCfg);
-  const resolve = (authorize = true): SessionSharingTarget => {
+  const resolve = (): SessionSharingTarget => {
     const cfg = options.context.getRuntimeConfig();
     assertRouting(cfg);
-    const target = actorFacts?.readCurrent().target;
+    const { target, membership } = actorFacts.readCurrent();
     if (!target) {
       throw new SkillLibraryError("NOT_FOUND", "Session not found.");
     }
-    if (authorize) {
-      const sharing =
-        actorFacts &&
-        prepareProjectedSessionSharing({
-          cfg,
-          client: options.client,
-          profiles,
-          isMember: (_target, id) => actorFacts.readCurrent().membership.has(id),
-        });
-      const error = sharing
-        ? sharing.authorizeTarget(target)
-        : authorizeSessionSharingTarget({ cfg, client: options.client, target });
-      if (error) {
-        throw new SessionMutationAuthorizationChangedError(error);
-      }
+    const sharing = prepareProjectedSessionSharing({
+      cfg,
+      client: options.client,
+      profiles,
+      isMember: (_target, id) => membership.has(id),
+    });
+    const error = sharing.authorizeTarget(target);
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
     }
     return target;
   };
@@ -342,9 +336,7 @@ async function selectedSession(
         throw new SessionMutationAuthorizationChangedError(error);
       }
     };
-    if (actorFacts) {
-      assertCurrent();
-    }
+    assertCurrent();
     const source: SessionSourceAssertion = Object.assign(assertMutationCurrent, {
       async prepareSessionSource() {
         assertMutationCurrent();

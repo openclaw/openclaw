@@ -32,7 +32,6 @@ src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts	2
 src/auto-reply/reply/dispatch-from-config.active-command.test.ts	2
 src/auto-reply/reply/reply-run-registry.question-registration.test.ts	2
 src/cli/gateway-cli/run-loop-startup.test-support.ts	4
-src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts	1
 src/cli/update-cli/update-command-retained-custody.test.ts	2
 src/config/sessions/legacy-main-session-migration.race.test.ts	1
 src/config/sessions/session-accessor.sqlite-page-reclamation.binding.test.ts	1
@@ -59,7 +58,6 @@ src/gateway/server-methods/models-dispatch.catalog.integration.test.ts	2
 src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts	2
 src/gateway/server-methods/send.scheduled-reads.integration.test.ts	2
 src/gateway/server-reload-channel-restart.test.ts	3
-src/gateway/server-session-events.test.ts	5
 src/gateway/server.approval-forwarding.test.ts	1
 src/gateway/server.chat.canonical-publication.test.ts	2
 src/gateway/server.cli-watchdog.test.ts	4
@@ -79,7 +77,7 @@ src/gateway/test-helpers.server-storage.test.ts	1
 src/gateway/test/server-sessions-resources.test-helpers.ts	1
 src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
-src/infra/approval-handler-runtime.test.ts	3
+src/infra/approval-handler-runtime.test.ts	1
 src/infra/env.test.ts	2
 src/infra/http-body.response.test.ts	2
 src/infra/kysely-sync.test.ts	1

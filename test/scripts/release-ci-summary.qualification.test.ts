@@ -55,6 +55,35 @@ function consumers(
   };
 }
 
+function verifier(f: ReturnType<typeof candidatePublicationFixture>) {
+  return {
+    repository: f.repository,
+    runId: f.runId,
+    trustedWorkflowRef: f.publisherFullRef.slice("refs/tags/".length),
+    trustedWorkflowFullRef: f.publisherFullRef,
+    trustedWorkflowSha: f.p,
+    verifierSourceSha: f.p,
+    verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+  };
+}
+
+function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
+  return verifyNpmPreflightProducer({
+    manifest: f.npmManifest,
+    manifestSha256: sha256(f.npmManifestBytes),
+    repository: f.repository,
+    workflowFullRef: f.tooling.fullRef,
+    workflowSha: f.q,
+    workflowPath: ".github/workflows/full-release-validation.yml",
+    runId: f.runId,
+    runAttempt: "1",
+    fullReleaseManifest: f.manifest,
+    fullReleaseRunId: f.runId,
+    fullReleaseRunAttempt: "1",
+    runGh: f.runGh,
+  });
+}
+
 describe("candidate-owned publish consumer chain", () => {
   it.each(["same qualification", "changed candidate", "changed input", "changed P", "revoked P"])(
     "selects a direct admitted root across transport refs only for %s",
@@ -104,13 +133,8 @@ describe("candidate-owned publish consumer chain", () => {
       };
       const result = validateReleaseRunEvidence(
         {
-          repository: root.repository,
-          runId: root.runId,
-          trustedWorkflowRef: root.publisherFullRef.slice("refs/tags/".length),
-          trustedWorkflowFullRef: root.publisherFullRef,
-          trustedWorkflowSha: root.p,
+          ...verifier(root),
           verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
-          verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
           reuseRequest: {
             targetSha: root.q,
             releaseProfile: root.manifest.releaseProfile,
@@ -253,18 +277,7 @@ describe("candidate-owned publish consumer chain", () => {
           };
         },
       };
-      const validation = validateReleaseRunEvidence(
-        {
-          runId: current.runId,
-          repository: root.repository,
-          trustedWorkflowRef: current.publisherFullRef.slice("refs/tags/".length),
-          trustedWorkflowFullRef: current.publisherFullRef,
-          trustedWorkflowSha: current.p,
-          verifierSourceSha: current.p,
-          verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-        },
-        client,
-      );
+      const validation = validateReleaseRunEvidence(verifier(current), client);
       if (mode === "changed retained IDs") {
         await expect(validation).rejects.toThrow("Reused publication artifacts differ");
         return;
@@ -321,22 +334,7 @@ describe("candidate-owned publish consumer chain", () => {
     );
     expect(qualified.source).toBe("candidate-owned-admission-v1");
     await expect(consumers(f).npm()).resolves.toEqual(f.npmQualified);
-    expect(
-      verifyNpmPreflightProducer({
-        manifest: f.npmManifest,
-        manifestSha256: sha256(f.npmManifestBytes),
-        repository: f.repository,
-        workflowFullRef: f.tooling.fullRef,
-        workflowSha: f.q,
-        workflowPath: ".github/workflows/full-release-validation.yml",
-        runId: f.runId,
-        runAttempt: "1",
-        fullReleaseManifest: f.manifest,
-        fullReleaseRunId: f.runId,
-        fullReleaseRunAttempt: "1",
-        runGh: f.runGh,
-      }).provenance,
-    ).toBe("immutable-manifest");
+    expect(npmProducer(f).provenance).toBe("immutable-manifest");
     const outputDir = join(tempDirs.make("candidate-npm-consumption-"), "qualified");
     await downloadFullReleaseNpmPreflight({
       manifest: f.manifest,
@@ -406,22 +404,7 @@ describe("candidate-owned publish consumer chain", () => {
     const f = candidatePublicationFixture();
     await consumers(f).npm();
     f.npmArtifact.digest = "sha256:" + "f".repeat(64);
-    expect(() =>
-      verifyNpmPreflightProducer({
-        manifest: f.npmManifest,
-        manifestSha256: sha256(f.npmManifestBytes),
-        repository: f.repository,
-        workflowFullRef: f.tooling.fullRef,
-        workflowSha: f.q,
-        workflowPath: ".github/workflows/full-release-validation.yml",
-        runId: f.runId,
-        runAttempt: "1",
-        fullReleaseManifest: f.manifest,
-        fullReleaseRunId: f.runId,
-        fullReleaseRunAttempt: "1",
-        runGh: f.runGh,
-      }),
-    ).toThrow("artifact identity changed");
+    expect(() => npmProducer(f)).toThrow("artifact identity changed");
     f.dockerArtifacts[0]!.digest = "sha256:" + "f".repeat(64);
     await expect(consumers(f).docker()).rejects.toThrow("payload artifact changed");
     f.dockerArtifacts[0]!.digest = f.docker.architectures[0]!.artifact.digest;

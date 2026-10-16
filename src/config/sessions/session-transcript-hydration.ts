@@ -22,7 +22,7 @@ import {
   readSessionActorTranscriptContext,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
 import {
@@ -177,22 +177,9 @@ export function prepareSessionTranscriptHydration(
             owner.assertCurrent();
           };
           try {
-            return await readRestoredSessionTranscript(
-              target,
+            return await readRestoredSessionTranscriptInWorker(
+              { scope: target, resolved: resolvedScope, owner, assertCurrent: assertReadCurrent },
               () => readInWorker(owner, resolvedScope),
-              {
-                assertCurrent: assertReadCurrent,
-                coldRead: {
-                  target: resolvedScope,
-                  readMetadata: async () => {
-                    const metadata = await owner.readColdMetadata({
-                      sessionId: resolvedScope.sessionId,
-                      env: target.env,
-                    });
-                    return metadata.archive;
-                  },
-                },
-              },
             );
           } finally {
             // An absent-store reply must not hide a revoked read owner.
@@ -232,6 +219,7 @@ export function prepareSessionTranscriptHydration(
         { agentId: target.agentId, path: target.storePath, sessionId: target.sessionId },
         selection,
         retained?.tail,
+        retained?.anchors,
       );
       if (!transcript) {
         return undefined;
@@ -288,8 +276,8 @@ export function prepareSessionTranscriptHydration(
               env: scope.env,
             };
             // Restoration needs the writer too; leave FIFO before handling a cold miss.
-            await readRestoredSessionTranscript(
-              scope,
+            await readRestoredSessionTranscriptInWorker(
+              { scope, resolved, owner, assertCurrent: assertSource },
               () =>
                 runOpenClawAgentWriteAdmission(
                   database,
@@ -326,19 +314,6 @@ export function prepareSessionTranscriptHydration(
                   signal,
                   "history.hydration",
                 ),
-              {
-                assertCurrent: assertSource,
-                coldRead: {
-                  target: resolved,
-                  readMetadata: async () => {
-                    const metadata = await owner.readColdMetadata({
-                      sessionId: resolved.sessionId,
-                      env: scope.env,
-                    });
-                    return metadata.archive;
-                  },
-                },
-              },
             );
           },
           signal,

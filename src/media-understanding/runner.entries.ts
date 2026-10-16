@@ -22,7 +22,6 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
@@ -767,9 +766,6 @@ export async function runCliEntry(
       delete templCtx[key];
     }
     const argv = args.map((part) => applyTemplate(part, templCtx));
-    if (shouldLogVerbose()) {
-      logVerbose(`Media understanding via CLI: ${[command, ...argv].join(" ")}`);
-    }
     assertMediaExecutionCurrent(params.execution);
     const { stdout, stderr } = await runExec(command, argv, {
       timeoutMs,

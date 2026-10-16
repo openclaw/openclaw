@@ -92,6 +92,11 @@ export type PluginStateKeyRange = {
   order?: "asc" | "desc";
 };
 
+export type PluginStateKeyRangeParams = {
+  pluginId: string;
+  namespace: string;
+} & PluginStateKeyRange;
+
 export type PluginStateMoveEntries = {
   /** Bounded logical source namespace belonging to the same plugin. */
   namespace: string;
@@ -126,7 +131,7 @@ type PluginStateKeyedStoreBase<T> = {
   /**
    * The updater runs synchronously in the transaction; undefined leaves the entry unchanged.
    * @deprecated Use observe and compareAndApply to prepare data outside the worker transaction.
-   * This synchronous callback will be removed after a stable deprecation period.
+   * This synchronous callback will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
    */
   update?: (
     key: string,
@@ -136,7 +141,7 @@ type PluginStateKeyedStoreBase<T> = {
   /**
    * The synchronous predicate and conditional deletion run in one transaction.
    * @deprecated Use observe and compareAndApply, or deleteIfEqual for JSON scalars.
-   * This synchronous callback will be removed after a stable deprecation period.
+   * This synchronous callback will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
    */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   /** Atomically deletes a live entry equal to the supplied JSON scalar, without a callback. */
@@ -176,43 +181,43 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
 /**
  * Synchronous plugin-state compatibility contract.
  * @deprecated Use PluginStateKeyedStore<T, 2> from api.runtime.state.openKeyedStoreV2
- * and await its operations. This synchronous API will be removed after a stable deprecation period.
+ * and await its operations. This synchronous API will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
  */
 export type PluginStateSyncKeyedStore<T> = {
-  /** @deprecated Await PluginStateKeyedStore.register; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.register; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   register(key: string, value: T, opts?: { ttlMs?: number }): void;
-  /** @deprecated Await PluginStateKeyedStore.registerIfAbsent; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.registerIfAbsent; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
   /**
    * Expiry options are consumed after the synchronous updater returns.
-   * @deprecated Use observe and compareAndApply; removed after a stable deprecation period.
+   * @deprecated Use observe and compareAndApply; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
    */
   update?: (
     key: string,
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => boolean;
-  /** @deprecated Use observe and compareAndApply; removed after a stable deprecation period. */
+  /** @deprecated Use observe and compareAndApply; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
-  /** @deprecated Await PluginStateKeyedStore.lookup; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.lookup; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   lookup(key: string): T | undefined;
   /**
    * Positional outcomes for at most 10,000 keys; missing/expired values are undefined.
-   * @deprecated Await PluginStateKeyedStore.lookupMany; removed after a stable deprecation period.
+   * @deprecated Await PluginStateKeyedStore.lookupMany; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
    */
   lookupMany?: (keys: readonly string[]) => Array<Result<T | undefined, PluginStateStoreError>>;
-  /** @deprecated Await PluginStateKeyedStore.consume; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.consume; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   consume(key: string): T | undefined;
-  /** @deprecated Await PluginStateKeyedStore.delete; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.delete; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   delete(key: string): boolean;
-  /** @deprecated Await PluginStateKeyedStore.entries; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.entries; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   entries(): PluginStateEntry<T>[];
   /**
    * Counts live stored rows without decoding values; absent on older hosts and adapters.
-   * @deprecated Await PluginStateKeyedStore.count; removed after a stable deprecation period.
+   * @deprecated Await PluginStateKeyedStore.count; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
    */
   count?: () => number;
-  /** @deprecated Await PluginStateKeyedStore.clear; removed after a stable deprecation period. */
+  /** @deprecated Await PluginStateKeyedStore.clear; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
   clear(): void;
 };
 

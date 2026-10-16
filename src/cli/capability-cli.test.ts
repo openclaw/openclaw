@@ -1485,6 +1485,7 @@ describe("capability cli", () => {
         ? undefined
         : await outputFixture(".mp4", "previous-video");
       await generateVideo(...(fixture ? ["--output", fixture.outputBase] : []));
+      expect(firstVideoGenerationCall()?.durationSeconds).toBeUndefined();
       const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
       expect(fetchCalls[0]?.[0]).toBe(url);
       const output = firstJsonOutput();
@@ -1564,56 +1565,63 @@ describe("capability cli", () => {
     expect(runtimeErrorMessages().join("\n")).not.toContain("/private-video.mp4");
   });
 
-  it("passes video generation parameters through to runtime", async () => {
-    mocks.generateVideo.mockResolvedValue({
-      provider: "minimax",
-      model: "MiniMax-Hailuo-2.3",
-      attempts: [],
-      ignoredOverrides: [
+  it.each([
+    ["2.5", 2.5],
+    ["0.5", 0.5],
+    ["2e0", 2],
+  ] as const)(
+    "passes video duration %s and generation parameters through to runtime",
+    async (duration, expected) => {
+      mocks.generateVideo.mockResolvedValue({
+        provider: "minimax",
+        model: "MiniMax-Hailuo-2.3",
+        attempts: [],
+        ignoredOverrides: [
+          { key: "audio", value: true },
+          { key: "watermark", value: true },
+        ],
+        videos: [
+          {
+            buffer: Buffer.from("video-bytes"),
+            mimeType: "video/mp4",
+            fileName: "provider-name.mp4",
+          },
+        ],
+      });
+
+      await generateVideo(
+        "--model",
+        "minimax/MiniMax-Hailuo-2.3",
+        "--size",
+        "1280x768",
+        "--aspect-ratio",
+        "16:9",
+        "--resolution",
+        "768p",
+        "--duration",
+        duration,
+        "--audio",
+        "--watermark",
+        "--timeout-ms",
+        "300000",
+      );
+
+      const videoCall = firstVideoGenerationCall();
+      expect(videoCall?.prompt).toBe("friendly lobster");
+      expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
+      expect(videoCall?.size).toBe("1280x768");
+      expect(videoCall?.aspectRatio).toBe("16:9");
+      expect(videoCall?.resolution).toBe("768P");
+      expect(videoCall?.durationSeconds).toBe(expected);
+      expect(videoCall?.audio).toBe(true);
+      expect(videoCall?.watermark).toBe(true);
+      expect(videoCall?.timeoutMs).toBe(300000);
+      expect(firstJsonOutput()?.ignoredOverrides).toEqual([
         { key: "audio", value: true },
         { key: "watermark", value: true },
-      ],
-      videos: [
-        {
-          buffer: Buffer.from("video-bytes"),
-          mimeType: "video/mp4",
-          fileName: "provider-name.mp4",
-        },
-      ],
-    });
-
-    await generateVideo(
-      "--model",
-      "minimax/MiniMax-Hailuo-2.3",
-      "--size",
-      "1280x768",
-      "--aspect-ratio",
-      "16:9",
-      "--resolution",
-      "768p",
-      "--duration",
-      "2.5",
-      "--audio",
-      "--watermark",
-      "--timeout-ms",
-      "300000",
-    );
-
-    const videoCall = firstVideoGenerationCall();
-    expect(videoCall?.prompt).toBe("friendly lobster");
-    expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
-    expect(videoCall?.size).toBe("1280x768");
-    expect(videoCall?.aspectRatio).toBe("16:9");
-    expect(videoCall?.resolution).toBe("768P");
-    expect(videoCall?.durationSeconds).toBe(2.5);
-    expect(videoCall?.audio).toBe(true);
-    expect(videoCall?.watermark).toBe(true);
-    expect(videoCall?.timeoutMs).toBe(300000);
-    expect(firstJsonOutput()?.ignoredOverrides).toEqual([
-      { key: "audio", value: true },
-      { key: "watermark", value: true },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("fails video generate when a provider returns an undeliverable asset", async () => {
     mocks.generateVideo.mockResolvedValue({
@@ -1728,7 +1736,7 @@ describe("capability cli", () => {
       "capability",
       ["video", "generate", "--prompt", "clip", "--duration"],
       "   ",
-      "--duration must be a finite number",
+      "--duration must be a positive duration (1–9007199254740991s after rounding",
     ],
   ] as const)(
     "rejects blank numeric input before %s %j dispatch",
@@ -1742,6 +1750,19 @@ describe("capability cli", () => {
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
       expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
+    "rejects invalid video duration %s before dispatch",
+    async (duration) => {
+      await expect(generateVideo("--duration", duration)).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains(
+        "--duration must be a positive duration (1–9007199254740991s after rounding; e.g. 1, 2.5, 10).",
+      );
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
       expect(mocks.generateVideo).not.toHaveBeenCalled();
     },
   );

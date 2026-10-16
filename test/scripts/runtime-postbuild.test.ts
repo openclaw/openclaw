@@ -2193,6 +2193,10 @@ describe("previous release update compatibility", () => {
     ["config-doctor", "missing"],
     ["native-hook-relay", "present"],
     ["native-hook-relay", "missing"],
+    ["state/openclaw-state-read-inspect", "present"],
+    ["state/openclaw-state-read-inspect", "missing"],
+    ["infra/sqlite-readonly-inspect", "present"],
+    ["infra/sqlite-readonly-inspect", "missing"],
     ["control-ui", "present"],
     ["control-ui", "missing"],
     ["control-ui.build-123-fixture", "present"],
@@ -2206,7 +2210,10 @@ describe("previous release update compatibility", () => {
       const root = createTempDir("update-compat-isolated-graph-");
       candidate(root);
       const current = path.join(root, "dist/current.mjs");
-      write(root, `dist/${directory}/inspect.mjs`, fsSync.readFileSync(current, "utf8"));
+      const isolatedPath = directory.includes("/")
+        ? `dist/${directory}-abcdefgh.mjs`
+        : `dist/${directory}/inspect.mjs`;
+      write(root, isolatedPath, fsSync.readFileSync(current, "utf8"));
       const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
       if (runtime === "missing") {
         fsSync.unlinkSync(current);

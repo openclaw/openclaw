@@ -111,8 +111,8 @@ it("the real reloader restores the working connection after failed credential ac
       const adapter = watcher.attach(options);
       return {
         ...adapter,
-        start() {
-          adapter.start();
+        async start() {
+          await adapter.start();
           watcher.emit("ready");
         },
       };

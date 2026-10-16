@@ -240,7 +240,6 @@ export function registerEmbeddedBackendStreamTests({
         data: { itemId: "failed", text: "Failed draft", delta: "Failed draft" },
       });
       for (const data of [
-        { itemId: "failed", text: "NO_REPLY" },
         {
           itemId: "failed",
           text: `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate runtime detail\n${INTERNAL_RUNTIME_CONTEXT_END}`,

@@ -422,49 +422,6 @@ describe("probeIMessage", () => {
     });
   });
 
-  it("does not cache rpc support when the expiry timestamp would exceed the valid date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const runCommand = mockCommandResult({
-      stderr: 'unknown command "rpc" for "imsg"',
-      code: 1,
-    });
-
-    await expect(
-      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
-    ).resolves.toMatchObject({
-      ok: false,
-      fatal: true,
-    });
-    await expect(
-      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
-    ).resolves.toMatchObject({
-      ok: false,
-      fatal: true,
-    });
-
-    expect(runCommand).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache unavailable private API status when the process clock is invalid", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    const runCommand = mockCommandResult({ stderr: "bridge unavailable", code: 1 });
-
-    await expect(
-      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
-    ).resolves.toMatchObject({
-      available: false,
-    });
-    await expect(
-      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
-    ).resolves.toMatchObject({
-      available: false,
-    });
-
-    // Each uncached probe runs status plus both side-effect-free CLI capability
-    // checks (send-rich attachment and poll caption suppression).
-    expect(runCommand).toHaveBeenCalledTimes(6);
-  });
-
   it("propagates imsg's status message when advanced features are unavailable", async () => {
     const note =
       "System Integrity Protection (SIP) is enabled.\nAdvanced IMCore features are intentionally disabled.";

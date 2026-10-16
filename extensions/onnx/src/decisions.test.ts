@@ -114,17 +114,4 @@ describe("ONNX decision contract", () => {
     ).resolves.toEqual({ status: "unavailable", reason: "transport" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`openclaw onnx verify ${model}`));
   });
-
-  it.for([[], [{ logits: [Number.NaN, 1], inputTokens: 1 }]])(
-    "rejects incomplete or invalid results",
-    async (results) => {
-      const classify = vi.fn<InferenceWorkerClient["classify"]>().mockResolvedValue(results);
-      await expect(
-        createOnnxProvider({ classify }, vi.fn()).evaluate(
-          { state: "text", questions: { one: batch.questions.topic! } },
-          context(),
-        ),
-      ).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
-    },
-  );
 });

@@ -190,11 +190,10 @@ function createQaSuiteScenarioDeps(
     });
   const markLogs = params.env.gateway.markLogs;
   const readLogsSince = params.env.gateway.readLogsSince;
-  let monotonicGatewayLogs =
+  const monotonicGatewayLogs =
     typeof markLogs === "function" && typeof readLogsSince === "function"
       ? { mark: markLogs, readSince: readLogsSince }
       : undefined;
-  const fullLegacyGatewayLogSnapshotMark = -1;
   const readGatewayLogs = (mark?: number) => {
     if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
       return monotonicGatewayLogs.readSince(mark);
@@ -216,17 +215,7 @@ function createQaSuiteScenarioDeps(
     webSnapshot: webRuntime.qaWebSnapshot,
     webEvaluate: webRuntime.qaWebEvaluate,
     readGatewayLogs,
-    markGatewayLogCursor: () => {
-      if (monotonicGatewayLogs) {
-        const mark = monotonicGatewayLogs.mark();
-        if (isValidGatewayLogMark(mark)) {
-          return mark;
-        }
-        monotonicGatewayLogs = undefined;
-        return fullLegacyGatewayLogSnapshotMark;
-      }
-      return fullLegacyGatewayLogSnapshotMark;
-    },
+    markGatewayLogCursor: () => monotonicGatewayLogs?.mark() ?? -1,
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
       scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
     assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>

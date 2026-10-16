@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -27,7 +28,12 @@ import {
   drainSessionDiskBudgetWorkers,
   measureSessionPhysicalDiskUsage,
 } from "./disk-budget-runtime.js";
+import * as diskBudgetModule from "./disk-budget.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.transcript.js";
 import * as archivePruningDiagnostics from "./session-history-archive-pruning-diagnostics.js";
 import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import {
@@ -425,3 +431,206 @@ it.each(["transaction", "iterator"] as const)(
     }
   },
 );
+
+it("retries retained WAL after a complete passive checkpoint and reader release on the budget cadence", async () => {
+  state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  ensureSessionTranscriptArchiveSchema(database.db);
+  database.db.exec("PRAGMA wal_autocheckpoint=0");
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const payload = Buffer.alloc(512 * 1024, 65);
+  database.db
+    .prepare(
+      "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES ('wal-proof','traffic',?,1)",
+    )
+    .run(payload);
+  const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+  reader.exec("BEGIN");
+  expect(
+    reader.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
+  ).toEqual(new Uint8Array(payload));
+  const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
+  const observePruning = archivePruningDiagnostics.observeSessionArchivePruning;
+  vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
+    async <T>(...args: Parameters<typeof observePruning<T>>) => {
+      const result = await observePruning(...args);
+      diagnostics.push(structuredClone(args[0]));
+      return result;
+    },
+  );
+  const maintenance = resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxDiskBytes: 1,
+    highWaterBytes: 1,
+  });
+  const params = { ...options, storePath, mode: "enforce" as const, maintenance };
+  try {
+    await enforceSqliteSessionHistoryDiskBudget(params);
+    await expect(enforceSqliteSessionHistoryDiskBudget(params)).resolves.toMatchObject({
+      freedBytes: 0,
+      removedEntries: 0,
+      removedFiles: 0,
+    });
+    expect(diagnostics.at(-1)).toMatchObject({
+      checkpointCalls: 2,
+      checkpointIncomplete: 0,
+      checkpoint: { state: "complete" },
+    });
+    expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
+    const before = await measureSessionPhysicalDiskUsage(storePath);
+    expect(before.databaseWalBytes).toBeGreaterThan(0);
+    reader.exec("ROLLBACK");
+    expect((await measureSessionPhysicalDiskUsage(storePath)).databaseWalBytes).toBe(
+      before.databaseWalBytes,
+    );
+    await expect(inspectSqliteSessionHistoryDiskBudget(params)).resolves.toMatchObject({
+      wouldMutate: false,
+    });
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    await withSessionHistoryBudgetSweepsForTest(async () => {
+      kickSessionHistoryDiskBudgetMaintenance({
+        ...options,
+        storePath,
+        maintenanceConfig: maintenance,
+      });
+    });
+    expect((await measureSessionPhysicalDiskUsage(storePath)).databaseWalBytes).toBe(
+      before.databaseWalBytes,
+    );
+    clock.mockReturnValue(now + 31 * 60_000);
+    await withSessionHistoryBudgetSweepsForTest(async () => {
+      kickSessionHistoryDiskBudgetMaintenance({
+        ...options,
+        storePath,
+        maintenanceConfig: maintenance,
+      });
+    });
+    const after = await measureSessionPhysicalDiskUsage(storePath);
+    expect(after.databaseWalBytes).toBe(0);
+    expect(after.totalBytes).toBeLessThan(before.totalBytes);
+    expect(
+      database.db.prepare("SELECT blob FROM cache_entries WHERE scope='wal-proof'").get()?.blob,
+    ).toEqual(new Uint8Array(payload));
+  } finally {
+    reader.close();
+  }
+});
+
+it("coalesces forced kicks during and after a sweep until the one-minute interval expires", async () => {
+  state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
+  const tempDir = state.sessionsDir();
+  const storePath = path.join(tempDir, "sessions.json");
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const measurement = vi
+    .spyOn(diskBudgetModule, "measureSessionPhysicalDiskUsage")
+    .mockResolvedValue({
+      databaseMainBytes: 0,
+      databaseWalBytes: 0,
+      sessionFilesBytes: 0,
+      totalBytes: 0,
+    });
+  const maintenanceConfig = resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxDiskBytes: 1,
+    highWaterBytes: 1,
+  });
+  const kick = (locator = storePath) =>
+    kickSessionHistoryDiskBudgetMaintenance({
+      storePath: locator,
+      force: true,
+      maintenanceConfig,
+    });
+  const settle = async () => {
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  };
+  kick();
+  for (let index = 0; index < 10; index++) {
+    kick(path.join(path.dirname(tempDir), "agent", "openclaw-agent.sqlite"));
+  }
+  await settle();
+  expect(measurement).toHaveBeenCalledOnce();
+
+  clock.mockReturnValue(now + 59_999);
+  kick(path.join(path.dirname(tempDir), "agent", "openclaw-agent.sqlite"));
+  await settle();
+  expect(measurement).toHaveBeenCalledOnce();
+
+  clock.mockReturnValue(now + 60_000);
+  kick();
+  await settle();
+  expect(measurement).toHaveBeenCalledTimes(2);
+});
+
+it("reclaims newly freed pages after rewriting a protected current transcript", async () => {
+  state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = { storePath, sessionKey: "agent:main:locked-budget", sessionId: "locked-budget" };
+  await withSessionHistoryBudgetSweepsForTest(async () => {
+    await replaceSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      modelSelectionLocked: true,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "large-answer",
+      message: { role: "assistant", content: randomBytes(512 * 1024).toString("hex") },
+    });
+  });
+  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  const maintenance = resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxDiskBytes: 1,
+    highWaterBytes: 1,
+  });
+  const params = { storePath, mode: "enforce" as const, maintenance };
+  await expect(enforceSqliteSessionHistoryDiskBudget(params)).resolves.toMatchObject({
+    removedEntries: 0,
+    removedFiles: 0,
+  });
+  // Settle any initial allocation; this pass records protected pressure with no work left.
+  await expect(enforceSqliteSessionHistoryDiskBudget(params)).resolves.toMatchObject({
+    freedBytes: 0,
+  });
+  const before = await measureSessionPhysicalDiskUsage(storePath);
+  const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "large-answer" });
+  assert(anchor);
+  await expect(
+    rewriteTranscriptMessageAtAnchor(anchor, () => ({
+      role: "assistant",
+      content: "short answer",
+    })),
+  ).resolves.toMatchObject({ message: { content: "short answer" } });
+  expect(database.walMaintenance.checkpoint()).toBe(true);
+  expect(
+    Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count),
+  ).toBeGreaterThan(0);
+  // Manual preview continues to report definite logical reclamation only.
+  await expect(inspectSqliteSessionHistoryDiskBudget(params)).resolves.toMatchObject({
+    wouldMutate: false,
+  });
+  const now = Date.now() + 31 * 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  await withSessionHistoryBudgetSweepsForTest(async () => {
+    kickSessionHistoryDiskBudgetMaintenance({ storePath, maintenanceConfig: maintenance, now });
+  });
+  const after = await measureSessionPhysicalDiskUsage(storePath);
+  expect(after.databaseMainBytes).toBeLessThan(before.databaseMainBytes);
+  expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
+  expect(
+    database.db
+      .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+      .get(scope.sessionKey),
+  ).toEqual({ current_session_id: scope.sessionId });
+});

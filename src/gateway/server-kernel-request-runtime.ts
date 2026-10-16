@@ -35,7 +35,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
-    lifecycle,
     startupState,
     shutdownRuntime,
   } = runtime;
@@ -166,7 +165,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
-    isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
+    // Request entry fences new calls during the prelude. Retained principals
+    // stay current until run shutdown records recovery and cancels execution.
+    isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
     prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
@@ -190,7 +191,12 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
-          if (!gatewayInstanceRuntime.isAvailable()) {
+          // Host control creates new effects; retained reply principals can remain
+          // current during recovery marking without admitting host start/stop.
+          if (
+            runtime.requestEntryLifetime.signal.aborted ||
+            !gatewayInstanceRuntime.isAvailable()
+          ) {
             throw new Error(
               "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
             );

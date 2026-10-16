@@ -8,17 +8,15 @@ import type {
   ModelCatalogEntry,
   ModelCatalogResult,
 } from "../../api/types.ts";
-import "../../components/agent-emoji-picker.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
-import {
-  renderDecisionModelPicker,
-  type DecisionModelEntry,
-} from "../../components/decision-model-picker.ts";
-import "../../components/multi-select-registration.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
-import "../../components/tooltip.ts";
+import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
+import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
+import { MultiSelect } from "../../components/multi-select.tsx";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import "../../components/tooltip.ts";
+import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import {
@@ -34,12 +32,10 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
@@ -76,15 +72,9 @@ export function AgentOverview(
     onSelectPanel: (panel: AgentsPanel) => void;
   },
 ) {
-  const avatarHost = new ControllerHost();
-  const avatarLoader = new IdentityAvatarController(avatarHost);
-  avatarHost.connect();
-  onCleanup(() => avatarHost.disconnect());
-  const avatarProjection = projectSource(avatarHost, {
-    read: (host) => host,
-    subscribe: (host, notify) => host.subscribe(notify),
-    equality: "revision",
-  });
+  const avatarLoader = createIdentityAvatars();
+  onCleanup(avatarLoader.connect());
+  const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
   );
@@ -130,6 +120,33 @@ export function AgentOverview(
   );
   const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
   const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
+  const primaryModelOptions = createMemo(() => {
+    const inherited = defaultPrimary();
+    return [
+      {
+        value: "",
+        label: isDefault()
+          ? t("agents.overview.notSet")
+          : inherited
+            ? t("agents.overview.inheritDefaultModel", { model: inherited })
+            : t("agents.overview.inheritDefault"),
+      },
+      ...buildModelOptions(
+        configForm(),
+        effectivePrimary() ?? undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
+  });
+  const decisionModel = createMemo(() => {
+    const value = config().entry?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
+  const inheritedDecisionModel = createMemo(() => {
+    const value = config().defaults?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
   const modelFallbacks = createMemo(
     () =>
       resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
@@ -160,12 +177,11 @@ export function AgentOverview(
     identityDraft().avatar ? null : resolveAgentAvatarUrl(params.agent, params.agentIdentity),
   );
   const identityAvatarUrl = createMemo(() => {
-    avatarProjection.revision();
     const source = persistedAvatarUrl();
     const draftAvatar = identityDraft().avatar;
-    return avatarLoader.withActiveRoutes(
-      () => draftAvatar ?? (source ? avatarLoader.resolve(source) : null),
-    );
+    return avatarProjection
+      .read()
+      .withActiveRoutes(() => draftAvatar ?? (source ? avatarLoader.resolve(source) : null));
   });
   const identityImageError = createMemo(() => {
     identityAvatarUrl();
@@ -228,20 +244,15 @@ export function AgentOverview(
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
-              <LitContent
-                render={() =>
-                  renderAgentIdentityAvatar(
-                    {
-                      id: params.agent.id,
-                      avatar: identityAvatarUrl(),
-                      textAvatar:
-                        identityDraft().emoji ??
-                        resolveAgentTextAvatar(params.agent, params.agentIdentity),
-                    },
-                    "",
-                    identityImageError(),
-                  )
-                }
+              <AgentIdentityAvatar
+                agent={{
+                  id: params.agent.id,
+                  avatar: identityAvatarUrl(),
+                  textAvatar:
+                    identityDraft().emoji ??
+                    resolveAgentTextAvatar(params.agent, params.agentIdentity),
+                }}
+                onImageError={identityImageError()}
               />
             </span>
             <div class="agent-identity-editor__content">
@@ -276,10 +287,10 @@ export function AgentOverview(
                         }
                       }}
                     />
-                    <openclaw-agent-emoji-picker
-                      prop:value={identityEmoji()}
-                      prop:disabled={identityBusy()}
-                      prop:onSelect={(emoji: string) =>
+                    <AgentEmojiPicker
+                      value={identityEmoji()}
+                      disabled={identityBusy()}
+                      onSelect={(emoji: string) =>
                         params.onIdentityFieldChange("emoji", limitEmoji(emoji))
                       }
                     />
@@ -381,35 +392,13 @@ export function AgentOverview(
         <SettingsRow
           title={primaryModelLabel()}
           control={
-            <LitContent
-              render={() => {
-                const inherited = defaultPrimary();
-                return renderModelPicker({
-                  label: primaryModelLabel(),
-                  value: selectedPrimary() ?? "",
-                  options: [
-                    {
-                      value: "",
-                      label: isDefault()
-                        ? t("agents.overview.notSet")
-                        : inherited
-                          ? t("agents.overview.inheritDefaultModel", {
-                              model: inherited,
-                            })
-                          : t("agents.overview.inheritDefault"),
-                    },
-                    ...buildModelOptions(
-                      configForm(),
-                      effectivePrimary() ?? undefined,
-                      params.modelCatalog,
-                      params.agent.id,
-                    ),
-                  ],
-                  disabled: disabled(),
-                  onChange: (value) => params.onModelChange(params.agent.id, value || null),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <ModelPicker
+              label={primaryModelLabel()}
+              value={selectedPrimary() ?? ""}
+              options={primaryModelOptions()}
+              disabled={disabled()}
+              onChange={(value) => params.onModelChange(params.agent.id, value || null)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />
@@ -417,26 +406,14 @@ export function AgentOverview(
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
-            <LitContent
-              render={() => {
-                const agentConfig = config();
-                const decisionModel = agentConfig.entry?.decisionModel;
-                const inheritedDecisionModel = agentConfig.defaults?.decisionModel;
-                return renderDecisionModelPicker({
-                  id: "agent-decision-model",
-                  models: params.decisionModels,
-                  value: typeof decisionModel === "string" ? decisionModel : undefined,
-                  inherit: {
-                    model:
-                      typeof inheritedDecisionModel === "string"
-                        ? inheritedDecisionModel
-                        : undefined,
-                  },
-                  disabled: disabled(),
-                  onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <DecisionModelPicker
+              id="agent-decision-model"
+              models={params.decisionModels}
+              value={decisionModel()}
+              inherit={{ model: inheritedDecisionModel() }}
+              disabled={disabled()}
+              onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />
@@ -444,20 +421,18 @@ export function AgentOverview(
           title={t("agents.overview.fallbacks")}
           stacked={true}
           control={
-            <openclaw-multi-select
+            <MultiSelect
               class="agent-fallbacks"
-              prop:options={fallbackOptions()}
-              prop:value={fallbackChips()}
-              prop:isExcluded={isPrimaryModel()}
-              prop:getValueKey={normalizeAgentModelRefForConfig}
-              prop:placeholder={t("agents.overview.addFallback")}
-              prop:accessibleLabel={t("agents.overview.fallbacks")}
-              prop:allowCustom={!catalogOwnsChoices()}
-              prop:disabled={disabled()}
-              prop:onChange={(next: string[]) =>
-                params.onModelFallbacksChange(params.agent.id, next)
-              }
-              prop:onOpen={params.onModelCatalogOpen}
+              options={fallbackOptions()}
+              value={fallbackChips()}
+              isExcluded={isPrimaryModel()}
+              getValueKey={normalizeAgentModelRefForConfig}
+              placeholder={t("agents.overview.addFallback")}
+              accessibleLabel={t("agents.overview.fallbacks")}
+              allowCustom={!catalogOwnsChoices()}
+              disabled={disabled()}
+              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />

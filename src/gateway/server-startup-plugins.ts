@@ -3,6 +3,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
   collectRegisteredEmbeddingProviderIds,
@@ -12,7 +13,6 @@ import {
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getRegisteredEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   completePluginMetadataSnapshot,
@@ -127,7 +127,9 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
       } catch (error) {
         if (!params.signal.aborted) {
-          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
+          params.log.warn(
+            `Gateway post-ready ${name} maintenance failed: ${formatErrorMessageWithCode(error)}`,
+          );
         }
       }
     }),
@@ -394,12 +396,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
     ).catch((error: unknown) => {
       params.log.warn(`Memory embedding setup checks failed: ${String(error)}`);
     });
-    const metadata = getPluginRuntimeLoadContext(loaded.pluginRegistry)?.metadataSnapshot;
-    const { settlePluginNativeAdmissions } =
-      await import("../plugins/plugin-native-admission-state.js");
-    await settlePluginNativeAdmissions(
-      metadata ? getPluginMetadataSnapshotCache(metadata) : undefined,
-    );
     return loaded;
   } catch (error) {
     loaded.retireGatewayRuntimeBindings();

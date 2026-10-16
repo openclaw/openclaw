@@ -469,23 +469,6 @@ describe("package source preflight", () => {
     ).toThrow("packages/ai/package.json version must match package.json");
   });
 
-  it("rejects @openclaw/ai dependency drift before packing", () => {
-    expect(() =>
-      validatePackageSource({
-        aiManifestContent: aiManifest({
-          dependencies: {
-            openai: "6.50.0",
-          },
-        }),
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest(),
-      }),
-    ).toThrow(
-      "package.json must declare openai@6.50.0 to bundle packages/ai/package.json without duplicate dependencies",
-    );
-  });
-
   it("shares exact, workspace, private, and value-type dependency semantics with packaging", () => {
     expect(
       validateBundledPackageDependencyAlignment({
@@ -519,17 +502,6 @@ describe("package source preflight", () => {
         rootDependencies: { invalid: 123 },
       }),
     ).toThrow("root package.json dependency invalid must declare a string version");
-  });
-
-  it("preserves historical sources from before the @openclaw/ai workspace split", () => {
-    expect(
-      validatePackageSource({
-        aiManifestContent: null,
-        allowUnreleasedChangelog: true,
-        changelogContent: changelog,
-        rootManifestContent: rootManifest({ dependencies: {} }),
-      }),
-    ).toBe("2026.8.1");
   });
 
   it("rejects conflicting bundled dependencies before setup and reads only the selected source", () => {

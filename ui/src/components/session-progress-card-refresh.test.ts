@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { nothing, render } from "lit";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  renderSessionProgressCard,
-  type SessionProgressCardRefreshAction,
-} from "./session-progress-card.ts";
+import type { SessionProgressCardProps } from "./session-progress-card-solid.tsx";
+import { renderProgressCard as render } from "./session-progress-card.test-support.tsx";
+import type { SessionProgressCardRefreshAction } from "./session-progress-card.ts";
 
 const containers: HTMLElement[] = [];
 function createContainer() {
@@ -36,41 +35,48 @@ describe("progress card refresh control", () => {
   });
   afterEach(() => {
     for (const container of containers.splice(0)) {
-      render(nothing, container);
+      render(null, container);
       container.remove();
     }
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
   it.each([false, true])(
-    "refreshes from the header without toggling or dragging (collapsed: %s)",
+    "refreshes from the options menu without toggling or dragging (collapsed: %s)",
     async (collapsed) => {
       const onRefresh = vi.fn();
       const onManipulate = vi.fn();
       const container = createContainer();
       const show = (state?: SessionProgressCardRefreshAction["state"]) =>
         render(
-          renderSessionProgressCard(
-            progressCard,
-            "composer",
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            true,
-            collapsed,
-            { onManipulate },
-            { onRefresh, state },
-          ),
+          {
+            card: progressCard,
+            placement: "composer",
+            hasActiveRun: true,
+            collapseComposerByDefault: collapsed,
+            composerDisclosureContext: { onManipulate },
+            refreshAction: { onRefresh, state },
+          },
           container,
         );
       show();
       await Promise.resolve();
+      const options = container.querySelector<HTMLButtonElement>(
+        ".session-progress-card__options",
+      )!;
+      const openMenu = async () => {
+        if (options.getAttribute("aria-expanded") !== "true") {
+          options.click();
+          flush();
+          await vi.waitFor(() => expect(options.getAttribute("aria-expanded")).toBe("true"));
+        }
+      };
+      await openMenu();
       const details = container.querySelector("details")!;
       const summary = container.querySelector("summary")!;
       const button = container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")!;
       expect(button.closest(".session-progress-card__summary-expanded")).toBeNull();
-      expect(button.getAttribute("aria-label")).toBe("Refresh task progress");
+      expect(button.textContent).toContain("Refresh task progress");
       expect(button.querySelector("svg path")).not.toBeNull();
       const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, clientY: 100 });
       Object.defineProperties(down, { isPrimary: { value: true }, pointerId: { value: 1 } });
@@ -81,6 +87,7 @@ describe("progress card refresh control", () => {
       expect(onManipulate).not.toHaveBeenCalled();
       expect(details.open).toBe(!collapsed);
       show("pending");
+      await openMenu();
       expect(button.disabled).toBe(true);
       expect(button.getAttribute("aria-busy")).toBe("true");
       button.click();
@@ -94,7 +101,7 @@ describe("progress card refresh control", () => {
       show("failed");
       expect(container.textContent).not.toContain("Use refresh to retry");
       expect(button.disabled).toBe(false);
-      expect(button.getAttribute("aria-label")).toBe("Retry progress refresh");
+      expect(button.textContent).toContain("Retry progress refresh");
       expect(container.querySelector("[role=status]")?.textContent).toContain(
         "Previous update kept",
       );
@@ -109,6 +116,8 @@ describe("progress card refresh control", () => {
       show("updated");
       expect(container.querySelector("[role=status]")?.textContent).toBe("Task progress updated");
       expect(details.open).toBe(!collapsed);
+      options.click();
+      flush();
       summary.click();
       expect(details.open).toBe(collapsed);
     },
@@ -117,15 +126,14 @@ describe("progress card refresh control", () => {
   it("uses a fresh saved timestamp rather than an older completed run after reload", () => {
     const container = createContainer();
     render(
-      renderSessionProgressCard(
-        { ...progressCard, updatedAt: NOW_MS },
-        "composer",
-        undefined,
-        "done",
-        NOW_MS - 120_000,
-        NOW_MS - 60_000,
-        false,
-      ),
+      {
+        card: { ...progressCard, updatedAt: NOW_MS },
+        placement: "composer",
+        sessionStatus: "done",
+        startedAt: NOW_MS - 120_000,
+        endedAt: NOW_MS - 60_000,
+        hasActiveRun: false,
+      },
       container,
     );
     expect(container.querySelector("time")?.textContent).toBe("Updated just now");
@@ -139,18 +147,13 @@ describe("progress card refresh control", () => {
   it("does not expose refresh on read-only board cards", () => {
     const container = createContainer();
     render(
-      renderSessionProgressCard(
-        progressCard,
-        "board",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-        false,
-        undefined,
-        { onRefresh: vi.fn() },
-      ),
+      {
+        card: progressCard,
+        placement: "board",
+        hasActiveRun: true,
+        collapseComposerByDefault: false,
+        refreshAction: { onRefresh: vi.fn() },
+      },
       container,
     );
     expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
@@ -158,8 +161,7 @@ describe("progress card refresh control", () => {
 
   it("retains manual disclosure across card updates and retires absent cards", () => {
     const container = createContainer();
-    const show = (card: ProgressCard | null) =>
-      render(renderSessionProgressCard(card, "composer"), container);
+    const show = (card: ProgressCard | null) => render({ card, placement: "composer" }, container);
     show(null);
     expect(container.querySelector("details")).toBeNull();
     show(progressCard);
@@ -174,13 +176,14 @@ describe("progress card refresh control", () => {
     expect(container.querySelector("details")).toBeNull();
     // Deliver jsdom's queued details toggle without advancing the 30s activity interval.
     vi.advanceTimersByTime(0);
+    flush();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it("retires disclosure listeners when changing to a board card", () => {
     const container = createContainer();
-    const show = (placement: Parameters<typeof renderSessionProgressCard>[1]) =>
-      render(renderSessionProgressCard(progressCard, placement), container);
+    const show = (placement: SessionProgressCardProps["placement"]) =>
+      render({ card: progressCard, placement }, container);
     show("composer");
     const details = container.querySelector("details")!;
     const summary = details.querySelector("summary")!;
@@ -192,24 +195,27 @@ describe("progress card refresh control", () => {
     expect(click.defaultPrevented).toBe(false);
     // Settle native toggle delivery and deferred scroll geometry before counting activity timers.
     vi.advanceTimersToNextFrame();
+    flush();
     expect(vi.getTimerCount()).toBe(1);
     show("details");
     expect(container.querySelector("details")?.open).toBe(true);
     vi.advanceTimersToNextFrame();
+    flush();
     expect(vi.getTimerCount()).toBe(1);
   });
 
   it("refreshes relative activity while mounted and clears its timer on unmount", () => {
     const container = createContainer();
     render(
-      renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
+      { card: { ...progressCard, updatedAt: NOW_MS - 10_000 }, placement: "composer" },
       container,
     );
     const time = container.querySelector("time")!;
     expect(time.textContent).toBe("Updated just now");
     vi.advanceTimersByTime(60_000);
+    flush();
     expect(time.textContent).toBe("Updated 1m ago");
-    render(nothing, container);
+    render(null, container);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

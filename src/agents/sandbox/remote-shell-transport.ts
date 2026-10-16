@@ -86,7 +86,7 @@ export function createRemoteShellSandboxSession(
       });
     };
     // Released guards cannot retain foreign-writer authority across broker IPC.
-    // Keep the final check and native launch synchronous until the next SDK major.
+    // Keep the final check and native launch synchronous while these guards remain supported.
     const result = await (checkCurrent && options.assertCurrent
       ? runWithSpawnBroker(undefined, launch)
       : launch());

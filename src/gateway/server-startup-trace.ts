@@ -58,6 +58,20 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "runtime.worker-pool-metrics",
   "ready",
 ]);
+const RECOVERY_PHASE = "sidecars.subagent-recovery";
+const RECOVERY_TIMINGS = new Map([
+  ["sidecars.recovery-readers", "readersMs"],
+  ["sidecars.delivery-recovery", "deliveryMs"],
+  ["sidecars.delivery-discovery", "deliveryDiscoveryMs"],
+  ["sidecars.delivery-entries", "deliveryEntriesMs"],
+  ["sidecars.delivery-history", "deliveryHistoryMs"],
+  ["sidecars.delivery-replay", "deliveryReplayMs"],
+  ["sidecars.delivery-notices", "deliveryNoticesMs"],
+  ["sidecars.delivery-retry-wait", "retryWaitMs"],
+  ["sidecars.exec-recovery", "execMs"],
+  ["sidecars.subagent-load", "registryLoadMs"],
+  ["sidecars.subagent-activation", "registryActivationMs"],
+]);
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -107,6 +121,7 @@ export function createGatewayStartupTrace(
   let last = started;
   let spanSequence = 0;
   let bootstrapSummary = "";
+  const recoveryTimings = new Map<string, number>();
   const reportProgress = (name: string) => {
     if (progressEnabled && !closed && isUpdateCanaryStartupMilestone(name)) {
       process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
@@ -156,18 +171,37 @@ export function createGatewayStartupTrace(
     totalMs: number,
     eventLoopSample: ReturnType<typeof takeEventLoopSample>,
     extras: ReadonlyArray<readonly [string, number | string]> = [],
+    serviceOutcome?: "success" | "failure",
   ) => {
+    const recoveryTiming = RECOVERY_TIMINGS.get(name);
+    if (recoveryTiming) {
+      recoveryTimings.set(recoveryTiming, (recoveryTimings.get(recoveryTiming) ?? 0) + durationMs);
+    }
+    const recoverySummary =
+      name === RECOVERY_PHASE
+        ? [...RECOVERY_TIMINGS.values()].map((key) => [key, recoveryTimings.get(key) ?? 0] as const)
+        : [];
     const metrics = [
       ["eventLoopMax", `${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`] as const,
+      ...recoverySummary,
       ...extras,
+      ...(serviceOutcome ? [["outcome", serviceOutcome] as const] : []),
     ];
     recordGatewayRestartTraceSpan(`restart.ready.${name}`, durationMs, totalMs, metrics);
-    if (logEnabled) {
+    if (logEnabled || (serviceOutcome && durationMs >= 250)) {
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
     } else if (STARTUP_PROGRESS_PHASES.has(name)) {
-      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
+      const summary =
+        name === RECOVERY_PHASE
+          ? [...recoverySummary, ...extras]
+              .map(([key, value]) => formatMetric(key, value))
+              .join(" ")
+          : "";
+      log.info(
+        `startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${summary ? ` ${summary}` : ""}`,
+      );
     }
   };
   return {
@@ -242,6 +276,9 @@ export function createGatewayStartupTrace(
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
+      if (name === RECOVERY_PHASE) {
+        recoveryTimings.clear();
+      }
       if (STARTUP_PROGRESS_PHASES.has(name)) {
         log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
       }
@@ -253,6 +290,7 @@ export function createGatewayStartupTrace(
         attributes: name === mappedName ? undefined : { traceName: name },
       };
       emitDiagnosticsTimelineEvent({ ...span, type: "span.start" }, timelineOptions());
+      let outcome: "success" | "failure" = "success";
       try {
         const result = await withDiagnosticPhase(mappedName, run, { traceName: name });
         reportProgress(name);
@@ -267,6 +305,7 @@ export function createGatewayStartupTrace(
         );
         return result;
       } catch (error) {
+        outcome = "failure";
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -284,7 +323,14 @@ export function createGatewayStartupTrace(
       } finally {
         const now = performance.now();
         const eventLoopSample = takeEventLoopSample();
-        emit(name, now - before, now - started, eventLoopSample);
+        emit(
+          name,
+          now - before,
+          now - started,
+          eventLoopSample,
+          name === RECOVERY_PHASE ? [["outcome", outcome]] : [],
+          /^sidecars\.plugin-services\.[^.]+\.[^.]+$/u.test(name) ? outcome : undefined,
+        );
         emitEventLoopTimelineSample(name, eventLoopSample);
         last = now;
       }

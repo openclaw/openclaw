@@ -7,7 +7,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clearLegacyPluginInternalHooks,
-  listLegacyPluginInternalHookEventKeys,
   listLegacyPluginInternalHooks,
 } from "../plugins/legacy-internal-hook-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -175,10 +174,6 @@ export function setInternalHooksEnabled(enabled: boolean): void {
   internalHooksEnabledState.enabled = enabled;
 }
 
-export function getRegisteredEventKeys(): string[] {
-  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
-}
-
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
   return (
     (handlers.get(type)?.length ?? 0) + listLegacyPluginInternalHooks(type).length > 0 ||
@@ -251,19 +246,4 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
   return hasHookEventContext(event, "gateway", "startup");
-}
-
-export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
-  if (!hasHookEventContext(event, "session", "patch")) {
-    return false;
-  }
-  const context = event.context;
-  return (
-    typeof context.patch === "object" &&
-    context.patch !== null &&
-    typeof context.cfg === "object" &&
-    context.cfg !== null &&
-    typeof context.sessionEntry === "object" &&
-    context.sessionEntry !== null
-  );
 }

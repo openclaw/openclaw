@@ -163,7 +163,7 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
-  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. */
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
   resolveModelCapabilities?: (

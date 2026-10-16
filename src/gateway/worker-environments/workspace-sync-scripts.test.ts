@@ -20,7 +20,7 @@ function quiescenceCommand(...args: Parameters<typeof workspaceQuiescenceArgv>) 
 const PADDED_PROCESS_START = "Thu Oct  1 00:11:43 2026";
 
 async function fixture(
-  probeClock?: "exhaust" | "budget" | "census" | "identity" | "recovery" | "prefix" | "retry",
+  probeClock?: "exhaust" | "budget" | "identity" | "recovery" | "prefix" | "retry",
 ) {
   const root = tempDirs.make("openclaw-quiescence-test-");
   const home = path.join(root, "home");
@@ -81,8 +81,7 @@ childProcess.execFileSync = (command, args, options) => {
     require("node:fs").appendFileSync(${JSON.stringify(path.join(root, "recovery-probes"))}, elapsed + "\\n");
     throw Object.assign(new Error("simulated unavailable ps"), { code: "ETIMEDOUT", status: null, signal: options.killSignal });
   }
-  const selected = command === "ps" &&
-    (mode === "census" ? args[0] === "-axo" : mode === "identity" && args[1] === "lstart=");
+  const selected = command === "ps" && mode === "identity" && args[1] === "lstart=";
   if (selected && slowProbePending) {
     elapsed += Math.min(3000, options.timeout);
     if (options.timeout < 3000) {
@@ -233,25 +232,22 @@ async function renew(
 }
 
 describe("remote workspace quiescence scripts", () => {
-  it.each(["census", "identity"] as const)(
-    "recovers a slow %s probe within the shared budget",
-    async (probe) => {
-      const input = await fixture(probe);
-      const result = await runCommandWithTimeout(
-        quiescenceCommand(
-          input.workspace,
-          { action: "acquire", nonce: "", timeoutMs: 10_000 },
-          "dedicated",
-        ),
-        { timeoutMs: 10_000, baseEnv: input.env },
-      );
-      expect(result.code, JSON.stringify(result)).toBe(0);
-      expect(result.stderr).toContain("slow ps check; retrying");
-      const nonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout)?.[1];
-      expect(nonce).toBeDefined();
-      await resume(input, nonce!);
-    },
-  );
+  it("recovers a slow identity probe within the shared budget", async () => {
+    const input = await fixture("identity");
+    const result = await runCommandWithTimeout(
+      quiescenceCommand(
+        input.workspace,
+        { action: "acquire", nonce: "", timeoutMs: 10_000 },
+        "dedicated",
+      ),
+      { timeoutMs: 10_000, baseEnv: input.env },
+    );
+    expect(result.code, JSON.stringify(result)).toBe(0);
+    expect(result.stderr).toContain("slow ps check; retrying");
+    const nonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout)?.[1];
+    expect(nonce).toBeDefined();
+    await resume(input, nonce!);
+  });
 
   it("surfaces an exhausted probe budget through the workspace caller", async () => {
     const input = await fixture("budget");
@@ -494,20 +490,14 @@ esac
     }
   });
 
-  it.each([
-    ["shared-host", true],
-    ["dedicated", false],
-  ])("removes an empty %s orphan lease without depending on ps", async (_mode, sharedHost) => {
+  it("removes an empty shared-host orphan lease without depending on ps", async () => {
     const input = await fixture("exhaust");
     const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
     const nonce = await quiesce(input, true, "30000");
     const leaseFile = leasePath(input.home, input.workspace, nonce);
     const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
-      sharedHost: boolean;
       watchdog: { pid: number };
     };
-    lease.sharedHost = sharedHost;
-    await fs.writeFile(leaseFile, JSON.stringify(lease));
 
     await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
     await fs.chmod(path.join(input.bin, "ps"), 0o755);

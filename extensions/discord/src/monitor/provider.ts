@@ -47,7 +47,6 @@ import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
-import { logDiscordStartupPhase } from "./provider.startup-log.js";
 import {
   createDiscordMonitorClient,
   fetchDiscordBotIdentity,
@@ -94,7 +93,6 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   const { scheduler } = opts;
-  const startupStartedAt = Date.now();
   const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = opts.readConfig ?? createRuntimeConfigReader(cfg);
   const account = discordProviderRuntime.resolveDiscordAccount({
@@ -111,16 +109,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
 
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   let lifecycleGateway: MutableDiscordGateway | undefined;
-  const logStartupPhase = (phase: string, details?: string) =>
-    logDiscordStartupPhase({
-      runtime,
-      accountId: account.accountId,
-      phase,
-      startAt: startupStartedAt,
-      gateway: lifecycleGateway,
-      details,
-      isVerbose: discordProviderRuntime.isVerbose,
-    });
 
   const rawDiscordCfg = account.config;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
@@ -232,7 +220,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     );
   }
 
-  logStartupPhase("fetch-application-id:start");
   const configuredApplicationId = normalizeOptionalString(discordCfg.applicationId);
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
   const applicationIdProbe = parsedApplicationId
@@ -258,7 +245,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     throw new Error(message, { cause: applicationIdProbe.error });
   }
   const applicationId = applicationIdProbe.applicationId;
-  logStartupPhase("fetch-application-id:done", `applicationId=${applicationId}`);
 
   const { commandSpecs } = await resolveDiscordProviderCommandSpecs({
     cfg,
@@ -283,11 +269,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => Promise<void>) | undefined;
   let stopMonitorListeners: (() => Promise<void>) | undefined;
-  let autoPresenceController: Awaited<
-    ReturnType<typeof createDiscordMonitorClient>
-  >["autoPresenceController"] = null;
-  let earlyGatewayEmitter = gatewaySupervisor?.emitter;
-  let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
+  let autoPresenceController:
+    | Awaited<ReturnType<typeof createDiscordMonitorClient>>["autoPresenceController"]
+    | null = null;
   try {
     if (opts.abortSignal?.aborted) {
       return;
@@ -378,29 +362,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     gatewaySupervisor = createdGatewaySupervisor;
     autoPresenceController = createdAutoPresenceController;
 
-    earlyGatewayEmitter = gatewaySupervisor.emitter;
-    onEarlyGatewayDebug = (msg: unknown) => {
-      if (!discordProviderRuntime.isVerbose()) {
-        return;
-      }
-      runtime.log?.(
-        `discord startup [${account.accountId}] gateway-debug ${Math.max(0, Date.now() - startupStartedAt)}ms ${String(msg)}`,
-      );
-    };
-    earlyGatewayEmitter?.on("debug", onEarlyGatewayDebug);
-
-    logStartupPhase(
-      "deploy-commands:schedule",
-      `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
-    );
     runDiscordCommandDeployInBackground({
       client,
       runtime,
       enabled: nativeEnabled,
       accountId: account.accountId,
-      startupStartedAt,
-      shouldLogVerbose: discordProviderRuntime.shouldLogVerbose,
-      isVerbose: discordProviderRuntime.isVerbose,
     });
 
     const logger = createSubsystemLogger("discord/monitor");
@@ -412,7 +378,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       client,
       token,
       runtime,
-      logStartupPhase,
     });
     const monitorOptions = {
       readPolicy,
@@ -488,13 +453,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       trackInboundEvent,
     });
 
-    logStartupPhase("client-start");
-
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(
       formatDiscordStartupStatusMessage({
-        gatewayReady: lifecycleGateway?.isConnected === true,
+        gatewayReady: lifecycleGateway.isConnected,
         botIdentity: botIdentity || undefined,
       }),
     );
@@ -503,8 +466,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     }
 
     lifecycleStarted = true;
-    earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
-    onEarlyGatewayDebug = undefined;
     await discordProviderRuntime.runDiscordGatewayLifecycle({
       accountId: account.accountId,
       gateway: lifecycleGateway,
@@ -523,8 +484,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       stopMonitorListeners,
       autoPresenceController,
       setStatus: opts.setStatus,
-      onEarlyGatewayDebug,
-      earlyGatewayEmitter,
       lifecycleStarted,
       lifecycleGateway,
       gatewaySupervisor,

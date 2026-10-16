@@ -8,6 +8,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as sessionStorePaths from "../../../config/sessions/session-store-path.js";
 import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
@@ -85,19 +86,34 @@ it.each(["creation", "fork"] as const)(
       const cfg = { session: { store: path.join(alias, "store.sqlite") } };
       const resolveTarget = spawnRuntime.resolveGatewaySessionStoreTargetInWorker;
       let aliasMoved = false;
-      const selected = vi
-        .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
-        .mockImplementation(async (params) => {
-          const target = await resolveTarget(params);
-          const lastSelectionKey = operation === "creation" ? childSessionKey : parentSessionKey;
-          if (params.key === lastSelectionKey) {
-            expect(target.readSource?.path).toBe(original.path);
-            await fs.rename(alias, heldAlias);
-            aliasMoved = true;
-            await fs.symlink(path.dirname(successor.path), alias, linkType);
-          }
-          return target;
-        });
+      const moveAlias = async () => {
+        await fs.rename(alias, heldAlias);
+        aliasMoved = true;
+        await fs.symlink(path.dirname(successor.path), alias, linkType);
+      };
+      const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
+      const selected =
+        operation === "creation"
+          ? vi
+              .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
+              .mockImplementation(async (...args) => {
+                const physical = await preparePhysical(...args);
+                if (args[0].sessionKey === childSessionKey) {
+                  expect(physical).toBe(original.path);
+                  await moveAlias();
+                }
+                return physical;
+              })
+          : vi
+              .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
+              .mockImplementation(async (params) => {
+                const target = await resolveTarget(params);
+                if (params.key === parentSessionKey) {
+                  expect(target.readSource?.path).toBe(original.path);
+                  await moveAlias();
+                }
+                return target;
+              });
       try {
         const result =
           operation === "creation"
@@ -194,14 +210,14 @@ function writeParentDuringChildPrepare(
   childSessionKey: string,
   write: () => Promise<unknown>,
 ): { mockRestore: () => void } {
-  const resolveTarget = spawnRuntime.resolveGatewaySessionStoreTargetInWorker;
+  const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
   return vi
-    .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
-    .mockImplementation(async (target) => {
-      if (target.key === childSessionKey) {
+    .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
+    .mockImplementation(async (...args) => {
+      if (args[0].sessionKey === childSessionKey) {
         await write();
       }
-      return resolveTarget(target);
+      return preparePhysical(...args);
     });
 }
 
@@ -326,6 +342,60 @@ async function createFromParent(
   });
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+it.each(["sqlite", "json"] as const)(
+  "creates the child in its configured %s store independently of the parent's history",
+  async (extension) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:historical-parent";
+      const childSessionKey = "agent:main:subagent:configured-child";
+      const historical = state.statePath("history", "store.sqlite");
+      const configured = state.statePath("current", `store.${extension}`);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, storePath: historical },
+        { sessionId: "historical-parent", updatedAt: 1 },
+      );
+      const parentTarget = await spawnRuntime.resolveGatewaySessionStoreTargetInWorker({
+        cfg: { session: { store: historical } },
+        key: sessionKey,
+        agentId: "main",
+        projection: "full",
+      });
+      // A legacy JSON selector must keep the registered suffix owner's routing.
+      if (extension === "json") {
+        openOpenClawAgentDatabase({
+          agentId: "other",
+          path: state.statePath("current", "store.sqlite"),
+        });
+      }
+      const result = await createInitialSubagentSession({
+        ...lineageSpawnParams(sessionKey, childSessionKey, { senderIsOwner: true }),
+        cfg: { session: { store: configured } },
+        parentTarget,
+        firstAdmission: { group: {} },
+      });
+      expect(result).toMatchObject({ status: "ok", freshChild: { storePath: configured } });
+      expect(
+        loadSessionEntry({
+          agentId: "main",
+          sessionKey: childSessionKey,
+          storePath: state.statePath(
+            "current",
+            extension === "json" ? "store.main.sqlite" : "store.sqlite",
+          ),
+        }),
+      ).toMatchObject({ spawnedBy: sessionKey, sessionId: expect.any(String) });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath: historical }),
+      ).toBeUndefined();
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey, storePath: historical }),
+      ).toMatchObject({
+        sessionId: "historical-parent",
+      });
+    });
+  },
+);
 
 it("commits group and delivery facts with creation for one host-bound admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

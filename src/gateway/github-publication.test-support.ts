@@ -628,8 +628,8 @@ export function installGitHubPublicationTestHarness(
           const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
           return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
         }
-        if (command === "git show -s --format=%B HEAD") {
-          return commandResult("existing commit\n");
+        if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
+          return commandResult(`${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`);
         }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
@@ -660,14 +660,11 @@ export function installGitHubPublicationTestHarness(
         ) {
           return commandResult("", 1);
         }
-        if (command.endsWith("write-tree") || command === "git rev-parse HEAD^{tree}") {
+        if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command === `git rev-parse ${BASE_HEAD}^{tree}`) {
           return commandResult("e".repeat(40) + "\n");
-        }
-        if (command === "git rev-parse HEAD^") {
-          return commandResult(`${OLD_HEAD}\n`);
         }
         if (command.startsWith("git commit-tree ")) {
           return commandResult(`${NEW_HEAD}\n`);

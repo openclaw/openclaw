@@ -17,9 +17,9 @@ import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
-  OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
-  normalizeOllamaCloudModelId,
+  resolveOllamaCloudDefaultModel,
+  resolveOllamaOutputBudget,
 } from "./defaults.js";
 import {
   buildOllamaThinkingLevelMap,
@@ -98,6 +98,7 @@ export type OllamaModelShowInfo = {
   contextWindow?: number;
   capabilities?: string[];
   thinkingLevelMap?: ModelDefinitionConfig["thinkingLevelMap"];
+  parameterCount?: number;
   /** Distinguishes a failed request from a successful response that omitted capabilities. */
   showInspectionFailed?: boolean;
 };
@@ -111,9 +112,14 @@ export const mergeOllamaModelShowInfo = (
     model.capabilities !== undefined &&
     isOllamaRemoteModel(model) &&
     !isOllamaEmbeddingOnlyModel(model);
+  const parameterCount =
+    info.parameterCount ??
+    model.parameterCount ??
+    parseOllamaParameterSize(model.details?.parameter_size);
   return {
     ...model,
     ...info,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     contextWindow: info.contextWindow ?? model.contextWindow ?? model.details?.context_length,
     capabilities: incomplete
       ? [
@@ -167,12 +173,26 @@ function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelSho
   ollamaModelShowInfoCache.set(key, value);
 }
 
-function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
+export function hasOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return (
-    typeof info.contextWindow === "number" ||
+    info.parameterCount !== undefined ||
+    info.contextWindow !== undefined ||
     (info.capabilities?.length ?? 0) > 0 ||
     info.thinkingLevelMap !== undefined
   );
+}
+
+function parseOllamaParameterSize(value: unknown): number | undefined {
+  const match =
+    typeof value === "string" ? value.trim().match(/^(\d+(?:\.\d+)?)\s*([KMBT])$/i) : undefined;
+  const magnitude = match?.[1];
+  const unit = match?.[2];
+  if (!magnitude || !unit) {
+    return undefined;
+  }
+  const exponent = "KMBT".indexOf(unit.toUpperCase()) + 1;
+  const count = Math.round(Number(magnitude) * 1000 ** exponent);
+  return Number.isSafeInteger(count) && count > 0 ? count : undefined;
 }
 
 function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
@@ -231,6 +251,7 @@ export async function readOllamaModelShowInfo(
     }
     const data = await readProviderJsonResponse<{
       model_info?: Record<string, unknown>;
+      details?: OllamaTagModel["details"];
       capabilities?: unknown;
       parameters?: unknown;
       thinking?: unknown;
@@ -264,8 +285,20 @@ export async function readOllamaModelShowInfo(
         )
       : undefined;
 
+    const rawParameterCount = data.model_info?.["general.parameter_count"];
+    const parameterCount =
+      typeof rawParameterCount === "number" &&
+      Number.isSafeInteger(rawParameterCount) &&
+      rawParameterCount > 0
+        ? rawParameterCount
+        : parseOllamaParameterSize(data.details?.parameter_size);
     const thinkingLevelMap = await buildOllamaThinkingLevelMap(modelName, data.thinking);
-    return { contextWindow, capabilities, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
+    return {
+      contextWindow,
+      capabilities,
+      ...(parameterCount !== undefined ? { parameterCount } : {}),
+      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    };
   } finally {
     await release();
   }
@@ -302,7 +335,7 @@ async function queryOllamaModelShowInfoCached(
   }
 
   const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name, opts).then((result) => {
-    if (!hasCachedOllamaModelShowInfo(result)) {
+    if (!hasOllamaModelShowInfo(result)) {
       ollamaModelShowInfoCache.delete(cacheKey);
     }
     return result;
@@ -399,18 +432,6 @@ export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
   );
 }
 
-/**
- * Cloud models are referenced both bare (`kimi-k3`) and suffixed (`kimi-k3:cloud`).
- * Both spellings must reach the same known context window, or a suffixed ref silently
- * falls back to the generic default whenever live inspection is unavailable.
- */
-function resolveOllamaCloudDefaultModel(
-  modelId: string,
-): (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number] | undefined {
-  const normalized = normalizeOllamaCloudModelId(modelId);
-  return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
-}
-
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -419,8 +440,11 @@ export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
   capabilities?: string[],
-  opts?: OllamaModelShowInfo,
+  opts?: OllamaModelShowInfo & { remote?: boolean },
 ): ModelDefinitionConfig {
+  const cloudModel = resolveOllamaCloudDefaultModel(modelId);
+  const resolvedContext =
+    contextWindow ?? cloudModel?.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW;
   return {
     id: modelId,
     name: modelId,
@@ -434,11 +458,13 @@ export function buildOllamaModelDefinition(
           : capabilities.includes("thinking")),
     input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
-    contextWindow:
-      contextWindow ??
-      resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
-      OLLAMA_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    contextWindow: resolvedContext,
+    maxTokens: resolveOllamaOutputBudget({
+      modelId,
+      contextWindow: resolvedContext,
+      remote: opts?.remote,
+    }),
+    ...(opts?.parameterCount !== undefined ? { parameterCount: opts.parameterCount } : {}),
     ...(opts?.thinkingLevelMap ? { thinkingLevelMap: opts.thinkingLevelMap } : {}),
     compat: {
       supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
@@ -452,7 +478,9 @@ export function buildDefaultOllamaCloudModelDefinition(
   model: (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number],
 ): ModelDefinitionConfig {
   return {
-    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities]),
+    ...buildOllamaModelDefinition(model.id, model.contextWindow, [...model.capabilities], {
+      remote: true,
+    }),
     compat: {
       supportsTools: true,
       supportsUsageInStreaming: true,
@@ -469,6 +497,8 @@ export function toDynamicOllamaModel(params: {
     (value): value is "text" | "image" => value === "text" || value === "image",
   );
   const api = params.providerConfig.api ?? "ollama";
+  const cloudModel = resolveOllamaCloudDefaultModel(params.model.id);
+  const contextWindow = params.model.contextWindow ?? cloudModel?.contextWindow ?? 8192;
   return {
     id: params.model.id,
     name: params.model.name ?? params.model.id,
@@ -478,11 +508,20 @@ export function toDynamicOllamaModel(params: {
     reasoning: params.model.reasoning ?? false,
     input: input.length > 0 ? input : ["text"],
     cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: params.model.contextWindow ?? 8192,
+    contextWindow,
     ...(params.model.contextTokens !== undefined
       ? { contextTokens: params.model.contextTokens }
       : {}),
-    maxTokens: params.model.maxTokens ?? 8192,
+    maxTokens:
+      params.model.maxTokens ??
+      resolveOllamaOutputBudget({
+        modelId: params.model.id,
+        contextWindow,
+        remote: isHostedOllamaCloud(params.providerConfig.baseUrl),
+      }),
+    ...(params.model.parameterCount !== undefined
+      ? { parameterCount: params.model.parameterCount }
+      : {}),
     ...(api === "ollama" && params.model.thinkingLevelMap
       ? { thinkingLevelMap: params.model.thinkingLevelMap }
       : {}),
@@ -553,11 +592,11 @@ async function fetchOllamaModelRows(params: {
         response,
         auditContext,
       );
-      if (params.opts?.discoveryMode === "strict" && !Array.isArray(data.models)) {
+      const models = Array.isArray(data.models) ? data.models : undefined;
+      if (params.opts?.discoveryMode === "strict" && !models) {
         throw new Error("Ollama model discovery response must contain models[]");
       }
-      const models = Array.isArray(data.models) ? data.models : [];
-      return { reachable: true, models };
+      return { reachable: true, models: models ?? [] };
     } finally {
       await release();
     }
@@ -625,7 +664,10 @@ export async function buildOllamaProvider(
     baseUrl: apiBase,
     api: "ollama",
     models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, model),
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, {
+        ...model,
+        remote: isHostedOllamaCloud(apiBase) || isOllamaRemoteModel(model),
+      }),
     ),
   };
 }

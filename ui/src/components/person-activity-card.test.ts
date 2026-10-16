@@ -1,12 +1,24 @@
 /* @vitest-environment jsdom */
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createRoot, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 
 const containers: HTMLElement[] = [];
+beforeEach(() => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
 function createContainer() {
   const container = document.createElement("div");
   document.body.append(container);
@@ -18,6 +30,7 @@ afterEach(() => {
     updatePersonActivityCard(container);
     container.remove();
   }
+  vi.unstubAllGlobals();
 });
 
 const alice = {
@@ -124,4 +137,43 @@ it("keeps native modified-click navigation and exposes activity when presence is
   expect(navigate).not.toHaveBeenCalled();
   link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   expect(navigate).toHaveBeenCalledWith("alice", "Alice");
+});
+
+it("updates localized connection and session labels without replacing the focused link", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  const container = createContainer();
+  try {
+    await i18n.setLocale("en");
+    updatePersonActivityCard(container, {
+      user: { ...alice, entries: [{ mode: "webchat", ts: 1 }] },
+      sessionData: data([{ ...session("cron:daily-check", 1), label: "Daily check" }]),
+      watchAgentId: "main",
+      mainKey: "main",
+      globalScope: false,
+      routing: { basePath: "/ui", navigate: vi.fn() },
+      openSession: vi.fn(),
+    });
+    flush();
+    const link = container.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
+    const labels = () => [
+      container.querySelector(".person-activity-card__facts dd > span")?.textContent,
+      link.querySelector(".person-activity-card__session-name")?.textContent,
+    ];
+    expect(labels()).toEqual(["Web app", "Automation: Daily check"]);
+    link.focus();
+    await i18n.setLocale("de");
+    flush();
+    expect(labels()).toEqual(["Web-App", "Automatisierung: Daily check"]);
+    expect(container.querySelector(".person-activity-card__session")).toBe(link);
+    expect(document.activeElement).toBe(link);
+    await i18n.setLocale("en");
+    flush();
+    expect(labels()).toEqual(["Web app", "Automation: Daily check"]);
+    expect(container.querySelector(".person-activity-card__session")).toBe(link);
+    expect(document.activeElement).toBe(link);
+  } finally {
+    updatePersonActivityCard(container);
+    await restoreI18n();
+    flush();
+  }
 });

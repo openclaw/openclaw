@@ -1,27 +1,37 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+} from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeRegions } from "./code-regions.js";
+import { findCodeOwnership, findCodeRegions } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
 // Token absence must prove identity; activated syntax stays with the canonical transform.
-export type TextFilter = { transform: (text: string) => string } & (
-  | { activationTokens: readonly string[] }
-  | { create: () => TextProjector }
-);
+type TextCheckpoint = { text: string; retainStart: number; retainedOutputStart: number };
+type CheckpointTransform = (text: string, settleBefore: number) => TextCheckpoint;
+export type TextFilter = {
+  transform: (text: string) => string;
+  checkpoint?: CheckpointTransform;
+  boundaryWhitespaceOnly?: true;
+} & ({ activationTokens: readonly string[] } | { create: () => TextProjector });
 
 /** Preserve append provenance while a probe proves that the canonical transform is identity. */
 export function createConditionalTextProjector(
   transform: (text: string) => string,
   shouldTransform: (input: TextProjection) => boolean,
+  checkpoint?: CheckpointTransform,
 ): TextProjector {
+  const project = checkpoint ? createCheckpointTransform(checkpoint) : transform;
   let previous = "";
   let identity = true;
   return (input) => {
     if (input.delta === "") {
       return identity ? input : { text: previous, delta: "" };
     }
-    const text = shouldTransform(input) ? transform(input.text) : input.text;
+    const text = shouldTransform(input) ? project(input.text) : input.text;
     const nextIdentity = text === input.text;
     const delta =
       input.delta === null
@@ -37,21 +47,115 @@ export function createConditionalTextProjector(
   };
 }
 
-export function createActivatedProjector(
+function findTextCheckpoint(
+  text: string,
+  referenceLength: number,
+): {
+  offset: number;
+  context: string;
+  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
+} {
+  const state = createProtectionScanState();
+  let cursor = referenceLength;
+  let lastLineStart = cursor;
+  let closedFence = false;
+  for (let end = text.indexOf("\n", cursor); end !== -1; end = text.indexOf("\n", cursor)) {
+    const line = text.slice(cursor, end + 1);
+    const inFence = Boolean(state.fenceChar);
+    advanceProtectionScanState(state, line);
+    // References, image descriptions, and setext headings can need earlier paragraph context.
+    if (
+      state.paragraphAmbiguous ||
+      state.structuralUnknown ||
+      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
+    ) {
+      const ownership = findCodeOwnership(text);
+      // Normalization can expand a label beyond CommonMark's 999-character source limit.
+      // Such definitions stay in source instead of being serialized as carried context.
+      const retain = ownership.definitions.reduce(
+        (offset, { identifier, start }) =>
+          identifier.length > 999 ? Math.min(offset, start) : offset,
+        ownership.retainStart,
+      );
+      const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
+      const completeEnd = text.lastIndexOf("\n") + 1;
+      if (
+        !/\r(?!\n)/.test(text) &&
+        ownership.regions.some((region) => region.block && region.start === retain)
+      ) {
+        const fence = scanFenceSpans(text.slice(start, completeEnd)).state.open;
+        if (fence) {
+          return {
+            offset: completeEnd,
+            context: fence.marker + "\n",
+            definitions: ownership.definitions,
+          };
+        }
+      }
+      return { offset: start, context: "", definitions: ownership.definitions };
+    }
+    lastLineStart = cursor;
+    cursor = end + 1;
+    closedFence = inFence && !state.fenceChar;
+  }
+  if (state.fenceChar) {
+    // Only the proven top-level fence is carried; its settled body is never parsed again.
+    return { offset: cursor, context: state.fenceChar.repeat(state.fenceLength) + "\n" };
+  }
+  return { offset: closedFence ? cursor : lastLineStart, context: "" };
+}
+
+function createCheckpointTransform(project: CheckpointTransform): (text: string) => string {
+  let sourceLength = 0;
+  let pending = "";
+  let settled = "";
+  let context = "";
+  let references = "";
+  const definitions = new Set<string>();
+  return (source) => {
+    pending += source.slice(sourceLength);
+    sourceLength = source.length;
+    const contextLength = references.length + context.length;
+    const text = references + context + pending;
+    const boundary = findTextCheckpoint(text, references.length);
+    const result = project(text, boundary.offset);
+    const visible = settled + result.text.slice(contextLength);
+    // A provisional tool call can retain text before the Markdown checkpoint.
+    if (boundary.offset > contextLength && result.retainStart === boundary.offset) {
+      settled += result.text.slice(contextLength, result.retainedOutputStart);
+      for (const definition of boundary.definitions ?? []) {
+        if (definition.end <= boundary.offset && !definitions.has(definition.identifier)) {
+          definitions.add(definition.identifier);
+          // Code ownership needs only the normalized label, never its destination or title.
+          references += `[${definition.identifier}]: /\n\n`;
+        }
+      }
+      pending = text.slice(boundary.offset);
+      context = boundary.context;
+    }
+    return visible;
+  };
+}
+
+function createActivatedProjector(
   filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
 ): TextProjector {
   const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
   let tail = "";
   let active = false;
-  return createConditionalTextProjector(filter.transform, (input) => {
-    if (!active) {
-      const appended = tail + (input.delta ?? input.text);
-      active = activation.test(appended);
-      tail = !active && overlap ? appended.slice(-overlap) : "";
-    }
-    return active;
-  });
+  return createConditionalTextProjector(
+    filter.transform,
+    (input) => {
+      if (!active) {
+        const appended = tail + (input.delta ?? input.text);
+        active = activation.test(appended);
+        tail = !active && overlap ? appended.slice(-overlap) : "";
+      }
+      return active;
+    },
+    filter.checkpoint,
+  );
 }
 
 export function applyTextFilters(input: string, filters: readonly TextFilter[]): string {
@@ -68,7 +172,13 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   }));
   let source = "";
   let text = "";
+  let trimStart = 0;
+  let trimEnd = 0;
+  let onlyBoundaryWhitespaceChanged = true;
+  let matchesTrimmedSource: boolean | undefined;
   const project = (value: TextProjection) => {
+    onlyBoundaryWhitespaceChanged = true;
+    matchesTrimmedSource = undefined;
     let input = value;
     for (const stage of stages) {
       // Replacements can expose earlier syntax, so every downstream probe starts fresh.
@@ -76,7 +186,11 @@ export function createTextProjection(filters: readonly TextFilter[]) {
         stage.projector =
           "create" in stage.filter ? stage.filter.create() : createActivatedProjector(stage.filter);
       }
-      input = stage.projector(input);
+      const next = stage.projector(input);
+      if (!stage.filter.boundaryWhitespaceOnly && next !== input && next.text !== input.text) {
+        onlyBoundaryWhitespaceChanged = false;
+      }
+      input = next;
     }
     return input;
   };
@@ -87,7 +201,21 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     get text() {
       return text;
     },
+    get matchesTrimmedSource(): boolean {
+      // Padding-only stages preserve the source span. Real transforms still need
+      // an exact comparison when their output happens to have the same length.
+      return (matchesTrimmedSource ??=
+        text.length === Math.max(0, trimEnd - trimStart) &&
+        (onlyBoundaryWhitespaceChanged || source.startsWith(text, trimStart)));
+    },
     append(delta: string, preparedSource?: string): TextProjection {
+      if (trimEnd === 0) {
+        trimStart += delta.length - delta.trimStart().length;
+      }
+      const contentLength = delta.trimEnd().length;
+      if (contentLength > 0) {
+        trimEnd = source.length + contentLength;
+      }
       // A validated cumulative snapshot already owns these bytes; rebuilding its
       // rope would copy the growing reply again when a consumer reads it.
       source = preparedSource ?? source + delta;
@@ -101,6 +229,8 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     },
     replace(value: string): TextProjection {
       source = value;
+      trimStart = value.length - value.trimStart().length;
+      trimEnd = value.trimEnd().length;
       const next = project({ text: source, delta: null });
       next.delta = null;
       text = next.text;
@@ -143,6 +273,7 @@ export function trimTextFilter(
   options?: { preserveCodeIndentation?: boolean },
 ): TextFilter {
   return {
+    boundaryWhitespaceOnly: true,
     transform: (text) =>
       mode === "none"
         ? text

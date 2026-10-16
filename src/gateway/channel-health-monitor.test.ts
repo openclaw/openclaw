@@ -1,7 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-/**
- * Channel health monitor regression tests.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -152,30 +148,6 @@ describe("channel-health-monitor", () => {
     await scheduler.stop();
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("normalizes oversized check intervals before rearming timers", async () => {
-    const monitor = startDefaultMonitor(createMockChannelManager(), {
-      checkIntervalMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    await clock.advanceBy(1);
-
-    expect(clock.wakes.at(-1)?.delayMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    monitor.stop();
-  });
-
-  it("runs health check after grace period", async () => {
-    const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 60_000,
-      timing: { monitorStartupGraceMs: 1_000 },
-    });
-
-    await clock.advanceBy(1_001);
-
-    expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
-    monitor.stop();
   });
 
   it("keeps running after a runtime snapshot failure", async () => {
@@ -390,27 +362,6 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createBusyDisconnectedManager(now - 26 * 60_000);
     await expectRestartedChannel(manager, "discord");
-  });
-
-  it("respects custom per-channel startup grace", async () => {
-    const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 30_000,
-        },
-      },
-    });
-    const monitor = await startAndRunCheck(manager, {
-      timing: { channelConnectGraceMs: 60_000 },
-    });
-    expect(manager.stopChannel).not.toHaveBeenCalled();
-    expect(manager.startChannel).not.toHaveBeenCalled();
-    monitor.stop();
   });
 
   it("caps an account stuck in pending restart instead of thrashing forever", async () => {

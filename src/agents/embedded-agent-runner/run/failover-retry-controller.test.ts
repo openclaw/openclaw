@@ -44,6 +44,7 @@ function createController(
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
   isFinalFallbackAttempt?: boolean,
+  retryTransientErrors?: boolean,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -52,6 +53,7 @@ function createController(
         abortSignal,
         onRetryWait,
         isFinalFallbackAttempt,
+        retryTransientErrors,
       } as ControllerInput["runInput"]["runParams"],
       globalLane: "test",
       agentDir: "/tmp/openclaw-failover-retry-controller-test",
@@ -290,8 +292,9 @@ describe("createEmbeddedRunFailoverRetryController", () => {
 
   it.each([
     ["fallback", true, undefined, 30_000, "rate_limit", 9_897_000, false],
-    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, true],
+    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, false],
     ["replay-unsafe", true, false, 30_000, "rate_limit", 9_897_000, true],
+    ["replay-unsafe without fallback", false, false, 30_000, "rate_limit", 9_897_000, true],
     ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
     ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
     ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],
@@ -534,6 +537,28 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
     await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
     expect(controller.transientRetryCount).toBe(8);
+  });
+
+  it("lets auxiliary runs defer provider failures without sleeping or replaying", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(
+      advanceAuthProfile,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+    controller.observeAttempt({ providerRetryMaxRetries: 9 });
+    const onRetry = vi.fn();
+    for (const reason of ["rate_limit", "overloaded", "timeout", "server_error"] as const) {
+      await expect(controller.maybeRetryTransient({ reason, onRetry })).resolves.toBe(false);
+      await expect(controller.advanceAuthProfile(reason, rateLimitContext)).resolves.toBe(false);
+    }
+    expect(advanceAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
   });
 
   it.each([

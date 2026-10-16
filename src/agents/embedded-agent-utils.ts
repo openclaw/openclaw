@@ -205,8 +205,11 @@ export function extractAssistantVisibleText(
   return prepareAssistantVisibleText(msg, prepareText)();
 }
 
-export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
+export function extractAssistantCommentaryText(
+  msg: AssistantMessage,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+): string {
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText)();
 }
 
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {

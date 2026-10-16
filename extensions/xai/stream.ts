@@ -148,7 +148,7 @@ function normalizeXaiResponsesToolResultPayload(
     return;
   }
 
-  const includeImages = Array.isArray(model.input) && model.input.includes("image");
+  const includeImages = model.input.includes("image");
   let imageContentParts: Array<Record<string, unknown>> = [];
   let toolResultIndex = 0;
   const normalizedInput = payloadObj.input.flatMap((item: unknown, index, input) => {

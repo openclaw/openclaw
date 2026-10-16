@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
@@ -110,6 +116,38 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
 });
 
 describe("resolveAgentRunErrorLifecycleFields", () => {
+  it("only turns live restart refusals into recovery and preserves explicit stop outcomes", () => {
+    const error = new Error("runtime preparation failed", { cause: new GatewayDrainingError() });
+    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    try {
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
+    } finally {
+      suspension?.rollback();
+    }
+    markGatewayRestartDraining();
+    try {
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+        aborted: true,
+        stopReason: "restart",
+      });
+      const stop = new AbortController();
+      stop.abort(createAgentRunDirectAbortError());
+      expect(resolveAgentRunErrorLifecycleFields(error, stop.signal)).toEqual({
+        aborted: true,
+        stopReason: "aborted",
+      });
+      const timeout = new AbortController();
+      timeout.abort(new DOMException("deadline", "TimeoutError"));
+      expect(resolveAgentRunErrorLifecycleFields(error, timeout.signal).stopReason).toBe("timeout");
+      expect(
+        resolveAgentRunErrorLifecycleFields(new Error("Gateway is restarting"), undefined),
+      ).toEqual({});
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
+  });
   it.each(["wrapped canonical"])(
     "preserves an unphased provider-started timeout through %s errors unless cancelled",
     (wrapper) => {

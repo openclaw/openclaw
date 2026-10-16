@@ -76,7 +76,10 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
+    preparedHistory = await withOwnedSessionTranscriptWrites(
+      input.sessionLock.ownedTranscriptWriteContext,
+      () => prepareEmbeddedAttemptHistory(input, assertActive),
+    );
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,

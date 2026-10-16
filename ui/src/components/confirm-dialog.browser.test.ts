@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
+import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
 import "../styles.css";
 
@@ -37,6 +37,22 @@ afterEach(async () => {
 });
 
 describe("promise dialog native focus and dismissal", () => {
+  it("keeps Cancel focused in a three-way choice and restores its opener", async () => {
+    const trigger = opener();
+    const pending = showConfirmChoiceDialog({
+      title: "Archive session?",
+      message: '"Synthetic session" has a nested session.',
+      confirmLabel: "Archive this session",
+      alternativeLabel: "Archive 2 sessions",
+      signal: owner(),
+    });
+    await getRenderedModalDialog(document.body);
+    expect(document.activeElement).toBe(button("Cancel"));
+    button("Archive 2 sessions").click();
+    expect(document.activeElement).toBe(trigger);
+    await expect(pending).resolves.toBe("alternative");
+  });
+
   it("focuses the safe confirmation action, requires acknowledgement, and restores focus synchronously", async () => {
     const trigger = opener();
     const result = showConfirmDialog({

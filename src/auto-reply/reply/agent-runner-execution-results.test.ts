@@ -1,12 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   initialFallbackAttemptOptions,
@@ -21,7 +23,9 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-
+import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import { createTurn } from "./followup-delivery.test-helpers.js";
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
@@ -58,6 +62,73 @@ describe("executeAgentTurn: result and tool delivery", () => {
       }
     },
   );
+
+  it("preserves one core missing-answer notice through queued message-tool-only delivery", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.originatingChannel = "whatsapp";
+    followupRun.originatingTo = "user";
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    followupRun.run.terminalReplyExpectation = "required";
+    const notice = setReplyPayloadMetadata(
+      {
+        text: "No answer was returned. Ask again if you still need one.",
+        isError: true,
+        isStatusNotice: true,
+      },
+      { assistantTranscriptOwned: true },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [notice],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: "No answer was returned. Ask again if you still need one.",
+        },
+      },
+    });
+    const params = createMinimalRunAgentTurnParams({ followupRun });
+    const execute = await getRawExecuteAgentTurnForTest();
+    const execution = await execute(params);
+    assert(execution.outcome.kind === "settled");
+    expect(execution.outcome.status).toBe("failed");
+    expect(execution.outcome.result.payloads).toEqual([]);
+    expect(execution.outcome.terminalFailurePayload).toBe(notice);
+
+    const accounting = await accountAgentTurn({
+      activeSessionEntry: undefined,
+      activeSessionStore: undefined,
+      blockReplyPipeline: null,
+      cfg: followupRun.run.config,
+      defaultModel: followupRun.run.model,
+      followupRun,
+      isHeartbeat: false,
+      pendingToolTasks: params.pendingToolTasks,
+      preflightCompactionApplied: false,
+      resolvedVerboseLevel: "off",
+      execution: execution.outcome,
+      runId: execution.runId,
+      runStartedAt: 0,
+      sessionCtx: params.sessionCtx,
+      sessionKey: undefined,
+      storePath: undefined,
+      shouldInjectGroupIntro: false,
+    });
+    const turn = createTurn({ runId: execution.runId, queued: followupRun });
+    const decision = await resolveFollowupDeliveryDecision({ turn, execution, accounting });
+    assert(decision.kind === "deliver");
+    expect(decision.payloads).toHaveLength(1);
+    expect(decision.payloads[0]).toMatchObject({
+      text: "No answer was returned. Ask again if you still need one.",
+      isError: true,
+      isStatusNotice: true,
+    });
+    expect(
+      getReplyPayloadMetadata(expectDefined(decision.payloads[0], "missing-answer notice")),
+    ).toMatchObject({
+      assistantTranscriptOwned: true,
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
 
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
@@ -286,7 +357,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
     expect(result.kind).toBe("success");
   });
 
-  it("strips a glued leading NO_REPLY token from streamed tool results", async () => {
+  it("preserves a glued leading NO_REPLY mention in streamed tool results", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onToolResult?.({ text: "NO_REPLYThe user is saying hello" });
@@ -314,8 +385,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
     await Promise.all(pendingToolTasks);
 
     expect(result.kind).toBe("success");
-    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("The user is saying hello");
-    expect(onToolResult).toHaveBeenCalledWith({ text: "The user is saying hello" });
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("NO_REPLYThe user is saying hello");
+    expect(onToolResult).toHaveBeenCalledWith({ text: "NO_REPLYThe user is saying hello" });
   });
 
   it.each([

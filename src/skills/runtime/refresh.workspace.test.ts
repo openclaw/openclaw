@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
@@ -90,6 +90,56 @@ it("retires remote subscriptions during Gateway drain and reacquires after runti
   expect(getSkillsSnapshotVersion(gateway)).toBe(restartedVersion);
   subscriptions[1]!.emit("change");
   expect(getSkillsSnapshotVersion(gateway)).toBeGreaterThan(restartedVersion);
+});
+
+it("waits for an agent's remote skills subscription to close before deletion completes", async () => {
+  const { params, access } = await remoteFixture();
+  const closeStarted = createDeferred();
+  const releaseClose = createDeferred();
+  access.watchSkills.mockImplementation(async (_request, _emit, signal) => {
+    await new Promise<void>((resolve) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          closeStarted.resolve();
+          resolve();
+        },
+        { once: true },
+      );
+    });
+    await releaseClose.promise;
+  });
+  await refresh.ensureSkillsWatcher({ ...params, agentId: "worker" });
+  const drain = refresh.closeSkillsWatchersForAgent({ agentId: "worker" });
+  try {
+    await awaitGateBeforeSettlement(
+      closeStarted.promise,
+      drain,
+      "Agent drainage completed before remote watcher cancellation began",
+    );
+    let drained = false;
+    void drain.then(() => {
+      drained = true;
+    });
+    await waitForSkillsTurn();
+    expect(drained).toBe(false);
+  } finally {
+    releaseClose.resolve();
+  }
+  await drain;
+});
+
+it("keeps a shared remote subscription until its last agent owner is removed", async () => {
+  const { params, subscriptions, access } = await remoteFixture();
+  await refresh.ensureSkillsWatcher({ ...params, agentId: "first" });
+  await refresh.ensureSkillsWatcher({ ...params, agentId: "second" });
+  expect(access.watchSkills).toHaveBeenCalledTimes(1);
+
+  await refresh.closeSkillsWatchersForAgent({ agentId: "first" });
+  expect(subscriptions[0]?.signal.aborted).toBe(false);
+
+  await refresh.closeSkillsWatchersForAgent({ agentId: "second" });
+  expect(subscriptions[0]?.signal.aborted).toBe(true);
 });
 
 async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {

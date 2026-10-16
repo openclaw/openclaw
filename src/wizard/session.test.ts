@@ -211,6 +211,7 @@ describe("WizardSession", () => {
           type: "progress",
           executor: "gateway",
           message: "Waiting for approval",
+          progressMessage: "Waiting for approval",
           externalUrl: destination,
         });
         for (const message of ["Approval received", "Finishing sign-in"]) {
@@ -220,6 +221,7 @@ describe("WizardSession", () => {
             type: "progress",
             executor: "gateway",
             message,
+            progressMessage: message,
             externalUrl: destination,
           });
         }

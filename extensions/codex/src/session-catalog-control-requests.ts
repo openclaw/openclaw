@@ -1,6 +1,5 @@
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.js";
-import { assertCodexThreadForkParams } from "./app-server/protocol.js";
 import type {
   CodexAppServerRequestParams,
   CodexAppServerRequestResult,
@@ -72,12 +71,7 @@ export function createCodexCatalogRequestSnapshot(
     listThreadTurns: (params) => read(CODEX_CONTROL_METHODS.listThreadTurns, params),
     listThreadItems: (params) => read(CODEX_CONTROL_METHODS.listThreadItems, params),
     forkThread: (params, assertCurrent) =>
-      request(
-        CODEX_CONTROL_METHODS.forkThread,
-        assertCodexThreadForkParams(params),
-        undefined,
-        assertCurrent,
-      ),
+      request(CODEX_CONTROL_METHODS.forkThread, params, undefined, assertCurrent),
     readThread: async (threadId, includeTurns, timeoutMs) =>
       (await read(CODEX_CONTROL_METHODS.readThread, { threadId, includeTurns }, timeoutMs)).thread,
     archiveThread: async (threadId, assertCurrent) => {

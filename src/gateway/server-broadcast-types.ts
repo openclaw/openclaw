@@ -5,7 +5,7 @@ import type { SessionAncestorReferences } from "./session-ancestor-references.js
 
 export type SessionEventProjection = {
   payload: unknown;
-  /** Certifies a fresh, mutable payload envelope and row bytes for this publication. */
+  /** Certifies a publication-owned envelope and stable row bytes; identical envelopes share encoding. */
   serializeSession?: () => string;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
@@ -17,7 +17,7 @@ type SessionEventProjectionScope = {
   agentId?: string;
 };
 
-/** Connection-owned receipts and live run state, consumed within one publication. */
+/** Connection-owned receipts and run display facts, consumed within one publication. */
 type SessionEventProjectionContext = {
   isCurrentProjection: (owner: object) => boolean;
   resolveAgentScope: (
@@ -27,7 +27,7 @@ type SessionEventProjectionContext = {
   forgetAncestors: (key?: string) => void;
   references: (client: GatewayClient) => SessionAncestorReferences;
   forgetConnectionAncestors: (client: GatewayClient) => void;
-  getRunProjector: () => (selection: {
+  createRunProjector: () => (selection: {
     requestedKey: string;
     canonicalKey: string;
     sessionId?: string;

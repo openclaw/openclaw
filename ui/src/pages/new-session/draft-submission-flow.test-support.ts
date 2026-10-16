@@ -10,7 +10,6 @@ import { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
   gateway?: ApplicationContext["gateway"];
@@ -60,6 +59,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   };
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
   const agents = {
+    subscribe: () => () => undefined,
     state: {
       agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} },
     },
@@ -101,6 +101,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     agents,
     sessions: {
+      subscribe: () => () => undefined,
       state: { result: null },
       createResult: vi.fn(),
       describe: ((params, describeOptions) => {
@@ -116,7 +117,10 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
     chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
+    config: {
+      subscribe: () => () => undefined,
+      current: { cliAgentsEnabled: true, terminalEnabled: true },
+    },
     basePath: "",
     replace: vi.fn(),
     navigateAndWait: vi.fn(async () => undefined),
@@ -128,9 +132,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
     context.gateway.snapshot.sessionKey = sessionKey;
   });
-  const host = new TestReactiveControllerHost();
   const gateway = new DraftGatewayState(
-    host,
     () => ({
       context,
       data: options.data,
@@ -149,7 +151,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       readAgents: () => context.agents,
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
@@ -163,14 +165,14 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     },
   );
   const browser = new DraftPlaceBrowser(
-    host,
     gateway,
     () => ({
       context,
       isAdmin: place?.isAdmin() ?? false,
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
+      updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
       onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
@@ -189,27 +191,27 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const requestUpdate = vi.fn();
+  const changed = vi.fn();
   const flow = new DraftSubmissionFlow(
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
     {
-      requestUpdate,
+      changed,
       closeTransientUi: vi.fn(),
       takePreparedTitle: options.takePreparedTitle,
       retainForHandoff: options.retainForHandoff,
     },
   );
   gateway.synchronize(context.gateway);
-  place.setAgentsHydrated(true);
+  place.agentsHydrated = true;
   place.adoptAgentDefaults();
-  return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, changed };
 }
 
 export function registerTextPayload(id: string) {

@@ -78,6 +78,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     );
   }
 
+  protected toggleConversationPanel(layout: SidebarLayout): void {
+    const changeSlot = isSidebarSlotVisible(layout, "conversation") ? closeSlot : openSlot;
+    const nextLayout = changeSlot(layout, "conversation");
+    this.commitSidebarLayout(nextLayout, { dashboardPresentation: "personal" });
+    if (layout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
+    }
+  }
+
   protected requestSessionRail(intent: "open" | "toggle"): void {
     const state = this.state;
     if (!state) {
@@ -87,10 +96,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const changeSlot = closing ? closeSlot : openSlot;
     this.commitSidebarLayout(changeSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(!closing);
-  }
-
-  requestSubagentsPanel(intent: "open" | "toggle"): void {
-    this.requestBackgroundPanel("subagents", intent);
   }
 
   /** Opens the Subagents panel on one subagent, or on its list. */

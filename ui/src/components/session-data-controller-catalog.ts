@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
@@ -8,14 +7,15 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
   buildCatalogSessionKey,
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   refreshSessionCatalogsLive,
   SessionCatalogLiveState,
@@ -40,12 +40,21 @@ import {
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
+  readonly navigationVisible: boolean;
+  readonly navigationView: "sessions" | "online" | "pages";
+  readonly contextualSidebar?: ContextualSidebar;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  shouldPublishSessionData(): boolean;
   readonly activeRouteId?: string;
+  readonly sessionCatalogRowsVisible: boolean;
+  samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
+  childSessionParents(): Set<string>;
   readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
@@ -61,6 +70,7 @@ export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
+  readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
@@ -232,24 +242,6 @@ export function updateSessionCatalogData(owner: SessionCatalogDataOwner): void {
   void refreshSessionCatalogsInBackground(owner);
 }
 
-function sessionCatalogChangesAdvertised(owner: SessionCatalogDataOwner): boolean {
-  return (
-    owner.context?.gateway.snapshot.hello?.features?.events?.includes(
-      "sessions.catalog.changed",
-    ) === true
-  );
-}
-
-export function applySessionCatalogChanged(owner: SessionCatalogDataOwner, payload: unknown): void {
-  if (!sessionCatalogChangesAdvertised(owner)) {
-    return;
-  }
-  const agentId = asNullableRecord(payload)?.agentId;
-  if (typeof agentId !== "string" || normalizeAgentId(agentId) === owner.sessionCatalogAgentId) {
-    scheduleSessionCatalogRefresh(owner);
-  }
-}
-
 export function applySessionCatalogHostEvent(
   owner: SessionCatalogDataOwner,
   payload: unknown,
@@ -264,7 +256,9 @@ export function applySessionCatalogHostEvent(
     return;
   }
   owner.sessionCatalogs = update.catalogs;
-  owner.requestSessionDataUpdate();
+  if (owner.sessionCatalogRowsVisible) {
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function applySessionCatalogContinuation(
@@ -305,7 +299,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     catalogs: () => owner.sessionCatalogs,
     pageDepths: owner.sessionCatalogPageDepths,
     connected: () => owner.isSessionDataHostConnected,
-    catalogChangedEvents: sessionCatalogChangesAdvertised(owner),
     applyFinal: (catalogs) => {
       owner.sessionCatalogs = owner.sessionCatalogLive.resumeDiscovery(catalogs);
       owner.sessionCatalogRefreshStatus = completePanelRefresh();

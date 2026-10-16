@@ -104,6 +104,11 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ readCheckoutGitContext }) =>
                   readCheckoutGitContext(command.input.root, command.input.githubHost),
               );
+            case "pull-request.branch-comparison":
+              return import("../gateway/control-ui-session-prs-git.runtime.js").then(
+                ({ readPullRequestBranchComparison }) =>
+                  readPullRequestBranchComparison(command.input),
+              );
             case "pull-request.branch-facts":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
                 ({ readPullRequestBranchFacts }) => readPullRequestBranchFacts(command.input),

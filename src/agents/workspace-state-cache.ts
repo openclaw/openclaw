@@ -63,7 +63,7 @@ export async function readCachedWorkspaceStateSnapshot(
   }
   const cached = store.snapshots.get(aliasKey);
   if (cached) {
-    return structuredClone(cached);
+    return cached;
   }
   const snapshot = await read();
   context.admission.assertCurrent();
@@ -77,7 +77,7 @@ export async function readCachedWorkspaceStateSnapshot(
       if (store.snapshots.size >= 128) {
         store.snapshots.delete(store.snapshots.keys().next().value!);
       }
-      store.snapshots.set(aliasKey, structuredClone(snapshot));
+      store.snapshots.set(aliasKey, snapshot);
     }
   }
   return snapshot;

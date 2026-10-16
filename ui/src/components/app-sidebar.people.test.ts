@@ -6,6 +6,7 @@ import "../test-helpers/app-sidebar-cases/agent-menu-scope.ts";
 import "../test-helpers/app-sidebar-cases/agent-menu-hover.ts";
 import "../test-helpers/app-sidebar-cases/roster-agent-first.ts";
 import "../test-helpers/app-sidebar-cases/roster-main-metadata.ts";
+import "../test-helpers/app-sidebar-cases/roster-live.ts";
 import "../test-helpers/app-sidebar-cases/roster.ts";
 import "../test-helpers/app-sidebar-cases/roster-pins.ts";
 import "../test-helpers/app-sidebar-cases/attention.ts";

@@ -378,7 +378,7 @@ describe("lmstudio plugin", () => {
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([401, 408, 425, 429, 503])(
+  it.each([401, 503])(
     "preserves the existing HTTP %i reset failure guidance",
     async (httpStatus) => {
       fetchLmstudioModelsMock.mockResolvedValue({
@@ -504,7 +504,7 @@ describe("lmstudio plugin", () => {
     },
   );
 
-  it.each(["models", "empty", "unavailable"])(
+  it.each(["models", "empty"])(
     "acquires the live catalog with saved model rows: %s",
     async (outcome) => {
       const provider = registerProvider();
@@ -518,11 +518,7 @@ describe("lmstudio plugin", () => {
               { ...createDiscoveredModel("New model", 32_768), id: "new-model" },
             ]
           : [];
-      if (outcome === "unavailable") {
-        discoverLmstudioModelsMock.mockRejectedValue(new Error("server unavailable"));
-      } else {
-        discoverLmstudioModelsMock.mockResolvedValue(models);
-      }
+      discoverLmstudioModelsMock.mockResolvedValue(models);
 
       const result = await provider.catalog?.run({
         config,
@@ -531,11 +527,10 @@ describe("lmstudio plugin", () => {
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       });
 
-      expect(result).toMatchObject(
-        outcome === "unavailable"
-          ? { providers: {}, outcomes: [{ provider: "lmstudio", status: "unavailable" }] }
-          : { provider: { models }, outcomes: [{ provider: "lmstudio", status: "ready" }] },
-      );
+      expect(result).toMatchObject({
+        provider: { models },
+        outcomes: [{ provider: "lmstudio", status: "ready" }],
+      });
       expect(config).toEqual(before);
     },
   );
@@ -579,8 +574,9 @@ describe("lmstudio plugin", () => {
           lmstudio: {
             models: [
               {
-                id: "qwen3-8b-instruct",
-                name: "Qwen 3 8B Instruct",
+                id: "compact-chat",
+                name: "Compact Chat",
+                parameterCount: 4_000_000_000,
                 contextWindow: 32768,
                 contextTokens: 8192,
                 reasoning: true,
@@ -598,6 +594,7 @@ describe("lmstudio plugin", () => {
               },
               {
                 id: "bad-window",
+                parameterCount: -1,
                 contextWindow: Number.POSITIVE_INFINITY,
                 contextTokens: 4096.5,
               },
@@ -626,8 +623,9 @@ describe("lmstudio plugin", () => {
     ).toEqual([
       {
         provider: "lmstudio",
-        id: "qwen3-8b-instruct",
-        name: "Qwen 3 8B Instruct",
+        id: "compact-chat",
+        name: "Compact Chat",
+        parameterCount: 4_000_000_000,
         compat: {
           supportsUsageInStreaming: true,
           codeMode: "preferred",

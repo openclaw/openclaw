@@ -1,25 +1,30 @@
-/* Shadow-hosted primitives need the same noninherited reset as document-hosted controls. */
+/* Keep shadow-hosted resets, with separate ancestors for selector fast rejection. */
 :is(.oc-overlay, .oc-modal-dialog),
-:is(.oc-overlay, .oc-modal-dialog) * {
+.oc-overlay *,
+.oc-modal-dialog * {
   box-sizing: border-box;
   scrollbar-width: thin;
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar {
+.oc-overlay ::-webkit-scrollbar,
+.oc-modal-dialog ::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-track,
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-corner,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-track,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-corner {
+.oc-overlay ::-webkit-scrollbar-track,
+.oc-modal-dialog ::-webkit-scrollbar-track,
+.oc-overlay ::-webkit-scrollbar-corner,
+.oc-modal-dialog ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb {
+.oc-overlay ::-webkit-scrollbar-thumb,
+.oc-modal-dialog ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: content-box;
   border: var(--scrollbar-thumb-inset) solid transparent;
@@ -27,7 +32,8 @@
 }
 
 :is(.oc-overlay, .oc-modal-dialog)::-webkit-scrollbar-thumb:hover,
-:is(.oc-overlay, .oc-modal-dialog) ::-webkit-scrollbar-thumb:hover {
+.oc-overlay ::-webkit-scrollbar-thumb:hover,
+.oc-modal-dialog ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
@@ -224,6 +230,10 @@
     color var(--control-ui-transition-fast) ease;
 }
 
+a.oc-menu-item[href] {
+  cursor: pointer;
+}
+
 .oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
@@ -255,6 +265,10 @@
 .oc-menu-item__label {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.oc-menu-item--submenu > .oc-menu-item__label {
+  display: contents;
 }
 
 .oc-menu-item__icon,

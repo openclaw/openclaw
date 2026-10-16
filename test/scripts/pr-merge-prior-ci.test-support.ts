@@ -166,8 +166,22 @@ const securityResponse=()=>{
 
 export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: string) {
   const blob = f.git(["hash-object", "-w", "--stdin"], workflow);
-  const workflows = f.git(["mktree"], `100644 blob ${blob}\tci.yml\n`);
-  const github = f.git(["mktree"], `040000 tree ${workflows}\tworkflows\n`);
+  const workflowEntries = f
+    .git(["ls-tree", `${treeish}:.github/workflows`])
+    .split("\n")
+    .filter((entry) => !entry.endsWith("\tci.yml"));
+  const workflows = f.git(
+    ["mktree"],
+    [...workflowEntries, `100644 blob ${blob}\tci.yml`, ""].join("\n"),
+  );
+  const githubEntries = f
+    .git(["ls-tree", `${treeish}:.github`])
+    .split("\n")
+    .filter((entry) => !entry.endsWith("\tworkflows"));
+  const github = f.git(
+    ["mktree"],
+    [...githubEntries, `040000 tree ${workflows}\tworkflows`, ""].join("\n"),
+  );
   const entries = f
     .git(["ls-tree", treeish])
     .split("\n")

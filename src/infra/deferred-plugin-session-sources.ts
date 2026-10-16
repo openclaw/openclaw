@@ -171,7 +171,7 @@ export function resolveVerifiedSessionSource(
   source: DeferredPluginSessionImport["sources"][number],
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
-  verification: SessionSourceVerification = new Map(),
+  verification: SessionSourceVerification,
 ): string | undefined {
   const targetKey = JSON.stringify([sourceKey(target), resolveSessionSqliteMigrationRunsDir(env)]);
   let cachedTarget = verification.get(targetKey);
@@ -335,6 +335,7 @@ export function readDeferredPluginSessionImport(
   if (params.purpose) {
     return recorded;
   }
+  const verification = params.verification ?? new Map();
   if (params.allowMissingIndex && !statMigrationPath(params.target.storePath)) {
     recorded = {
       ...recorded,
@@ -345,7 +346,7 @@ export function readDeferredPluginSessionImport(
             source,
             { ...params.target, sqlitePath: params.sqlitePath },
             params.env,
-            params.verification,
+            verification,
           ) ||
           existingSessionSourcePaths(
             source.path,
@@ -355,7 +356,7 @@ export function readDeferredPluginSessionImport(
       ),
     };
   }
-  assertVerifiedSessionSources(params, recorded, params.verification, params.onSourceConflict);
+  assertVerifiedSessionSources(params, recorded, verification, params.onSourceConflict);
   return recorded;
 }
 
@@ -418,7 +419,7 @@ export function resolveDeferredPluginSessionStoreSource(params: {
         )
       : undefined;
   return index
-    ? resolveVerifiedSessionSource(index, { ...params.target, sqlitePath }, params.env)
+    ? resolveVerifiedSessionSource(index, { ...params.target, sqlitePath }, params.env, new Map())
     : undefined;
 }
 
@@ -466,7 +467,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
       !receiptStillBound(readDeferredPluginSessionImportReceipt(params)) ||
       (verifiedIndex &&
         !missingIndex &&
-        !resolveVerifiedSessionSource(verifiedIndex, target, params.env)) ||
+        !resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map())) ||
       (missingIndex && existingSessionSourcePaths(index.path, target, params.env).length > 0)
     ) {
       throw new Error(
@@ -514,7 +515,8 @@ export async function rebuildDeferredPluginSessionSourceIndex(
             const indexPath =
               !isIndex &&
               verifiedIndex &&
-              resolveVerifiedSessionSource(verifiedIndex, target, params.env);
+              // Recovery yields between sources; do not reuse verification across those awaits.
+              resolveVerifiedSessionSource(verifiedIndex, target, params.env, new Map());
             if (isIndex) {
               const issues: Array<{ code: string; message: string }> = [];
               const current = readLegacySessionStoreEntries(params.target, issues, {

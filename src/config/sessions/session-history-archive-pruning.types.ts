@@ -21,6 +21,11 @@ export type SessionArchivePruningRead = {
   limit?: number;
 };
 
+export type SessionArchivePruningSnapshot = {
+  archives: PublishedSessionTranscriptArchive[];
+  freePages: number;
+};
+
 export type SessionArchiveRetentionDelete = {
   candidates: readonly PublishedSessionTranscriptArchive[];
   archiveDirectory: string;

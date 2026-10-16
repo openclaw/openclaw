@@ -28,6 +28,7 @@ const PROVIDER_DOC_ALIASES = new Map([
 ]);
 const PLUGIN_DOC_ALIASES = new Map([
   ["acpx", "/tools/acp-agents-setup"],
+  ["agent-guidance", "/plugins/agent-guidance"],
   ["brave", "/tools/brave-search"],
   ["browser", "/tools/browser"],
   ["codex", "/plugins/codex-harness"],

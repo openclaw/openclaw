@@ -383,19 +383,31 @@ export function resolveConfiguredAgentDatabaseCandidatePaths(
 /** Include configured agent roots and session stores with their exact database owners. */
 export function resolveConfiguredAgentDatabaseTargets(
   cfg: OpenClawConfig,
-  params: { env: NodeJS.ProcessEnv; registeredDatabases?: SessionStoreRegistryRead },
+  params: {
+    env: NodeJS.ProcessEnv;
+    registeredDatabases?: SessionStoreRegistryRead;
+    agentId?: string;
+  },
 ): Array<{ agentId: string; path: string }> {
   const { env } = params;
+  const requested = params.agentId === undefined ? undefined : normalizeAgentId(params.agentId);
   const targets = new Map<string, { agentId: string; path: string }>();
-  const add = (agentId: string, pathname: string) =>
-    targets.set(`${agentId}\0${pathname}`, { agentId, path: pathname });
+  const add = (agentId: string, pathname: string) => {
+    if (requested === undefined || agentId === requested) {
+      targets.set(`${agentId}\0${pathname}`, { agentId, path: pathname });
+    }
+  };
+  // Physical store collisions still require all configured claims; only the selected
+  // agent's native directory needs preparation for a per-agent startup guard.
   dedupeSessionStoreTargetsBySqliteTarget(resolveConfiguredSessionStoreTargets(cfg, env), {
     ...params,
     defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
     onResolvedTarget: (_selected, physical) => add(physical.agentId, physical.storePath),
   });
   for (const agentId of listAgentIds(cfg)) {
-    add(agentId, path.join(resolveAgentDir(cfg, agentId, env), "openclaw-agent.sqlite"));
+    if (requested === undefined || agentId === requested) {
+      add(agentId, path.join(resolveAgentDir(cfg, agentId, env), "openclaw-agent.sqlite"));
+    }
   }
   return [...targets.values()];
 }

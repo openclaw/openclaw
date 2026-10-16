@@ -7,6 +7,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
@@ -48,12 +49,15 @@ function createFixture() {
 }
 
 function trackEntryReadProbes(database: ReturnType<typeof openOpenClawAgentDatabase>) {
-  return trackSqliteStatementExecutions(database.db, ["transcript", "window"], (sql) =>
-    /^select .+ from "session_windows" where "session_id" = \?$/i.test(sql)
-      ? "window"
-      : /^select "seq" from "transcript_events" where "session_id" = \? limit \?$/i.test(sql)
-        ? "transcript"
-        : null,
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["transcript", "window"],
+    (sql) =>
+      /^select .+ from "session_windows" where "session_id" = \?$/i.test(sql)
+        ? "window"
+        : /^select "seq" from "transcript_events" where "session_id" = \? limit \?$/i.test(sql)
+          ? "transcript"
+          : null,
   );
 }
 

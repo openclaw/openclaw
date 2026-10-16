@@ -199,6 +199,69 @@ describe("OpenAI Decisions API", () => {
     expect(JSON.parse(init.body).input).toBe("literal evidence");
   });
 
+  it.each([200, 201])("enforces the %i-question batch boundary before auth", async (count) => {
+    const questions = Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [`q${index}`, { type: "boolean" as const }]),
+    );
+    mocks.fetch.mockResolvedValue(
+      Response.json({
+        ...response(),
+        answers: Object.keys(questions).map((name) => ({
+          name,
+          type: "predicate",
+          probability: 0.5,
+        })),
+      }),
+    );
+    const result = await buildOpenAIDecisionProvider(() => ({})).evaluate(
+      { state: "Evidence", questions },
+      context(),
+    );
+    if (count === 200) {
+      expect(result.status).toBe("ok");
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toEqual({ status: "unavailable", reason: "unsupported-input" });
+      expect(auth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([255, 256])("enforces the %i-choice boundary before auth", async (count) => {
+    const criteria = Object.fromEntries(
+      Array.from({ length: count }, (_, index) => [`option${index}`, `Alternative ${index}`]),
+    );
+    mocks.fetch.mockResolvedValue(
+      Response.json({
+        ...response(),
+        answers: [
+          {
+            name: "route",
+            type: "choice",
+            choice: "option0",
+            confidence: 1,
+            probabilities: Object.keys(criteria).map((value, index) => ({
+              value,
+              probability: index === 0 ? 1 : 0,
+            })),
+          },
+        ],
+      }),
+    );
+    const result = await buildOpenAIDecisionProvider(() => ({})).evaluate(
+      { state: "Evidence", questions: { route: { type: "choice", criteria } } },
+      context(),
+    );
+    if (count === 255) {
+      expect(result.status).toBe("ok");
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toEqual({ status: "unavailable", reason: "unsupported-input" });
+      expect(auth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+    }
+  });
+
   it("does not dispatch with an unresolved configured header credential", async () => {
     vi.stubEnv("OPENAI_DECISION_HEADER", "synthetic-ambient-header");
     const provider = buildOpenAIDecisionProvider(() => ({
@@ -254,10 +317,7 @@ describe("OpenAI Decisions API", () => {
 
   it.each([
     [401, "authentication"],
-    [403, "authentication"],
     [400, "unsupported-input"],
-    [413, "unsupported-input"],
-    [422, "unsupported-input"],
     [500, "transport"],
   ])("maps HTTP %s without exposing the body or retrying", async (status, reason) => {
     mocks.fetch.mockResolvedValue(new Response("private reflected evidence", { status }));

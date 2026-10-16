@@ -493,7 +493,8 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const { writeContext, track } = captureAgentRunTerminalPersistence(evt.runId);
+        const { writeContext, track } =
+          evt.terminalPersistence ?? captureAgentRunTerminalPersistence(evt.runId);
         const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,

@@ -22,12 +22,12 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
+  prepareAssistantTranscriptText,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -435,9 +435,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   ) {
     return null;
   }
-  if (isSilentReplyPayloadText(normalized)) {
-    return null;
-  }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
   // nothing to do" reply to a heartbeat tick. Drop on the assistant side
   // directly so we do not have to rely on cross-message coupling with the
@@ -483,7 +480,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Retained during stable deprecation; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -663,7 +660,7 @@ export async function buildSessionEntryFromSnapshot(
   const result = await buildSessionEntryFromSource(
     absPath,
     {
-      ...structuredClone(options),
+      ...options,
       ...(onTranscriptMessage
         ? {
             onTranscriptMessage(message, observedAt) {
@@ -691,7 +688,9 @@ async function buildSessionEntryFromSource(
       (sqliteIdentity
         ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
             // Observers require original messages and run only after the snapshot closes.
-            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+            projectEvent: opts.onTranscriptMessage
+              ? undefined
+              : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
           })
         : null);
     const sqliteSource =
@@ -862,8 +861,14 @@ async function buildSessionEntryFromSource(
       ) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
-      if (rawText === null) {
+      if ("display" in message && message.display === false) {
+        continue;
+      }
+      const rawText = prepareAssistantTranscriptText(
+        message,
+        collectRawSessionText(message.content) ?? undefined,
+      );
+      if (rawText === undefined) {
         continue;
       }
 

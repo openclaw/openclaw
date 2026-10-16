@@ -11,8 +11,8 @@ import {
   runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
 } from "../sqlite-worker-store.js";
-import type { DatabaseEngineInput } from "./config.js";
 import { observeDatabaseRequest } from "./observation.js";
+import type { DatabaseEngineInput } from "./types.js";
 
 type EngineStoreOptions = SqliteWorkerStoreOptions & { existingOnly?: false; target?: never };
 

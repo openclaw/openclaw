@@ -8,10 +8,11 @@ import type {
   SessionMethodAccess,
   SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
 import type {
@@ -19,21 +20,20 @@ import type {
   CatalogSessionMenuRequest,
   SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
+import "./mcp-app-catalog.tsx";
+import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
   SidebarToolActivity,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import "./mcp-app-catalog.tsx";
-import "./menu-surface.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
 import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
@@ -123,7 +123,7 @@ export interface SessionListHost {
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary">;
   mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
@@ -158,6 +158,7 @@ export type SessionCatalogGroupsParams = {
   visibleSessionLimits: ReadonlyMap<string, number>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   renderLiveRow: (
     row: () => GatewaySessionRow,
     display: CatalogBackingSessionDisplay,
@@ -233,6 +234,7 @@ type BridgeAttributes<Props> = SolidJSX.HTMLAttributes<SolidBridgeElement<Props>
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-sidebar-session-filter-popover": HTMLAttributes<HTMLElement>;
       "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement> & {
         "prop:onToggle"?: () => void;
       };

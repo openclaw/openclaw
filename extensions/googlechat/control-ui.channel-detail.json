@@ -1,0 +1,7 @@
+{
+  "pluginId": "googlechat",
+  "titleKey": "channels.googleChat.title",
+  "subtitleKey": "channels.googleChat.subtitle",
+  "extraFacts": ["credential", "audience"],
+  "runningWhenStatusMissing": "unknown"
+}

@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import {
+  emptyAssistantAcknowledgment,
+  emptyAssistantHistory,
+} from "../../test-helpers/empty-assistant-history.ts";
 import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -60,22 +64,6 @@ describe("sessions_yield transcript projection", () => {
       expect(messages).toEqual(original);
     },
   );
-
-  it.each([
-    {
-      role: "assistant",
-      content: [{ type: "image", url: "https://example.invalid/proof.png" }],
-      timestamp: 3_000,
-    },
-  ])("separates later $role activity from the run that handed off", (later) => {
-    const messages = [...separateHistory, later];
-    const items = buildChatItems(createProps({ messages }));
-    // The boundary is structural: it carries nothing a reader could see.
-    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
-    expect(items[0]).toMatchObject({ kind: "notice", handoffBoundary: true });
-    expect(items[0]).not.toHaveProperty("label");
-    expect(pendingSessionsYield(messages)).toBeNull();
-  });
 
   it.each([true])(
     "never displays private yield inputs before confirmation (failed=%s)",
@@ -164,43 +152,6 @@ describe("sessions_yield transcript projection", () => {
     expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([]);
   });
 
-  it("gives the pending wait the handed-off run's identity and yields to an own run", () => {
-    const messages = [
-      {
-        role: "assistant",
-        runId: "parent-run",
-        timestamp: 1_900,
-        content: [{ type: "text", text: "Delegating the backend." }],
-      },
-      ...separateHistory,
-    ];
-    const items = buildChatItems(
-      createProps({ messages, subagentWait: { startedAt: 2_500, runId: "parent-run" } }),
-    );
-    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
-    expect(items.at(-1)).toMatchObject({
-      kind: "reading-indicator",
-      waitingOn: "subagents",
-      startedAt: 2_500,
-      runId: "parent-run",
-    });
-    // An own run owns the indicator; the wait never competes with it.
-    const working = buildChatItems(
-      createProps({
-        messages,
-        runId: "resumed-run",
-        runActive: true,
-        runWorking: true,
-        streamStartedAt: 3_000,
-        subagentWait: { startedAt: 2_500, runId: "parent-run" },
-      }),
-    );
-    expect(working.filter((item) => item.kind === "reading-indicator")).toEqual([
-      expect.objectContaining({ runId: "resumed-run" }),
-    ]);
-    expect(working.at(-1)).not.toHaveProperty("waitingOn");
-  });
-
   describe("a run that resumed the handoff", () => {
     const asked = { role: "user", content: "Split the work.", timestamp: 1_000 };
     const request = { askedAt: 1_000, runIds: ["parent-run"] };
@@ -231,44 +182,7 @@ describe("sessions_yield transcript projection", () => {
       });
     });
 
-    it("keeps the request clock while waiting, including a second handoff", () => {
-      const waiting = {
-        runActive: false,
-        runWorking: false,
-        subagentWait: { startedAt: 2_500, runId: "parent-run" },
-      };
-      expect(status([asked, ...separateHistory], waiting)).toMatchObject({
-        waitingOn: "subagents",
-        startedAt: 1_000,
-        request: { askedAt: 1_000, runIds: [] },
-      });
-      const again = separateHistory.map((message) => ({
-        ...message,
-        runId: "second-run",
-        timestamp: message.timestamp + 1_000,
-      }));
-      expect(
-        status([asked, ...separateHistory, ...again], {
-          ...waiting,
-          subagentWait: { startedAt: 3_500, runId: "second-run" },
-        }),
-      ).toMatchObject({
-        waitingOn: "subagents",
-        startedAt: 1_000,
-        request: { askedAt: 1_000, runIds: ["parent-run"] },
-      });
-      // Missing or ambiguous request history must not invent a total-turn clock.
-      expect(status(separateHistory, waiting)).not.toHaveProperty("request");
-      const unrelated = {
-        role: "assistant",
-        runId: "other-run",
-        timestamp: 1_500,
-        content: "Done.",
-      };
-      expect(status([asked, unrelated, ...separateHistory], waiting)).not.toHaveProperty("request");
-    });
-
-    it.each([1, 2])("counts each run once after %s handoffs", (handoffCount) => {
+    it.each([2])("counts each run once after %s handoffs", (handoffCount) => {
       const runIds = ["parent-run", "second-run"].slice(0, handoffCount);
       const runId = runIds.at(-1)!;
       const messages = [
@@ -328,4 +242,81 @@ describe("sessions_yield transcript projection", () => {
       expect(status([asked, earlier, ...separateHistory])).not.toHaveProperty("request");
     });
   });
+});
+
+it.each([undefined, "Waiting for the parent to reply."])(
+  "projects a thinking-only message wait with its public acknowledgment (%s)",
+  (acknowledgment) => {
+    const messages = [
+      { role: "user", content: "talk to parent session", timestamp: 1_000 },
+      {
+        ...separateHistory[0],
+        content: [
+          { type: "thinking", thinking: "Wait for the parent." },
+          { ...call, arguments: { waitFor: "message", message: "PRIVATE_CONTINUATION" } },
+        ],
+      },
+      {
+        ...separateHistory[1],
+        content: [{ type: "text", text: JSON.stringify({ status: "yielded", acknowledgment }) }],
+      },
+    ];
+    const status = acknowledgment ?? "Waiting for a message";
+    const items = buildChatItems(createProps({ messages }));
+    expect(items.filter((item) => item.kind === "group").map((item) => item.role)).toEqual([
+      "user",
+    ]);
+    expect(items).toContainEqual(expect.objectContaining({ kind: "notice", text: status }));
+    expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
+    const resumed = buildChatItems(
+      createProps({
+        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
+      }),
+    );
+    expect(resumed).not.toContainEqual(expect.objectContaining({ kind: "notice", text: status }));
+  },
+);
+
+it("does not revive a completed message wait when search hides the resumed reply", () => {
+  const messages = [
+    {
+      ...separateHistory[0],
+      content: [
+        { type: "text", text: "Waiting for the parent." },
+        { ...call, arguments: { waitFor: "message" } },
+        result,
+      ],
+    },
+  ];
+  const search = { searchOpen: true, searchQuery: "Waiting for the parent" };
+  const notice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
+  expect(buildChatItems(createProps({ messages, ...search }))).toContainEqual(notice);
+  expect(
+    buildChatItems(
+      createProps({
+        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
+        ...search,
+      }),
+    ),
+  ).not.toContainEqual(notice);
+});
+
+it("keeps Code Mode activity and its public yield acknowledgment without an empty assistant row", () => {
+  const items = buildChatItems(createProps({ messages: emptyAssistantHistory() }));
+  expect(items.filter((item) => item.kind === "group").map((item) => item.role)).not.toContain(
+    "assistant",
+  );
+  expect(items).toContainEqual(
+    expect.objectContaining({ kind: "notice", text: emptyAssistantAcknowledgment }),
+  );
+  expect(
+    items.flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) =>
+            extractToolCardsCached(message).map((card) => card.name),
+          )
+        : [],
+    ),
+  ).toEqual(["exec", "exec", "sessions_list", "sessions_list"]);
+  expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
 });

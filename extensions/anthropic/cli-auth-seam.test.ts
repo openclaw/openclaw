@@ -136,6 +136,16 @@ it.each([0, 1])("does not inspect Claude token storage on logout (exit %s)", asy
   expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
 });
 
+it.each([
+  { code: 1, stdout: "keychain unavailable" },
+  { code: 0, stdout: "{}" },
+  { code: 0, stdout: '{"loggedIn":"false"}' },
+  { code: 1, stdout: '{"loggedIn":true}' },
+])("keeps an inconclusive status unknown: $code/$stdout", async ({ code, stdout }) => {
+  runUtf8CommandWithTimeout.mockResolvedValue({ code, termination: "exit", stdout });
+  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "unreadable" });
+});
+
 it("distinguishes a timed-out probe even when it already printed authenticated JSON", async () => {
   runUtf8CommandWithTimeout.mockResolvedValue({
     code: null,

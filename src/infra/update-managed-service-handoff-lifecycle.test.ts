@@ -99,7 +99,7 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
-  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "validation"] as const)(
+  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "data-at-risk", "validation"] as const)(
     "coordinates CLI %s outcomes and preserves the notice destination",
     async (outcome) => {
       const rollback = outcome === "rollback";
@@ -138,7 +138,11 @@ describe("managed service update handoff", () => {
                   : {}),
                 recovery: rollback
                   ? { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" }
-                  : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+                  : {
+                      serviceRestartSafe: false,
+                      reason: "runtime-verification-failed",
+                      ...(outcome === "data-at-risk" ? { dataAtRisk: "unreadable-state" } : {}),
+                    },
               },
             }),
       });
@@ -168,8 +172,14 @@ describe("managed service update handoff", () => {
           ).toBe(false);
         }
       }
+      if (outcome === "data-at-risk") {
+        expect(result.log).toContain("keep the gateway stopped: data at risk (unreadable-state)");
+      }
       if (outcome === "unsafe") {
-        expect(result.log).toContain("keep the gateway stopped");
+        expect(result.log).toContain("runtime-verification-failed");
+        expect(result.log).toContain("openclaw update repair");
+        expect(result.log).toContain("openclaw gateway status --deep");
+        expect(result.log).not.toContain("keep the gateway stopped");
       }
       if (outcome === "validation") {
         expect(result.commands).toEqual([]);

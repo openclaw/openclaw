@@ -4,17 +4,26 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
+import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
 
-let lifecycle: BoardWidgetFrameLifecycle | undefined;
+let lifecycle: BoardWidgetFrameOwner | undefined;
 const disposers: Array<() => void> = [];
 function mountFrame(
-  owner: BoardWidgetFrameLifecycle,
+  owner: BoardWidgetFrameOwner,
   widget: BoardWidget | (() => BoardWidget),
   root: HTMLElement,
 ) {
   const [revision, setRevision] = createSignal(0);
-  disposers.push(mountSolid(() => owner.render(widget, revision), { container: root }).unmount);
+  disposers.push(
+    mountSolid(
+      () =>
+        owner.render(() => {
+          revision();
+          return typeof widget === "function" ? widget() : widget;
+        }),
+      { container: root },
+    ).unmount,
+  );
   flush();
   return () => {
     setRevision((value) => value + 1);
@@ -62,16 +71,14 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
     sandboxOrigin: "https://sandbox.example",
   };
   const refresh = vi.fn(async () => {});
-  lifecycle = new BoardWidgetFrameLifecycle({
+  lifecycle = new BoardWidgetFrameOwner({
     active: () => true,
     connected: () => root.isConnected,
     context: () => context,
     refreshFrame: () => refresh,
-    requestUpdate: () => {},
     reportContentHeight: () => {},
     scrollBy: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
-    root: () => root,
     widget: () => widget,
   });
   mountFrame(lifecycle, widget, root);
@@ -161,26 +168,20 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
       connection: { gatewayUrl: "https://gateway.example" },
     },
   } as ApplicationContext;
-  let updateView = () => {};
-  const update = () => {
-    updateView();
-    lifecycle!.update();
-  };
   const refresh = vi.fn(async () => {});
-  lifecycle = new BoardWidgetFrameLifecycle({
+  lifecycle = new BoardWidgetFrameOwner({
     active: () => true,
     connected: () => root.isConnected,
     context: () => context,
     refreshFrame: () => refresh,
-    requestUpdate: update,
     reportContentHeight: () => {},
     scrollBy: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
-    root: () => root,
     widget: () => widget,
   });
-  updateView = mountFrame(lifecycle, widget, root);
-  update();
+  onTestFinished(lifecycle.changes.subscribe(() => lifecycle?.update()));
+  mountFrame(lifecycle, widget, root);
+  lifecycle.update();
   const frame = root.querySelector("iframe")!;
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
   const notify = (method: string, params: object) =>
@@ -234,21 +235,18 @@ it.each(["current", "revision", "replacement", "reconnect"] as const)(
     const refreshFrame = vi.fn(() => refreshResult.promise);
     const root = document.createElement("div");
     document.body.append(root);
-    let updateView = () => {};
-    lifecycle = new BoardWidgetFrameLifecycle({
+    lifecycle = new BoardWidgetFrameOwner({
       active: () => true,
       connected: () => root.isConnected,
       context: () => undefined,
       refreshFrame: () => refreshFrame,
-      requestUpdate: () => updateView(),
       reportContentHeight: () => {},
       scrollBy: () => {},
       resolveFrameUrl: () => (name, revision) => `/widget/${name}/${revision}`,
-      root: () => root,
       widget: () => widget,
     });
     lifecycle.connect();
-    updateView = mountFrame(lifecycle, () => widget, root);
+    const updateView = mountFrame(lifecycle, () => widget, root);
     const frame = root.querySelector("iframe")!;
     frame.dispatchEvent(new Event("error"));
     expect(refreshFrame).toHaveBeenCalledExactlyOnceWith("weather");

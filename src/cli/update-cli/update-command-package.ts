@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
   UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
@@ -122,19 +123,26 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     targetVersion: candidateHostVersion,
     allowGatewayServiceRepair: false,
   });
-  const doctorArgv = [
-    params.nodeRunner ?? resolveNodeRunner(),
-    ...(context
-      ? [
-          path.join(
-            params.root,
-            "dist",
-            runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-          ),
-          "--doctor",
-        ]
-      : [entryPath, "doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])]),
-  ];
+  let doctorArgv: string[];
+  if (context) {
+    doctorArgv = [
+      params.nodeRunner ?? resolveNodeRunner(),
+      path.join(
+        params.root,
+        "dist",
+        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      ),
+      "--doctor",
+    ];
+  } else {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: params.nodeRunner ?? resolveNodeRunner(),
+      entryPath,
+      execArgv: [],
+      args: ["doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])],
+    });
+    doctorArgv = [invocation.command, ...invocation.args];
+  }
   const doctorProgressInfo = {
     name: `${CLI_NAME} doctor`,
     command: doctorArgv.join(" "),
@@ -209,6 +217,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
+                databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
               },
             },

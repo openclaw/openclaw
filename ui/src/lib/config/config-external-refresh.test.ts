@@ -18,14 +18,18 @@ function snapshot(count: number): ConfigSnapshot {
 }
 
 describe("external mutation config refresh", () => {
-  it.each([
-    { order: "mutation read first", failure: false },
-    { order: "successor read first", failure: false },
-    { order: "mutation read first", failure: true },
-    { order: "successor read first", failure: true },
-  ])(
-    "uses the actual successor result with $order (failure: $failure)",
-    async ({ order, failure }) => {
+  it.each(
+    [
+      { order: "mutation read first", failure: false },
+      { order: "successor read first", failure: false },
+      { order: "mutation read first", failure: true },
+      { order: "successor read first", failure: true },
+    ].flatMap(({ order, failure }) =>
+      [false, true].map((mutationFailure) => ({ order, failure, mutationFailure })),
+    ),
+  )(
+    "uses the actual successor result with $order (failure: $failure, mutation failure: $mutationFailure)",
+    async ({ order, failure, mutationFailure }) => {
       const mutationRead = deferred<ConfigSnapshot>();
       const successorRead = deferred<ConfigSnapshot>();
       const mutationReadStarted = deferred();
@@ -64,14 +68,22 @@ describe("external mutation config refresh", () => {
           failure
             ? successorRead.reject(new Error("current refresh unavailable"))
             : successorRead.resolve(snapshot(3));
+        const finishMutationRead = async () => {
+          if (mutationFailure) {
+            mutationRead.reject(new Error("superseded refresh unavailable"));
+            await expect(mutationRead.promise).rejects.toThrow("superseded refresh unavailable");
+          } else {
+            mutationRead.resolve(snapshot(2));
+            await mutationRead.promise;
+          }
+        };
         if (order === "mutation read first") {
-          mutationRead.resolve(snapshot(2));
-          await mutationRead.promise;
+          await finishMutationRead();
           finishSuccessor();
         } else {
           finishSuccessor();
           await refresh;
-          mutationRead.resolve(snapshot(2));
+          await finishMutationRead();
         }
         await refresh;
         await expect(mutation).resolves.toEqual({

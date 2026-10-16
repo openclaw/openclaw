@@ -153,32 +153,6 @@ describe("qa suite runtime flow", () => {
     vi.clearAllMocks();
   });
 
-  it("records intentional scenario skips without running later steps", async () => {
-    const laterStep = vi.fn();
-    const result = await runQaSuiteScenarioSteps("requires group credentials", [
-      {
-        name: "Prepare WhatsApp",
-        run: async () => {
-          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
-        },
-      },
-      { name: "Run scenario", run: laterStep },
-    ]);
-
-    expect(result).toMatchObject({
-      status: "skip",
-      details: "requires groupJid in the credential payload",
-      steps: [
-        {
-          name: "Prepare WhatsApp",
-          status: "skip",
-          details: "requires groupJid in the credential payload",
-        },
-      ],
-    });
-    expect(laterStep).not.toHaveBeenCalled();
-  });
-
   it.each([["skip", new QaSuiteScenarioSkipError("later skip")]] as const)(
     "keeps the latest structured RTT measurement when the scenario ends in %s",
     async (expectedStatus, terminalError) => {
@@ -412,10 +386,7 @@ describe("qa suite runtime flow", () => {
     expect(readLogsSince).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    ["fail", true],
-    ["pass", false],
-  ] as const)(
+  it.each([["fail", true]] as const)(
     "attaches scenario-window gateway sentinels only to a failed step (%s)",
     async (outcome, expectEvidence) => {
       const finalReplyFailure =

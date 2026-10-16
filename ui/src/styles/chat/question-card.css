@@ -68,7 +68,8 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__request-nav button,
-.chat-question-panel__collapse {
+.chat-question-panel__collapse,
+.chat-question-panel__secret-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -360,16 +361,8 @@ openclaw-chat-question-panel {
 .chat-question-panel__secret-toggle {
   position: absolute;
   inset: 0 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 40px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
 }
 
 .chat-question-panel__secret-toggle:hover:not(:disabled) {
@@ -377,7 +370,8 @@ openclaw-chat-question-panel {
   background: var(--panel-hover);
 }
 
-.chat-question-panel__secret-toggle:focus-visible {
+.chat-question-panel__secret-toggle:focus-visible,
+.chat-question-panel__hosts:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
@@ -412,11 +406,6 @@ openclaw-chat-question-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--panel);
-}
-
-.chat-question-panel__hosts:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
 }
 
 .chat-question-panel__option--other:has(.chat-question-panel__other:focus-visible) {

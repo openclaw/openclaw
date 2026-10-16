@@ -2,7 +2,7 @@ import * as terminalText from "openclaw/plugin-sdk/text-chunking";
 import { expect, it, vi } from "vitest";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
@@ -19,10 +19,7 @@ it("reconciles saved and externally changed names through background DB-only pag
       originator: "codex_cli_rs",
     }),
   );
-  const saved = await projectCodexCatalogPage(
-    { data: original },
-    { sanitize: terminalText.sanitizeTerminalText },
-  );
+  const saved = await projectCodexCatalogPage({ data: original });
   const state: CodexCatalogState = {
     entries: vi.fn(async () => [
       { key: "complete", createdAt: 0, value: { version: 1 as const, kind: "complete" as const } },

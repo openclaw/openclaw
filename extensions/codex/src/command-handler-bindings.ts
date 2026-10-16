@@ -15,7 +15,7 @@ import {
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
-import { isCodexFastServiceTier } from "./app-server/config.js";
+import { isCodexFastServiceTier, type CodexPluginConfig } from "./app-server/config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadResumeResponse,
@@ -84,7 +84,7 @@ export async function isCurrentSessionModelSelectionLocked(
 export async function bindConversation(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string[],
 ): Promise<PluginCommandResult> {
   const parsed = parseBindArgs(args);
@@ -289,7 +289,7 @@ export async function describeConversationBinding(
 export async function buildThreads(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   filter: string,
 ): Promise<string> {
   const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
@@ -326,7 +326,7 @@ export async function buildCodexCliSessions(
 export async function resumeThread(
   deps: CodexCommandDeps,
   ctx: CodexCommandContext,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   args: string[],
 ): Promise<string> {
   const parsed = parseResumeArgs(args);

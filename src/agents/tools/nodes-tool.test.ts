@@ -254,20 +254,18 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it.each([{ title: " \t ", body: " \n " }] as const)(
-    "rejects empty notification %# before gateway invocation",
-    async (input) => {
-      await expect(
-        createNodesTool().execute("call-notify-empty", {
-          action: "notify",
-          node: "Office Mac",
-          ...input,
-        }),
-      ).rejects.toThrow("title or body required");
+  it("rejects whitespace-only notifications before gateway invocation", async () => {
+    await expect(
+      createNodesTool().execute("call-notify-empty", {
+        action: "notify",
+        node: "Office Mac",
+        title: " \t ",
+        body: " \n ",
+      }),
+    ).rejects.toThrow("title or body required");
 
-      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
-    },
-  );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 
   it.each(["screen_record", "camera_clip"])(
     "clamps %s to the tool duration limit and budgets both timeout layers",
@@ -759,22 +757,19 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it.each(["mobile.ui.act"])(
-    "blocks raw %s so mobile UI uses the dedicated safety contract",
-    async (invokeCommand) => {
-      const tool = createNodesTool();
+  it("blocks raw mobile.ui.act so mobile UI uses the dedicated safety contract", async () => {
+    const tool = createNodesTool();
 
-      await expect(
-        tool.execute("call-1", {
-          action: "invoke",
-          node: "pixel",
-          invokeCommand,
-          invokeParamsJson: "{}",
-        }),
-      ).rejects.toThrow("use the dedicated mobile_ui tool");
-      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "pixel",
+        invokeCommand: "mobile.ui.act",
+        invokeParamsJson: "{}",
+      }),
+    ).rejects.toThrow("use the dedicated mobile_ui tool");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
     const tool = createNodesTool({ allowMediaInvokeCommands: true });

@@ -115,6 +115,8 @@ export type RunEmbeddedAgentParams = {
   modelRun?: boolean;
   /** Setup can reject unavailable endpoints without spending the session retry budget. */
   retryConnectionErrors?: boolean;
+  /** Auxiliary callers can defer transient provider failures to their own scheduler. */
+  retryTransientErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /**
@@ -167,6 +169,13 @@ export type RunEmbeddedAgentParams = {
   /** Verified setup continuation: pin both the harness and its local implementation. */
   expectedAgentHarnessRuntimeArtifact?: ExpectedAgentHarnessRuntimeArtifact;
   authProfileIdSource?: "auto" | "user";
+  /** Caller-owned credential lifetime; independent of interactive pin provenance. */
+  authProfileBinding?: {
+    profileId: string;
+    authRequirement: import("../../../plugin-sdk/provider-model-types.js").ProviderModelRouteAuthRequirement;
+    assertCurrent(): void;
+    revalidate(): Promise<void>;
+  };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
   verboseLevel?: VerboseLevel;

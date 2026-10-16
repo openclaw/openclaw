@@ -276,6 +276,14 @@ path and actual content source through the same classifier. A support bundle
 reports refused inputs without including their contents. These checks do not
 parse workspace manifests or scan for other state roots.
 
+Database discovery for updates, database porting, and Git backups inspects known
+core database paths and declared plugin database resources, including retained
+stores from disabled plugins. It does not traverse unrelated state directories
+such as historical repair backups. Permission errors in those unrelated trees
+do not block a schema crossing; privacy and permission checks still apply to
+selected database sources. Full archives retain their broader traversal and
+error handling.
+
 The marker is an exclusion instruction, not proof of artifact ownership or
 permission to reopen, adopt, or delete it. Producers must durably write it before
 raw data, including in each independently movable staging or capture directory.

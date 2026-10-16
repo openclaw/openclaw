@@ -62,7 +62,6 @@ const SubagentsToolSchema = Type.Object({
 });
 type SubagentsToolOptions = {
   agentSessionKey?: string;
-  callerPolicySessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 };

@@ -137,6 +137,8 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     authProfileType,
   })),
   ...[
+    "tools.github.app.privateKey",
+    "agents.entries.*.tools.github.app.privateKey",
     "memory.search.remote.apiKey",
     "agents.entries.*.memory.search.remote.apiKey",
     "cron.webhookToken",

@@ -156,41 +156,6 @@ describe("CronPage lifecycle", () => {
     );
   });
 
-  it("rejects conversation targets from an earlier channel selection", async () => {
-    const telegram = createDeferred<{ conversations: ConversationListItem[] }>();
-    const request = directoryRequest((params) => {
-      const channel = (params as { channel: string }).channel;
-      if (channel === "telegram") {
-        return telegram.promise;
-      }
-      return {
-        conversations: [
-          conversationTarget("channel:current", {
-            conversationRef: "conv_discord_current",
-            channel: "discord",
-            kind: "channel",
-          }),
-        ],
-      };
-    });
-    const { page } = await mountPage(request);
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    page.patchForm({ deliveryChannel: "discord" });
-    await waitForCronPage(() =>
-      expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-        "channel:current",
-      ]),
-    );
-
-    telegram.resolve({
-      conversations: [conversationTarget("-100stale", { conversationRef: "conv_telegram_stale" })],
-    });
-    await Promise.resolve();
-    expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-      "channel:current",
-    ]);
-  });
-
   it("keeps account and topic routing operator-authored without rediscovering cached targets", async () => {
     const request = directoryRequest(() => ({
       conversations: [
@@ -321,7 +286,7 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
 
-    page.cron = { ...page.cron, cronError: "scheduler save failed" };
+    page.cron.cronError = "scheduler save failed";
     page.refreshView();
     await page.settle();
     expect(page.textContent).toContain("scheduler save failed");

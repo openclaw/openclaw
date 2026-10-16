@@ -368,6 +368,7 @@ describe("worktree Git maintenance", () => {
       .mockImplementation(async (cwd, args, options) => {
         if (args[0] === "multi-pack-index") {
           repairRoots.push(cwd);
+          expect(options?.timeoutMs).toBe(30 * 60_000);
           if (failPackRepair && cwd === repo) {
             throw new Error("pack index unavailable");
           }
@@ -375,7 +376,6 @@ describe("worktree Git maintenance", () => {
         if (args[0] !== "maintenance") {
           return await execute(cwd, args, options);
         }
-        expect(repairRoots.at(-1)).toBe(cwd);
         taskOrders.push(args.filter((arg) => arg.startsWith("--task=")));
         expect(options).toMatchObject({
           killProcessTree: true,

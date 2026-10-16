@@ -5,7 +5,7 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.test-support.js";
 import {
   admitSqliteSchema,
   adoptSqliteSchemaFacts,

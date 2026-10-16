@@ -18,8 +18,10 @@ vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: author
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h20v10H0z"/></svg>';
 const ART_PATH = "/__openclaw__/plugin-theme-art/%40scope%2Fpack/neon/hat/beret";
+// 1 × 1 lossless WebP.
+const WEBP = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
 
-function snapshot(svg = SVG, enabled = true) {
+function snapshot(svg = SVG, enabled = true, background = WEBP) {
   const value = createPluginMetadataSnapshotFixture({
     plugins: [
       {
@@ -32,6 +34,7 @@ function snapshot(svg = SVG, enabled = true) {
               icons: { rocket: { svg } },
               hats: { beret: { svg } },
               critters: { ferris: { svg, title: "a crab, allegedly", crossMs: 15000 } },
+              backgrounds: { dark: { base64: background.toString("base64") } },
             },
           },
         ],
@@ -110,7 +113,33 @@ describe("plugin theme artwork HTTP", () => {
     });
   });
 
+  it("serves captured raster backgrounds with the shared image policy", async () => {
+    await withPluginMetadataSnapshotScope(snapshot(), async () => {
+      const pathname = ART_PATH.replace("hat/beret", "background/dark");
+      const get = await request(`${pathname}?v=content-hash`);
+      expect(get.res.statusCode).toBe(200);
+      expect(get.end).toHaveBeenCalledExactlyOnceWith(WEBP);
+      for (const header of [
+        ["content-type", "image/webp"],
+        ["content-length", String(WEBP.byteLength)],
+        ["cache-control", "private, max-age=3600"],
+        ["x-content-type-options", "nosniff"],
+        ["content-disposition", 'attachment; filename="plugin-theme-background"'],
+      ]) {
+        expect(get.setHeader).toHaveBeenCalledWith(...header);
+      }
+    });
+    const html = Buffer.from("<html><script>alert(1)</script></html>");
+    const rejected = await withPluginMetadataSnapshotScope(snapshot(SVG, true, html), () =>
+      request(ART_PATH.replace("hat/beret", "background/dark")),
+    );
+    expect(rejected.res.statusCode).toBe(404);
+  });
+
   it.each([
+    ART_PATH.replace("hat/beret", "background/light"),
+    ART_PATH.replace("hat/beret", "background/sepia"),
+    ART_PATH.replace("hat/beret", "background/beret"),
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
     ART_PATH.replace("hat", "unknown"),
     ART_PATH.replace("beret", "constructor"),

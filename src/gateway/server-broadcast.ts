@@ -9,7 +9,6 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import {
   createGatewayLiveTextDelivery,
@@ -54,6 +53,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
   "session.tool",
+  "socket.drain",
 ]);
 
 type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
@@ -246,7 +246,7 @@ export function createGatewayBroadcaster(params: {
     }
     const live = opts?.liveText;
     const publication = retained ? retained.publication : delivery.publish(live);
-    if (params.clients.size === 0) {
+    if (params.clients.size === 0 || (!retained && targetConnIds?.size === 0)) {
       return;
     }
     const { sessionKeys, agentId } = resolveBroadcastSessionScope(
@@ -254,6 +254,30 @@ export function createGatewayBroadcaster(params: {
       opts?.sessionKeys,
       opts?.agentId,
     );
+    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
+    const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
+    const sessionMessageSubscribers = params.sessionMessageSubscribers;
+    const subscriptionRequired = event === "session.typing" || sessionSubscriptionVerified;
+    let sessionSubscriberConnIdsByKey: ReadonlySet<string>[] | undefined;
+    let recipientConnIds = targetConnIds;
+    if (!retained && !recipientConnIds && (subscriptionRequired || isSessionSubscriptionEvent)) {
+      // The subscription owner supplies candidates; live authority is still checked at delivery.
+      const audience = new Set(
+        subscriptionRequired ? undefined : params.clients.unscopedSessionEventConnIds,
+      );
+      sessionSubscriberConnIdsByKey = sessionMessageSubscribers
+        ? sessionKeys.map((key) => sessionMessageSubscribers.get(key))
+        : [];
+      for (const subscribers of sessionSubscriberConnIdsByKey) {
+        for (const connId of subscribers) {
+          audience.add(connId);
+        }
+      }
+      if (audience.size === 0) {
+        return;
+      }
+      recipientConnIds = audience;
+    }
     const isTargeted = Boolean(targetConnIds);
     const presencePayload =
       // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
@@ -261,6 +285,12 @@ export function createGatewayBroadcaster(params: {
     // The bounded signal has no caller-provided serialization or model/config data.
     const metadataInvalidation =
       event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
+    // Older Control UI builds cannot render an unknown status phase.
+    const modelWaitStatus =
+      event === "chat" &&
+      isPlainEventPayload(payload) &&
+      payload.state === "status" &&
+      payload.phase === "waiting_for_model";
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
@@ -272,16 +302,17 @@ export function createGatewayBroadcaster(params: {
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
+    let sessionFragments: Map<unknown, string | EncodedMessagePayload> | undefined;
     let projectSession:
       | ((client: GatewayWsClient) => SessionEventProjection | undefined)
       | undefined;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    let lastFrameSequence = 0;
-    let lastFrameRecipientProfileId: string | undefined;
-    let lastFrame: string | Buffer | undefined;
-    let lastPayloadFragment: FramePayload | undefined;
+    const encodedFrames = new Map<
+      FramePayload,
+      Map<string | undefined, Map<number, string | Buffer>>
+    >();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -303,14 +334,10 @@ export function createGatewayBroadcaster(params: {
               : serializeFrameField("payload", value),
           ),
     });
-    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
-    const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
-    const sessionMessageSubscribers = params.sessionMessageSubscribers;
-    let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
     const recipients = retained
       ? [retained.client]
-      : targetConnIds
-        ? params.clients.getByConnectionIds(targetConnIds)
+      : recipientConnIds
+        ? params.clients.getByConnectionIds(recipientConnIds)
         : params.clients;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
@@ -319,6 +346,8 @@ export function createGatewayBroadcaster(params: {
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
+        (modelWaitStatus &&
+          !hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS)) ||
         (opts?.excludeClientCapability &&
           hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
@@ -345,11 +374,8 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       const requiresSessionSubscription =
-        event === "session.typing" ||
-        sessionSubscriptionVerified ||
-        ((isBrowserCopilotClient(c.connect.client) ||
-          hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-          isSessionSubscriptionEvent);
+        subscriptionRequired ||
+        (isSessionSubscriptionEvent && !params.clients.unscopedSessionEventConnIds.has(c.connId));
       if (
         requiresSessionSubscription &&
         !(isTargeted && sessionSubscriptionVerified && !retained)
@@ -357,21 +383,10 @@ export function createGatewayBroadcaster(params: {
         if (!sessionKeys.length || !sessionMessageSubscribers) {
           continue;
         }
-        // Resolve keys lazily to preserve short-circuit order, then reuse their live sets across clients.
-        // This avoids repeated normalization and map lookups without snapshotting recipients.
-        sessionSubscriberConnIdsByKey ??= [];
-        let subscribed = false;
-        let sessionKeyIndex = 0;
-        for (const sessionKey of sessionKeys) {
-          const subscriberConnIds = (sessionSubscriberConnIdsByKey[sessionKeyIndex] ??=
-            sessionMessageSubscribers.get(sessionKey));
-          if (subscriberConnIds.has(c.connId)) {
-            subscribed = true;
-            break;
-          }
-          sessionKeyIndex += 1;
-        }
-        if (!subscribed) {
+        sessionSubscriberConnIdsByKey ??= sessionKeys.map((key) =>
+          sessionMessageSubscribers.get(key),
+        );
+        if (!sessionSubscriberConnIdsByKey.some((subscribers) => subscribers.has(c.connId))) {
           // Scoped clients opt out of cross-session fanout, including critical observer announces.
           // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
           continue;
@@ -599,33 +614,37 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
-          payloadFragment = serializeFrameField(
-            "payload",
-            projected.payload,
-            projected.serializeSession,
-            projected.serializeMessage,
-          );
+          payloadFragment =
+            (projected.serializeSession && sessionFragments?.get(projected.payload)) ||
+            serializeFrameField(
+              "payload",
+              projected.payload,
+              projected.serializeSession,
+              projected.serializeMessage,
+            );
+          if (projected.serializeSession) {
+            (sessionFragments ??= new Map()).set(projected.payload, payloadFragment);
+          }
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
-        if (
-          !projectSession &&
-          lastFrame !== undefined &&
-          lastFrameSequence === nextSeq &&
-          lastFrameRecipientProfileId === recipientProfileId &&
-          lastPayloadFragment === payloadFragment
-        ) {
-          frame = lastFrame;
-        } else {
+        // Reuse across interleaved audiences only after each recipient's live projection.
+        let audienceFrames = encodedFrames.get(payloadFragment);
+        if (!audienceFrames) {
+          encodedFrames.set(payloadFragment, (audienceFrames = new Map()));
+        }
+        let sequenceFrames = audienceFrames.get(recipientProfileId);
+        if (!sequenceFrames) {
+          audienceFrames.set(recipientProfileId, (sequenceFrames = new Map()));
+        }
+        const cached = sequenceFrames.get(nextSeq);
+        if (cached === undefined) {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!projectSession) {
-            lastFrameSequence = nextSeq;
-            lastFrameRecipientProfileId = recipientProfileId;
-            lastPayloadFragment = payloadFragment;
-            lastFrame = frame;
-          }
+          sequenceFrames.set(nextSeq, frame);
+        } else {
+          frame = cached;
         }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
@@ -662,6 +681,7 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
+        state.socket.batchWrites?.();
         if (typeof frame === "string") {
           state.socket.send(frame, sent);
         } else {

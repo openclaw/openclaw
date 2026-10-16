@@ -14,7 +14,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import {
   prepareSynologyHostedMedia,
@@ -158,6 +158,14 @@ describe("Synology Chat hosted outbound media", () => {
       contentType: "image/png",
       fileName: "floor-plan.png",
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    // Native worker drains use setImmediate after exit, including during afterAll cleanup.
     vi.useRealTimers();
   });
 

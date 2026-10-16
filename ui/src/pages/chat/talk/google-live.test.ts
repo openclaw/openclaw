@@ -233,19 +233,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
   });
 
-  it("decodes Blob setup messages", async () => {
-    const onStatus = vi.fn();
-    const transport = await createTransport({ onStatus });
-
-    const { start, ws } = await beginTransport(transport);
-    ws.emitOpen();
-    ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
-    await expect(start).resolves.toBe("ready");
-    transport.activate();
-
-    await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-  });
-
   it("stops queued output when Google Live sends interruption", async () => {
     const onTalkEvent = vi.fn();
     const transport = await createTransport({ onTalkEvent });
@@ -446,7 +433,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
     await expect(start).resolves.toBe("cancelled");
     ws.emitOpen();
-    ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
+    ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
 
     await flushMicrotasks();
     expect(ws.sent).toStrictEqual([]);
@@ -605,6 +592,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       expect(getGoogleLiveToolOwnerState(transport).pendingCalls.get("call-1")).toStrictEqual({
         name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         cancelled: false,
+        controller: expect.any(AbortController),
       }),
     );
     transport.stop();

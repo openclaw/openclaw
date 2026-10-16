@@ -108,3 +108,31 @@ export default function (api) {
   }));
 }
 ```
+
+### Compaction progress
+
+Plugin-owned `compact()` calls normally have one
+`agents.defaults.compaction.timeoutSeconds` window to finish. To report progress,
+explicitly include `"onProgress"` in `info.acceptedHostParams`:
+
+```ts
+const info = {
+  id: "my-context-engine",
+  name: "My Context Engine",
+  ownsCompaction: true,
+  acceptedHostParams: ["onProgress"],
+};
+```
+
+The host then supplies `compact({ onProgress, abortSignal, ... })`. Call
+`onProgress?.()` when useful work advances, such as after a streamed summary
+chunk. Each call refreshes the existing no-progress watchdog; it does not create
+a separate timer or extend the overall ceiling of 10 timeout windows. Do not
+report keepalives as progress. Honor `abortSignal` and stop promptly when it
+aborts, including at the ceiling. Compaction always receives this signal, even
+when the engine excludes `"abortSignal"` from `acceptedHostParams`.
+
+Engines that omit `acceptedHostParams`, or list fields without `"onProgress"`,
+do not receive the callback and keep the one-window contract for their own work.
+Delegating with `delegateCompactionToRuntime(params)` retains built-in model
+progress reporting through the same watchdog.

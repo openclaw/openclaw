@@ -20,8 +20,6 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
-import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { apiThrottler } from "./bot.runtime.js";
@@ -55,10 +53,40 @@ const http = useTelegramHttpFixture();
 
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 const replySpy = vi.fn<ReplyResolver>();
-const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
-const prepareSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
+const { buildModelsProviderData, prepareSkillCommandsForAgents } = vi.hoisted(() => ({
+  buildModelsProviderData:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+    >(),
+  prepareSkillCommandsForAgents:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/skill-commands-runtime").prepareSkillCommandsForAgents
+    >(),
+}));
 const pendingUpdates = new Set<Promise<void>>();
 const pendingMenuSyncs = new Set<Promise<void>>();
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: (...args: Parameters<typeof buildModelsProviderData>) =>
+    buildModelsProviderData(...args),
+}));
+vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForAgents: (...args: Parameters<typeof prepareSkillCommandsForAgents>) =>
+    prepareSkillCommandsForAgents(...args),
+}));
+vi.mock("./bot-native-command-menu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bot-native-command-menu.js")>();
+  return {
+    ...actual,
+    syncTelegramMenuCommands: (params: Parameters<typeof actual.syncTelegramMenuCommands>[0]) => {
+      const pending = actual.syncTelegramMenuCommands(params);
+      pendingMenuSyncs.add(pending);
+      return pending;
+    },
+  };
+});
 
 export async function settleMenuSyncs(): Promise<void> {
   await Promise.all(pendingMenuSyncs);
@@ -77,7 +105,7 @@ export const harness: {
   transcribeFirstAudio: typeof transcribeFirstAudio;
   settleUpdates: typeof settleUpdates;
   prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
-  telegramBotDepsForTest: TelegramBotDeps;
+  buildModelsProviderData: typeof buildModelsProviderData;
 } = {
   get state() {
     return state;
@@ -86,16 +114,7 @@ export const harness: {
   transcribeFirstAudio,
   settleUpdates,
   prepareSkillCommandsForAgents,
-  telegramBotDepsForTest: {
-    ...defaultTelegramBotDeps,
-    buildModelsProviderData,
-    prepareSkillCommandsForAgents,
-    syncTelegramMenuCommands: (params) => {
-      const pending = syncTelegramMenuCommands(params);
-      pendingMenuSyncs.add(pending);
-      return pending;
-    },
-  },
+  buildModelsProviderData,
 };
 const bots: Array<{ bot: Bot; abort: AbortController }> = [];
 export const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
@@ -182,7 +201,6 @@ export async function createBot(
     accountId,
     fetchAbortSignal: abort.signal,
     telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
-    telegramDeps: harness.telegramBotDepsForTest,
     dispatchReplyFromConfig: (params) =>
       dispatchInboundMessage({ ...params, replyResolver: replySpy }),
   });
@@ -301,9 +319,12 @@ beforeEach(async () => {
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
   transcribeFirstAudio.mockReset();
-  prepareSkillCommandsForAgents
-    .mockReset()
-    .mockImplementation(defaultTelegramBotDeps.prepareSkillCommandsForAgents);
+  prepareSkillCommandsForAgents.mockReset().mockImplementation(async (...args) => {
+    const actual = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/skill-commands-runtime")
+    >("openclaw/plugin-sdk/skill-commands-runtime");
+    return await actual.prepareSkillCommandsForAgents(...args);
+  });
   buildModelsProviderData.mockReset().mockResolvedValue({
     byProvider: new Map(),
     providers: [],

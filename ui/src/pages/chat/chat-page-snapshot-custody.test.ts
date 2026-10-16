@@ -3,7 +3,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
@@ -14,7 +13,7 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPageView, type ChatPage } from "./chat-page.ts";
+import { ChatPage } from "./chat-page.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
@@ -162,7 +161,7 @@ it.each([false, true])(
       return expectDefined(state, "mounted pane state");
     };
     try {
-      view = mountSolid(() => createComponent(ChatPageView, { data: route }), {
+      view = mountSolid(() => Object.assign(new ChatPage(), { data: route }), {
         container,
         wrapper: provider.wrapper,
       });

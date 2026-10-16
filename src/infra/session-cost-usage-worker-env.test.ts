@@ -2,11 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as configEnv from "../config/config-env-vars.js";
+import { resolveSqliteTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -18,6 +21,8 @@ import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
 const usageRecord =
   JSON.stringify({
     type: "message",
+    id: "usage",
+    parentId: null,
     timestamp: "2026-09-18T00:00:00Z",
     message: {
       role: "assistant",
@@ -26,6 +31,41 @@ const usageRecord =
       usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
     },
   }) + "\n";
+
+it("refreshes retained transcript windows whose session IDs contain colons", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const scope = resolveSqliteTranscriptScope({
+      agentId: "main",
+      sessionKey: "agent:main:retained-usage",
+      sessionId: "legacy:session",
+      storePath: database.path,
+      env: state.env,
+    });
+    runOpenClawAgentWriteTransaction(
+      (owner) => {
+        appendTranscriptEventsInTransaction(
+          owner,
+          scope,
+          [{ type: "session", version: 1, id: scope.sessionId }, JSON.parse(usageRecord)],
+          { scheduleProjectionReconcile: false },
+        );
+      },
+      { agentId: "main", path: database.path, env: state.env },
+    );
+    await expect(
+      refreshCostUsageCacheForAgent({ agentId: "main", config: {}, env: state.env }),
+    ).resolves.toBe("refreshed");
+    await expect(
+      loadSessionCostSummariesFromCache({
+        agentId: "main",
+        config: {},
+        sessions: [{ sessionFile: `sqlite:main:legacy:session:${database.path}` }],
+        requestRefresh: false,
+      }),
+    ).resolves.toMatchObject({ summaries: [{ totalTokens: 10, totalCost: 1 }] });
+  });
+});
 
 it("retains requested SQLite selectors separately from physical rollup keys", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

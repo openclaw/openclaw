@@ -360,29 +360,6 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("creates an ungrouped visible session with empty staging hints", async () => {
-    const callGateway = mockGateway(visibleCreated);
-    const tool = makeVisibleTool({
-      callGateway,
-    });
-
-    const result = await tool.execute("visible-ungrouped", {
-      task: "inspect issue",
-      visible: true,
-      group: " \t\n ",
-      mode: "run",
-      attachments: [],
-      attachAs: { mountPath: " \t\n " },
-    });
-
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.not.objectContaining({ category: expect.anything() }),
-    );
-  });
-
   it.each(["external", "allowed", "unstructured"] as const)(
     "only translates a structured admin denial for an external cwd: %s",
     async (scenario) => {
@@ -518,6 +495,10 @@ describe("sessions_spawn tool", () => {
         task: "review patch",
         agentId: target,
         visible: true,
+        group: " \t\n ",
+        mode: "run",
+        attachments: [],
+        attachAs: { mountPath: " \t\n " },
       });
       expect(result.details).toMatchObject({ status: "accepted" });
       expect(callGateway).toHaveBeenCalledWith(
@@ -536,6 +517,7 @@ describe("sessions_spawn tool", () => {
         undefined,
       );
       expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
+      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("category");
       const creation = mockCallArg(callGateway, 0, 2, "sessions.create");
       if (inherits) {
         expect(creation).toMatchObject({ resolvedModel: requesterModel });

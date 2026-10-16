@@ -1,5 +1,5 @@
 import { createComponent, createEffect, lazy, Loading, Show } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastControllerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
 
 const ToastView = lazy(() => import("./toast-view.tsx"), { export: "ToastView" });
@@ -10,6 +10,7 @@ if (typeof customElements !== "undefined") {
     "openclaw-toast-host",
     (props, host) => {
       const controller = toastControllerFor(host);
+      // Focus after the DOM commit determines whether the existing toast deadline pauses.
       createEffect(
         () => [props.toast, props.active],
         () => controller.updated(),

@@ -1,3 +1,5 @@
+import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
+import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -547,7 +549,8 @@ const enSettings = {
       idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
       idleTimeoutPlaceholder: "45m",
       setup: "Setup command",
-      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
+      setupHelp:
+        "Optional shell command run before OpenClaw is installed; it must be safe to repeat.",
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
@@ -623,6 +626,9 @@ const enSettings = {
       setupDescription:
         "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
+      statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
+      startChat: "Start a new chat with {model}",
+      modelReady: "{model} is ready for your agent.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
       chooseAccount: "Choose account",
@@ -650,6 +656,7 @@ const enSettings = {
     status: {
       ok: "Signed in",
       ready: "Ready",
+      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -733,6 +740,8 @@ const enSettings = {
     readiness: {
       title: "AI setup",
       heading: "Connect a verified AI model",
+      readyHeading: "AI models available",
+      readyDescription: "Choose a default model below, or connect another provider.",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",
@@ -773,6 +782,7 @@ const enSettings = {
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback Model",
+      utilityFallback: "Utility Fallback Model",
       noFallback: "No fallback model",
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
@@ -817,6 +827,9 @@ const enSettings = {
       checking: "Checking…",
       empty: "No supported coding apps are available.",
       note: "Update installed agents from Control UI",
+      enabled: "{name} is enabled.",
+      sessionExpired:
+        "This setup session ended. Close this dialog and check the installed agent status.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -1574,69 +1587,7 @@ const enSettings = {
       dreams: "Dreams",
       settings: "Settings",
     },
-    overview: {
-      hero: {
-        awake: "Memory is awake",
-        waking: "Waking memory…",
-        hibernating: "Memory is hibernating",
-        needsAttention: "Memory needs attention",
-        noSearchRuntime: "Host memory search is unavailable",
-        noSearchRuntimeDescription:
-          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
-        activeDescription: "{engine} · {mode}",
-        loadingDescription: "Checking this agent's memory engine and dream cycle.",
-        offDescription: "Choose a memory engine in Settings to wake it up.",
-        disabledDescription: "The selected memory engine is disabled. Re-enable it in Settings.",
-        gatewayOffline: "The gateway is offline, so memory status is unavailable.",
-        hybridSearch: "hybrid search",
-        keywordSearch: "keyword search (no embeddings)",
-        openSettings: "Open Settings",
-        retry: "Retry",
-        refresh: "Refresh status",
-      },
-      schedule: {
-        title: "Sleep schedule",
-        lightDescription:
-          "Sorts fresh short-term notes and stages promising candidates without changing long-term memory.",
-        remDescription:
-          "Reflects on themes and recurring ideas across recent activity to strengthen ranking without changing long-term memory.",
-        deepDescription:
-          "Scores staged candidates, promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary.",
-        nextRun: "next {time}",
-        lastRun: "last {time}",
-        notScheduled: "Not scheduled",
-        learnMore: "How dreaming works",
-        openDocs: "Open dreaming guide",
-      },
-      activity: {
-        title: "Activity",
-        promotedToday: "Promoted today",
-        promotedTotal: "Promoted total",
-        shortTermCount: "Pending short-term entries",
-        phaseHitCount: "Phase signals",
-        lightPhaseHitCount: "Light-phase hits",
-        remPhaseHitCount: "REM-phase hits",
-      },
-      health: {
-        title: "Engine health",
-        provider: "Provider",
-        embeddings: "Embeddings",
-        runtime: "Embedding runtime",
-        healthy: "Ready",
-        unavailable: "Unavailable",
-        notChecked: "Not checked",
-        notCheckedDescription: "Embedding readiness has not been checked yet.",
-        checking: "Checking…",
-        test: "Test",
-        testing: "Testing…",
-      },
-      shortcuts: {
-        title: "Explore memory",
-        memories: "Search memories",
-        diary: "Read the dream diary",
-        settings: "Configure memory",
-      },
-    },
+
     memories: {
       searchLabel: "Search memories",
       searchPlaceholder: "Search this agent's memories",
@@ -1681,10 +1632,10 @@ const enSettings = {
       description:
         "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
       activeMemory: {
-        title: "Active memory",
+        title: activeMemoryPresentation.memoryAddon.label,
       },
       memoryWiki: {
-        title: "Memory wiki",
+        title: memoryWikiPresentation.memoryAddon.label,
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Could not update {plugin}",

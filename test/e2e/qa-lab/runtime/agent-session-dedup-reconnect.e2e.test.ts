@@ -152,12 +152,6 @@ describe("agent session deduplication across reconnect", () => {
       stage = "start-gateway";
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         primaryModel: MODEL_REF,

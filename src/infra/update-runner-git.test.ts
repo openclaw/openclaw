@@ -9,6 +9,7 @@ import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
+import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import {
   advanceFixtureRemote,
@@ -192,6 +193,97 @@ describe("Git checkout execution", () => {
       await expectRuntime(root, target);
     },
   );
+
+  it.each([false, true])(
+    "fetches only the selected source before candidate admission (shallow: %s)",
+    async (shallow) => {
+      if (shallow) {
+        await git(root, "fetch", "--depth=1", "origin");
+      }
+      const target = await advanceRemote();
+      await git(remote, "checkout", "-b", "unrelated", beforeSha);
+      await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
+      await git(remote, "add", ".");
+      await git(remote, "commit", "-m", "unrelated remote work");
+      const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
+      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const resultRoots: string[] = [];
+      const execute = runCommand;
+      runCommand = (argv, options) => {
+        const inspection = argv.find((arg) => arg.startsWith("--git-dir="));
+        if (inspection) {
+          resultRoots.push(inspection.slice("--git-dir=".length));
+        }
+        return execute(argv, options);
+      };
+      const result = await update({
+        inspectGitTarget: async () => {
+          const inspection = resultRoots.at(-1)!;
+          const object = await runCommandWithTimeout(
+            ["git", "--no-lazy-fetch", "--git-dir=" + inspection, "cat-file", "-e", unrelated],
+            { timeoutMs: 5000 },
+          );
+          expect(object.code).not.toBe(0);
+        },
+      });
+      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+      await expectRuntime(root, target);
+    },
+  );
+
+  it("refuses an option-shaped upstream before downloading unrelated branches", async () => {
+    await advanceRemote();
+    await git(remote, "checkout", "-b", "unrelated", beforeSha);
+    await fs.writeFile(path.join(remote, "unrelated.txt"), "unrelated branch content");
+    await git(remote, "add", ".");
+    await git(remote, "commit", "-m", "unrelated remote work");
+    const unrelated = await git(remote, "rev-parse", "HEAD:unrelated.txt");
+    await git(root, "config", "branch.main.merge", "--no-tags");
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const observations: { code: number | null; stdout: string }[] = [];
+    const execute = runCommand;
+    runCommand = async (argv, options) => {
+      const result = await execute(argv, options);
+      const inspection = argv.find((arg) => arg.startsWith("--git-dir="));
+      if (inspection && argv.includes("fetch")) {
+        const object = await runCommandWithTimeout(
+          [
+            "git",
+            "--no-lazy-fetch",
+            inspection,
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype)",
+          ],
+          { timeoutMs: 5000, input: unrelated + "\n" },
+        );
+        observations.push({ code: object.code, stdout: object.stdout.trim() });
+      }
+      return result;
+    };
+    const result = await update();
+    expect(observations).toEqual([{ code: 0, stdout: unrelated + " missing" }]);
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(
+      result.steps.find((step) => step.name === "git-target-inspection-fetch")?.stderrTail,
+    ).toContain("--no-tags");
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, beforeSha);
+  });
+
+  it("does not admit cached tracking data excluded from the source fetch", async () => {
+    await advanceRemote();
+    await git(root, "config", "--add", "remote.origin.fetch", "^refs/heads/main");
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const result = await update();
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(stopped).toBe(false);
+    expect(events).toEqual([]);
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, beforeSha);
+  });
 
   it("fails before activation when the authoritative remote is unavailable", async () => {
     await advanceRemote();
@@ -596,60 +688,81 @@ describe("Git checkout execution", () => {
     expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
   });
 
-  it.each(["head-error", "head-mismatch", "ui-missing"] as const)(
-    "retains the candidate after migration starts: %s",
-    async (failure) => {
-      const targetSha = await advanceRemote();
-      const stateFile = path.join(directory, "operator-state");
-      await fs.writeFile(stateFile, "old state");
-      let migrated = false;
-      const execute = runCommand;
-      runCommand = (argv, options) => {
-        if (migrated && argv[2] === root && argv[3] === "rev-parse" && argv[4] === "HEAD") {
-          if (failure === "head-error") {
-            return Promise.resolve({ code: 1, stdout: "", stderr: "HEAD unavailable" });
-          }
-          if (failure === "head-mismatch") {
-            return Promise.resolve({ code: 0, stdout: beforeSha, stderr: "" });
-          }
+  it.each([
+    "doctor-failed",
+    "doctor-threw",
+    "doctor-data-at-risk",
+    "head-error",
+    "head-mismatch",
+    "ui-missing",
+  ] as const)("retains the candidate after migration starts: %s", async (failure) => {
+    const targetSha = await advanceRemote();
+    const stateFile = path.join(directory, "operator-state");
+    await fs.writeFile(stateFile, "old state");
+    let migrated = false;
+    const execute = runCommand;
+    runCommand = (argv, options) => {
+      if (migrated && argv[2] === root && argv[3] === "rev-parse" && argv[4] === "HEAD") {
+        if (failure === "head-error") {
+          return Promise.resolve({ code: 1, stdout: "", stderr: "HEAD unavailable" });
         }
-        return execute(argv, options);
-      };
-      const result = await update({
-        runGitDoctor: async (doctorRoot) => {
-          expect(stopped).toBe(true);
-          await expectRuntime(doctorRoot, targetSha);
-          migrated = true;
-          await fs.writeFile(stateFile, "migrated state");
-          if (failure === "ui-missing") {
-            await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
-          }
-          return {
-            name: "openclaw doctor",
-            command: "CLI activation doctor",
-            cwd: doctorRoot,
-            durationMs: 0,
-            exitCode: 0,
-          };
-        },
-      });
-      expect(result).toMatchObject({
-        status: "error",
-        reason: {
-          "head-error": "head-verification-failed",
-          "head-mismatch": "target-sha-mismatch",
-          "ui-missing": "ui-assets-missing",
-        }[failure],
-        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-      });
-      expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
-      expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
-      expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
-      expect(
-        JSON.parse(await fs.readFile(path.join(root, "dist", "build-info.json"), "utf8")),
-      ).toMatchObject({ buildId: targetSha });
-    },
-  );
+        if (failure === "head-mismatch") {
+          return Promise.resolve({ code: 0, stdout: beforeSha, stderr: "" });
+        }
+      }
+      return execute(argv, options);
+    };
+    const result = await update({
+      runGitDoctor: async (doctorRoot) => {
+        expect(stopped).toBe(true);
+        await expectRuntime(doctorRoot, targetSha);
+        migrated = true;
+        await fs.writeFile(stateFile, "migrated state");
+        if (failure === "doctor-threw") {
+          throw new Error("Doctor failed after writing state");
+        }
+        if (failure === "doctor-data-at-risk") {
+          throw new DoctorMaintenanceRefusalError("State is unreadable", {
+            kind: "data-at-risk",
+            reason: "unreadable-state",
+          });
+        }
+        if (failure === "ui-missing") {
+          await fs.rm(path.join(root, "dist", "control-ui"), { recursive: true });
+        }
+        return {
+          name: "openclaw doctor",
+          command: "CLI activation doctor",
+          cwd: doctorRoot,
+          durationMs: 0,
+          exitCode: failure === "doctor-failed" ? 1 : 0,
+        };
+      },
+    });
+    expect(result).toMatchObject({
+      status: "error",
+      reason: {
+        "doctor-failed": "doctor-failed",
+        "doctor-threw": "unexpected-error",
+        "doctor-data-at-risk": "unexpected-error",
+        "head-error": "head-verification-failed",
+        "head-mismatch": "target-sha-mismatch",
+        "ui-missing": "ui-assets-missing",
+      }[failure],
+      recovery: {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk:
+          failure === "doctor-data-at-risk" ? "unreadable-state" : "state-migrated-no-rollback",
+      },
+    });
+    expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
+    expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
+    expect(await git(root, "rev-parse", "HEAD")).toBe(targetSha);
+    expect(
+      JSON.parse(await fs.readFile(path.join(root, "dist", "build-info.json"), "utf8")),
+    ).toMatchObject({ buildId: targetSha });
+  });
 
   it.each(["build", "locked worktree creation"] as const)(
     "settles cancelled candidate %s before returning",

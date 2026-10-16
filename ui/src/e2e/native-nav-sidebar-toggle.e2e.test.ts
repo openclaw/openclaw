@@ -1,7 +1,5 @@
-// Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
-// at document start and stamp `openclaw-native-web-chrome` at document end.
-// Plain browsers keep their normal in-page controls.
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -20,15 +18,69 @@ const suite = createControlUiE2eSuite({
 let TOAST_PROOF_DIR: string;
 beforeEach(() => {
   TOAST_PROOF_DIR = createControlUiE2eArtifactDir("toast-layering");
-});
-const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-let railProofDir: string | undefined;
-beforeEach(() => {
   railProofDir = railProofDirParent
     ? createControlUiE2eArtifactDir("native-nav-sidebar-toggle", railProofDirParent)
     : undefined;
 });
+const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let railProofDir: string | undefined;
 const limitedScopes = ["operator.read", "operator.write"];
+const expectFocused = (target: Locator) =>
+  expect.poll(() => target.evaluate((element) => element === document.activeElement)).toBe(true);
+const expectShellClass = (page: Page, name: string, present = true) => {
+  const assertion = expect.poll(() => page.locator(".shell").getAttribute("class"));
+  return present ? assertion.toContain(name) : assertion.not.toContain(name);
+};
+const nativeEvent = (page: Page, type: string) =>
+  page.evaluate((name) => window.dispatchEvent(new CustomEvent(name)), type);
+const visible = (target: Locator, value = true) =>
+  expect.poll(() => target.isVisible()).toBe(value);
+const count = (target: Locator, value: number) => expect.poll(() => target.count()).toBe(value);
+const attr = (target: Locator, name: string, value: string | null) =>
+  expect.poll(() => target.getAttribute(name)).toBe(value);
+async function expectStyles(target: Locator, expected: Record<string, string>, length = 1) {
+  await expect
+    .poll(() =>
+      target.evaluateAll(
+        (elements, names) =>
+          elements.map((element) => {
+            const style = getComputedStyle(element);
+            return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
+          }),
+        Object.keys(expected),
+      ),
+    )
+    .toEqual(Array.from({ length }, () => expected));
+}
+async function expectBelow(lower: Locator, upper: Locator, inclusive: boolean) {
+  await expect
+    .poll(async () => {
+      const [a, b] = await Promise.all([lower.boundingBox(), upper.boundingBox()]);
+      return Boolean(a && b && (inclusive ? a.y >= b.y + b.height : a.y > b.y + b.height));
+    })
+    .toBe(true);
+}
+type NavWindow = Window & {
+  openclawNavMessages?: Array<{ type?: string; width?: number; collapsed?: boolean }>;
+};
+const navState = (page: Page, collapsed?: boolean) =>
+  page.evaluate(
+    (desired) =>
+      (window as NavWindow).openclawNavMessages?.find(
+        (message) =>
+          message?.type === "nav-state" && (desired === undefined || message.collapsed === desired),
+      ),
+    collapsed,
+  );
+async function capture(page: Page, directory: string | undefined, file: string, fullPage = false) {
+  if (directory) {
+    await page.screenshot({ animations: "disabled", fullPage, path: path.join(directory, file) });
+  }
+}
+const boxes = async (controls: Locator) =>
+  Promise.all(
+    Array.from({ length: await controls.count() }, (_, index) => controls.nth(index).boundingBox()),
+  );
 const UPDATE_AVAILABLE = {
   channel: "stable",
   currentVersion: "1.0.0",
@@ -73,43 +125,34 @@ suite.define(() => {
 
   it("keeps sidebar rail toggles in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
-    const titlebarRequest = controlUiE2eBuiltModuleRequest(
-      "ui/src/components/macos-titlebar-controls.runtime-solid.tsx",
-    );
-    const swipeRequest = controlUiE2eBuiltModuleRequest("ui/src/app/nav-drawer-swipe.runtime.ts");
-
     expect(
       await page.evaluate(
-        (requestPattern) => ({
+        (patterns) => ({
           titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
-          titlebarRequested: performance
-            .getEntriesByType("resource")
-            .some((entry) => new RegExp(requestPattern, "u").test(entry.name)),
+          requested: patterns.map((pattern) =>
+            performance
+              .getEntriesByType("resource")
+              .some((entry) => new RegExp(pattern, "u").test(entry.name)),
+          ),
         }),
-        titlebarRequest.source,
+        [
+          "components/macos-titlebar-controls.runtime-solid.tsx",
+          "app/nav-drawer-swipe.runtime.ts",
+        ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
-    ).toEqual({ titlebarRegistered: false, titlebarRequested: false });
-    expect(
-      await page.evaluate(
-        (requestPattern) =>
-          performance
-            .getEntriesByType("resource")
-            .some((entry) => new RegExp(requestPattern, "u").test(entry.name)),
-        swipeRequest.source,
-      ),
-    ).toBe(false);
+    ).toEqual({ titlebarRegistered: false, requested: [false, false] });
     const toggle = page.locator('[data-navigation-view="sessions"]');
     const sidebarPanel = page.locator(".sidebar-shell");
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await visible(sidebarPanel);
     await toggle.click();
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
+    await visible(sidebarPanel, false);
     await toggle.click();
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await visible(sidebarPanel);
 
     await page.locator(".sidebar-issues-button").click();
     const desktopInbox = page.locator("#sidebar-issues-panel");
     await desktopInbox.waitFor();
-    await expect.poll(() => desktopInbox.getAttribute("aria-modal")).toBeNull();
+    await attr(desktopInbox, "aria-modal", null);
     await page.keyboard.press("Escape");
   });
 
@@ -118,10 +161,9 @@ suite.define(() => {
     const toggle = page.locator('[data-navigation-view="sessions"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await visible(sidebarPanel);
 
-    // Safari does not focus buttons on tap. Reproduce that ordering so the
-    // shell's post-collapse focus, rather than the pointer itself, owns focus.
+    // Safari tap leaves post-collapse focus restoration to the shell.
     await toggle.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
@@ -129,104 +171,46 @@ suite.define(() => {
       (element as HTMLElement).click();
     });
 
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
-    await expect
-      .poll(() => toggle.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-    await expect.poll(() => openTooltip.count()).toBe(0);
+    await visible(sidebarPanel, false);
+    await expectFocused(toggle);
+    await count(openTooltip, 0);
 
     await page.keyboard.press("Enter");
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
 
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-    });
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(false);
-    await expect
-      .poll(() => toggle.evaluate((element) => element === document.activeElement))
-      .toBe(true);
-    await expect.poll(() => openTooltip.count()).toBe(0);
+    await nativeEvent(page, "openclaw:native-toggle-sidebar");
+    await visible(sidebarPanel, false);
+    await expectFocused(toggle);
+    await count(openTooltip, 0);
 
-    // A later, explicit keyboard return still reveals the accessible hint.
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => openTooltip.locator(".tooltip-content").textContent())
       .toContain("Sessions · Expand sidebar");
     await page.keyboard.press("Enter");
-    await expect.poll(() => sidebarPanel.isVisible()).toBe(true);
+    await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
     const page = await openPage({ nativeNav: true });
 
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const messages = (window as Window & { openclawNavMessages?: unknown[] })
-            .openclawNavMessages;
-          return messages?.find(
-            (message) =>
-              typeof message === "object" &&
-              message !== null &&
-              (message as { type?: string }).type === "nav-state",
-          );
-        }),
-      )
-      .toMatchObject({ type: "nav-state", collapsed: false });
-    const initialWidth = await page.evaluate(() => {
-      const messages = (window as Window & { openclawNavMessages?: unknown[] }).openclawNavMessages;
-      const message = messages?.find(
-        (candidate) =>
-          typeof candidate === "object" &&
-          candidate !== null &&
-          (candidate as { type?: string }).type === "nav-state",
-      );
-      return (message as { width?: number } | undefined)?.width ?? 0;
-    });
-    expect(initialWidth).toBeGreaterThan(0);
+    await expect.poll(() => navState(page)).toMatchObject({ type: "nav-state", collapsed: false });
+    expect((await navState(page))?.width ?? 0).toBeGreaterThan(0);
+    await visible(page.locator(".sidebar-brand__search"));
 
-    // Expanded native-nav hosts keep sidebar search (no native search control
-    // exists while the rail is open) but hide the duplicate web nav toggle.
-    await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+    await nativeEvent(page, "openclaw:native-toggle-sidebar");
+    await expectShellClass(page, "shell--nav-collapsed");
+    await expect.poll(() => navState(page, true)).toMatchObject({ collapsed: true });
+    await visible(page.locator(".shell-chrome-controls"), false);
+    await expectFocused(page.locator('[data-navigation-view="sessions"]'));
 
-    // Collapse through the native titlebar path; the whole web chrome cluster
-    // hides (native titlebar provides search and new-thread while collapsed).
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-    });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--nav-collapsed");
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (
-            window as Window & { openclawNavMessages?: Array<{ collapsed?: boolean }> }
-          ).openclawNavMessages?.some((message) => message.collapsed === true),
-        ),
-      )
-      .toBe(true);
-    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    // The persistent rail remains a keyboard path back to the collapsed list.
-    await expect
-      .poll(() =>
-        page
-          .locator('[data-navigation-view="sessions"]')
-          .evaluate((element) => element === document.activeElement),
-      )
-      .toBe(true);
+    await nativeEvent(page, "openclaw:native-open-search");
+    await visible(page.locator(".cmd-palette-overlay"));
 
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-open-search"));
-    });
-    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
-
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-new-session"));
-    });
+    await nativeEvent(page, "openclaw:native-new-session");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
   });
 
@@ -246,19 +230,12 @@ suite.define(() => {
       webChrome: true,
     });
     const toolbar = page.locator(".macos-titlebar-controls");
-    await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
+    await visible(toolbar);
+    await visible(page.locator(".shell-chrome-controls"), false);
     const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
-    await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
-    await expect
-      .poll(() =>
-        sidebarNewThread.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { borderStyle: style.borderTopStyle, boxShadow: style.boxShadow };
-        }),
-      )
-      .toEqual({ borderStyle: "none", boxShadow: "none" });
-    await expect.poll(() => sidebarNewThread.getAttribute("aria-disabled")).toBeNull();
+    await visible(sidebarNewThread);
+    await expectStyles(sidebarNewThread, { "border-top-style": "none", "box-shadow": "none" });
+    await attr(sidebarNewThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect
@@ -279,15 +256,13 @@ suite.define(() => {
     const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
-    await expect.poll(() => search.isVisible()).toBe(true);
-    await expect.poll(() => newThread.isVisible()).toBe(true);
+    await visible(search);
+    await visible(newThread);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
     await page.locator(".sidebar-session-toolbar__collapse").click();
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--nav-collapsed");
-    await expect.poll(() => newThread.isVisible()).toBe(true);
+    await expectShellClass(page, "shell--nav-collapsed");
+    await visible(newThread);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
@@ -349,32 +324,16 @@ suite.define(() => {
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom .sidebar-issues-button:visible",
     );
     await page.mouse.move(600, 400);
-    if (railProofDir) {
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(railProofDir, "native-web-top-left-controls.png"),
-      });
-    }
-    await expect
-      .poll(() =>
-        shellControls.evaluateAll((buttons) =>
-          buttons.map((button) => {
-            const style = getComputedStyle(button);
-            return {
-              border: style.borderTopWidth,
-              background: style.backgroundColor,
-              shadow: style.boxShadow,
-            };
-          }),
-        ),
-      )
-      .toEqual(
-        Array.from({ length: 3 }, () => ({
-          border: "0px",
-          background: "rgba(0, 0, 0, 0)",
-          shadow: "none",
-        })),
-      );
+    await capture(page, railProofDir, "native-web-top-left-controls.png");
+    await expectStyles(
+      shellControls,
+      {
+        "border-top-width": "0px",
+        "background-color": "rgba(0, 0, 0, 0)",
+        "box-shadow": "none",
+      },
+      3,
+    );
     const inbox = attention;
     await inbox.hover();
     expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
@@ -388,56 +347,38 @@ suite.define(() => {
       .toBe(true);
     expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
     await page.keyboard.press("Enter");
-    await expect.poll(() => page.locator("#sidebar-issues-panel").isVisible()).toBe(true);
+    await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
-    await expect.poll(() => inbox.getAttribute("aria-expanded")).toBe("false");
+    await attr(inbox, "aria-expanded", "false");
 
     await search.click();
-    await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
+    await visible(page.locator(".cmd-palette-overlay"));
     await page.keyboard.press("Escape");
 
-    await page.evaluate(() => {
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: true, canGoForward: false },
-        }),
+    for (const canGoBack of [true, false]) {
+      await page.evaluate(
+        (backward) =>
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-history-state", {
+              detail: { canGoBack: backward, canGoForward: !backward },
+            }),
+          ),
+        canGoBack,
       );
-    });
-    await expect.poll(() => back.isDisabled()).toBe(false);
-    await expect.poll(() => forward.isDisabled()).toBe(true);
-    await page.evaluate(() => {
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: false, canGoForward: true },
-        }),
-      );
-    });
-    await expect.poll(() => back.isDisabled()).toBe(true);
-    await expect.poll(() => forward.isDisabled()).toBe(false);
+      await expect
+        .poll(async () => [await back.isDisabled(), await forward.isDisabled()])
+        .toEqual([!canGoBack, canGoBack]);
+    }
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await page.locator(".shell-chrome-controls__nav-toggle").click();
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--nav-collapsed");
+    await expectShellClass(page, "shell--nav-collapsed", false);
   });
 
   it.each([
-    {
-      deviceLess: false,
-      label: "ordinary collapsed-navigation",
-      navCollapsed: true,
-      operatorScopes: undefined,
-      width: 1280,
-    },
-    {
-      deviceLess: true,
-      label: "limited-access collapsed-navigation",
-      navCollapsed: true,
-      operatorScopes: limitedScopes,
-      width: 1280,
-    },
+    { deviceLess: false, label: "ordinary", operatorScopes: undefined },
+    { deviceLess: true, label: "limited-access", operatorScopes: limitedScopes },
   ])("keeps focused main controls clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
       deviceLess: testCase.deviceLess,
@@ -455,11 +396,9 @@ suite.define(() => {
           }
         : undefined,
       webChrome: true,
-      width: testCase.width,
+      width: 1280,
     });
-    if (testCase.navCollapsed) {
-      await page.locator(".sidebar-session-toolbar__collapse").click();
-    }
+    await page.locator(".sidebar-session-toolbar__collapse").click();
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
 
@@ -467,16 +406,8 @@ suite.define(() => {
       ".macos-titlebar-controls button:visible, .sidebar-rail__bottom button:visible",
     );
     const panelControls = page.locator(".chat-pane__actions button:visible");
-    const shellBoxes = await Promise.all(
-      Array.from({ length: await shellControls.count() }, (_, index) =>
-        shellControls.nth(index).boundingBox(),
-      ),
-    );
-    const panelBoxes = await Promise.all(
-      Array.from({ length: await panelControls.count() }, (_, index) =>
-        panelControls.nth(index).boundingBox(),
-      ),
-    );
+    const shellBoxes = await boxes(shellControls);
+    const panelBoxes = await boxes(panelControls);
     expect(shellBoxes.length).toBeGreaterThan(0);
     expect(panelBoxes.length).toBeGreaterThan(0);
     for (const panelBox of panelBoxes) {
@@ -498,15 +429,12 @@ suite.define(() => {
     for (let index = 0; index < (await panelControls.count()); index += 1) {
       await panelControls.nth(index).click({ trial: true });
     }
-    if (railProofDir) {
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(
-          railProofDir,
-          `native-web-${testCase.deviceLess ? "limited" : "ordinary"}-${testCase.navCollapsed ? "collapsed" : "expanded"}.png`,
-        ),
-      });
-    }
+    await capture(
+      page,
+      railProofDir,
+      `native-web-${testCase.deviceLess ? "limited" : "ordinary"}-collapsed.png`,
+      true,
+    );
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
@@ -522,39 +450,36 @@ suite.define(() => {
     const trigger = page.locator(".chat-pane__nav-toggle").first();
     const readFocusLocation = () =>
       page.evaluate(() => {
-        // Native dialog tab order may hand focus to browser chrome when no document candidate remains.
-        // `document.hasFocus()` distinguishes that from focus on the underlying inert page.
+        // Native dialog tab order may hand focus to browser chrome, but not the inert page.
         if (!document.hasFocus()) {
           return "browser-chrome";
         }
         return document.activeElement?.closest(".shell-nav") ? "navigation" : "page";
       });
 
-    await expect.poll(() => navigation.getAttribute("inert")).toBe("");
-    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(1);
-    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await attr(navigation, "inert", "");
+    await count(page.locator(".shell-nav-backdrop"), 1);
+    await visible(dialog, false);
     await page.locator(".shell-skip-link").focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
       .toBe(false);
 
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await attr(trigger, "aria-expanded", "false");
+    await attr(trigger, "aria-label", "Expand sidebar");
     await trigger.focus();
     await page.keyboard.press("Enter");
     await expect.poll(readFocusLocation).toBe("navigation");
 
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--nav-drawer-open");
-    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
-    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await expectShellClass(page, "shell--nav-drawer-open");
+    await attr(navigation, "inert", null);
+    await visible(dialog);
     await expect
       .poll(() => page.locator(".shell-nav-backdrop").getAttribute("aria-hidden"))
       .toBe("true");
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await attr(trigger, "aria-expanded", "true");
+    await attr(trigger, "aria-label", "Collapse sidebar");
 
     for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab"] as const) {
       await page.keyboard.press(key);
@@ -573,37 +498,41 @@ suite.define(() => {
     await row.hover();
     await row.click({ button: "right" });
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
-    await expect.poll(() => sessionMenu.isVisible()).toBe(true);
+    await visible(sessionMenu);
     await page.keyboard.press("Escape");
-    await expect.poll(() => sessionMenu.count()).toBe(0);
-    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await count(sessionMenu, 0);
+    await visible(dialog);
 
-    const pageDetails = page.locator(".chat-controls__model-picker").first();
-    await pageDetails.evaluate((element) => ((element as HTMLDetailsElement).open = true));
-    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
+    // Unlike a native picker, a disclosure can open in inert content to probe Escape ownership.
+    await page.evaluate(() => {
+      const details = document.createElement("details");
+      details.id = "background-navigation-disclosure";
+      details.className = "chat-controls__inline-select";
+      details.open = true;
+      document.querySelector(".chat-controls__model-picker")!.parentElement!.append(details);
+    });
+    const pageDetails = page.locator("#background-navigation-disclosure");
+    await attr(pageDetails, "open", "");
     await page.keyboard.press("Escape");
-    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
-    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await attr(pageDetails, "open", "");
+    await visible(dialog, false);
+    await pageDetails.evaluate((element) => element.remove());
 
     await trigger.click();
-    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await visible(dialog);
 
     await page.keyboard.press("Escape");
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--nav-drawer-open");
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
-    await expect
-      .poll(() => trigger.evaluate((element) => element === document.activeElement))
-      .toBe(true);
+    await expectShellClass(page, "shell--nav-drawer-open", false);
+    await attr(trigger, "aria-expanded", "false");
+    await attr(trigger, "aria-label", "Expand sidebar");
+    await expectFocused(trigger);
 
     await trigger.click();
     const inbox = navigation.locator(".sidebar-issues-button");
     await inbox.click();
     const attentionDialog = page.getByRole("dialog", { name: "Inbox" });
     await attentionDialog.waitFor();
-    await expect.poll(() => attentionDialog.getAttribute("aria-modal")).toBe("true");
+    await attr(attentionDialog, "aria-modal", "true");
     const attentionControls = attentionDialog.locator("button, a[href], summary");
     const lastAttentionControl = attentionControls.last();
     await lastAttentionControl.focus();
@@ -614,31 +543,27 @@ suite.define(() => {
       )
       .toBe(true);
     await page.keyboard.press("Escape");
-    await expect.poll(() => attentionDialog.count()).toBe(0);
-    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await count(attentionDialog, 0);
+    await visible(dialog);
 
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:debug-overlay-request"));
-    });
+    await nativeEvent(page, "openclaw:debug-overlay-request");
     const debugOverlay = page.locator(".debug-overlay");
     await debugOverlay.waitFor();
-    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await visible(dialog, false);
     await page.keyboard.press("Escape");
-    await expect.poll(() => debugOverlay.count()).toBe(0);
+    await count(debugOverlay, 0);
 
     await trigger.click();
     await page.mouse.click(899, 450);
-    await expect.poll(() => dialog.isVisible()).toBe(false);
-    await expect
-      .poll(() => trigger.evaluate((element) => element === document.activeElement))
-      .toBe(true);
+    await visible(dialog, false);
+    await expectFocused(trigger);
 
     await trigger.click();
     await navigation.locator(".sidebar-issues-button").click();
     await attentionDialog.waitFor();
     await page.setViewportSize({ width: 1280, height: 900 });
-    await expect.poll(() => attentionDialog.count()).toBe(0);
-    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await count(attentionDialog, 0);
+    await attr(navigation, "inert", null);
     await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
@@ -666,7 +591,7 @@ suite.define(() => {
       const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
       await page.locator(".chat-pane__nav-toggle").first().click();
-      await expect.poll(() => dialog.isVisible()).toBe(true);
+      await visible(dialog);
 
       const catalog = drawer.locator('[data-session-section="catalog:codex"]');
       await catalog.waitFor({ state: "visible" });
@@ -688,74 +613,43 @@ suite.define(() => {
           placement: node.dataset.toastPlacement,
         };
       });
-      expect(drawerToastGeometry.placement).toBe("overlay");
-      expect(drawerToastGeometry.computedTop).toBe(20);
+      expect(drawerToastGeometry).toEqual({ placement: "overlay", computedTop: 20 });
       const dismiss = toast.getByRole("button", { name: "Dismiss" });
       await dismiss.click({ trial: true });
 
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
-      });
+      await capture(page, TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`);
       if (finalLayout === "compact") {
         await page.keyboard.press("Escape");
-        await expect.poll(() => dialog.isVisible()).toBe(false);
+        await visible(dialog, false);
       } else {
         await page.setViewportSize(finalViewport);
-        await expect.poll(() => drawer.count()).toBe(0);
+        await count(drawer, 0);
       }
       expect(page.viewportSize()).toEqual(finalViewport);
       const retainedHost = page.locator(".shell > openclaw-toast-host");
-      await expect.poll(() => retainedHost.getAttribute("data-toast-placement")).toBe("shell");
+      await attr(retainedHost, "data-toast-placement", "shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      await expect
-        .poll(async () => {
-          const [toastBounds, headerBounds] = await Promise.all([
-            retainedToast.boundingBox(),
-            page.locator(".chat-pane__header:visible").first().boundingBox(),
-          ]);
-          return Boolean(
-            toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
-          );
-        })
-        .toBe(true);
-      await expect
-        .poll(async () => {
-          const [toastBounds, composerBounds] = await Promise.all([
-            retainedToast.boundingBox(),
-            page.locator(".agent-chat__composer-shell").boundingBox(),
-          ]);
-          return Boolean(
-            toastBounds && composerBounds && toastBounds.y + toastBounds.height < composerBounds.y,
-          );
-        })
-        .toBe(true);
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`),
-      });
+      await expectBelow(retainedToast, page.locator(".chat-pane__header:visible").first(), true);
+      await expectBelow(page.locator(".agent-chat__composer-shell"), retainedToast, false);
+      await capture(page, TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`);
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();
-      await expect.poll(() => retainedToast.isVisible()).toBe(false);
+      await visible(retainedToast, false);
     },
   );
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {
     const page = await openPage({ webChrome: true, width: 620 });
-    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-resizer").isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--mobile-nav");
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
+    await visible(page.locator(".macos-titlebar-controls"));
+    await visible(page.locator(".sidebar-resizer"));
+    await visible(page.locator(".shell-nav"));
+    await expectShellClass(page, "shell--mobile-nav", false);
+    await visible(page.locator(".topbar-nav-toggle"), false);
 
     await page.setViewportSize({ width: 560, height: 900 });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--mobile-nav");
-    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    await expectShellClass(page, "shell--mobile-nav");
+    await visible(page.locator(".macos-titlebar-controls"), false);
+    await visible(page.locator(".topbar-nav-toggle"));
     // Keep the brand clear of the native traffic-light cluster.
     await expect
       .poll(() =>
@@ -763,31 +657,21 @@ suite.define(() => {
       )
       .toBe(92);
     await page.setViewportSize({ width: 620, height: 900 });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--mobile-nav");
-    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expectShellClass(page, "shell--mobile-nav", false);
+    await visible(page.locator(".shell-nav"));
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {
     const page = await openPage({ nativeNav: true, width: 900 });
     // The native titlebar toggle drives the drawer via the window event, so
     // the web hamburger would be a duplicate control.
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-    });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--nav-drawer-open");
+    await visible(page.locator(".topbar-nav-toggle"), false);
+    await nativeEvent(page, "openclaw:native-toggle-sidebar");
+    await expectShellClass(page, "shell--nav-drawer-open");
     // Closing through the native toggle restores focus to the content anchor,
     // not the hidden hamburger the drawer recorded as its trigger.
-    await page.evaluate(() => {
-      window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-    });
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .not.toContain("shell--nav-drawer-open");
+    await nativeEvent(page, "openclaw:native-toggle-sidebar");
+    await expectShellClass(page, "shell--nav-drawer-open", false);
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.classList.contains("content")))
       .toBe(true);

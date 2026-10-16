@@ -3,7 +3,7 @@ import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { formatChatWorkContext } from "../../../src/chat/work-context.js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import "../pages/chat/chat-pane.tsx";
 import "../styles/chat.ts";
