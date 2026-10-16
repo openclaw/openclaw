@@ -74,6 +74,22 @@ function readRow(databasePath: string, sql: string, ...values: SQLInputValue[]) 
   }
 }
 
+function historyRow(
+  databasePath: string,
+  table: "session_windows" | "session_transcript_archives",
+  sessionId: string,
+) {
+  return readRow(databasePath, `SELECT session_id FROM ${table} WHERE session_id = ?`, sessionId);
+}
+
+function currentRow(databasePath: string, sessionKey: string) {
+  return readRow(
+    databasePath,
+    "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
+    sessionKey,
+  );
+}
+
 function observeFirstSweep(spy: SessionHistoryBudgetQueueObservation) {
   const index = spy.mock.calls.findIndex(
     ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
@@ -161,20 +177,10 @@ it.each([
     queueSpy.mockClear();
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env: state.env });
     const databasePath = target.path;
-    expect(
-      readRow(
-        databasePath,
-        "SELECT session_id FROM session_windows WHERE session_id = ?",
-        originalId,
-      ),
-    ).toEqual({ session_id: originalId });
-    expect(
-      readRow(
-        databasePath,
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        protectedKey,
-      ),
-    ).toEqual({ current_session_id: currentId });
+    expect(historyRow(databasePath, "session_windows", originalId)).toEqual({
+      session_id: originalId,
+    });
+    expect(currentRow(databasePath, protectedKey)).toEqual({ current_session_id: currentId });
     // Forget cached reads without revoking the active sweep's database workers.
     const databaseOptions = {
       agentId: target.agentId ?? "main",
@@ -197,13 +203,7 @@ it.each([
       async (...args) => {
         if (victim === "cap-entry" && args[0].target.canonicalKey === sessionKey) {
           capEntryCalls += 1;
-          expect(
-            readRow(
-              databasePath,
-              "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-              sessionKey,
-            ),
-          ).toEqual({ current_session_id: originalId });
+          expect(currentRow(databasePath, sessionKey)).toEqual({ current_session_id: originalId });
           forgetCachedDatabase();
         }
         return await deleteEntry(...args);
@@ -215,13 +215,9 @@ it.each([
       const result = await materialize(plan);
       if (victim === "history" && plan.sessionId === originalId) {
         expect(result?.archive?.bytes.byteLength).toBeGreaterThan(0);
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toEqual({ session_id: originalId });
+        expect(historyRow(databasePath, "session_windows", originalId)).toEqual({
+          session_id: originalId,
+        });
         order.push("materialized while source exists");
       }
       return result;
@@ -230,13 +226,7 @@ it.each([
     vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
       const result = await reclaim(params);
       if (params.plan.kind === "history-eviction" && params.plan.sessionId === originalId) {
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toBeUndefined();
+        expect(historyRow(databasePath, "session_windows", originalId)).toBeUndefined();
         expect(
           readRow(
             databasePath,
@@ -255,13 +245,7 @@ it.each([
             sessionKey,
           ),
         ).toBeUndefined();
-        expect(
-          readRow(
-            databasePath,
-            "SELECT session_id FROM session_windows WHERE session_id = ?",
-            originalId,
-          ),
-        ).toBeUndefined();
+        expect(historyRow(databasePath, "session_windows", originalId)).toBeUndefined();
         order.push("cap-archived entry durably deleted");
       }
       return result;
@@ -397,32 +381,16 @@ it.each([
     }
     expect(capEntryCalls).toBe(victim === "cap-entry" ? 1 : 0);
     // A one-byte high water can legitimately prune the new derived archive afterward.
-    const oldWindow = readRow(
-      databasePath,
-      "SELECT session_id FROM session_windows WHERE session_id = ?",
-      originalId,
-    );
+    const oldWindow = historyRow(databasePath, "session_windows", originalId);
     if (trigger === "inspect") {
       expect(oldWindow).toEqual({ session_id: originalId });
     } else {
       expect(oldWindow).toBeUndefined();
     }
     if (victim === "cap-entry") {
-      expect(
-        readRow(
-          databasePath,
-          "SELECT session_id FROM session_transcript_archives WHERE session_id = ?",
-          originalId,
-        ),
-      ).toBeUndefined();
+      expect(historyRow(databasePath, "session_transcript_archives", originalId)).toBeUndefined();
     }
-    expect(
-      readRow(
-        databasePath,
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        protectedKey,
-      ),
-    ).toEqual({ current_session_id: currentId });
+    expect(currentRow(databasePath, protectedKey)).toEqual({ current_session_id: currentId });
     expect(readRow(databasePath, "SELECT agent_id FROM schema_meta")).toEqual({ agent_id: "main" });
 
     // Do not open B to inspect it: that would create the failure under test.

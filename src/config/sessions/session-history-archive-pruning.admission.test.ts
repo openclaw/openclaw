@@ -48,6 +48,7 @@ import {
   pruneAllSessionTranscriptArchivesToHighWater,
   reclaimSqliteFreePages,
 } from "./session-history-archive-pruning.js";
+import type { SessionArchivePruningOperations } from "./session-history-archive-pruning.types.js";
 import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -78,6 +79,42 @@ function own<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
+function interceptArchives(
+  wrap: (
+    archives: SessionArchivePruningOperations,
+    options: { path: string },
+  ) => SessionArchivePruningOperations,
+) {
+  const withPages = pageReclamation.withSqliteSessionPageReclamation;
+  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+    <T>(...args: Parameters<typeof withPages<T>>) => {
+      const [input, run] = args;
+      return withPages(input, (reclaim, assertCurrent, options, archives) =>
+        run(reclaim, assertCurrent, options, wrap(archives, options)),
+      );
+    },
+  );
+}
+
+function gate() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  releases.push(release.resolve);
+  return { entered, release };
+}
+
+async function blockArchives() {
+  const { entered, release } = gate();
+  const blocker = own(
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      entered.resolve();
+      await release.promise;
+    }),
+  );
+  await entered.promise;
+  return { release, blocker };
+}
+
 it("keeps native page cleanup outside archive admission", async () => {
   const options = {
     agentId: "main",
@@ -91,16 +128,7 @@ it("keeps native page cleanup outside archive admission", async () => {
     assertOwnerCurrent: () => schemaLease.assertCurrent(),
     assertDatabaseAccess: schemaLease.assertDatabaseAccess,
   });
-  const entered = createDeferred();
-  const release = createDeferred();
-  releases.push(release.resolve);
-  const blocker = own(
-    runExclusiveSqliteTranscriptArchiveWorker(async () => {
-      entered.resolve();
-      await release.promise;
-    }),
-  );
-  await entered.promise;
+  const { release, blocker } = await blockArchives();
   const pageComplete = createDeferred();
   let archiveRead = false;
   const run = () =>
@@ -141,33 +169,16 @@ it("keeps native page cleanup outside archive admission", async () => {
 
 it("retires a queued archive removal without waiting for unrelated archive work", async () => {
   const fixture = await publishedArchive();
-  const entered = createDeferred();
-  const release = createDeferred();
   const queued = createDeferred();
-  releases.push(release.resolve);
-  const blocker = own(
-    runExclusiveSqliteTranscriptArchiveWorker(async () => {
-      entered.resolve();
-      await release.promise;
-    }),
-  );
-  await entered.promise;
-  const withPages = pageReclamation.withSqliteSessionPageReclamation;
-  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
-    <T>(...args: Parameters<typeof withPages<T>>) => {
-      const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, options, archives) =>
-        run(reclaim, assertCurrent, options, {
-          ...archives,
-          withWriter: (operation) => {
-            const work = archives.withWriter(operation);
-            queued.resolve();
-            return work;
-          },
-        }),
-      );
+  const { release, blocker } = await blockArchives();
+  interceptArchives((archives) => ({
+    ...archives,
+    withWriter: (operation) => {
+      const work = archives.withWriter(operation);
+      queued.resolve();
+      return work;
     },
-  );
+  }));
   const work = fixture.prune();
   void work.catch(queued.reject);
   let retirement: Promise<void> | undefined;
@@ -183,8 +194,7 @@ it("retires a queued archive removal without waiting for unrelated archive work"
     release.resolve();
     const failure: unknown = await work.catch((error: unknown) => error);
     await blocker;
-    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
-    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+    fixture.expectUnchanged();
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toMatch(/revoked|closed/);
   } finally {
@@ -234,6 +244,10 @@ async function publishedArchive(content = "synthetic retained archive payload") 
     archivedBytes,
     originalArchive,
     readArchive,
+    expectUnchanged() {
+      expect(readArchive()).toEqual(originalArchive);
+      expect(fs.readFileSync(archivePath)).toEqual(archivedBytes);
+    },
     prune: (highWaterBytes = 1, databaseOptions = options) =>
       own(
         pruneAllSessionTranscriptArchivesToHighWater({
@@ -271,8 +285,7 @@ it("skips writer admission when the archive budget target is already satisfied",
       completed: true,
       checkpointIncomplete: 0,
     });
-    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
-    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+    fixture.expectUnchanged();
   } finally {
     release.resolve();
     await Promise.allSettled([blocker, work]);
@@ -283,9 +296,7 @@ it("lets foreground writes settle while archive pruning scans physical usage", a
   signal,
 }) => {
   const fixture = await publishedArchive();
-  const scanning = createDeferred();
-  const release = createDeferred();
-  releases.push(release.resolve);
+  const { entered: scanning, release } = gate();
   const measure = diskBudget.measureSessionPhysicalDiskUsage;
   let measurements = 0;
   vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(async (storePath) => {
@@ -413,8 +424,7 @@ it("rejects another agent's archive without changing its canonical row or file",
   const failure: unknown = await fixture
     .prune(0, { ...fixture.options, agentId: "other" })
     .catch((error: unknown) => error);
-  expect(fixture.readArchive()).toEqual(fixture.originalArchive);
-  expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+  fixture.expectUnchanged();
   const recovered = await fixture.prune(0);
   expect(recovered).toMatchObject({ removedFiles: 1, completed: true });
   expect(fixture.readArchive()).toBeUndefined();
@@ -548,9 +558,7 @@ it.each([
   { phase: "after-unlink", outcome: "republished" },
 ] as const)("preserves item writer authority at $phase ($outcome)", async ({ phase, outcome }) => {
   const fixture = await publishedArchive();
-  const entered = createDeferred();
-  const release = createDeferred();
-  releases.push(release.resolve);
+  const { entered, release } = gate();
   let held = false;
   let released = false;
   let laterWriterRan = false;
@@ -562,27 +570,19 @@ it.each([
     entered.resolve();
     await release.promise;
   };
-  const withPages = pageReclamation.withSqliteSessionPageReclamation;
-  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
-    <T>(...args: Parameters<typeof withPages<T>>) => {
-      const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, options, archives) =>
-        run(reclaim, assertCurrent, options, {
-          ...archives,
-          read: async () => {
-            if (!held && phase === "before-read") {
-              await hold();
-            }
-            const result = await archives.read();
-            if (!held && phase === "read-result") {
-              await hold();
-            }
-            return result;
-          },
-        }),
-      );
+  interceptArchives((archives) => ({
+    ...archives,
+    read: async () => {
+      if (!held && phase === "before-read") {
+        await hold();
+      }
+      const result = await archives.read();
+      if (!held && phase === "read-result") {
+        await hold();
+      }
+      return result;
     },
-  );
+  }));
   const rm = fs.promises.rm.bind(fs.promises);
   vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
     const result = await rm(...args);
@@ -753,26 +753,20 @@ it("excludes peer publication until atomic legacy removal settles", async () => 
   let filePresentAtGrant = false;
   let peerEntered = false;
   let refusal: unknown;
-  const withPages = pageReclamation.withSqliteSessionPageReclamation;
-  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
-    <T>(...args: Parameters<typeof withPages<T>>) => {
-      const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, options, archives) => {
-        physicalPath = options.path;
-        return run(reclaim, assertCurrent, options, {
-          ...archives,
-          removeLegacy: async (filePath) => {
-            removing = filePath;
-            try {
-              return await archives.removeLegacy(filePath);
-            } finally {
-              removing = undefined;
-            }
-          },
-        });
-      });
-    },
-  );
+  interceptArchives((archives, options) => {
+    physicalPath = options.path;
+    return {
+      ...archives,
+      removeLegacy: async (filePath) => {
+        removing = filePath;
+        try {
+          return await archives.removeLegacy(filePath);
+        } finally {
+          removing = undefined;
+        }
+      },
+    };
+  });
   workerProbe.admission(workerAdmission, (request, grant, admit) => {
     if (
       !attempted &&
@@ -818,8 +812,7 @@ it("excludes peer publication until atomic legacy removal settles", async () => 
         .values(fixture.originalArchive),
     );
     peer.exec("COMMIT");
-    expect(fixture.readArchive()).toEqual(fixture.originalArchive);
-    expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
+    fixture.expectUnchanged();
   } finally {
     if (peer.isTransaction) {
       peer.exec("ROLLBACK");
