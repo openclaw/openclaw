@@ -73,43 +73,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     }
   });
 
-  it("uses a matching plugin policy when one is registered", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => {
-        expect(ctx.node?.caps).toEqual(["demo.allowed"]);
-        return ctx.invokeNode();
-      }),
-    ]);
-    const nodeSession = createNodeSession();
-    nodeSession.declaredCaps = ["demo.allowed", "demo.unapproved"];
-    nodeSession.caps = ["demo.allowed"];
-    const { context, invoke } = createContext({ nodeSession });
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession,
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-    });
-
-    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      expectedConnId: "conn-1",
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      timeoutMs: undefined,
-      deadlineAtMs: undefined,
-      idempotencyKey: undefined,
-      isDispatchAuthorized: expect.any(Function),
-      onDispatchReady: expect.any(Function),
-    });
-    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(true);
-    context.getRuntimeConfig = () => nodeCommandsConfig({ deny: [DEMO_COMMAND] });
-    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
-  });
-
   it("preserves one approval and session identity through streaming readiness recovery", async (testContext) => {
     const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
@@ -312,9 +275,15 @@ describe("applyPluginNodeInvokePolicy", () => {
 
   it("marks plugin-owned work dispatched only after the node transport accepts it", async () => {
     setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => {
+        expect(ctx.node?.caps).toEqual(["demo.allowed"]);
+        return ctx.invokeNode();
+      }),
     ]);
-    const { context, invoke } = createContext();
+    const nodeSession = createNodeSession();
+    nodeSession.declaredCaps = ["demo.allowed", "demo.unapproved"];
+    nodeSession.caps = ["demo.allowed"];
+    const { context, invoke } = createContext({ nodeSession });
     const dispatchOrder: string[] = [];
     invoke.mockImplementationOnce(async (params) => {
       dispatchOrder.push("node transport");
@@ -330,14 +299,17 @@ describe("applyPluginNodeInvokePolicy", () => {
     const result = await applyPluginNodeInvokePolicy({
       context,
       client: null,
-      nodeSession: createNodeSession(),
+      nodeSession,
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
       onNodeCommandDispatched: () => dispatchOrder.push("dispatched"),
     });
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(dispatchOrder).toStrictEqual(["node transport", "dispatched"]);
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(true);
+    context.getRuntimeConfig = () => nodeCommandsConfig({ deny: [DEMO_COMMAND] });
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
   it("rejects expired plugin-owned work without dispatching it", async () => {
