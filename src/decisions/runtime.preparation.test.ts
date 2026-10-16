@@ -12,6 +12,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { decisionBatchV1ToV2 } from "./compatibility.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import type { DecisionProviderV1 } from "./types.js";
 
@@ -20,9 +21,16 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each(["expired", "partial", "caller-aborted", "authority-closed"] as const)(
-  "preserves the Decision caller budget through %s preparation",
-  async (ending) => {
+it.each(
+  ([1, 2] as const).flatMap((version) =>
+    (["expired", "partial", "caller-aborted", "authority-closed"] as const).map((ending) => ({
+      version,
+      ending,
+    })),
+  ),
+)(
+  "preserves the Decision V$version caller budget through $ending preparation",
+  async ({ version, ending }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(config);
       const context = createContext();
@@ -62,12 +70,16 @@ it.each(["expired", "partial", "caller-aborted", "authority-closed"] as const)(
           hasCurrentClientAuthority: () => current,
           isWebchatConnect: () => false,
         },
-        () =>
-          host.api.runtime.decisions.evaluate(batch, {
+        () => {
+          const requestOptions = {
             ...options(),
             timeoutMs: 500,
             signal: controller.signal,
-          }),
+          };
+          return version === 1
+            ? host.api.runtime.decisions.evaluate(batch, requestOptions)
+            : host.api.runtime.decisions.evaluateV2(decisionBatchV1ToV2(batch)!, requestOptions);
+        },
       );
       const settled = pending.then(
         (outcome) => ({ outcome }),
