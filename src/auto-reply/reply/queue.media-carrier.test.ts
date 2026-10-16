@@ -24,7 +24,7 @@ import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import type { FollowupRun } from "./queue.js";
-import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
+import { FollowupRunDeferredError } from "./queue.js";
 import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -73,6 +73,7 @@ describe("followup prompt metadata carrier", () => {
     run.images = [{ type: "image", data: "inline-png", mimeType: "image/png" }];
     run.imageOrder = ["offloaded", "inline"];
     run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
+    const expectedMedia = structuredClone([run.prompt, run.images, run.imageOrder, run.media]);
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: run.prompt, media: run.media },
       target: () => undefined,
@@ -129,17 +130,9 @@ describe("followup prompt metadata carrier", () => {
       operation.complete();
       await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledOnce());
       const fallback = await delivered.promise;
-      expect({
-        text: fallback.prompt,
-        images: fallback.images,
-        imageOrder: fallback.imageOrder,
-        media: fallback.media,
-      }).toEqual({
-        text: "  preserve this caption\n",
-        images: [{ type: "image", data: "inline-png", mimeType: "image/png" }],
-        imageOrder: ["offloaded", "inline"],
-        media: [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }],
-      });
+      expect([fallback.prompt, fallback.images, fallback.imageOrder, fallback.media]).toEqual(
+        expectedMedia,
+      );
       expect(fallback.userTurnTranscriptRecorder).toBe(recorder);
       expect(recorder.hasPersisted()).toBe(false);
     } finally {
@@ -155,22 +148,16 @@ describe("followup prompt metadata carrier", () => {
       evidenceCleanups.add(() => audit.close());
       const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 1);
       queueKeys.add(q.key);
-      for (const [prompt, path, contentType, skillName, sharedSkillName] of [
-        [
-          "[media attached: /tmp/a.png (image/png)]\nfirst",
-          "/tmp/a.png",
-          "image/png",
-          "a",
-          "shared-first",
-        ],
-        [
-          "[media attached: /tmp/b.pdf (application/pdf)]\nsecond",
-          "/tmp/b.pdf",
-          "application/pdf",
-          "b",
-          "shared-last",
-        ],
+      const media = [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.pdf", contentType: "application/pdf" },
+      ];
+      for (const [index, skillName, label] of [
+        [0, "a", "first"],
+        [1, "b", "second"],
       ] as const) {
+        const { path, contentType } = media[index]!;
+        const prompt = `[media attached: ${path} (${contentType})]\n${label}`;
         const run = createQueueTestRun({ prompt });
         run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "message"]]);
         run.disableTools = true;
@@ -192,7 +179,7 @@ describe("followup prompt metadata carrier", () => {
         run.media = [{ path, contentType }];
         run.explicitSkillSelections = [
           { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
-          { name: sharedSkillName, path: "/tmp/skills/shared/SKILL.md" },
+          { name: `shared-${index === 0 ? "first" : "last"}`, path: "/tmp/skills/shared/SKILL.md" },
         ];
         run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
           audit,
@@ -217,27 +204,28 @@ describe("followup prompt metadata carrier", () => {
       ].join("\n\n");
       expect(q.calls.map((run) => run.prompt)).toEqual([expectedPrompt, expectedPrompt]);
       for (const run of q.calls) {
-        expect(run.media).toEqual([
-          { path: "/tmp/a.png", contentType: "image/png" },
-          { path: "/tmp/b.pdf", contentType: "application/pdf" },
+        expect(run.media).toEqual(media);
+        expect(run.images).toEqual(
+          media.map(({ path, contentType }) => ({
+            type: "image",
+            data: path,
+            mimeType: contentType,
+          })),
+        );
+        expect([run.imageOrder, run.toolsAllow, run.disableTools]).toEqual([
+          ["inline", "inline"],
+          ["exec"],
+          true,
         ]);
-        expect(run.images).toEqual([
-          { type: "image", data: "/tmp/a.png", mimeType: "image/png" },
-          { type: "image", data: "/tmp/b.pdf", mimeType: "application/pdf" },
-        ]);
-        expect(run.imageOrder).toEqual(["inline", "inline"]);
         expect(run.explicitSkillSelections).toEqual([
           { name: "a", path: "/tmp/skills/a/SKILL.md" },
           { name: "shared-last", path: "/tmp/skills/shared/SKILL.md" },
           { name: "b", path: "/tmp/skills/b/SKILL.md" },
         ]);
-        expect(run).toBeDefined();
-        expect(run.toolsAllow).toEqual(["exec"]);
         expect(run.toolsAllow ? readToolAllowlistIntersection(run.toolsAllow) : undefined).toEqual([
           ["exec"],
           ["exec", "message"],
         ]);
-        expect(run.disableTools).toBe(true);
         expect(run.run).toMatchObject(carrierRun);
         if (kind === "mixed") {
           expect(run.run).toMatchObject({
@@ -274,31 +262,26 @@ describe("followup prompt metadata carrier", () => {
     },
   ] as const)(
     "keeps conflicting turn $name choices in separate collected replies",
-    async ({ name, first, second }) => {
-      const key = `turn-choice-collect-${name}`;
-      queueKeys.add(key);
-      const done = createDeferred();
-      const calls: FollowupRun[] = [];
+    async ({ first, second }) => {
+      const q = createQueueCase({ cap: 20 }, 3);
+      queueKeys.add(q.key);
       for (const [index, settings] of [first, second, second, first].entries()) {
         const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
         run.run = { ...run.run, traceAuthorized: true, ...settings };
-        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+        q.add(run);
       }
-      scheduleFollowupDrain(key, async (run) => {
-        calls.push(run);
-        if (run.prompt.includes("task 3")) {
-          done.resolve();
+      await q.drain();
+      expect(q.calls).toHaveLength(3);
+      expect(q.calls.map((run) => run.run)).toMatchObject([first, second, first]);
+      for (const [index, texts] of [
+        [0, ["task 0"]],
+        [1, ["task 1", "task 2"]],
+        [2, ["task 3"]],
+      ] as const) {
+        for (const text of texts) {
+          expect(q.calls[index]?.prompt).toContain(text);
         }
-      });
-      await done.promise;
-      expect(calls).toHaveLength(3);
-      expect(calls[0]?.run).toMatchObject(first);
-      expect(calls[1]?.run).toMatchObject(second);
-      expect(calls[2]?.run).toMatchObject(first);
-      expect(calls[0]?.prompt).toContain("task 0");
-      expect(calls[1]?.prompt).toContain("task 1");
-      expect(calls[1]?.prompt).toContain("task 2");
-      expect(calls[2]?.prompt).toContain("task 3");
+      }
     },
   );
 });
@@ -340,21 +323,18 @@ describe("queued Gateway attach evidence", () => {
   it.each(["matching", "mixed"] as const)(
     "collects %s attach snapshots without changing sender authority",
     async (kind) => {
-      const key = `gateway-attach-collect-${kind}`;
-      queueKeys.add(key);
-      const done = createDeferred<FollowupRun>();
+      const q = createQueueCase({ cap: 20 });
+      queueKeys.add(q.key);
       for (const index of [0, 1]) {
         const run = createQueueTestRun({ prompt: `queued ${index}` });
         run.gatewayLocalUserIngress = prepareIngress(
           kind === "mixed" && index === 1 ? "person-2" : "person-1",
         );
         run.run = { ...run.run, senderId: "transport", senderIsOwner: true };
-        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+        q.add(run);
       }
-      scheduleFollowupDrain(key, async (run) => {
-        done.resolve(run);
-      });
-      const collected = await done.promise;
+      await q.drain();
+      const collected = q.calls[0]!;
       expect(collected.prompt).toContain("queued 0");
       expect(collected.prompt).toContain("queued 1");
       await admit(collected);

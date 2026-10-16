@@ -1,4 +1,3 @@
-// Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
@@ -14,6 +13,23 @@ function countOccurrences(text: string | undefined, needle: string): number {
   return (text?.split(needle).length ?? 1) - 1;
 }
 
+type EnvelopeOptions = Parameters<typeof buildReplyPromptEnvelope>[0];
+function envelopeFor(
+  sessionCtx: EnvelopeOptions["sessionCtx"],
+  options: Partial<EnvelopeOptions> = {},
+) {
+  return buildReplyPromptEnvelope({
+    ctx: sessionCtx,
+    sessionCtx,
+    baseBody: sessionCtx.Body ?? "",
+    hasUserBody: true,
+    inboundUserContext: "",
+    isBareSessionReset: false,
+    startupAction: "new",
+    ...options,
+  });
+}
+
 describe("buildReplyPromptEnvelope", () => {
   it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {
     const sessionCtx = finalizeInboundContext({
@@ -24,11 +40,8 @@ describe("buildReplyPromptEnvelope", () => {
       SenderId: "telegram-user-1",
     });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
+    const envelope = envelopeFor(sessionCtx, {
       baseBody: "A new session was started via /new or /reset.",
-      hasUserBody: true,
       inboundUserContext: "Conversation info:\nsender_id=telegram-user-1",
       isBareSessionReset: true,
       startupAction: "reset",
@@ -41,12 +54,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.currentInboundContext).toBeUndefined();
   });
 
-  it.each([
-    {
-      systemEventBlocks: ["System: Scheduled digest."],
-      sourceReplyDeliveryMode: "message_tool_only",
-    },
-  ] as const)("keeps Telegram reply text beside its marker: %j", (extra) => {
+  it("keeps Telegram reply text beside its marker", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "Tldr",
       Provider: "telegram",
@@ -56,18 +64,12 @@ describe("buildReplyPromptEnvelope", () => {
       ReplyToBody: "The restore finished.",
       ReplyToSender: "Example Bot",
     });
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "Tldr",
-      hasUserBody: true,
+    const envelope = envelopeFor(sessionCtx, {
       inboundUserContext: buildInboundUserContextPrefix(sessionCtx),
       inboundUserContextPromptJoiner: resolveInboundUserContextPromptJoiner(sessionCtx),
-      isBareSessionReset: false,
-      startupAction: "new",
       inboundEventKind: "user_request",
-      sourceReplyDeliveryMode: extra.sourceReplyDeliveryMode,
-      systemEventBlocks: [...extra.systemEventBlocks],
+      sourceReplyDeliveryMode: "message_tool_only",
+      systemEventBlocks: ["System: Scheduled digest."],
     });
     const prompt = buildCurrentInboundPrompt({
       context: envelope.currentInboundContext,
@@ -75,20 +77,14 @@ describe("buildReplyPromptEnvelope", () => {
     });
     expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
     expect(envelope.transcriptCommandBody).toBe("Tldr");
-    for (const event of extra.systemEventBlocks) {
-      expect(prompt).toContain(event);
-      expect(prompt.indexOf(event)).toBeLessThan(prompt.indexOf("Current message:"));
-    }
-    if (extra.sourceReplyDeliveryMode === "message_tool_only") {
-      expect(prompt).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
-      expect(prompt.indexOf(MESSAGE_TOOL_ONLY_DELIVERY_HINT)).toBeLessThan(
-        prompt.indexOf("Current message:"),
-      );
+    for (const text of ["System: Scheduled digest.", MESSAGE_TOOL_ONLY_DELIVERY_HINT]) {
+      expect(prompt).toContain(text);
+      expect(prompt.indexOf(text)).toBeLessThan(prompt.indexOf("Current message:"));
     }
   });
 
-  it.each(["starter"])("labels the current message after thread %s", (kind) => {
-    const threadNote = `[Thread ${kind} - for context]\nPlanning the picnic next month.`;
+  it("labels the current message after thread starter", () => {
+    const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
     const sessionCtx = finalizeInboundContext({
       Body: "Can you pick a date?",
       BodyStripped: "Can you pick a date?",
@@ -96,14 +92,8 @@ describe("buildReplyPromptEnvelope", () => {
       ChatType: "channel",
     });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "Can you pick a date?",
-      hasUserBody: true,
+    const envelope = envelopeFor(sessionCtx, {
       inboundUserContext: "Conversation info:\nchat_id=123",
-      isBareSessionReset: false,
-      startupAction: "new",
       threadContextNote: threadNote,
       systemEventBlocks: ["System: reaction added"],
     });
@@ -128,60 +118,49 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
   });
 
-  it.each(["recent"] as const)(
-    "keeps %s room history in the initial prompt but not the resumed prompt",
-    (historyKind) => {
-      const sessionCtx = finalizeInboundContext({
-        Body: "Current room event",
-        BodyStripped: "Current room event",
-        Provider: "slack",
-        ChatType: "group",
-        InboundEventKind: "room_event",
-        MessageSid: "35676",
-        SenderName: "Alice",
-        InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
-        SessionTranscriptContext: { historyLimit: 20, historyKind },
-      });
-      const inboundUserContext = buildInboundUserContextPrefix(sessionCtx);
-      const envelope = buildReplyPromptEnvelope({
-        ctx: sessionCtx,
-        sessionCtx,
-        baseBody: "Current room event",
-        hasUserBody: true,
-        inboundUserContext,
-        isBareSessionReset: false,
-        startupAction: "new",
-        inboundEventKind: "room_event",
-        sourceReplyDeliveryMode: "message_tool_only",
-        threadContextNote: "Thread note",
-        systemEventBlocks: ["System event"],
-      });
+  it("keeps recent room history in the initial prompt but not the resumed prompt", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Current room event",
+      BodyStripped: "Current room event",
+      Provider: "slack",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "35676",
+      SenderName: "Alice",
+      InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
+      SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+    });
+    const inboundUserContext = buildInboundUserContextPrefix(sessionCtx);
+    const envelope = envelopeFor(sessionCtx, {
+      inboundUserContext,
+      inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: "message_tool_only",
+      threadContextNote: "Thread note",
+      systemEventBlocks: ["System event"],
+    });
 
-      expect(envelope.prefixedCommandBody).toBe("#35676 Alice: Current room event");
-      expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
-      expect(envelope.transcriptCommandBody).toBe("#35676 Alice: Current room event");
-      expect(countOccurrences(envelope.currentInboundContext?.text, "Earlier room activity")).toBe(
-        1,
-      );
-      expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
-      for (const text of [
-        envelope.currentInboundContext?.text,
-        envelope.currentInboundContext?.resumableText,
-      ]) {
-        expect(text).toContain("Conversation info:");
-        expect(text).toContain("Thread note");
-        expect(text).toContain("System event");
-        expect(text).not.toContain("Current room event");
-        expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
-      }
-      expect(envelope.currentInboundContext?.fragments).toEqual(
-        expect.arrayContaining([
-          { kind: "conversation-data", text: "Thread note" },
-          { kind: "conversation-data", text: "System event" },
-        ]),
-      );
-    },
-  );
+    expect(envelope.prefixedCommandBody).toBe("#35676 Alice: Current room event");
+    expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
+    expect(envelope.transcriptCommandBody).toBe("#35676 Alice: Current room event");
+    expect(countOccurrences(envelope.currentInboundContext?.text, "Earlier room activity")).toBe(1);
+    expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
+    for (const text of [
+      envelope.currentInboundContext?.text,
+      envelope.currentInboundContext?.resumableText,
+    ]) {
+      expect(text).toContain("Conversation info:");
+      expect(text).toContain("Thread note");
+      expect(text).toContain("System event");
+      expect(text).not.toContain("Current room event");
+      expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
+    }
+    expect(envelope.currentInboundContext?.fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
+    );
+  });
 
   it("uses the raw current body for room-event current event text", () => {
     const sessionCtx = finalizeInboundContext({
@@ -196,14 +175,8 @@ describe("buildReplyPromptEnvelope", () => {
       SenderName: "Bob",
     });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: sessionCtx.Body ?? "",
-      hasUserBody: true,
+    const envelope = envelopeFor(sessionCtx, {
       inboundUserContext: "Chat history since last reply:\nAlice: old context",
-      isBareSessionReset: false,
-      startupAction: "new",
       inboundEventKind: "room_event",
     });
 
@@ -246,14 +219,10 @@ describe("buildReplyPromptEnvelope", () => {
     });
     const sessionCtx = finalizeInboundContext({ ...ctx });
 
-    const envelope = buildReplyPromptEnvelope({
+    const envelope = envelopeFor(sessionCtx, {
       ctx,
-      sessionCtx,
       baseBody: sessionCtx.agentText,
-      hasUserBody: true,
       inboundUserContext: "Conversation info:",
-      isBareSessionReset: false,
-      startupAction: "new",
       inboundEventKind: "room_event",
     });
 
@@ -273,14 +242,8 @@ describe("buildReplyPromptEnvelope", () => {
       InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "context" }],
     });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "",
-      hasUserBody: true,
+    const envelope = envelopeFor(sessionCtx, {
       inboundUserContext: "Current message:\nchat_id=G1",
-      isBareSessionReset: false,
-      startupAction: "new",
     });
 
     expect(envelope.transcriptCommandBody).toContain("[media attached");
@@ -299,17 +262,10 @@ describe("buildReplyPromptEnvelope", () => {
       ],
     });
     const params = {
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "inspect these",
-      hasUserBody: true,
-      inboundUserContext: "",
-      isBareSessionReset: false,
-      startupAction: "new" as const,
       media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }],
     };
-    const first = buildReplyPromptEnvelope(params);
-    const rebuilt = buildReplyPromptEnvelope({
+    const first = envelopeFor(sessionCtx, params);
+    const rebuilt = envelopeFor(sessionCtx, {
       ...params,
       ctx: { ...sessionCtx, media: [...(sessionCtx.media ?? []), { path: "/tmp/later.png" }] },
       systemEventBlocks: ["context changed"],
@@ -343,11 +299,7 @@ describe("buildReplyPromptEnvelope", () => {
       ChatType: "direct",
     });
 
-    const envelope = buildReplyPromptEnvelope({
-      ctx: sessionCtx,
-      sessionCtx,
-      baseBody: "",
-      hasUserBody: true,
+    const envelope = envelopeFor(sessionCtx, {
       inboundUserContext: 'Conversation info:\n{"sender":{"id":"U123"}}',
       isBareSessionReset: true,
       startupAction: "reset",

@@ -1,4 +1,3 @@
-// Tests queue drain restart behavior when follow-up runs chain together.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -28,6 +27,7 @@ import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } f
 import {
   createQueueTestRun as createRun,
   createDrainRecorder,
+  createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback, kickFollowupDrainIfIdle } from "./queue/drain.js";
@@ -51,6 +51,34 @@ const nextTurn = () =>
   new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
+
+function start(prompt: string, run: (run: FollowupRun) => Promise<void>, settings = defaults) {
+  enqueueFollowupRun(key, createRun({ prompt }), settings);
+  scheduleFollowupDrain(key, run);
+}
+
+function restartFenceAttempt() {
+  const refused =
+    createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
+  const delivered = createDeferred();
+  let attempts = 0;
+  return {
+    refused,
+    delivered,
+    attempts: () => attempts,
+    run: async () => {
+      if (++attempts === 1) {
+        const fence = beginGatewayRestartSignalAdmission();
+        if (!fence) {
+          throw new Error("expected restart-signal fence");
+        }
+        refused.resolve(fence);
+        throw new GatewayDrainingError();
+      }
+      delivered.resolve();
+    },
+  };
+}
 
 describe("followup queue drain restart after idle window", () => {
   it.each([
@@ -212,11 +240,8 @@ describe("followup queue drain restart after idle window", () => {
   it("releases a detached drain root when its queue is cleared during debounce", async () => {
     const env = captureEnv(["OPENCLAW_TEST_FAST"]);
     setTestEnvValue("OPENCLAW_TEST_FAST", "0");
-    const settings: QueueSettings = { mode: "followup", debounceMs: 60_000, cap: 50 };
-
     try {
-      enqueueFollowupRun(key, createRun({ prompt: "clear during debounce" }), settings);
-      scheduleFollowupDrain(key, async () => {});
+      start("clear during debounce", async () => {}, { ...defaults, debounceMs: 60_000 });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
 
       clearFollowupQueue(key);
@@ -279,15 +304,8 @@ describe("followup queue drain restart after idle window", () => {
         runFollowup,
       );
 
-      await vi.waitFor(
-        () => {
-          expect(calls).toHaveLength(2);
-        },
-        { timeout: 1_000 },
-      );
-
-      expect(calls[0]?.prompt).toBe("before-idle");
-      expect(calls[1]?.prompt).toBe("after-idle");
+      await vi.waitFor(() => expect(calls).toHaveLength(2), { timeout: 1_000 });
+      expect(calls.map((run) => run.prompt)).toEqual(["before-idle", "after-idle"]);
     } finally {
       clearFollowupQueue(key);
       drainA.clearFollowupDrainCallback(key);
@@ -307,71 +325,36 @@ describe("followup queue drain restart after idle window", () => {
       delivered.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "retry while admission is open" }), defaults);
-    scheduleFollowupDrain(key, runFollowup);
+    start("retry while admission is open", runFollowup);
     await delivered.promise;
     await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
     expect(attempts).toBe(2);
   });
 
   it("does not reschedule when a restart-signal fence commits to drain", async () => {
-    const firstFailed =
-      createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
-    let attempts = 0;
-
-    const runFollowup = async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        const signal = beginGatewayRestartSignalAdmission();
-        if (!signal) {
-          throw new Error("expected restart-signal fence");
-        }
-        firstFailed.resolve(signal);
-        throw new GatewayDrainingError();
-      }
-    };
-
-    enqueueFollowupRun(key, createRun({ prompt: "queued during restart commit" }), defaults);
-    scheduleFollowupDrain(key, runFollowup);
-    await firstFailed.promise;
+    const attempt = restartFenceAttempt();
+    start("queued during restart commit", attempt.run);
+    await attempt.refused.promise;
     markGatewayRestartDraining();
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(attempts).toBe(1);
+    expect(attempt.attempts()).toBe(1);
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 
   it("waits for a normal drain kick after a restart signal rolls back", async () => {
-    const firstFailed =
-      createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
-    const delivered = createDeferred();
-    let attempts = 0;
-
-    const runFollowup = async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        const signal = beginGatewayRestartSignalAdmission();
-        if (!signal) {
-          throw new Error("expected restart-signal fence");
-        }
-        firstFailed.resolve(signal);
-        throw new GatewayDrainingError();
-      }
-      delivered.resolve();
-    };
-
-    enqueueFollowupRun(key, createRun({ prompt: "queued during pending restart" }), defaults);
-    scheduleFollowupDrain(key, runFollowup);
-    const signal = await firstFailed.promise;
+    const attempt = restartFenceAttempt();
+    start("queued during pending restart", attempt.run);
+    const signal = await attempt.refused.promise;
     await nextTurn();
-    expect(attempts).toBe(1);
+    expect(attempt.attempts()).toBe(1);
     expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
     expect(signal.rollback()).toBe(true);
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(attempts).toBe(1);
+    expect(attempt.attempts()).toBe(1);
     expect(getExistingFollowupQueue(key)?.draining).toBe(false);
     kickFollowupDrainIfIdle(key);
-    await delivered.promise;
-    expect(attempts).toBe(2);
+    await attempt.delivered.promise;
+    expect(attempt.attempts()).toBe(2);
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
@@ -394,8 +377,7 @@ describe("followup queue drain restart after idle window", () => {
       retried.resolve();
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), defaults);
-    scheduleFollowupDrain(key, staleFollowup);
+    start("wait-for-lane", staleFollowup);
     await firstStarted.promise;
 
     scheduleFollowupDrain(key, freshFollowup);
@@ -408,12 +390,7 @@ describe("followup queue drain restart after idle window", () => {
   });
 
   it("bounds overflow identities across repeated deferred retries", async () => {
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
     const completed = createDeferred();
     let retainedIdentityCount = 0;
     let attempts = 0;
@@ -447,12 +424,7 @@ describe("followup queue drain restart after idle window", () => {
   it.each(["old", "new"] as const)(
     "drains a pending overflow summary after future drops switch to %s",
     async (dropPolicy) => {
-      const summarizeSettings: QueueSettings = {
-        mode: "followup",
-        debounceMs: 0,
-        cap: 1,
-        dropPolicy: "summarize",
-      };
+      const summarizeSettings = createQueueSettings({ mode: "followup", cap: 1 });
       const nonOutcomeAbandoned = vi.fn();
       const nonOutcomeDisposition = vi.fn();
       const nonOutcomeSettled = vi.fn();
@@ -587,12 +559,7 @@ describe("followup queue drain restart after idle window", () => {
     "preserves trusted owner provenance for $mode/$kind/$senderIsOwner",
     async ({ mode, kind, senderIsOwner, owner }) => {
       const inputProvenance = { kind, sourceTool: "test" };
-      const settings: QueueSettings = {
-        mode,
-        debounceMs: 0,
-        cap: mode === "collect" ? 50 : 1,
-        dropPolicy: "summarize",
-      };
+      const settings = createQueueSettings({ mode, cap: mode === "collect" ? 50 : 1 });
       const firstDelivery = createDeferred<FollowupRun>();
       const retried = createDeferred<FollowupRun>();
       let attempts = 0;

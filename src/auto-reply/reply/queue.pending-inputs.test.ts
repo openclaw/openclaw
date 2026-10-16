@@ -112,6 +112,34 @@ describe("followup queue durable input consumption", () => {
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
 
+  const enqueue = (...runs: FollowupRun[]) => {
+    for (const run of runs) {
+      expect(enqueueFollowupRun(sessionKey, run, { mode: "collect", debounceMs: 0 })).toBe(true);
+    }
+  };
+  const drain = async (consume = async (_run: FollowupRun, _index: number) => {}) => {
+    const calls: FollowupRun[] = [];
+    const failures: unknown[] = [];
+    scheduleFollowupDrain(sessionKey, async (run) => {
+      calls.push(run);
+      try {
+        await consume(run, calls.length - 1);
+      } catch (error) {
+        if (error instanceof FollowupRunDeferredError) {
+          throw error;
+        }
+        failures.push(error);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+    expect(failures).toEqual([]);
+    return calls;
+  };
+  const loadMessages = async () =>
+    (await loadTranscriptEvents(scope()))
+      .filter(isRecord)
+      .filter((event) => event.type === "message");
+
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
     const first = await createStagedRun("first");
     const second = await createStagedRun("second");
@@ -125,26 +153,13 @@ describe("followup queue durable input consumption", () => {
     expect(first.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
     expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
     const before = await loadTranscriptEvents(scope());
-    const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
-    const prompts: string[] = [];
-    const consumers: UserTurnTranscriptRecorder[] = [];
-    const failures: unknown[] = [];
-    scheduleFollowupDrain(sessionKey, async (run) => {
-      try {
-        await admitFollowupRunLifecycle(run);
-        await persistQueuedRun(run);
-        prompts.push(run.prompt);
-        consumers.push(run.userTurnTranscriptRecorder!);
-      } catch (error) {
-        failures.push(error);
-      }
+    enqueue(first.run, second.run);
+    const calls = await drain(async (run) => {
+      await admitFollowupRunLifecycle(run);
+      await persistQueuedRun(run);
     });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
-    expect(failures).toEqual([]);
-    expect(prompts).toEqual(["first approved", "second approved"]);
-    expect(consumers).toEqual([
+    expect(calls.map((run) => run.prompt)).toEqual(["first approved", "second approved"]);
+    expect(calls.map((run) => run.userTurnTranscriptRecorder)).toEqual([
       first.run.userTurnTranscriptRecorder,
       second.run.userTurnTranscriptRecorder,
     ]);
@@ -173,14 +188,8 @@ describe("followup queue durable input consumption", () => {
       }),
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
-    const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, staged.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, unstaged, settings)).toBe(true);
-    const calls: FollowupRun[] = [];
-    scheduleFollowupDrain(sessionKey, async (run) => {
-      calls.push(run);
-    });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+    enqueue(staged.run, unstaged);
+    const calls = await drain();
 
     expect(calls.map((run) => run.prompt)).toEqual([
       "[Queued messages while agent was busy]\n\n---\nQueued #1\nstaged approved",
@@ -196,9 +205,7 @@ describe("followup queue durable input consumption", () => {
       const second = await createStagedRun("second");
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
-      const settings = { mode: "collect" as const, debounceMs: 0 };
-      expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-      expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+      enqueue(first.run, second.run);
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
@@ -272,12 +279,10 @@ describe("followup queue durable input consumption", () => {
       expect(calls[0]?.currentInboundContext?.text).toBe(
         "Queued #1 context:\nfirst runtime context\n\nQueued #2 context:\nsecond runtime context",
       );
-      const messages = (await loadTranscriptEvents(scope()))
-        .filter(isRecord)
-        .filter((event) => event.type === "message");
-      expect(messages).toHaveLength(abortDuringPreparation ? 0 : 1);
+      const persisted = await loadMessages();
+      expect(persisted).toHaveLength(abortDuringPreparation ? 0 : 1);
       if (!abortDuringPreparation) {
-        expect(messages[0]?.message).toMatchObject({ role: "user", content: expected });
+        expect(persisted[0]?.message).toMatchObject({ role: "user", content: expected });
       }
       expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
       expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
@@ -297,38 +302,26 @@ describe("followup queue durable input consumption", () => {
       source.run.summaryLine = `${source.run.messageId} private summary`;
       expect(enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
     }
-    const calls: FollowupRun[] = [];
-    const failures: unknown[] = [];
     const pendingRunIds: string[][] = [];
-    scheduleFollowupDrain(sessionKey, async (run) => {
-      calls.push(run);
-      if (calls.length === 1) {
+    const calls = await drain(async (run, index) => {
+      if (index === 0) {
         throw new FollowupRunDeferredError();
       }
-      try {
-        await admitFollowupRunLifecycle(run);
-        await persistQueuedRun(run);
-        pendingRunIds.push(
-          (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
-        );
-      } catch (error) {
-        failures.push(error);
-      }
+      await admitFollowupRunLifecycle(run);
+      await persistQueuedRun(run);
+      pendingRunIds.push(
+        (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
+      );
     });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
-
-    expect(failures).toEqual([]);
     expect(calls).toHaveLength(3);
     expect(calls[1]?.prompt).toBe(
       "[Queue overflow] Dropped 2 messages due to cap.\nSummary:\n- second approved",
     );
     expect(pendingRunIds).toEqual([["third"], []]);
-    const messages = (await loadTranscriptEvents(scope()))
-      .filter(isRecord)
-      .filter((event) => event.type === "message");
-    expect(messages).toHaveLength(2);
-    expect(messages[0]?.message).toMatchObject({ content: calls[1]?.prompt });
-    expect(messages[1]?.message).toMatchObject({ content: "third approved" });
+    const persisted = await loadMessages();
+    expect(persisted).toHaveLength(2);
+    expect(persisted[0]?.message).toMatchObject({ content: calls[1]?.prompt });
+    expect(persisted[1]?.message).toMatchObject({ content: "third approved" });
     expect(sources.map((source) => source.beforeMessageWrite.mock.calls.length)).toEqual([1, 1, 1]);
   });
 });
