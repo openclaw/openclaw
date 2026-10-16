@@ -31,17 +31,82 @@ import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+async function createScope(name: string, sessionId = name) {
+  await captureRuntimeConfigAsyncReader()();
+  const scope = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  return scope;
+}
+
+async function stageInput(
+  scope: Parameters<typeof stageSessionPendingInput>[0],
+  runId: string,
+  message: Partial<Parameters<typeof stageSessionPendingInput>[1]["message"]> = {},
+) {
+  return expectDefined(
+    await stageSessionPendingInput(scope, {
+      runId,
+      assertCurrent: () => {},
+      message: {
+        role: "user",
+        content: runId,
+        timestamp: 1,
+        idempotencyKey: `${runId}:user`,
+        ...message,
+      },
+    }),
+    "pending input receipt",
+  );
+}
+
+async function finishInputs(receipts: Awaited<ReturnType<typeof stageInput>>[]) {
+  for (const receipt of receipts) {
+    receipt.finish("interrupted");
+    await receipt.settled?.();
+  }
+}
+
+function request(
+  method: "chat.history" | "chat.startup" | "chat.message.get",
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  respond: RespondFn,
+) {
+  const handler =
+    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method];
+  return expectDefined(
+    handler,
+    "read handler",
+  )({
+    params,
+    context,
+    respond,
+    req: { type: "req", id: "history", method },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+}
+
+async function readHistory(
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  method: "chat.history" | "chat.startup" = "chat.history",
+) {
+  let result: unknown;
+  await request(method, context, params, (ok, payload, error) => {
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    result = payload;
+  });
+  return expectDefined(asOptionalRecord(result), "history response");
+}
 
 describe("pending input read boundary", () => {
   it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:pending-automation",
-        sessionId: "pending-automation",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await createScope("pending-automation");
       const job: CronJob = {
         id: "report",
         name: "Wrong partition",
@@ -61,24 +126,14 @@ describe("pending input read boundary", () => {
       try {
         for (let index = 0; index < 20; index += 1) {
           receipts.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId: `automation-${index}`,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: "The queue is clear.",
-                  timestamp: 1,
-                  idempotencyKey: `automation-${index}:user`,
-                  provenance: {
-                    kind: "inter_session",
-                    sourceTool: "sessions_send",
-                    sourceSessionKey: "agent:main:cron:report:run:finished",
-                  },
-                },
-              }),
-              "pending automation receipt",
-            ),
+            await stageInput(scope, `automation-${index}`, {
+              content: "The queue is clear.",
+              provenance: {
+                kind: "inter_session",
+                sourceTool: "sessions_send",
+                sourceSessionKey: "agent:main:cron:report:run:finished",
+              },
+            }),
           );
         }
         for (const name of ["Selected automation", "Renamed automation", undefined]) {
@@ -102,17 +157,7 @@ describe("pending input read boundary", () => {
               senderSession: expect.objectContaining({ label: name ?? "Automation" }),
             };
             const respond = vi.fn();
-            await expectDefined(
-              chatHistoryHandlers["chat.history"],
-              "history handler",
-            )({
-              params: { sessionKey: scope.sessionKey },
-              context,
-              req: { type: "req", id: "history", method: "chat.history" },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
+            await request("chat.history", context, { sessionKey: scope.sessionKey }, respond);
             expect(counter.counts).toEqual({ names: 0, selection: 0 });
             expect(respond).toHaveBeenLastCalledWith(
               true,
@@ -125,20 +170,15 @@ describe("pending input read boundary", () => {
                 }),
               }),
             );
-            await expectDefined(
-              chatMessageGetHandlers["chat.message.get"],
-              "message handler",
-            )({
-              params: {
+            await request(
+              "chat.message.get",
+              context,
+              {
                 sessionKey: scope.sessionKey,
                 messageId: `pending:${expectDefined(receipts[0], "first automation receipt").inputId}`,
               },
-              context,
-              req: { type: "req", id: "message", method: "chat.message.get" },
-              client: null,
-              isWebchatConnect: () => false,
               respond,
-            });
+            );
             expect(respond).toHaveBeenLastCalledWith(true, {
               ok: true,
               message: expect.objectContaining(expectedMessage),
@@ -149,46 +189,28 @@ describe("pending input read boundary", () => {
           }
         }
       } finally {
-        for (const receipt of receipts) {
-          receipt.finish("interrupted");
-          await receipt.settled?.();
-        }
+        await finishInputs(receipts);
       }
     });
   });
 
   it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+      const scope = await createScope("pending-display-time");
       const profile = ensureProfileForEmail("pending-sender@example.test");
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:pending-display-time",
-        sessionId: "pending-display-time",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const receipts = [];
       const readDisplay = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
           receipts.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId: `pending-display-run-${index}`,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: `Pending input ${index}`,
-                  timestamp: 1_000 + index,
-                  idempotencyKey: `pending-display-run-${index}:user`,
-                  __openclaw: {
-                    senderIdentity: { type: "profile", id: profile.id },
-                    senderName: "Historical sender",
-                  },
-                },
-              }),
-              "pending input receipt",
-            ),
+            await stageInput(scope, `pending-display-run-${index}`, {
+              content: `Pending input ${index}`,
+              timestamp: 1_000 + index,
+              __openclaw: {
+                senderIdentity: { type: "profile", id: profile.id },
+                senderName: "Historical sender",
+              },
+            }),
           );
         }
         // Acceptance belongs to the writer worker, independently of the display projection.
@@ -224,23 +246,7 @@ describe("pending input read boundary", () => {
         }
         const readPage = async () => {
           readDisplay.mockClear();
-          let result: unknown;
-          await expectDefined(
-            chatHistoryHandlers["chat.history"],
-            "history handler",
-          )({
-            params: { sessionKey: scope.sessionKey },
-            context,
-            req: { type: "req", id: "history", method: "chat.history" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          const page = expectDefined(asOptionalRecord(result), "history response");
+          const page = await readHistory(context, { sessionKey: scope.sessionKey });
           const pending = expectDefined(asOptionalRecord(page.pendingInputs), "pending inputs");
           expect(pending.total).toBe(20);
           expect(pending.queuedCount).toBe(1);
@@ -304,45 +310,28 @@ describe("pending input read boundary", () => {
         expect(JSON.stringify(initial)).toBe(initialBytes);
       } finally {
         readDisplay.mockRestore();
-        for (const receipt of receipts) {
-          receipt.finish("interrupted");
-          await receipt.settled?.();
-        }
+        await finishInputs(receipts);
       }
     });
   });
 
   it("keeps cancelled input readable and sanitized without changing the transcript or crossing a reset", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:accepted",
-        sessionId: "accepted-session",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipt = expectDefined(
-        await stageSessionPendingInput(scope, {
-          runId: "r".repeat(300),
-          assertCurrent: () => {},
-          message: {
-            role: "user",
-            content: "Accepted input ".repeat(2000),
-            timestamp: 1,
-            idempotencyKey: "queued:user",
-            __openclaw: {
-              media: [
-                {
-                  kind: "image",
-                  data: "synthetic-inline-payload",
-                  url: "https://example.test/image?credential=synthetic",
-                },
-              ],
+      const scope = await createScope("accepted", "accepted-session");
+      const receipt = await stageInput(scope, "r".repeat(300), {
+        content: "Accepted input ".repeat(2000),
+        timestamp: 1,
+        idempotencyKey: "queued:user",
+        __openclaw: {
+          media: [
+            {
+              kind: "image",
+              data: "synthetic-inline-payload",
+              url: "https://example.test/image?credential=synthetic",
             },
-          },
-        }),
-        "pending receipt",
-      );
+          ],
+        },
+      });
       try {
         receipt.finish("cancelled");
         await receipt.settled?.();
@@ -361,17 +350,12 @@ describe("pending input read boundary", () => {
         const respond = vi.fn();
         const context = await createHistoryReadContext();
         const lookup = () =>
-          expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { sessionKey: scope.sessionKey, messageId: displayId },
-            respond,
+          request(
+            "chat.message.get",
             context,
-            req: {} as never,
-            client: null,
-            isWebchatConnect: () => false,
-          });
+            { sessionKey: scope.sessionKey, messageId: displayId },
+            respond,
+          );
         const sql = observeHostDataSql();
         try {
           await lookup();
@@ -393,55 +377,34 @@ describe("pending input read boundary", () => {
           unavailableReason: "not_found",
         });
       } finally {
-        receipt.finish("interrupted");
-        await receipt.settled?.();
+        await finishInputs([receipt]);
       }
     });
   });
 
   it("does not reveal an input hidden by the canonical history visibility policy", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:hidden-input",
-        sessionId: "hidden-session",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipt = expectDefined(
-        await stageSessionPendingInput(scope, {
-          runId: "hidden-run",
-          assertCurrent: () => {},
-          message: {
-            role: "user",
-            display: false,
-            content: "Internal continuation",
-            timestamp: 1,
-            idempotencyKey: "hidden:user",
-          },
-        }),
-        "hidden pending receipt",
-      );
+      const scope = await createScope("hidden-input", "hidden-session");
+      const receipt = await stageInput(scope, "hidden-run", {
+        display: false,
+        content: "Internal continuation",
+        timestamp: 1,
+        idempotencyKey: "hidden:user",
+      });
       try {
         expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual(
           [],
         );
         const respond = vi.fn();
-        await expectDefined(
-          chatMessageGetHandlers["chat.message.get"],
-          "message handler",
-        )({
-          params: { sessionKey: scope.sessionKey, messageId: `pending:${receipt.inputId}` },
+        await request(
+          "chat.message.get",
+          await createHistoryReadContext(),
+          { sessionKey: scope.sessionKey, messageId: `pending:${receipt.inputId}` },
           respond,
-          context: await createHistoryReadContext(),
-          req: {} as never,
-          client: null,
-          isWebchatConnect: () => false,
-        });
+        );
         expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_visible" });
       } finally {
-        receipt.finish("interrupted");
-        await receipt.settled?.();
+        await finishInputs([receipt]);
       }
     });
   });
@@ -452,48 +415,13 @@ describe("pending input consumption receipts", () => {
     "%s returns only requested current-session receipts in pages and empty deltas",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:collected",
-          sessionId: "collected",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const scope = await createScope("collected");
         const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (params: Record<string, unknown> = {}) => {
-          let result: unknown;
-          await handler({
-            params: { sessionKey: scope.sessionKey, ...params },
-            context,
-            req: { type: "req", id: "history", method },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          return expectDefined(asOptionalRecord(result), "history response");
-        };
+        const call = (params: Record<string, unknown> = {}) =>
+          readHistory(context, { sessionKey: scope.sessionKey, ...params }, method);
         const sources = [];
         for (const runId of ["source-a", "source-b"]) {
-          sources.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: runId,
-                  timestamp: 1,
-                  idempotencyKey: `${runId}:user`,
-                },
-              }),
-              "source receipt",
-            ),
-          );
+          sources.push(await stageInput(scope, runId));
         }
         const aggregate = expectDefined(
           bindSessionPendingInputSources(sources, {
@@ -524,21 +452,7 @@ describe("pending input consumption receipts", () => {
           const delta = await call({ inputRunIds, cursor: page.deltaCursor });
           expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
           for (let index = 0; index < 21; index += 1) {
-            retained.push(
-              expectDefined(
-                await stageSessionPendingInput(scope, {
-                  runId: `retained-${index}`,
-                  assertCurrent: () => {},
-                  message: {
-                    role: "user",
-                    content: `retained-${index}`,
-                    timestamp: index + 3,
-                    idempotencyKey: `retained-${index}:user`,
-                  },
-                }),
-                "retained receipt",
-              ),
-            );
+            retained.push(await stageInput(scope, `retained-${index}`, { timestamp: index + 3 }));
           }
           expect(
             registerQueuedChatTurn({
@@ -581,10 +495,7 @@ describe("pending input consumption receipts", () => {
           await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
           expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
         } finally {
-          for (const receipt of [aggregate, ...sources, ...retained]) {
-            receipt.finish("interrupted");
-            await receipt.settled?.();
-          }
+          await finishInputs([aggregate, ...sources, ...retained]);
         }
       });
     },

@@ -37,6 +37,45 @@ import {
 } from "./chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
+function callMetadata(
+  options: Pick<GatewayRequestHandlerOptions, "params" | "context" | "respond"> &
+    Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">>,
+) {
+  return expectDefined(
+    chatHistoryHandlers["chat.metadata"],
+    "metadata handler",
+  )({
+    req: { type: "req", id: "metadata", method: "chat.metadata" },
+    client: null,
+    isWebchatConnect: () => false,
+    ...options,
+  });
+}
+
+function ownedEntry(
+  owner: string,
+  sessionId: string,
+  fields: Partial<SessionEntry> = {},
+): SessionEntry {
+  return {
+    sessionId,
+    updatedAt: 1,
+    createdActor: { type: "human", source: "profile", id: owner },
+    ...fields,
+  };
+}
+
+function holdMetadata(fixture: ReturnType<typeof createPersonalMetadataFixture>) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  fixture.readChatMetadata.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return fixture.metadata;
+  });
+  return { entered, release };
+}
+
 function createPersonalMetadataFixture(
   scopes: GatewayOperatorRoleDefinition["scopes"] = [READ_SCOPE],
 ) {
@@ -99,16 +138,11 @@ function createPersonalMetadataFixture(
     overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
   ) => {
     const respond = vi.fn<RespondFn>();
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      "metadata handler",
-    )({
+    await callMetadata({
       params,
       context,
       client,
       respond,
-      req: { type: "req", id: "draft-preview", method: "chat.metadata" },
-      isWebchatConnect: () => false,
       ...overrides,
     });
     return respond;
@@ -158,20 +192,14 @@ describe("chat metadata ownership", () => {
     });
     const request = async (includeModels?: boolean, ifRevision?: string) => {
       const respond = vi.fn<RespondFn>();
-      await expectDefined(
-        chatHistoryHandlers["chat.metadata"],
-        "metadata handler",
-      )({
+      await callMetadata({
         params: {
           agentId: "main",
           ...(includeModels === false ? { includeModels } : {}),
           ...(ifRevision ? { ifRevision } : {}),
         },
         context,
-        client: null,
         respond,
-        req: { type: "req", id: "commands-only", method: "chat.metadata" },
-        isWebchatConnect: () => false,
       });
       return respond;
     };
@@ -240,16 +268,11 @@ describe("chat metadata ownership", () => {
       try {
         sql.calibrate();
         for (let attempt = 0; attempt < 2; attempt++) {
-          await expectDefined(
-            chatHistoryHandlers["chat.metadata"],
-            "metadata handler",
-          )({
+          await callMetadata({
             params: { agentId: "main" },
             context,
             client,
             respond,
-            req: { type: "req", id: `legacy-profile-${attempt}`, method: "chat.metadata" },
-            isWebchatConnect: () => false,
           });
         }
         sql.expectIdle();
@@ -341,21 +364,15 @@ describe("chat metadata ownership", () => {
         swarmEnabled: false,
       }));
       const respond = vi.fn<RespondFn>();
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
       const context = createDirectChatContext({ readChatMetadata });
+      const request = (params: Record<string, unknown>) =>
+        callMetadata({ params, context, respond });
       requireNodeSqlite();
       const sql = observeMainThreadSql();
       try {
         sql.calibrate();
         for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
-          await handler({
-            params,
-            context,
-            respond,
-            req: { type: "req", id: "saved-selection", method: "chat.metadata" },
-            client: null,
-            isWebchatConnect: () => false,
-          });
+          await request(params);
         }
         sql.expectIdle();
       } finally {
@@ -384,14 +401,7 @@ describe("chat metadata ownership", () => {
       ]);
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
-      await handler({
-        params: { agentId: "other", sessionKey },
-        context,
-        respond,
-        req: { type: "req", id: "mismatched-agent", method: "chat.metadata" },
-        client: null,
-        isWebchatConnect: () => false,
-      });
+      await request({ agentId: "other", sessionKey });
       expect(readChatMetadata).not.toHaveBeenCalled();
       expect(respond).toHaveBeenLastCalledWith(
         false,
@@ -411,15 +421,9 @@ describe("chat metadata ownership", () => {
     const respond = vi.fn<RespondFn>();
     const readChatMetadata = vi.fn();
 
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      'chatHistoryHandlers["chat.metadata"] test invariant',
-    )({
+    await callMetadata({
       params: {},
       respond,
-      req: { type: "req", id: "ownerless-fleet", method: "chat.metadata" },
-      client: null,
-      isWebchatConnect: () => false,
       context: createDirectChatContext({
         getRuntimeConfig: () => config,
         readChatMetadata,
@@ -451,12 +455,7 @@ describe("chat metadata dispatch authority", () => {
       setRuntimeConfigSnapshot(fixture.config);
       const other = ensureProfileForEmail("metadata-foreign@example.test");
       const sessionKey = "agent:main:hidden-metadata";
-      const entry: SessionEntry = {
-        sessionId: "hidden-metadata",
-        updatedAt: 1,
-        visibility,
-        createdActor: { type: "human", source: "profile", id: other.id },
-      };
+      const entry = ownedEntry(other.id, "hidden-metadata", { visibility });
       if (incognito) {
         entry.incognito = true;
       }
@@ -493,16 +492,9 @@ describe("chat metadata dispatch authority", () => {
         setRuntimeConfigSnapshot(fixture.config);
         const other = ensureProfileForEmail("metadata-foreign@example.test");
         const sessionKey = "agent:other:visible-metadata";
-        const entry: SessionEntry = {
-          sessionId: "visible-metadata",
-          updatedAt: 1,
+        const entry = ownedEntry(own ? fixture.owner.id : other.id, "visible-metadata", {
           visibility,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: own ? fixture.owner.id : other.id,
-          },
-        };
+        });
         if (incognito) {
           entry.incognito = true;
         }
@@ -575,19 +567,11 @@ describe("chat metadata dispatch authority", () => {
         setRuntimeConfigSnapshot(fixture.config);
         const other = ensureProfileForEmail("metadata-foreign@example.test");
         const scope = { agentId: "main", sessionKey: "agent:main:changing-metadata" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "changing-metadata",
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: other.id },
-        });
-        const entered = createDeferred();
-        const release = createDeferred();
-        fixture.readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return fixture.metadata;
-        });
+        await upsertSessionEntryCore(
+          scope,
+          ownedEntry(other.id, "changing-metadata", { visibility: "shared" }),
+        );
+        const { entered, release } = holdMetadata(fixture);
         const { pending, respond } = dispatchMetadata(fixture, { sessionKey: scope.sessionKey });
         const settled = Promise.allSettled([pending]);
         try {
@@ -622,11 +606,7 @@ describe("chat metadata dispatch authority", () => {
       fixture.readChatMetadata.mockImplementationOnce(async () => {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
-          {
-            sessionId: "created-during-read",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: fixture.owner.id },
-          },
+          ownedEntry(fixture.owner.id, "created-during-read"),
         );
         return fixture.metadata;
       });
@@ -648,12 +628,9 @@ describe("chat metadata dispatch authority", () => {
       for (const storePath of [original, replacement]) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey, storePath },
-          {
-            sessionId: "identical-session",
+          ownedEntry(fixture.owner.id, "identical-session", {
             lifecycleRevision: "identical-lifecycle",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: fixture.owner.id },
-          },
+          }),
         );
       }
       fs.symlinkSync(state.statePath("original"), alias, "junction");
@@ -688,11 +665,7 @@ describe("chat metadata dispatch authority", () => {
         const sibling = { agentId: "main", sessionKey: "agent:main:metadata-cleanup-sibling" };
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
-          {
-            sessionId: "metadata-cleanup",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: fixture.owner.id },
-          },
+          ownedEntry(fixture.owner.id, "metadata-cleanup"),
         );
         await upsertSessionEntryCore(sibling, { sessionId: "cleanup-sibling", updatedAt: 1 });
         const gate = createDeferred();
@@ -786,12 +759,10 @@ describe("chat metadata dispatch authority", () => {
           sessionKey: "agent:main:dashboard:incognito-metadata",
           storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
         };
-        await upsertSessionEntryCore(target, {
-          sessionId: "native-metadata",
-          updatedAt: 1,
-          incognito: true,
-          createdActor: { type: "human", source: "profile", id: fixture.owner.id },
-        });
+        await upsertSessionEntryCore(
+          target,
+          ownedEntry(fixture.owner.id, "native-metadata", { incognito: true }),
+        );
         const params = { agentId: "main", sessionKey: requestedKey };
         fixture.readChatMetadata.mockImplementationOnce(async (scope) => {
           expect(scope.storePath).toBe(target.storePath);
@@ -820,14 +791,8 @@ describe("chat metadata dispatch authority", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         await state.writeConfig(fixture.config);
         setRuntimeConfigSnapshot(fixture.config);
-        const entered = createDeferred();
-        const release = createDeferred();
+        const { entered, release } = holdMetadata(fixture);
         const abort = new AbortController();
-        fixture.readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return fixture.metadata;
-        });
         const { pending, respond } = dispatchMetadata(fixture, { agentId: "main" }, abort.signal);
         const settled = Promise.allSettled([pending]);
         try {

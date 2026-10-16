@@ -161,6 +161,10 @@ it.each(
       }
     }
     const before = expectDefined(loadSessionEntry(selected), "selected session entry");
+    const writeSelected = (
+      current: Parameters<typeof writeSessionEntry>[0],
+      patch: Partial<typeof before>,
+    ) => writeSessionEntry(current, selected.sessionKey, { ...before, ...patch });
     if (cache === "full") {
       listSessionEntriesCore({ ...selected, projection: "list" });
     }
@@ -200,12 +204,12 @@ it.each(
           sideWrite(selected);
         } else {
           runOpenClawAgentWriteTransaction((current) => {
-            writeSessionEntry(current, selected.sessionKey, {
-              ...before,
-              ...(write.endsWith("account")
+            writeSelected(
+              current,
+              write.endsWith("account")
                 ? { authProfileOverride: "openai:changed-during-refresh" }
-                : { lastReadAt: 2 }),
-            });
+                : { lastReadAt: 2 },
+            );
           }, selected);
         }
       } else if (write === "tracked sibling update") {
@@ -272,22 +276,14 @@ it.each(
             break;
           case "selected entry write then participant repeat":
             runOpenClawAgentWriteTransaction((current) => {
-              writeSessionEntry(current, selected.sessionKey, {
-                ...before,
-                label: "changed selected",
-                updatedAt: 2,
-              });
+              writeSelected(current, { label: "changed selected", updatedAt: 2 });
               recordSelected("a", 30);
             }, selected);
             break;
           case "selected participant repeat then entry write":
             runOpenClawAgentWriteTransaction((current) => {
               recordSelected("a", 30);
-              writeSessionEntry(current, selected.sessionKey, {
-                ...before,
-                label: "changed selected",
-                updatedAt: 2,
-              });
+              writeSelected(current, { label: "changed selected", updatedAt: 2 });
             }, selected);
             break;
           default:
@@ -298,10 +294,7 @@ it.each(
         expect(() =>
           runOpenClawAgentWriteTransaction((current) => {
             if (write === "rolled-back selected account") {
-              writeSessionEntry(current, selected.sessionKey, {
-                ...before,
-                authProfileOverride: "openai:changed-during-transaction",
-              });
+              writeSelected(current, { authProfileOverride: "openai:changed-during-transaction" });
               expect(scope.isCurrent?.()).toBe(false);
               expect(() => scope.assertCurrent?.()).toThrow(
                 PreparedModelRuntimePublicationSupersededError,
@@ -358,16 +351,16 @@ it.each(
               ).toEqual(beforeRow);
             }
             // The owning write publishes the recreated row's committed postimage.
-            writeSessionEntry(current, selected.sessionKey, {
-              ...before,
-              ...(write === "committed selected recreated sessionId"
+            writeSelected(
+              current,
+              write === "committed selected recreated sessionId"
                 ? { sessionId: "replacement" }
                 : write === "committed selected recreated lifecycle"
                   ? { lifecycleRevision: "replacement" }
                   : write === "committed selected recreated payload"
                     ? { label: "raw" }
-                    : {}),
-            });
+                    : {},
+            );
           }
         }, selected);
       }
@@ -378,10 +371,9 @@ it.each(
       return refresh ? await refresh : metadata;
     });
     const respond = vi.fn<RespondFn>();
-    const handler = handleChatMetadataRequest;
     const outcome = await Promise.resolve()
       .then(() =>
-        handler({
+        handleChatMetadataRequest({
           params: { sessionKey: selected.sessionKey },
           context: createDirectChatContext({
             getRuntimeConfig: () => runtimeConfig,
@@ -572,10 +564,9 @@ it.each([
         getRuntimeConfig: () => config,
         readChatMetadata: harness.runtime.read,
       });
-      const handler = handleChatMetadataRequest;
       const invoke = (respond: RespondFn) =>
         Promise.resolve(
-          handler({
+          handleChatMetadataRequest({
             params: { sessionKey: selected.sessionKey },
             context,
             respond,
