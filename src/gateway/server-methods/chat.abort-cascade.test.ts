@@ -763,8 +763,8 @@ describe("descendant cascade ownership", () => {
         } else if (kind === "mixed queued") {
           expect(context.chatQueuedTurns.get("run-foreign")?.controller).toBe(foreign.controller);
         } else {
-          expect(context.dedupe.get("agent:run-foreign")?.payload).toMatchObject({
-            status: "accepted",
+          expect(context.dedupe.get("agent:run-foreign")).toMatchObject({
+            payload: { status: "accepted" },
           });
         }
       }
