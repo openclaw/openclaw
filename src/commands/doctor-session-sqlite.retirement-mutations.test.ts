@@ -23,6 +23,57 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it("reads each recovery manifest once after confirmation", async () => {
+    const { store, imported } = await createVerifiedRecoveryStore();
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    const originals = preview.artifacts.filter((artifact) => artifact.outcome === "candidate");
+    expect(originals.length).toBeGreaterThan(0);
+    const reads = vi.spyOn(fs, "readFileSync");
+    try {
+      const result = await retireSessionSqliteRecovery({
+        env: store.env,
+        preview,
+        readConfig: async () => ({}),
+        confirm: async () => {
+          reads.mockClear();
+          return true;
+        },
+      });
+      expect(result.status).toBe("complete");
+      expect(reads.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(1);
+      expect(result.totals.removedFiles).toBe(originals.length);
+      for (const original of originals) {
+        expect(fs.existsSync(original.path)).toBe(false);
+      }
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it("retains originals when manifest metadata changes during confirmation", async () => {
+    const { store, imported } = await createVerifiedRecoveryStore();
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    await expect(
+      retireSessionSqliteRecovery({
+        env: store.env,
+        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+        readConfig: async () => ({}),
+        confirm: async () => {
+          manifest.completedAt = "2099-01-01T00:00:00.000Z";
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+          return true;
+        },
+      }),
+    ).rejects.toThrow(/manifest changed during confirmation/i);
+    for (const target of manifest.targets) {
+      for (const move of target.completedMoves) {
+        expect(fs.existsSync(move.archivePath)).toBe(true);
+      }
+    }
+  });
+
   it("blocks a same-size replacement recovery original during preview", async () => {
     const { store, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);

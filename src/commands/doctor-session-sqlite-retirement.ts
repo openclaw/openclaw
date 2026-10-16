@@ -16,7 +16,6 @@ import {
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
-  readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
@@ -271,14 +270,21 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed during confirmation; preview again.");
       }
+      const runs = new Set([...references.values()].flatMap((refs) => refs.map((ref) => ref.run)));
+      const currentManifests = new Map(
+        [...rechecked.references.values()].flatMap((refs) =>
+          refs.map((ref) => [ref.run.manifestPath, ref.run.manifest] as const),
+        ),
+      );
+      for (const run of runs) {
+        if (
+          JSON.stringify(currentManifests.get(run.manifestPath)) !== JSON.stringify(run.manifest)
+        ) {
+          throw new Error("Recovery manifest changed during confirmation; preview again.");
+        }
+      }
       for (const refs of references.values()) {
         for (const ref of refs) {
-          if (
-            JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
-            JSON.stringify(ref.run.manifest)
-          ) {
-            throw new Error("Recovery manifest changed during confirmation; preview again.");
-          }
           if (
             !(rechecked.references.get(ref.move.archivePath) ?? []).some(
               (current) =>
