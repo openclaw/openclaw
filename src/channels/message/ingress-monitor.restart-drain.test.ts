@@ -80,40 +80,6 @@ function createMonitor(
   });
 }
 
-const event = (id: string, text = "deliver me", lane = "a"): RawEvent => ({ id, lane, text });
-const stored = (raw: RawEvent): StoredEvent => ({ version: 1, rawEvent: JSON.stringify(raw) });
-const adoptingDelivery = () =>
-  vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-    await lifecycle.onAdopted();
-  });
-
-async function withRestartFence(
-  run: (fixture: {
-    monitor: ReturnType<typeof createMonitor>;
-    deliver: ReturnType<typeof adoptingDelivery>;
-    signal: ReturnType<typeof beginGatewayRestartSignalAdmission>;
-    activity: boolean[];
-  }) => Promise<void>,
-) {
-  await withQueue(async (queue) => {
-    const deliver = adoptingDelivery();
-    const activity: boolean[] = [];
-    const monitor = createMonitor(queue, deliver, (active) => activity.push(active));
-    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
-    try {
-      monitor.start();
-      await monitor.waitForIdle();
-      activity.length = 0;
-      signal = beginGatewayRestartSignalAdmission();
-      expect(signal).not.toBeNull();
-      await run({ monitor, deliver, signal, activity });
-    } finally {
-      signal?.rollback();
-      await monitor.stop();
-    }
-  });
-}
-
 function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
   return new Promise((resolve, reject) => {
     const fixture = resolveRuntimeWorkerUrl(channelIngressGatewayRestartEntrypoint);
@@ -132,14 +98,10 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
     let failure: Error | undefined;
     let stderr = "";
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const fail = (message: string) => {
-      failure = new Error(message);
+    const completionTimer = setTimeout(() => {
+      failure = new Error("Gateway restart fixture did not finish within 30 seconds");
       child.kill();
-    };
-    const completionTimer = setTimeout(
-      () => fail("Gateway restart fixture did not finish within 30 seconds"),
-      30_000,
-    );
+    }, 30_000);
     childStderr.setEncoding("utf8");
     childStderr.on("data", (chunk: string) => {
       stderr += chunk;
@@ -149,10 +111,10 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
         return;
       }
       if (message.type === "ingress-restart-drain-committed") {
-        idleTimer = setTimeout(
-          () => fail("Ingress did not become idle within 3 seconds of restart drain"),
-          3_000,
-        );
+        idleTimer = setTimeout(() => {
+          failure = new Error("Ingress did not become idle within 3 seconds of restart drain");
+          child.kill();
+        }, 3_000);
         return;
       }
       if (message.type === "ingress-restart-idle") {
@@ -169,16 +131,24 @@ function runRestartDrainFixture(stateDir: string): Promise<RestartDrainProof> {
     child.on("close", (code, signal) => {
       clearTimeout(completionTimer);
       clearTimeout(idleTimer);
-      if (!failure && code === 0 && proof) {
-        resolve(proof);
-      } else {
-        const reason = failure?.message ?? "Gateway restart fixture failed";
+      if (failure) {
         reject(
-          new Error(`${reason}; code=${String(code)} signal=${String(signal)} stderr=${stderr}`, {
-            cause: failure,
-          }),
+          new Error(
+            `${failure.message}; code=${String(code)} signal=${String(signal)} stderr=${stderr}`,
+            { cause: failure },
+          ),
         );
+        return;
       }
+      if (code !== 0 || !proof) {
+        reject(
+          new Error(
+            `Gateway restart fixture failed: code=${String(code)} signal=${String(signal)} stderr=${stderr}`,
+          ),
+        );
+        return;
+      }
+      resolve(proof);
     });
   });
 }
@@ -196,23 +166,46 @@ it("reaches ingress idle after the Gateway commits restart drain", async () => {
 }, 40_000);
 
 it("rearms queued ingress after a restart signal rolls back without an idle observer", async () => {
-  await withRestartFence(async ({ monitor, deliver, signal }) => {
-    await monitor.admit(event("event-signal-rollback"));
-    expect(deliver).not.toHaveBeenCalled();
-    expect(signal?.rollback()).toBe(true);
-    await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+  await withQueue(async (queue) => {
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const monitor = createMonitor(queue, deliver);
+    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      signal = beginGatewayRestartSignalAdmission();
+      expect(signal).not.toBeNull();
+      await monitor.admit({ id: "event-signal-rollback", lane: "a", text: "deliver me" });
+      expect(deliver).not.toHaveBeenCalled();
+
+      expect(signal?.rollback()).toBe(true);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+    } finally {
+      signal?.rollback();
+      await monitor.stop();
+    }
   });
 });
 
 it("holds queued ingress until host suspension reopens admission", async () => {
   await withQueue(async (queue) => {
-    const deliver = adoptingDelivery();
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
     const monitor = createMonitor(queue, deliver);
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
     try {
-      const raw = event("event-suspend-release");
-      await queue.enqueue(raw.id, stored(raw), { laneKey: "lane:a" });
+      await queue.enqueue(
+        "event-suspend-release",
+        {
+          version: 1,
+          rawEvent: JSON.stringify({ id: "event-suspend-release", lane: "a", text: "deliver me" }),
+        },
+        { laneKey: "lane:a" },
+      );
       monitor.start();
 
       await new Promise((resolve) => {
@@ -232,8 +225,12 @@ it("holds queued ingress until host suspension reopens admission", async () => {
 
 it("releases a claim without an attempt when suspension closes during the claim", async () => {
   await withQueue(async (queue) => {
-    const raw = event("event-suspend-claim", "deliver after suspension");
-    const payload = stored(raw);
+    const raw: RawEvent = {
+      id: "event-suspend-claim",
+      lane: "a",
+      text: "deliver after suspension",
+    };
+    const payload: StoredEvent = { version: 1, rawEvent: JSON.stringify(raw) };
     const claimReady = createDeferredCore();
     const returnClaim = createDeferredCore();
     const claimEvent = queue.claim.bind(queue);
@@ -244,7 +241,9 @@ it("releases a claim without an attempt when suspension closes during the claim"
       await returnClaim.promise;
       return claim;
     });
-    const deliver = adoptingDelivery();
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
     const activity: boolean[] = [];
     const monitor = createMonitor(queue, deliver, (active) => activity.push(active));
     let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
@@ -276,7 +275,8 @@ it("releases a claim without an attempt when suspension closes during the claim"
       expect(suspension?.release()).toBe(true);
       await monitor.waitForIdle();
 
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(raw, expect.anything());
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(deliver.mock.calls[0]?.[0]).toEqual(raw);
       expect(await queue.listPending()).toEqual([]);
       expect(await queue.listClaims()).toEqual([]);
       expect(await queue.enqueue(raw.id, payload, { laneKey: "lane:a" })).toMatchObject({
@@ -294,25 +294,51 @@ it("releases a claim without an attempt when suspension closes during the claim"
 });
 
 it("clears activity when a restart signal commits to one-way drain", async () => {
-  await withRestartFence(async ({ monitor, activity }) => {
-    monitor.requestDrain();
-    expect(activity.at(-1)).toBe(true);
+  await withQueue(async (queue) => {
+    const activity: boolean[] = [];
+    const monitor = createMonitor(
+      queue,
+      async () => {},
+      (active) => activity.push(active),
+    );
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      activity.length = 0;
 
-    markGatewayRestartDraining();
-    await monitor.waitForIdle();
-    expect(activity.at(-1)).toBe(false);
+      expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+      monitor.requestDrain();
+      expect(activity.at(-1)).toBe(true);
+
+      markGatewayRestartDraining();
+      await monitor.waitForIdle();
+      expect(activity.at(-1)).toBe(false);
+    } finally {
+      await monitor.stop();
+    }
   });
 });
 
 it.each(["pause", "stop"] as const)(
   "releases idle waiters when %s ends a restart fence wait",
   async (action) => {
-    await withRestartFence(async ({ monitor }) => {
-      monitor.requestDrain();
-      const idle = monitor.waitForIdle();
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(queue, async () => {});
+      let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
+      try {
+        monitor.start();
+        await monitor.waitForIdle();
+        signal = beginGatewayRestartSignalAdmission();
+        expect(signal).not.toBeNull();
+        monitor.requestDrain();
+        const idle = monitor.waitForIdle();
 
-      await monitor[action]();
-      await expect(idle).resolves.toBeUndefined();
+        await monitor[action]();
+        await expect(idle).resolves.toBeUndefined();
+      } finally {
+        signal?.rollback();
+        await monitor.stop();
+      }
     });
   },
 );
@@ -338,6 +364,7 @@ it("propagates a rejected pump wrapper without spinning idle or stop waits", asy
 it("retains adopted webhook delivery through restart while plugin cleanup owns its separate tail", async () => {
   await withQueue(async (queue) => {
     const adoptGate = createDeferredCore();
+    let adopted = false;
     const dispatchGate = createDeferredCore();
     const cleanupStarted = createDeferredCore();
     const cleanupGate = createDeferredCore();
@@ -346,17 +373,14 @@ it("retains adopted webhook delivery through restart while plugin cleanup owns i
     const activity: boolean[] = [];
     const delivered: string[] = [];
     const pumpSignals: AbortSignal[] = [];
-    const facts = {
-      adopted: false,
-      stoppingSettled: false,
-      dispatchRetainedRoot: false,
-      dispatchAdmissionClosed: false,
-      cleanupSettled: false,
-      disposalSettled: false,
-    };
-    const first = event("adopted", "already delivered");
-    const interrupted = event("cancelled", "resume once", "b");
-    const next = event("next", "next queued delivery", "b");
+    let stoppingSettled = false;
+    let dispatchRetainedRoot = false;
+    let dispatchAdmissionClosed = false;
+    let cleanupSettled = false;
+    let disposalSettled = false;
+    const first: RawEvent = { id: "adopted", lane: "a", text: "already delivered" };
+    const interrupted: RawEvent = { id: "cancelled", lane: "b", text: "resume once" };
+    const next: RawEvent = { id: "next", lane: "b", text: "next queued delivery" };
     const monitor = createMonitor(
       queue,
       async (raw, lifecycle) => {
@@ -369,18 +393,18 @@ it("retains adopted webhook delivery through restart while plugin cleanup owns i
                 cleanupStarted.resolve();
                 await cleanupGate.promise;
                 await trackAsyncWork(() => {
-                  facts.cleanupSettled = true;
+                  cleanupSettled = true;
                 });
               });
             }),
           );
           await lifecycle.onAdopted();
-          facts.adopted = true;
+          adopted = true;
           await dispatchGate.promise;
-          facts.dispatchRetainedRoot =
+          dispatchRetainedRoot =
             getActiveGatewayRootWorkCount({ excludeCurrent: true }) <
             getActiveGatewayRootWorkCount();
-          facts.dispatchAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+          dispatchAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
           return;
         }
         await new Promise<void>((resolve) => {
@@ -411,7 +435,7 @@ it("retains adopted webhook delivery through restart while plugin cleanup owns i
       await monitor.waitForPumpIdle();
       await vi.waitFor(() => expect(pumpSignals[0]?.aborted).toBe(true));
       adoptGate.resolve();
-      await vi.waitFor(() => expect(facts.adopted).toBe(true));
+      await vi.waitFor(() => expect(adopted).toBe(true));
       await expect(queue.listClaims()).resolves.toEqual([]);
       await monitor.waitForPumpIdle();
       await vi.waitFor(() =>
@@ -427,24 +451,26 @@ it("retains adopted webhook delivery through restart while plugin cleanup owns i
       expect(signal).not.toBeNull();
       markGatewayRestartDraining();
       const cleanup = instance.dispose().then((result) => {
-        facts.disposalSettled = true;
+        disposalSettled = true;
         return result;
       });
       await cleanupStarted.promise;
       const stopping = monitor.stop().then(() => {
-        facts.stoppingSettled = true;
+        stoppingSettled = true;
       });
       await cancelled.promise;
-      expect(facts.stoppingSettled).toBe(false);
+      expect(stoppingSettled).toBe(false);
       expect(activity.at(-1)).toBe(true);
       expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
       dispatchGate.resolve();
       await stopping;
-      expect(facts).toMatchObject({ dispatchRetainedRoot: true, dispatchAdmissionClosed: true });
+      expect(dispatchRetainedRoot).toBe(true);
+      expect(dispatchAdmissionClosed).toBe(true);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expect(activity.at(-1)).toBe(false);
-      expect(facts).toMatchObject({ cleanupSettled: false, disposalSettled: false });
+      expect(cleanupSettled).toBe(false);
+      expect(disposalSettled).toBe(false);
       expect(instance.disposing).toBe(true);
       await expect(queue.listClaims()).resolves.toEqual([]);
       await expect(queue.listPending()).resolves.toEqual([
@@ -454,7 +480,7 @@ it("retains adopted webhook delivery through restart while plugin cleanup owns i
 
       cleanupGate.resolve();
       await expect(cleanup).resolves.toEqual({ errors: [] });
-      expect(facts.cleanupSettled).toBe(true);
+      expect(cleanupSettled).toBe(true);
       resetGatewayWorkAdmission();
       replacement.start();
       await replacement.waitForIdle();

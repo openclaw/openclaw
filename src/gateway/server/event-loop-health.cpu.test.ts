@@ -19,8 +19,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 vi.mock("../../infra/worker-cpu.js", () => ({ getTrackedWorkerCpuSources: vi.fn() }));
 
-let activeMonitor: ReturnType<typeof createGatewayEventLoopHealthMonitor> | undefined;
-const host = vi.mocked(cpus);
+const monitors: ReturnType<typeof createGatewayEventLoopHealthMonitor>[] = [];
 let now = 10_000;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let revision = 0;
@@ -42,11 +41,14 @@ beforeEach(() => {
   vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({ workers, revision }));
   mainThreadUsage.mockReset().mockImplementation(() => ({ user: now * 250, system: 0 }));
   vi.spyOn(process, "threadCpuUsage").mockImplementation(mainThreadUsage);
-  host.mockReset().mockImplementation(() => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
+  vi.mocked(cpus)
+    .mockReset()
+    .mockImplementation(() => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
 });
 afterEach(() => {
-  activeMonitor?.stop();
-  activeMonitor = undefined;
+  for (const monitor of monitors.splice(0)) {
+    monitor.stop();
+  }
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -58,7 +60,7 @@ async function createMonitor() {
     cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
     eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
-  activeMonitor = monitor;
+  monitors.push(monitor);
   await setImmediate();
   return monitor;
 }
@@ -68,11 +70,6 @@ async function sample(elapsedMs = 1_000) {
   await clock.advanceTo(now);
   // Worker replies publish asynchronously; settle them before advancing the injected clock again.
   await setImmediate();
-  return activeMonitor?.snapshot();
-}
-
-async function breakdown() {
-  return (await sample())?.cpuBreakdown;
 }
 
 describe("CPU breakdown sampling", () => {
@@ -82,7 +79,8 @@ describe("CPU breakdown sampling", () => {
     }
     const monitor = await createMonitor();
     expect(monitor.snapshot()).toBeUndefined();
-    const snapshot = await sample();
+    await sample();
+    const snapshot = monitor.snapshot();
     expect(snapshot).toMatchObject({ cpuCoreRatio: 2, utilization: 0.05 });
     expect(snapshot?.cpuBreakdown).toEqual({
       mainThreadCoreRatio: 0.25,
@@ -93,28 +91,31 @@ describe("CPU breakdown sampling", () => {
     if (runtime === "Bun") {
       expect(workerUsage).not.toHaveBeenCalled();
     }
-    const counts = [workerUsage.mock.calls.length, host.mock.calls.length];
+    const counts = [workerUsage.mock.calls.length, vi.mocked(cpus).mock.calls.length];
     for (let index = 0; index < 50; index++) {
       expect(monitor.snapshot()).toBe(snapshot);
       monitor.persistentDegradationSnapshot();
     }
-    expect([workerUsage.mock.calls.length, host.mock.calls.length]).toEqual(counts);
+    expect([workerUsage.mock.calls.length, vi.mocked(cpus).mock.calls.length]).toEqual(counts);
   });
 
   it("keeps collection failures unavailable and requires fresh windows on recovery", async () => {
     mainThreadUsage.mockImplementation(() => {
       throw new Error("unsupported");
     });
-    host.mockReturnValue([]);
+    vi.mocked(cpus).mockReturnValue([]);
     workerUsage.mockRejectedValue(new Error("worker exited"));
     const monitor = await createMonitor();
-    expect(await sample()).toMatchObject({ cpuCoreRatio: 2 });
-    expect(monitor.snapshot()?.cpuBreakdown).toEqual({});
+    await sample();
+    expect(monitor.snapshot()).toMatchObject({ cpuCoreRatio: 2, cpuBreakdown: {} });
+    expect(Object.keys(monitor.snapshot()!.cpuBreakdown!)).toEqual([]);
     mainThreadUsage.mockImplementation(() => ({ user: now * 250, system: 0 }));
-    host.mockImplementation(() => [hostCpu(now, now)]);
+    vi.mocked(cpus).mockImplementation(() => [hostCpu(now, now)]);
     workerUsage.mockImplementation(async () => ({ user: now * 500, system: 0 }));
-    expect(await breakdown()).toEqual({ hostCpuCount: 1 });
-    expect(await breakdown()).toEqual({
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown).toEqual({ hostCpuCount: 1 });
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown).toEqual({
       mainThreadCoreRatio: 0.25,
       workerCoreRatio: 0.5,
       otherThreadsCoreRatio: 1.25,
@@ -123,38 +124,47 @@ describe("CPU breakdown sampling", () => {
     });
   });
 
-  it.each([
-    ["counter rollback", () => [hostCpu(0, 0), hostCpu(0, 0)]],
-    ["topology change", () => [hostCpu(now + 1_000, 0)]],
-    ["no ticks", () => [hostCpu(now, 0), hostCpu(now / 2, now / 2)]],
-    ["invalid ticks", () => [hostCpu(Number.NaN, 0)]],
-    [
-      "throw",
-      () => {
-        throw new Error("unavailable");
-      },
-    ],
-  ] as const)("does not fabricate idle host utilization after %s", async (_failure, read) => {
-    await createMonitor();
-    host.mockImplementation(read);
-    const health = await sample();
-    expect(health?.cpuCoreRatio).toBe(2);
-    expect(health?.cpuBreakdown?.hostUtilization).toBeUndefined();
-  });
+  it.each(["counter rollback", "topology change", "no ticks", "invalid ticks", "throw"])(
+    "does not fabricate idle host utilization after %s",
+    async (failure) => {
+      const monitor = await createMonitor();
+      if (failure === "counter rollback") {
+        vi.mocked(cpus).mockReturnValue([hostCpu(0, 0), hostCpu(0, 0)]);
+      }
+      if (failure === "topology change") {
+        vi.mocked(cpus).mockReturnValue([hostCpu(now + 1_000, 0)]);
+      }
+      if (failure === "no ticks") {
+        vi.mocked(cpus).mockReturnValue([hostCpu(now, 0), hostCpu(now / 2, now / 2)]);
+      }
+      if (failure === "invalid ticks") {
+        vi.mocked(cpus).mockReturnValue([hostCpu(Number.NaN, 0)]);
+      }
+      if (failure === "throw") {
+        vi.mocked(cpus).mockImplementation(() => {
+          throw new Error("unavailable");
+        });
+      }
+      await sample();
+      expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBeUndefined();
+      expect(monitor.snapshot()?.cpuCoreRatio).toBe(2);
+    },
+  );
 
   it("invalidates worker rates across churn, including workers that start and exit between samples", async () => {
-    await createMonitor();
+    const monitor = await createMonitor();
     revision += 2;
-    const invalidated = await breakdown();
-    expect([invalidated?.workerCoreRatio, invalidated?.otherThreadsCoreRatio]).toEqual([
-      undefined,
-      undefined,
-    ]);
-    expect((await breakdown())?.workerCoreRatio).toBe(0.5);
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
+    expect(monitor.snapshot()?.cpuBreakdown?.otherThreadsCoreRatio).toBeUndefined();
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0.5);
     workers = [];
     revision++;
-    expect((await breakdown())?.workerCoreRatio).toBeUndefined();
-    expect((await breakdown())?.workerCoreRatio).toBe(0);
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
+    await sample();
+    expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0);
   });
 
   it.each(["timeout", "reset", "stop"] as const)(
@@ -163,7 +173,8 @@ describe("CPU breakdown sampling", () => {
       const monitor = await createMonitor();
       const slow = createDeferredCore<NodeJS.CpuUsage>();
       workerUsage.mockReturnValueOnce(slow.promise);
-      const health = await sample();
+      await sample();
+      const health = monitor.snapshot();
       expect(health?.cpuCoreRatio).toBe(2);
       expect(health?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
       if (action === "timeout") {
@@ -176,14 +187,16 @@ describe("CPU breakdown sampling", () => {
       await setImmediate();
       if (action === "timeout") {
         expect(monitor.snapshot()).toBe(health);
-        expect((await breakdown())?.workerCoreRatio).toBeUndefined();
+        await sample();
+        expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();
       } else {
         expect(monitor.snapshot()).toBeUndefined();
       }
       if (action === "stop") {
         expect(clock.armedAtMs).toBeNull();
       } else {
-        expect((await breakdown())?.workerCoreRatio).toBe(0.5);
+        await sample();
+        expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0.5);
       }
     },
   );

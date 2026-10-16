@@ -1,5 +1,5 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createMattermostClient, updateMattermostPost } from "./client.js";
 import { createMattermostDraftStream } from "./draft-stream.js";
@@ -13,19 +13,20 @@ const postSchema = z.object({
   props: z.record(z.string(), z.unknown()),
   file_ids: z.array(z.string()),
 });
+const updateSchema = postSchema.partial();
 type Post = z.infer<typeof postSchema>;
-const postPath = "/api/v4/posts/post-fixture";
 
 async function withPostFixture(
   run: (fixture: {
     client: ReturnType<typeof createMattermostClient>;
-    before: Post;
-    read: () => Post;
+    read: () => Promise<Post>;
+    setFlags: (enabled: boolean) => void;
     wire: string[];
     stream: ReturnType<typeof createMattermostDraftStream>;
     warnings: string[];
   }) => Promise<void>,
   options: {
+    allowChannelMentions?: boolean;
     assertRequestCurrent?: () => void;
     onLookup?: () => void;
     lookupResponse?: { status: number; body: unknown };
@@ -34,50 +35,65 @@ async function withPostFixture(
   let stored: Post | undefined;
   const wire: string[] = [];
   await withServer(
-    async (request, response) => {
+    (request, response) => {
       let raw = "";
       request.setEncoding("utf8");
-      for await (const chunk of request) {
+      request.on("data", (chunk: string) => {
         raw += chunk;
-      }
-      const route = request.url ?? "";
-      wire.push(`${request.method} ${route}`);
-      response.setHeader("content-type", "application/json");
-      try {
-        const input = postSchema.partial().parse(raw ? JSON.parse(raw) : {});
-        if (request.method === "POST" && route === "/api/v4/posts") {
-          stored = {
-            id: "post-fixture",
-            channel_id: "channel-fixture",
-            message: input.message ?? "",
-            is_pinned: true,
-            has_reactions: true,
-            props: { retained: "provider metadata" },
-            file_ids: ["file-fixture"],
-          };
-        } else if (!stored) {
-          throw new Error("post not created");
-        } else if (request.method === "PUT" && route === `${postPath}/patch`) {
-          // PatchPost applies mention suppression before Post.Patch replaces supplied properties.
-          if (/\B@(channel|all|here)\b/i.test(input.message ?? "")) {
-            input.props = { ...input.props, mentionHighlightDisabled: true };
+      });
+      request.on("end", () => {
+        const route = request.url ?? "";
+        wire.push(`${request.method} ${route}`);
+        response.setHeader("content-type", "application/json");
+        try {
+          const input = updateSchema.parse(raw ? JSON.parse(raw) : {});
+          if (request.method === "POST" && route === "/api/v4/posts") {
+            stored = {
+              id: "post-fixture",
+              channel_id: "channel-fixture",
+              message: input.message ?? "",
+              is_pinned: false,
+              has_reactions: false,
+              props: { retained: "provider metadata" },
+              file_ids: ["file-fixture"],
+            };
+          } else if (!stored) {
+            throw new Error("post not created");
+          } else if (request.method === "PUT" && route === "/api/v4/posts/post-fixture") {
+            // Full UpdatePost preserves nil props/files but decodes omitted scalars to zero values.
+            stored = {
+              ...stored,
+              message: input.message ?? "",
+              is_pinned: input.is_pinned ?? false,
+              has_reactions: input.has_reactions ?? false,
+              props: input.props ?? stored.props,
+              file_ids: input.file_ids ?? stored.file_ids,
+            };
+          } else if (request.method === "PUT" && route === "/api/v4/posts/post-fixture/patch") {
+            // PatchPost applies mention suppression before Post.Patch replaces supplied properties.
+            if (
+              options.allowChannelMentions === false &&
+              /\B@(channel|all|here)\b/i.test(input.message ?? "")
+            ) {
+              input.props = { ...input.props, mentionHighlightDisabled: true };
+            }
+            stored = { ...stored, ...input };
+          } else if (request.method === "GET" && route === "/api/v4/posts/post-fixture") {
+            options.onLookup?.();
+            if (options.lookupResponse) {
+              response.statusCode = options.lookupResponse.status;
+              response.end(JSON.stringify(options.lookupResponse.body));
+              return;
+            }
+          } else {
+            throw new Error(`unexpected request ${request.method} ${route}`);
           }
-          stored = { ...stored, ...input };
-        } else if (request.method === "GET" && route === postPath) {
-          options.onLookup?.();
-          if (options.lookupResponse) {
-            response.statusCode = options.lookupResponse.status;
-            response.end(JSON.stringify(options.lookupResponse.body));
-            return;
-          }
-        } else {
-          throw new Error(`unexpected request ${request.method} ${route}`);
+          response.end(JSON.stringify(stored));
+        } catch (error) {
+          response.statusCode = 400;
+          response.end(JSON.stringify({ message: String(error) }));
         }
-        response.end(JSON.stringify(stored));
-      } catch (error) {
-        response.statusCode = 400;
-        response.end(JSON.stringify({ message: String(error) }));
-      }
+      });
     },
     async (baseUrl) => {
       const client = createMattermostClient({
@@ -87,16 +103,27 @@ async function withPostFixture(
         assertRequestCurrent: options.assertRequestCurrent,
       });
       const warnings: string[] = [];
-      const warn = (message: string) => warnings.push(message);
-      const stream = createMattermostDraftStream({ client, channelId: "channel-fixture", warn });
+      const stream = createMattermostDraftStream({
+        client,
+        channelId: "channel-fixture",
+        warn: (message) => warnings.push(message),
+      });
       try {
         stream.update("Working");
         await stream.flush();
-        wire.length = 0;
         await run({
           client,
-          before: postSchema.parse(stored),
-          read: () => postSchema.parse(stored),
+          read: async () => {
+            const response = await fetch(`${baseUrl}/api/v4/posts/post-fixture`);
+            expect(response.ok).toBe(true);
+            return postSchema.parse(await response.json());
+          },
+          setFlags: (enabled) => {
+            if (!stored) {
+              throw new Error("post not created");
+            }
+            stored = { ...stored, is_pinned: enabled, has_reactions: enabled };
+          },
           wire,
           stream,
           warnings,
@@ -108,70 +135,102 @@ async function withPostFixture(
   );
 }
 
-it("preserves message and flags on props-only edit", async () => {
-  await withPostFixture(async ({ client, before, read }) => {
-    const props = { attachments: [{ text: "Completed" }] };
-    await updateMattermostPost(client, before.id, { props });
-    expect(read()).toEqual({ ...before, props });
-  });
-});
-
-it("preserves flags and omitted props when channel mentions are restricted", async () => {
-  await withPostFixture(async ({ stream, warnings, before, read }) => {
-    stream.update("Update for @channel");
-    await stream.flush();
-    expect(warnings).toEqual([]);
-    expect(read()).toEqual({
-      ...before,
-      message: "Update for @channel",
-      props: { ...before.props, mentionHighlightDisabled: true },
+describe("Mattermost partial edits preserve provider-owned post state", () => {
+  it("preserves message and flags on props-only edit", async () => {
+    await withPostFixture(async ({ client, read, setFlags }) => {
+      setFlags(true);
+      const before = await read();
+      const props = { attachments: [{ text: "Completed" }] };
+      await updateMattermostPost(client, before.id, { props });
+      expect(await read()).toEqual({ ...before, props });
     });
   });
-});
 
-it("replaces explicit props without looking up the old map", async () => {
-  await withPostFixture(async ({ client, before, read, wire }) => {
-    await updateMattermostPost(client, before.id, { message: "@channel", props: {} });
-    expect(wire).toEqual([`PUT ${postPath}/patch`]);
-    expect(read()).toEqual({
-      ...before,
-      message: "@channel",
-      props: { mentionHighlightDisabled: true },
-    });
+  it("preserves flags and omitted props when channel mentions are restricted", async () => {
+    await withPostFixture(
+      async ({ stream, warnings, read, setFlags }) => {
+        setFlags(true);
+        const before = await read();
+        stream.update("Update for @channel");
+        await stream.flush();
+        expect(warnings).toEqual([]);
+        expect(await read()).toEqual({
+          ...before,
+          message: "Update for @channel",
+          props: {
+            ...before.props,
+            mentionHighlightDisabled: true,
+          },
+        });
+      },
+      { allowChannelMentions: false },
+    );
   });
-});
 
-it("does not PUT after authority is revoked during a valid props lookup", async () => {
-  const revoked = new Error("fixture edit authority revoked");
-  const assertRequestCurrent = vi.fn();
-  const deny = () => {
-    throw revoked;
-  };
-  await withPostFixture(
-    async ({ client, before, read, wire }) => {
-      const edit = updateMattermostPost(client, before.id, { message: "@channel" });
-      await expect(edit).rejects.toMatchObject({ message: revoked.message, cause: revoked });
-      expect(wire).toEqual([`GET ${postPath}`]);
-      expect(read()).toEqual(before);
-    },
-    {
-      assertRequestCurrent,
-      onLookup: () => assertRequestCurrent.mockImplementation(deny),
-    },
-  );
-});
+  it("replaces explicit props without looking up the old map", async () => {
+    await withPostFixture(
+      async ({ client, read, wire }) => {
+        const before = await read();
+        const start = wire.length;
+        await updateMattermostPost(client, before.id, { message: "@channel", props: {} });
+        expect(wire.slice(start)).toEqual(["PUT /api/v4/posts/post-fixture/patch"]);
+        expect(await read()).toEqual({
+          ...before,
+          message: "@channel",
+          props: { mentionHighlightDisabled: true },
+        });
+      },
+      { allowChannelMentions: false },
+    );
+  });
 
-it.each([
-  { name: "failed", status: 503, body: { message: "Unavailable" } },
-  { name: "malformed", status: 200, body: { props: {} } },
-  { name: "wrong-ID", status: 200, body: { id: "another-post", props: {} } },
-])("does not edit after a $name lookup", async (lookupResponse) => {
-  await withPostFixture(
-    async ({ client, wire }) => {
-      const edit = updateMattermostPost(client, "post-fixture", { message: "@channel" });
-      await expect(edit).rejects.toThrow();
-      expect(wire).toEqual([`GET ${postPath}`]);
-    },
-    { lookupResponse },
-  );
+  it("does not PUT after authority is revoked during a valid props lookup", async () => {
+    const revoked = new Error("fixture edit authority revoked");
+    let current = true;
+    let revokeOnLookup = false;
+    await withPostFixture(
+      async ({ client, read, wire }) => {
+        const before = await read();
+        const start = wire.length;
+        revokeOnLookup = true;
+        await expect(
+          updateMattermostPost(client, before.id, { message: "@channel" }),
+        ).rejects.toMatchObject({
+          message: revoked.message,
+          cause: revoked,
+        });
+        expect(wire.slice(start)).toEqual(["GET /api/v4/posts/post-fixture"]);
+        expect(await read()).toEqual(before);
+      },
+      {
+        assertRequestCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+        onLookup: () => {
+          if (revokeOnLookup) {
+            current = false;
+          }
+        },
+      },
+    );
+  });
+
+  it.each([
+    { name: "failed", status: 503, body: { message: "Unavailable" } },
+    { name: "malformed", status: 200, body: { props: {} } },
+    { name: "wrong-ID", status: 200, body: { id: "another-post", props: {} } },
+  ])("does not edit after a $name lookup", async (lookupResponse) => {
+    await withPostFixture(
+      async ({ client, wire }) => {
+        const start = wire.length;
+        await expect(
+          updateMattermostPost(client, "post-fixture", { message: "@channel" }),
+        ).rejects.toThrow();
+        expect(wire.slice(start)).toEqual(["GET /api/v4/posts/post-fixture"]);
+      },
+      { lookupResponse },
+    );
+  });
 });

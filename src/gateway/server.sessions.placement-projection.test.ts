@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import type {
-  EnvironmentSummary,
-  SessionPlacementMachine,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { EnvironmentSummary } from "../../packages/gateway-protocol/src/index.js";
 import { i18n } from "../../ui/src/i18n/index.ts";
 import { projectDevicePlacements } from "../../ui/src/pages/new-session/device-placement.ts";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
@@ -17,7 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
-import { NodeRegistry } from "./node-registry.js";
+import { NodeRegistry, type NodeSessionConnectParams } from "./node-registry.js";
 import { createSessionPlacementFactsReader } from "./server-methods/sessions-read-cache.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import {
@@ -54,42 +51,50 @@ afterEach(async () => {
 });
 
 test.each([
-  ["invocable", undefined],
-  [
-    "pending-approval",
-    "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
-  ],
-  [
-    "unauthorized",
-    "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
-  ],
-  [
-    "undeclared",
-    "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
-  ],
+  { state: "invocable", disabledReason: undefined },
+  {
+    state: "pending-approval",
+    disabledReason:
+      "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
+  },
+  {
+    state: "unauthorized",
+    disabledReason:
+      "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
+  },
+  {
+    state: "undeclared",
+    disabledReason:
+      "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
+  },
 ] as const)(
-  "sessions.list carries automatic runtime requirements through the recovery picker: %s",
-  async (state, disabledReason) => {
+  "sessions.list carries automatic runtime requirements through the recovery picker: $state",
+  async ({ state, disabledReason }) => {
     const registered = listRegisteredAgentHarnesses();
     const command = "runtime.repository.v1";
-    const commands = { allow: [command], deny: state === "unauthorized" ? [command] : [] };
-    const config = { gateway: { nodes: { commands } } };
-    const devicePlacement = { requiredNodeCommands: [command], consumesWorkerSlot: false };
+    const config = {
+      gateway: {
+        nodes: {
+          commands: {
+            allow: [command],
+            deny: state === "unauthorized" ? [command] : [],
+          },
+        },
+      },
+    };
     const registry = new NodeRegistry({ getConfig: () => config });
     const client = createOperatorWsClient({
       clientInfo: { id: "node-host", mode: "node" },
       socket: { readyState: 1, bufferedAmount: 0, send: vi.fn() },
     });
+    const connect: NodeSessionConnectParams = {
+      ...client.connect,
+      caps: ["session.host"],
+      commands: state === "invocable" || state === "unauthorized" ? [command] : [],
+      declaredCommands: state === "undeclared" ? [] : [command],
+    };
     const node = registry.register(
-      {
-        ...client,
-        connect: {
-          ...client.connect,
-          caps: ["session.host"],
-          commands: state === "invocable" || state === "unauthorized" ? [command] : [],
-          declaredCommands: state === "undeclared" ? [] : [command],
-        },
-      },
+      { ...client, connect },
       { pairingIdentity: "node-host", pairingGeneration: "node-host-generation" },
     );
     const connected = vi.spyOn(registry, "listConnectedForPairingStates").mockReturnValue([node]);
@@ -98,7 +103,13 @@ test.each([
       label: "Repository device",
       autoSelection: { providerIds: ["repository-provider"] },
       supports: () => ({ supported: true }),
-      cloudPlacement: { mode: "remote-exec", devicePlacement },
+      cloudPlacement: {
+        mode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["runtime.repository.v1"],
+          consumesWorkerSlot: false,
+        },
+      },
       runAttempt: async () => {
         throw new Error("projection must not execute the runtime");
       },
@@ -114,13 +125,16 @@ test.each([
           workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
         },
       });
-      await seedSessionRows({
-        "agent:main:repository": {
-          sessionId: "repository-session",
-          updatedAt: 200,
-          repositoryWorkspaceId: "repository-workspace",
-          providerOverride: "repository-provider",
-          modelOverride: "repository-model",
+      await createSessionStoreDir();
+      await writeSessionStore({
+        entries: {
+          "agent:main:repository": {
+            sessionId: "repository-session",
+            updatedAt: 200,
+            repositoryWorkspaceId: "repository-workspace",
+            providerOverride: "repository-provider",
+            modelOverride: "repository-model",
+          },
         },
       });
       const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>("sessions.list", {});
@@ -131,7 +145,10 @@ test.each([
       expect(runtime).toMatchObject({
         id: "repository-device",
         cloudPlacementExecutionMode: "remote-exec",
-        devicePlacement: { requiredNodeCommands: [command], consumesWorkerSlot: false },
+        devicePlacement: {
+          requiredNodeCommands: ["runtime.repository.v1"],
+          consumesWorkerSlot: false,
+        },
       });
       const catalog = await directSessionReq<{ environments: EnvironmentSummary[] }>(
         "environments.list",
@@ -151,7 +168,8 @@ test.each([
         runtime?.devicePlacement,
       );
       const device = devices.find((option) => option.deviceId === "node-host");
-      expect(device).toMatchObject({ selectable: state === "invocable" });
+      expect(device).toBeDefined();
+      expect(device?.selectable).toBe(state === "invocable");
       expect(device?.disabledReason).toBe(disabledReason);
     } finally {
       connected.mockRestore();
@@ -161,87 +179,61 @@ test.each([
   },
 );
 
-const placementIdentity = { providerId: "machine0", profileId: "team" };
-const projectedActive = {
-  state: "active" as const,
-  environmentId: "env-placement",
-  generation: 7,
-  activeOwnerEpoch: 12,
-  workspaceBaseManifestRef: "manifest-base",
-  remoteWorkspaceDir: "/workspace/main",
-  workerBundleHash: "ab".repeat(32),
-  lastTranscriptAckCursor: 23,
-  lastLiveEventAckCursor: 9,
-  createdAtMs: 100,
-  updatedAtMs: 300,
-  stateChangedAtMs: 200,
-};
-
 function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
   return {
-    ...projectedActive,
     sessionId: "sess-main",
     agentId: "main",
     sessionKey: "agent:main:main",
     executionMode: "worker-turn",
+    state: "active",
+    environmentId: "env-placement",
+    generation: 7,
+    activeOwnerEpoch: 12,
+    workspaceBaseManifestRef: "manifest-base",
+    remoteWorkspaceDir: "/workspace/main",
+    workerBundleHash: ["a", "b"].join("").repeat(32),
+    lastTranscriptAckCursor: 23,
+    lastLiveEventAckCursor: 9,
     recoveryError: null,
     terminalReason: null,
     terminalAtMs: null,
     turnClaim: null,
+    createdAtMs: 100,
+    updatedAtMs: 300,
+    stateChangedAtMs: 200,
   };
 }
 
-function failedPlacement(reason: string, activeOwnerEpoch: number | null = 12) {
-  return {
-    ...activePlacementRecord(),
-    state: "failed" as const,
-    activeOwnerEpoch,
-    recoveryError: reason,
-    terminalReason: reason,
-    terminalAtMs: 400,
-  } satisfies WorkerSessionPlacementRecord;
-}
-
-async function describeSession(
-  context: NonNullable<Parameters<typeof directSessionReq>[2]>["context"],
-  key = "main",
-) {
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key },
-    { context },
-  );
-  expect(result.ok).toBe(true);
-  return result.payload?.session;
-}
-
-async function seedSessionRows(
-  entries: Parameters<typeof writeSessionStore>[0]["entries"] = {
-    main: { sessionId: "sess-main", updatedAt: 200 },
-    "agent:main:other": { sessionId: "sess-other", updatedAt: 100 },
-  },
-) {
-  const directory = await createSessionStoreDir();
-  await writeSessionStore({ entries });
-  return directory;
+async function seedSessionRows(): Promise<void> {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: { sessionId: "sess-main", updatedAt: 200 },
+      "agent:main:other": { sessionId: "sess-other", updatedAt: 100 },
+    },
+  });
 }
 
 function placementContext(
   placement: WorkerSessionPlacementRecord,
-  environment?: Partial<WorkerEnvironmentServiceRecord> & { machine?: SessionPlacementMachine },
+  environment?: {
+    environmentId?: string;
+    providerId: string;
+    profileId: string;
+    ownerEpoch: number;
+    state: "provisioning" | "destroyed" | "failed";
+    leaseId?: string;
+  },
 ) {
   return {
     workerSessionPlacementService: {
       getMany: () => new Map([[placement.sessionId, placement]]),
     },
     workerEnvironmentService: {
-      get: (id: string): WorkerEnvironmentServiceRecord | undefined =>
-        environment && id === placement.environmentId
+      get: (): WorkerEnvironmentServiceRecord | undefined =>
+        environment
           ? {
               environmentId: placement.environmentId ?? "env-placement",
-              ...placementIdentity,
-              ownerEpoch: 12,
-              state: "destroyed",
               leaseId: null,
               sharedHost: null,
               createdAtMs: 100,
@@ -254,32 +246,46 @@ function placementContext(
               ...environment,
             }
           : undefined,
-      readMachineShape: () => environment?.machine,
+      readMachineShape: () => undefined,
       machineShapeVersion: () => 0,
       inventoryVersion: () => 0,
     },
   };
 }
 
-async function projectedContext(
-  context: NonNullable<Parameters<typeof createSessionRowProjection>[0]["context"]>,
-  placementFactsReader: Parameters<typeof createSessionRowProjection>[0]["placementFactsReader"],
-) {
-  const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
-  const projection = await createSessionRowProjection({ cfg, context, placementFactsReader });
-  trackSessionReadProjection(projection);
-  return bindSessionRowProjection(context, () => projection);
+function placementMove(
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" }>,
+  lastError: string | null,
+): WorkerPlacementMoveIntent {
+  return {
+    operationId: "move:v1:opaque",
+    sessionId: placement.sessionId,
+    source: {
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    },
+    target: { kind: "gateway" },
+    abandonSource: false,
+    lastError,
+    createdAtMs: 320,
+    updatedAtMs: 340,
+  };
 }
 
-test.each([12, 13])(
-  "sessions.list retains durable worker placement for resident rows: owner epoch %s",
-  async (ownerEpoch) => {
+test.each([
+  { name: "matching owner epoch", ownerEpoch: 12, expectedIdentity: true },
+  { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
+])(
+  "sessions.list retains durable worker placement for resident rows: $name",
+  async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
-    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-      (sessionIds) =>
-        new Map(sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : []),
-    );
+    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
+      return new Map(
+        sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
+      );
+    });
     const diskSpace = {
       status: "warning" as const,
       availableBytes: 400,
@@ -287,12 +293,23 @@ test.each([12, 13])(
       observedAtMs: 350,
     };
     const identity = {
-      ...placementIdentity,
+      providerId: "machine0",
+      profileId: "team",
       machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
     };
+    const getEnvironment = vi.fn((environmentId: string) =>
+      ownerEpoch !== undefined && environmentId === placement.environmentId
+        ? { ...identity, ownerEpoch, state: "attached" }
+        : undefined,
+    );
     const context = {
-      ...placementContext(placement, { ...identity, ownerEpoch, state: "attached" }),
       workerSessionPlacementService: { getMany },
+      workerEnvironmentService: {
+        get: getEnvironment,
+        readMachineShape: () => identity.machine,
+        machineShapeVersion: () => 0,
+        inventoryVersion: () => 0,
+      },
       workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
       workerPlacementRunnerAvailabilityReader: {
         read: () => ({ kind: "device", status: "offline" }),
@@ -312,10 +329,21 @@ test.each([12, 13])(
     const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
     const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
     expect(main?.placement).toStrictEqual({
-      ...projectedActive,
+      state: "active",
+      environmentId: "env-placement",
+      generation: 7,
+      activeOwnerEpoch: 12,
+      workspaceBaseManifestRef: "manifest-base",
+      remoteWorkspaceDir: "/workspace/main",
+      workerBundleHash: ["a", "b"].join("").repeat(32),
+      lastTranscriptAckCursor: 23,
+      lastLiveEventAckCursor: 9,
+      createdAtMs: 100,
+      updatedAtMs: 300,
+      stateChangedAtMs: 200,
       diskSpace,
       runner: { kind: "device", status: "offline" },
-      ...(ownerEpoch === 12 ? identity : {}),
+      ...(expectedIdentity ? identity : {}),
     });
     expect(other?.placement).toBeUndefined();
     getMany.mockClear();
@@ -330,68 +358,114 @@ test("sessions.describe preserves pre-epoch identity while starting", async () =
     ...activePlacementRecord(),
     state: "starting" as const,
     activeOwnerEpoch: null,
+    turnClaim: null,
     lastTranscriptAckCursor: null,
     lastLiveEventAckCursor: null,
   } satisfies WorkerSessionPlacementRecord;
-  const projected = await describeSession(
-    placementContext(placement, { ownerEpoch: 0, state: "provisioning" }),
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: 0,
+        state: "provisioning",
+      }),
+    },
   );
-  expect(projected?.placement).toMatchObject({ state: "starting", ...placementIdentity });
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "starting",
+    providerId: "machine0",
+    profileId: "team",
+  });
 });
 
 test.each([
-  ["without an environment", undefined, 12, false, false],
-  ["with matching terminal environment provenance", 12, 12, true, false],
-  ["without identity when no owner epoch was retained", 12, null, false, false],
-  ["while a move still owns recovery", 13, 12, false, true],
-] as const)(
-  "sessions.describe projects a durable terminal reason %s",
-  async (_name, ownerEpoch, activeOwnerEpoch, identity, retryBlock) => {
+  { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
+  {
+    name: "with matching terminal environment provenance",
+    ownerEpoch: 12,
+    activeOwnerEpoch: 12,
+    identity: true,
+  },
+  {
+    name: "without identity when no owner epoch was retained",
+    ownerEpoch: 12,
+    activeOwnerEpoch: null,
+    identity: false,
+  },
+  {
+    name: "while a move still owns recovery",
+    ownerEpoch: 13,
+    activeOwnerEpoch: 12,
+    identity: false,
+    retryBlock: "move",
+  },
+])(
+  "sessions.describe projects a durable terminal reason $name",
+  async ({ ownerEpoch, activeOwnerEpoch, identity, ...scenario }) => {
+    const retryBlock = "retryBlock" in scenario ? scenario.retryBlock : undefined;
     await seedSessionRows();
-    const placement = failedPlacement(
-      "cloud worker disappeared: provider reported lease destroyed",
+    const active = activePlacementRecord();
+    const placement = {
+      ...active,
+      state: "failed" as const,
       activeOwnerEpoch,
-    );
-    const move: WorkerPlacementMoveIntent = {
-      operationId: "move:v1:opaque",
-      sessionId: placement.sessionId,
-      source: {
-        generation: projectedActive.generation,
-        environmentId: projectedActive.environmentId,
-        ownerEpoch: 12,
-      },
-      target: { kind: "gateway" },
-      abandonSource: false,
-      lastError: null,
-      createdAtMs: 320,
-      updatedAtMs: 340,
-    };
+      turnClaim: null,
+      recoveryError: "cloud worker disappeared: provider reported lease destroyed",
+      terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+      terminalAtMs: 400,
+    } satisfies WorkerSessionPlacementRecord;
+    const move = placementMove(active, null);
     const context = placementContext(
       placement,
-      ownerEpoch === undefined ? undefined : { ownerEpoch },
+      ownerEpoch === undefined
+        ? undefined
+        : {
+            environmentId: active.environmentId,
+            providerId: "machine0",
+            profileId: "team",
+            ownerEpoch,
+            state: "destroyed",
+          },
     );
-    const prepared = await projectedContext(
+    const projection = await createSessionRowProjection({
+      cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
       context,
-      createSessionPlacementFactsReader(
+      placementFactsReader: createSessionPlacementFactsReader(
         context.workerSessionPlacementService,
         context.workerEnvironmentService.get,
-        new Map(retryBlock ? [[placement.sessionId, move]] : []),
+        new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
       ),
+    });
+    trackSessionReadProjection(projection);
+
+    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: bindSessionRowProjection(context, () => projection),
+      },
     );
-    const projected = (await describeSession(prepared))?.placement;
-    expect(projected).toMatchObject({
+
+    expect(result.ok).toBe(true);
+    expect(result.payload?.session?.placement).toMatchObject({
       state: "failed",
       recoveryAction: "restart",
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     });
+    const projected = result.payload?.session?.placement;
+    expect(projected).toBeDefined();
     if (ownerEpoch !== undefined && activeOwnerEpoch !== null && !retryBlock) {
       expect(projected).toHaveProperty("retryOnSend", true);
     } else {
       expect(projected).not.toHaveProperty("retryOnSend");
     }
     if (identity) {
-      expect(projected).toMatchObject(placementIdentity);
+      expect(projected).toMatchObject({ providerId: "machine0", profileId: "team" });
     } else {
       expect(projected).not.toHaveProperty("providerId");
       expect(projected).not.toHaveProperty("profileId");
@@ -405,7 +479,8 @@ function seedFailedPlacementWithRetainedResult(database: OpenClawStateDatabase, 
     ({ db }) => {
       db.prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL,
         turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
-        turn_claim_owner_epoch = NULL, state = 'failed',
+        turn_claim_owner_epoch = NULL WHERE session_id = ?`).run(sessionId);
+      db.prepare(`UPDATE worker_session_placements SET state = 'failed',
         transition_generation = transition_generation + 3,
         recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
         terminal_at_ms = 1 WHERE session_id = ?`).run(sessionId);
@@ -420,13 +495,14 @@ test.each([
 ] as const)(
   "sessions.describe waits for retained $recovery before offering retry on send",
   async ({ recovery, executionMode }) => {
+    const { dir } = await createSessionStoreDir();
     const identity = {
       sessionId: "sess-retained-recovery",
       sessionKey: "agent:main:retained-recovery",
       agentId: "main",
     };
-    const { dir } = await seedSessionRows({
-      [identity.sessionKey]: { sessionId: identity.sessionId, updatedAt: 200 },
+    await writeSessionStore({
+      entries: { [identity.sessionKey]: { sessionId: identity.sessionId, updatedAt: 200 } },
     });
     const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
     const placements = createWorkerSessionPlacementStore({ database });
@@ -434,12 +510,12 @@ test.each([
       ...identity,
       executionMode,
     });
-    const transitionOwner = {
+    const journalOwner = {
       sessionId: identity.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
     };
-    const journalOwner = { ...transitionOwner, placementGeneration: active.generation };
     if (recovery === "unstaged result") {
       const claim = await placements.claimTurn({
         ...identity,
@@ -448,7 +524,6 @@ test.each([
         runId: "retained-run",
       });
       await placements.markWorkspaceResultPending(claim);
-      seedFailedPlacementWithRetainedResult(database, identity.sessionId);
     } else {
       const basePack = Buffer.from("retained workspace rollback");
       await placements.beginWorkspaceReconciliation(journalOwner, {
@@ -462,12 +537,20 @@ test.each([
         basePackSha256: createHash("sha256").update(basePack).digest("hex"),
         basePack,
       });
+    }
+    if (recovery === "unstaged result") {
+      seedFailedPlacementWithRetainedResult(database, identity.sessionId);
+    } else {
       const draining = await placements.startDrain({
-        ...transitionOwner,
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
       const reconciling = await placements.startReconcile({
-        ...transitionOwner,
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
       await placements.fail({
@@ -491,12 +574,27 @@ test.each([
         readMachineShape: () => undefined,
       },
     };
-    const prepared = await projectedContext(context, placements);
-    const describe = () => describeSession(prepared, identity.sessionKey);
+    const projection = await createSessionRowProjection({
+      cfg,
+      context,
+      placementFactsReader: placements,
+    });
+    trackSessionReadProjection(projection);
+    const options = { context: bindSessionRowProjection(context, () => projection) };
+    const describe = () =>
+      directSessionReq<{ session: GatewaySessionRow | null }>(
+        "sessions.describe",
+        { key: identity.sessionKey },
+        options,
+      );
     const blocked = await describe();
-    expect(blocked?.placement).toMatchObject({ state: "failed", recoveryAction: "restart" });
-    expect(blocked?.placement).not.toHaveProperty("retryOnSend");
-    expect(blocked?.placement).not.toHaveProperty("workspaceResultReconciling");
+    expect(blocked.ok).toBe(true);
+    expect(blocked.payload?.session?.placement).toMatchObject({
+      state: "failed",
+      recoveryAction: "restart",
+    });
+    expect(blocked.payload?.session?.placement).not.toHaveProperty("retryOnSend");
+    expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
 
     if (recovery === "unstaged result") {
       const pending = await placements.listPendingWorkspaceResultsAsync(identity.sessionId);
@@ -505,18 +603,44 @@ test.each([
     } else {
       await placements.abortWorkspaceReconciliation(journalOwner, { force: true });
     }
-    expect(await describe()).toMatchObject({
+    const ready = await describe();
+    expect(ready.ok).toBe(true);
+    expect(ready.payload?.session).toMatchObject({
       sessionId: identity.sessionId,
-      placement: { ...blocked?.placement, retryOnSend: true },
+      placement: { ...blocked.payload?.session?.placement, retryOnSend: true },
     });
   },
 );
 
 test("sessions.describe requires worker teardown before failed-placement restart", async () => {
   await seedSessionRows();
-  const placement = failedPlacement("worker unavailable");
-  const projected = await describeSession(
-    placementContext(placement, { state: "failed", leaseId: "lease-live" }),
+  const active = activePlacementRecord();
+  const placement = {
+    ...active,
+    state: "failed" as const,
+    turnClaim: null,
+    recoveryError: "worker unavailable",
+    terminalReason: "worker unavailable",
+    terminalAtMs: 400,
+  } satisfies WorkerSessionPlacementRecord;
+
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: placement.activeOwnerEpoch,
+        state: "failed",
+        leaseId: "lease-live",
+      }),
+    },
   );
-  expect(projected?.placement).toMatchObject({ state: "failed", recoveryAction: "stop-first" });
+
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "failed",
+    recoveryAction: "stop-first",
+  });
 });

@@ -1,10 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement as awaitGate,
-  createDeferred,
-} from "../../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type {
   SessionEventOutcome,
   SessionEventReceipt,
@@ -55,24 +52,20 @@ const target: SessionEventTarget = {
   sessionId: "captured-session",
   generation: "captured-generation",
 };
+const completed: SessionEventOutcome = {
+  status: "completed",
+  executionStarted: true,
+  delivered: false,
+};
+
 function receipt(overrides: Partial<SessionEventReceipt> = {}): SessionEventReceipt {
   return {
     id: "controlled-receipt",
     cancel: vi.fn(() => false),
     accepted: Promise.resolve({ ok: true }),
-    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+    settled: Promise.resolve(completed),
     ...overrides,
   };
-}
-
-function expectResponse(response: Awaited<ReturnType<typeof post>>, status: number, body: object) {
-  expect(response).toMatchObject({ status, body });
-}
-
-function wakeResponse(accepted = true, eventOutcome = "queued") {
-  return accepted
-    ? { status: 200, body: { ok: true, eventOutcome } }
-    : { status: 503, body: { ok: false, error: "admission refused" } };
 }
 
 function fixture(dispatcher?: ReturnType<typeof createGatewayHookDispatcher>) {
@@ -148,7 +141,7 @@ async function post(
   });
   const res = { statusCode: 200, setHeader: vi.fn(), end } as unknown as ServerResponse;
   expect(await handler(req, res)).toBe(true);
-  return { status: res.statusCode, body: JSON.parse(body), end };
+  return { status: res.statusCode, body, end };
 }
 
 beforeEach(() => {
@@ -168,239 +161,301 @@ afterEach(async () => {
   );
 });
 
-it("rejects unauthenticated requests before capturing or queuing a target", async () => {
-  const response = await post(fixture().handler, "now", "wrong");
-  expect(response.status).toBe(401);
-  expect(mocks.capture).not.toHaveBeenCalled();
-  expect(mocks.enqueue).not.toHaveBeenCalled();
-  expect(peekSystemEvents(sessionKey)).toEqual([]);
-});
-
-it.each(["failed", "cancelled"] as const)(
-  "responds after acceptance and logs a later %s outcome without another handoff",
-  async (status) => {
-    const settled = createDeferred<SessionEventOutcome>();
-    mocks.enqueue.mockReturnValue(receipt({ settled: settled.promise }));
-    const { handler, warn } = fixture();
-    const response = await post(handler);
-    expectResponse(response, 200, { ok: true, eventOutcome: "queued" });
-    expect(warn).not.toHaveBeenCalled();
-    expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
-      "Wake notification",
-      expect.objectContaining({ expectedTarget: target, createIfMissing: true, source: "hook" }),
-    );
-
-    settled.resolve({ status, executionStarted: false, delivered: false, error: "missing route" });
-    await settled.promise;
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "hook wake failed",
-      expect.objectContaining({ status, error: "missing route" }),
-    );
-    expect(mocks.enqueue).toHaveBeenCalledOnce();
-    expect(response.end).toHaveBeenCalledOnce();
-  },
-);
-
-it.each([
-  { phase: "capture", revoked: false },
-  { phase: "acceptance", revoked: false },
-  { phase: "capture", revoked: true },
-  { phase: "acceptance", revoked: true },
-])(
-  "rejects $phase failure or config revocation ($revoked) without retargeting",
-  async ({ phase, revoked }) => {
-    const reached = createDeferred();
-    const release = createDeferred();
-    const error = "session storage unavailable";
-    if (phase === "capture") {
-      mocks.capture.mockImplementationOnce(async () => {
-        reached.resolve();
-        await release.promise;
-        if (!revoked) {
-          throw new Error(error);
-        }
-        return target;
-      });
-    } else {
-      mocks.enqueue.mockImplementationOnce(() => {
-        reached.resolve();
-        return receipt({
-          accepted: release.promise.then(() =>
-            revoked ? { ok: true as const } : { ok: false as const, error },
-          ),
-        });
-      });
-    }
-    const { handler, revoke } = fixture();
-    const pending = post(handler);
-    await reached.promise;
-    if (revoked) {
-      revoke();
-    }
-    release.resolve();
-    const response = await pending;
-    expectResponse(
-      response,
-      revoked ? 409 : 503,
-      revoked ? { error: "hook configuration changed; retry request" } : { ok: false, error },
-    );
-    if (revoked) {
-      expect(response.end).toHaveBeenCalledOnce();
-    }
-    expect(mocks.capture).toHaveBeenCalledOnce();
-    expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-  },
-);
-
-it.each([
-  { accepted: true, global: false },
-  { accepted: false, global: false },
-  { accepted: true, global: true },
-  { accepted: false, global: true },
-])(
-  "adopts a deferred occurrence for an immediate wake (accepted: $accepted, global: $global)",
-  async ({ accepted, global }) => {
-    const queueKey = global ? "agent:main:global" : sessionKey;
-    const expectedTarget = global ? { ...target, sessionKey: "global" } : target;
-    if (global) {
-      mocks.config.mockReturnValue({ ...config, session: { scope: "global" } });
-      mocks.capture.mockResolvedValue(expectedTarget);
-    }
-    const { handler } = fixture();
-    const deferred = await post(handler, "next-heartbeat");
-    expect(deferred.status).toBe(200);
-    const original = peekSystemEventEntries(queueKey);
-    expect(original).toHaveLength(1);
+describe("authenticated immediate hook wake admission", () => {
+  it("rejects unauthenticated requests before capturing or queuing a target", async () => {
+    const response = await post(fixture().handler, "now", "wrong");
+    expect(response.status).toBe(401);
+    expect(mocks.capture).not.toHaveBeenCalled();
     expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
 
-    const handoffReached = createDeferred();
-    const acceptance = createDeferred<Awaited<SessionEventReceipt["accepted"]>>();
-    mocks.enqueue.mockImplementationOnce(() => {
-      handoffReached.resolve();
-      return receipt({ accepted: acceptance.promise });
-    });
-    let responded = false;
-    const immediate = post(handler).then((response) => {
-      responded = true;
-      return response;
-    });
-    try {
-      await awaitGate(handoffReached.promise, immediate, "Wake returned before adoption");
-      expect(responded).toBe(false);
+  it.each(["failed", "cancelled"] as const)(
+    "responds after acceptance and logs a later %s outcome without another handoff",
+    async (status) => {
+      const settled = createDeferred<SessionEventOutcome>();
+      mocks.enqueue.mockReturnValue(receipt({ settled: settled.promise }));
+      const { handler, warn } = fixture();
+      const response = await post(handler);
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({ ok: true, eventOutcome: "queued" });
+      expect(warn).not.toHaveBeenCalled();
       expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
         "Wake notification",
-        expect.objectContaining({
-          occurrences: [original[0]],
-          expectedTarget,
-          preserveOccurrenceOnRejection: true,
-        }),
+        expect.objectContaining({ expectedTarget: target, createIfMissing: true, source: "hook" }),
       );
-      expect(peekSystemEventEntries(queueKey)).toEqual(original);
-    } finally {
-      acceptance.resolve(accepted ? { ok: true } : { ok: false, error: "admission refused" });
-      await immediate;
-    }
-    const response = await immediate;
-    expect(response).toMatchObject(wakeResponse(accepted, "coalesced"));
-    if (!accepted) {
-      expect(peekSystemEventEntries(queueKey)).toEqual(original);
-      expect(peekDeliverableSystemEventEntries(queueKey)).toEqual(original);
-    }
-    expect(mocks.enqueue).toHaveBeenCalledOnce();
-  },
-);
 
-it.each([
-  { accepted: true, revoke: false },
-  { accepted: false, revoke: false },
-  { accepted: true, revoke: true },
-])(
-  "joins one decision (accepted=$accepted, joining authority revoked=$revoke)",
-  async ({ accepted, revoke }) => {
-    const dispatcher = revoke
-      ? createGatewayHookDispatcher({
-          deps: {} as never,
-          logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
-        })
-      : undefined;
+      settled.resolve({
+        status,
+        executionStarted: false,
+        delivered: false,
+        error: "missing route",
+      });
+      await settled.promise;
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "hook wake failed",
+        expect.objectContaining({ status, error: "missing route" }),
+      );
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+      expect(response.end).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["capture", "acceptance"] as const)(
+    "returns 503 after failed %s without leaving a pending event",
+    async (phase) => {
+      if (phase === "capture") {
+        mocks.capture.mockRejectedValueOnce(new Error("session storage unavailable"));
+      } else {
+        mocks.enqueue.mockReturnValueOnce(
+          receipt({
+            accepted: Promise.resolve({ ok: false, error: "session storage unavailable" }),
+          }),
+        );
+      }
+      const response = await post(fixture().handler);
+      expect(response.status).toBe(503);
+      expect(JSON.parse(response.body)).toMatchObject({
+        ok: false,
+        error: "session storage unavailable",
+      });
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+      expect(mocks.capture).toHaveBeenCalledOnce();
+      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+    },
+  );
+
+  it.each(["capture", "acceptance"] as const)(
+    "rejects a config replacement during %s without recapturing the destination",
+    async (phase) => {
+      const reached = createDeferred();
+      const release = createDeferred();
+      if (phase === "capture") {
+        mocks.capture.mockImplementationOnce(async () => {
+          reached.resolve();
+          await release.promise;
+          return target;
+        });
+      } else {
+        mocks.enqueue.mockImplementationOnce(() => {
+          reached.resolve();
+          return receipt({ accepted: release.promise.then(() => ({ ok: true })) });
+        });
+      }
+      const { handler, revoke } = fixture();
+      const responsePromise = post(handler);
+      await reached.promise;
+      revoke();
+      release.resolve();
+      const response = await responsePromise;
+      expect(response.status).toBe(409);
+      expect(JSON.parse(response.body)).toMatchObject({
+        error: "hook configuration changed; retry request",
+      });
+      expect(response.end).toHaveBeenCalledOnce();
+      expect(mocks.capture).toHaveBeenCalledOnce();
+      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { accepted: true, global: false },
+    { accepted: false, global: false },
+    { accepted: true, global: true },
+    { accepted: false, global: true },
+  ])(
+    "adopts a deferred occurrence for an immediate wake (accepted: $accepted, global: $global)",
+    async ({ accepted, global }) => {
+      const queueKey = global ? "agent:main:global" : sessionKey;
+      const expectedTarget = global ? { ...target, sessionKey: "global" } : target;
+      if (global) {
+        mocks.config.mockReturnValue({ ...config, session: { scope: "global" } });
+        mocks.capture.mockResolvedValue(expectedTarget);
+      }
+      const { handler } = fixture();
+      const deferred = await post(handler, "next-heartbeat");
+      expect(deferred.status).toBe(200);
+      const original = peekSystemEventEntries(queueKey);
+      expect(original).toHaveLength(1);
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+
+      const handoffReached = createDeferred();
+      const acceptance = createDeferred<Awaited<SessionEventReceipt["accepted"]>>();
+      mocks.enqueue.mockImplementationOnce(() => {
+        handoffReached.resolve();
+        return receipt({ accepted: acceptance.promise });
+      });
+      let responded = false;
+      const immediate = post(handler).then((response) => {
+        responded = true;
+        return response;
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          handoffReached.promise,
+          immediate,
+          "Immediate wake returned without adopting the deferred occurrence",
+        );
+        expect(responded).toBe(false);
+        expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
+          "Wake notification",
+          expect.objectContaining({
+            occurrences: [original[0]],
+            expectedTarget,
+            preserveOccurrenceOnRejection: true,
+          }),
+        );
+        expect(peekSystemEventEntries(queueKey)).toEqual(original);
+      } finally {
+        acceptance.resolve(accepted ? { ok: true } : { ok: false, error: "admission refused" });
+        await immediate;
+      }
+      const response = await immediate;
+      expect(response.status).toBe(accepted ? 200 : 503);
+      expect(JSON.parse(response.body)).toMatchObject(
+        accepted
+          ? { ok: true, eventOutcome: "coalesced" }
+          : { ok: false, error: "admission refused" },
+      );
+      if (!accepted) {
+        expect(peekSystemEventEntries(queueKey)).toEqual(original);
+        expect(peekDeliverableSystemEventEntries(queueKey)).toEqual(original);
+      }
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([true, false])(
+    "joins concurrent immediate requests to one admission decision (accepted: %s)",
+    async (accepted) => {
+      const { handler } = fixture();
+      const handoff = controlledOwnedHandoff();
+      const first = post(handler);
+      let second: ReturnType<typeof post> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          handoff.submitted.promise,
+          first,
+          "First wake never submitted",
+        );
+        second = post(handler);
+        await awaitGateBeforeSettlement(
+          handoff.joined.promise,
+          second,
+          "Coalesced wake returned before joining the original acceptance",
+        );
+        expect(mocks.enqueue).toHaveBeenCalledOnce();
+        expect(handoff.cancel).not.toHaveBeenCalled();
+        expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+        expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([]);
+      } finally {
+        handoff.acceptance.resolve(
+          accepted ? { ok: true } : { ok: false, error: "admission refused" },
+        );
+        await Promise.all([first, second]);
+      }
+      const responses = await Promise.all([first, second]);
+      expect(responses.map((response) => response.status)).toEqual(
+        accepted ? [200, 200] : [503, 503],
+      );
+      expect(responses.map((response) => JSON.parse(response.body))).toMatchObject(
+        accepted
+          ? [
+              { ok: true, eventOutcome: "queued" },
+              { ok: true, eventOutcome: "coalesced" },
+            ]
+          : [
+              { ok: false, error: "admission refused" },
+              { ok: false, error: "admission refused" },
+            ],
+      );
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+      if (accepted) {
+        expect(handoff.cancel).not.toHaveBeenCalled();
+      } else {
+        expect(handoff.cancel).toHaveBeenCalledOnce();
+        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      }
+    },
+  );
+
+  it("does not cancel the original wake when a joining request loses its config authority", async () => {
+    const dispatcher = createGatewayHookDispatcher({
+      deps: {} as never,
+      logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+    });
     const original = fixture(dispatcher);
-    const joining = revoke ? fixture(dispatcher) : original;
+    const joining = fixture(dispatcher);
     const handoff = controlledOwnedHandoff();
     const first = post(original.handler);
     let second: ReturnType<typeof post> | undefined;
     try {
-      await awaitGate(handoff.submitted.promise, first, "Wake not submitted");
-      second = post(joining.handler);
-      await awaitGate(handoff.joined.promise, second, "Join returned before acceptance");
-      expect(mocks.enqueue).toHaveBeenCalledOnce();
-      expect(handoff.cancel).not.toHaveBeenCalled();
-      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
-      expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([]);
-      if (revoke) {
-        joining.revoke();
-      }
-    } finally {
-      handoff.acceptance.resolve(
-        accepted ? { ok: true } : { ok: false, error: "admission refused" },
+      await awaitGateBeforeSettlement(
+        handoff.submitted.promise,
+        first,
+        "First wake never submitted",
       );
+      second = post(joining.handler);
+      await awaitGateBeforeSettlement(
+        handoff.joined.promise,
+        second,
+        "Joining request returned before original admission",
+      );
+      joining.revoke();
+    } finally {
+      handoff.acceptance.resolve({ ok: true });
       await Promise.all([first, second]);
     }
     const responses = await Promise.all([first, second]);
-    expect(responses).toMatchObject([
-      wakeResponse(accepted),
-      revoke ? { status: 409 } : wakeResponse(accepted, "coalesced"),
-    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 409]);
+    expect(handoff.cancel).not.toHaveBeenCalled();
     expect(mocks.enqueue).toHaveBeenCalledOnce();
-    if (accepted) {
-      expect(handoff.cancel).not.toHaveBeenCalled();
-      if (revoke) {
-        const retained = peekSystemEventEntries(sessionKey);
-        expect(retained).toHaveLength(1);
-        const occurrence = retained[0];
-        if (!occurrence) {
-          throw new Error("expected the original occurrence");
-        }
-        expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
-      }
-    } else {
-      expect(handoff.cancel).toHaveBeenCalledOnce();
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+    const retained = peekSystemEventEntries(sessionKey);
+    expect(retained).toHaveLength(1);
+    const occurrence = retained[0];
+    if (!occurrence) {
+      throw new Error("expected the original occurrence");
     }
-  },
-);
-
-it("refuses a foreign-owned occurrence without consuming or cancelling it", async () => {
-  const occurrence = enqueueRequiredSystemEventEntry("Wake notification", { sessionKey });
-  if (!occurrence) {
-    throw new Error("expected a queued occurrence");
-  }
-  const cancel = vi.fn();
-  const owner = claimSystemEventTurn(sessionKey, [occurrence], cancel, "main");
-  if (!owner) {
-    throw new Error("expected foreign queue ownership");
-  }
-  try {
-    const response = await post(fixture().handler);
-    expectResponse(response, 503, {
-      ok: false,
-      error: "Hook wake acceptance is owned by another dispatcher",
-    });
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(peekSystemEventEntries(sessionKey)).toEqual([occurrence]);
     expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
-  } finally {
-    owner.release();
-  }
-});
+  });
 
-it("leaves next-heartbeat wakes passive and coalesces their duplicate occurrence", async () => {
-  const { handler } = fixture();
-  const first = await post(handler, "next-heartbeat");
-  const duplicate = await post(handler, "next-heartbeat");
-  expect([first, duplicate]).toMatchObject([wakeResponse(), wakeResponse(true, "coalesced")]);
-  expect(peekSystemEvents(sessionKey)).toEqual(["Wake notification"]);
-  expect(mocks.capture).not.toHaveBeenCalled();
-  expect(mocks.enqueue).not.toHaveBeenCalled();
+  it("refuses a foreign-owned occurrence without consuming or cancelling it", async () => {
+    const occurrence = enqueueRequiredSystemEventEntry("Wake notification", { sessionKey });
+    if (!occurrence) {
+      throw new Error("expected a queued occurrence");
+    }
+    const cancel = vi.fn();
+    const owner = claimSystemEventTurn(sessionKey, [occurrence], cancel, "main");
+    if (!owner) {
+      throw new Error("expected foreign queue ownership");
+    }
+    try {
+      const response = await post(fixture().handler);
+      expect(response.status).toBe(503);
+      expect(JSON.parse(response.body)).toMatchObject({
+        ok: false,
+        error: "Hook wake acceptance is owned by another dispatcher",
+      });
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([occurrence]);
+      expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
+    } finally {
+      owner.release();
+    }
+  });
+
+  it("leaves next-heartbeat wakes passive and coalesces their duplicate occurrence", async () => {
+    const { handler } = fixture();
+    const first = await post(handler, "next-heartbeat");
+    const duplicate = await post(handler, "next-heartbeat");
+    expect(first.status).toBe(200);
+    expect(duplicate.status).toBe(200);
+    expect(JSON.parse(first.body)).toMatchObject({ eventOutcome: "queued" });
+    expect(JSON.parse(duplicate.body)).toMatchObject({ eventOutcome: "coalesced" });
+    expect(peekSystemEvents(sessionKey)).toEqual(["Wake notification"]);
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
 });
