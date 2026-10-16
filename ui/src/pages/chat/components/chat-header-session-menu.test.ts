@@ -4,6 +4,7 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
+import { profileDirectory } from "../../../lib/profile-directory.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -247,6 +248,51 @@ describe("chat header session menu", () => {
     flush();
     expect(item(menu, "Pin session")).toBe(pin);
     expect(item(menu, "Mark as read")).toBeDefined();
+  });
+
+  it("reconciles parked owner membership and labels without replacing surviving rows", async () => {
+    const owner = createSessionOwnerMenuHarness();
+    owner.context.agents.state.agentsList!.agents.push({ id: "retired", name: "Retired" });
+    const menu = await mountMenu({ context: owner.context }, false);
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    item(menu, "Assign to…").click();
+    flush();
+    await profileDirectory(owner.context.gateway).load();
+    await menu.updateComplete;
+    const research = item(menu, "Research");
+    const self = item(menu, "Me");
+    const hidden = new Promise<void>((resolve) => {
+      panel(menu).addEventListener("overlay-after-hide", (event) => {
+        if (event.target === panel(menu)) {
+          resolve();
+        }
+      });
+    });
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
+    expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
+    const changes: MutationRecord[] = [];
+    const mutations = new MutationObserver((records) => changes.push(...records));
+    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+    owner.context.agents.state.agentsList!.agents = [
+      { id: "research:one", name: "Updated research" },
+      { id: "new", name: "New agent" },
+    ];
+    owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+    await menu.updateComplete;
+    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+    mutations.disconnect();
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    expect(item(menu, "Updated research")).toBe(research);
+    expect(item(menu, "Me")).toBe(self);
+    expect(
+      submenuItems(item(menu, "Assign to…"))
+        .filter((option) => option.value.startsWith("assign-owner:"))
+        .map(itemLabel),
+    ).toEqual(["Me", "New agent", "Updated research"]);
   });
 
   it.each(["shown", "aborted", "retargeted"] as const)(

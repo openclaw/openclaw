@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createProjection, createSignal } from "solid-js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
@@ -10,7 +10,10 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export function createSessionOwnerMenu(presented: () => boolean = () => true) {
+export function createSessionOwnerMenu(
+  presented: () => boolean = () => true,
+  prepare?: () => unknown,
+) {
   const context = useOptionalApplication();
   const agents = context ? projectAgents(context.agents) : undefined;
   const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
@@ -27,7 +30,7 @@ export function createSessionOwnerMenu(presented: () => boolean = () => true) {
     opened = true;
     void profiles?.read().load(true);
   };
-  const snapshot = createParkedProjection(() => {
+  const readSnapshot = () => {
     const self = sessionSelfOwner(connection.snapshot?.selfUser);
     // Keep a same-connection directory during refresh, never a previous Gateway's result.
     const directory = profiles?.read();
@@ -73,6 +76,14 @@ export function createSessionOwnerMenu(presented: () => boolean = () => true) {
       loading: Boolean(directory?.loading),
       error: directory?.error,
     };
-  }, presented);
-  return { load, snapshot, multipleOwners: () => snapshot().owners.length > 1 };
+  };
+  const snapshot = createParkedProjection(readSnapshot, presented, prepare);
+  const rows = createProjection(
+    snapshot,
+    {},
+    {
+      key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
+    },
+  );
+  return { load, snapshot: () => rows, multipleOwners: () => rows.owners.length > 1 };
 }

@@ -1,5 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, flush, merge, onCleanup, onSettled } from "solid-js";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  flush,
+  merge,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
@@ -105,8 +113,9 @@ function ChatHeaderSessionMenuContent(
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   const [open, setOpen] = createSignal(false);
-  const presentation = createParkedProjection(() => ({ ...liveProps }), open);
-  const props = merge(presentation);
+  const preparation = () => liveProps.prewarm;
+  const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
+  const props = createProjection(presentation, {}, { key: "id" });
   let menu: MenuHandle | undefined;
   const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
@@ -119,7 +128,7 @@ function ChatHeaderSessionMenuContent(
     readState,
     (action) => props.onAction(action),
     close,
-    createSessionOwnerMenu(open),
+    createSessionOwnerMenu(open, preparation),
   );
   const view = useSessionMenuEntries(actions, readState, {
     openInExtra: () => [
