@@ -303,17 +303,14 @@ describe("schema-header native reader lifetime", () => {
       };
       void operation.then(markSettled, markSettled);
       const waitForPhase = (phase: string) => {
+        const assertPhase = (error: unknown) => {
+          if (!fs.existsSync(marker(phase))) {
+            throw error;
+          }
+        };
         const settledBeforeReceipt = operation.then(
-          () => {
-            if (!fs.existsSync(marker(phase))) {
-              throw new Error(`Native inspection settled before ${phase}`);
-            }
-          },
-          (error: unknown) => {
-            if (!fs.existsSync(marker(phase))) {
-              throw error;
-            }
-          },
+          () => assertPhase(new Error(`Native inspection settled before ${phase}`)),
+          assertPhase,
         );
         return withinTest(
           Promise.race([receipts.waitFor(root, phase), settledBeforeReceipt]),

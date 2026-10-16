@@ -36,19 +36,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
-function createSession(unavailableRuntime?: string) {
+function createSession() {
   const child = new MockChild();
-  mock.spawn.mockImplementationOnce((executable) => {
-    if (executable === unavailableRuntime) {
-      throw Object.assign(new Error(`spawn ${executable} EACCES`), { code: "EACCES" });
-    }
-    return child;
-  });
+  mock.spawn.mockReturnValueOnce(child);
   const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
-  const requestArgs = vi.fn((pathname: string, options: { mode: string }) => [
-    options.mode,
-    pathname,
-  ]);
+  const requestArgs = vi.fn((file: string, { mode }: { mode: string }) => [mode, file]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
     env,
@@ -156,39 +148,37 @@ describe("SQLite read-only session operation custody", () => {
     },
   );
 
-  it.each(["staging-create"] as const)(
-    "reuses its child after a well-formed %s refusal",
-    async (mode) => {
-      const { session, child } = createSession();
-      const first = session.run("/fixture/first.sqlite", { mode });
-      const observed = first.catch((error: unknown) => error);
-      const firstId = requestId(child);
-      reply(child, { ok: false, message: "fixture staging refused" });
-      // An incorrect retirement must fail here, without waiting forever for a mock child close.
-      await nextTurn();
-      expect(child.kill).not.toHaveBeenCalled();
-      expect(await observed).toMatchObject({
-        message: expect.stringContaining("fixture staging refused"),
-      });
+  it("reuses its child after a well-formed staging refusal", async () => {
+    const mode = "staging-create";
+    const { session, child } = createSession();
+    const first = session.run("/fixture/first.sqlite", { mode });
+    const observed = first.catch((error: unknown) => error);
+    const firstId = requestId(child);
+    reply(child, { ok: false, message: "fixture staging refused" });
+    // An incorrect retirement must fail here, without waiting forever for a mock child close.
+    await nextTurn();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(await observed).toMatchObject({
+      message: expect.stringContaining("fixture staging refused"),
+    });
 
-      const second = session.run("/fixture/second.sqlite", { mode });
-      const secondId = requestId(child);
-      expect(secondId).not.toBe(firstId);
-      reply(child, { ok: true, location: "/fixture/staged" });
-      await expect(second).resolves.toBe("/fixture/staged");
-      expect(mock.spawn).toHaveBeenCalledOnce();
-      expect(child.kill).not.toHaveBeenCalled();
-    },
-  );
+    const second = session.run("/fixture/second.sqlite", { mode });
+    const secondId = requestId(child);
+    expect(secondId).not.toBe(firstId);
+    reply(child, { ok: true, location: "/fixture/staged" });
+    await expect(second).resolves.toBe("/fixture/staged");
+    expect(mock.spawn).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
 
-  it("joins retirement for a malformed staging refusal instead of retaining its child", async () => {
+  it("joins retirement for malformed staging refusals", async () => {
     const { session, child } = createSession();
     const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
     reply(child, { ok: false, message: "fixture refusal", unexpected: true });
     await expectRetirement(session, child, result, "returned an invalid result");
   });
 
-  it("joins a framed auth operation failure even when staging refusals may retain the child", async () => {
+  it("joins retirement after framed auth failure", async () => {
     const { session, child, env } = createSession();
     const result = session.run("/fixture/auth.sqlite", {
       mode: "auth-profile-rows",
@@ -203,10 +193,7 @@ describe("SQLite read-only session operation custody", () => {
     });
     const transfer = createSqliteWorkerTransferOwner();
     const handle = transfer.start(
-      [
-        { kind: "fields", value: [{ kind: "object" }] },
-        { kind: "fields", value: [{ kind: "key", value: "store" }, { kind: "object" }] },
-      ][Symbol.iterator](),
+      [{ kind: "fields", value: [{ kind: "object" }] }][Symbol.iterator](),
       { kinds: ["fields"] },
     );
     try {
@@ -250,7 +237,7 @@ describe("SQLite read-only session operation custody", () => {
   });
 });
 
-it("keeps a detached staging command budget inside a caller-owned deadline scope", async () => {
+it("keeps detached staging budget inside a caller-owned deadline", async () => {
   const timer = vi.spyOn(globalThis, "setTimeout");
   try {
     await withSqliteReadOnlyWorkerScope(
@@ -282,7 +269,7 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
   }
 });
 
-it("carries only its captured read scope and refuses callbacks after owner retirement", async () => {
+it("captures only read scope and refuses callbacks after owner retirement", async () => {
   const caller = new AsyncLocalStorage<string>();
   const withoutOwner = captureSqliteReadOnlyWorkerScope();
   const controller = new AbortController();
@@ -320,40 +307,37 @@ it("carries only its captured read scope and refuses callbacks after owner retir
 it.each([
   { execPath: "/fixture/bin/node", family: "node" },
   { execPath: "/fixture/bin/custom-runtime", family: "other" },
-])(
-  "counts admitted read-only session children as $family in spawn diagnostics",
-  ({ execPath, family }) => {
-    const originalExecPath = process.execPath;
-    let now = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const events: unknown[] = [];
-    const stop = onDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.child_process.spawn") {
-        events.push(event);
-      }
-    });
-    try {
-      process.execPath = execPath;
-      setDiagnosticsEnabledForProcess(false);
-      emitChildProcessSpawnSample();
-      setDiagnosticsEnabledForProcess(true);
-      const { child } = createSession("/usr/bin/node");
-      expect(mock.spawn).toHaveBeenCalledWith(execPath, expect.any(Array), expect.any(Object));
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual([]);
-      child.emit("spawn");
-      now = 120_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual([
-        expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
-      ]);
-    } finally {
-      process.execPath = originalExecPath;
-      stop();
-      setDiagnosticsEnabledForProcess(false);
-      emitChildProcessSpawnSample();
-      clock.mockRestore();
+])("counts admitted children as $family in spawn diagnostics", ({ execPath, family }) => {
+  const originalExecPath = process.execPath;
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const events: unknown[] = [];
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "diagnostic.child_process.spawn") {
+      events.push(event);
     }
-  },
-);
+  });
+  try {
+    process.execPath = execPath;
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    const { child } = createSession();
+    expect(mock.spawn).toHaveBeenCalledWith(execPath, expect.any(Array), expect.any(Object));
+    now = 60_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([]);
+    child.emit("spawn");
+    now = 120_000;
+    emitChildProcessSpawnSample();
+    expect(events).toEqual([
+      expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
+    ]);
+  } finally {
+    process.execPath = originalExecPath;
+    stop();
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    clock.mockRestore();
+  }
+});

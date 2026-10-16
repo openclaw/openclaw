@@ -31,6 +31,17 @@ import {
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
+const AGENT_SCHEMA = `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`;
+
+function expectSchema(database: DatabaseSync, tables: Record<string, boolean>, version?: number) {
+  for (const [table, present] of Object.entries(tables)) {
+    expect(tableExists(database, table)).toBe(present);
+  }
+  if (version !== undefined) {
+    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(version);
+  }
+}
+
 function observeReads() {
   const observation = observeSqliteReadSql(StatementSync.prototype);
   return Object.assign(observation, {
@@ -43,6 +54,7 @@ function observeReads() {
 
 describe("admitted SQLite schema facts", () => {
   const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
+  const databaseFile = (label: string) => path.join(tempDirs.make(label), "state.sqlite");
 
   it("keeps read receipts stable for mutation words while tracking callback writes", () => {
     const database = openDatabase();
@@ -62,10 +74,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("serves admitted runtime schema checks without executing SQL", () => {
-    const database = openDatabase(
-      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
-      false,
-    );
+    const database = openDatabase(AGENT_SCHEMA, false);
     assertCanonicalSessionValidationSchema(database);
     admitSqliteSchema(database);
     using observation = observeReads();
@@ -110,8 +119,7 @@ describe("admitted SQLite schema facts", () => {
     replacement.close();
     renameSync(replacementPath, filename);
     const replaced = openDatabase("", true, filename);
-    expect(tableExists(replaced, "replacement")).toBe(true);
-    expect(tableExists(replaced, "original")).toBe(false);
+    expectSchema(replaced, { replacement: true, original: false });
     expect(validations()).toHaveLength(2);
     replaced.close();
     const replacementReopened = openDatabase("", true, filename);
@@ -120,7 +128,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("keeps a catalog capture private when a sibling publishes DDL before it returns", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-capture-race-"), "state.sqlite");
+    const filename = databaseFile("openclaw-schema-capture-race-");
     using source = new DatabaseSync(filename);
     source.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(id); PRAGMA user_version=1");
     const reader = openDatabase("", false, filename);
@@ -216,16 +224,12 @@ describe("admitted SQLite schema facts", () => {
     replacement.close();
     renameSync(replacementPath, filename);
     database.open();
-    expect(tableExists(database, "original")).toBe(false);
-    expect(tableExists(database, "replacement")).toBe(true);
+    expectSchema(database, { original: false, replacement: true });
     expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(7);
   });
 
   it("publishes the final migration catalog without rechecking it on the next open", () => {
-    const filename = path.join(
-      tempDirs.make("openclaw-schema-migration-publication-"),
-      "state.sqlite",
-    );
+    const filename = databaseFile("openclaw-schema-migration-publication-");
     const database = openDatabase(undefined, true, filename);
     runSqliteImmediateTransactionSync(database, () => {
       database.exec("ALTER TABLE original ADD COLUMN first_added TEXT");
@@ -242,11 +246,7 @@ describe("admitted SQLite schema facts", () => {
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
-    const database = openDatabase(
-      `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
-      true,
-      filename,
-    );
+    const database = openDatabase(AGENT_SCHEMA, true, filename);
     database.exec("PRAGMA journal_mode=WAL");
     assertCanonicalSessionValidationSchema(database);
     const peer = openNodeSqliteDatabase(filename);
@@ -302,7 +302,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("derives owner columns from admitted sibling schema publications without table-info reads", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
+    const filename = databaseFile("openclaw-schema-adoption-");
     const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
     using observation = observeReads();
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
@@ -325,7 +325,7 @@ describe("admitted SQLite schema facts", () => {
   it.each(["transaction", "implicit snapshot"])(
     "refreshes foreign row commits while trusting admitted format through an active %s",
     (pin) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
+      const filename = databaseFile("openclaw-schema-foreign-");
       const reader = openDatabase(undefined, true, filename);
       reader.exec("PRAGMA journal_mode=WAL");
       // An external writer changes rows without publishing process-owned schema facts.
@@ -375,7 +375,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
+    const filename = databaseFile("openclaw-schema-read-scope-");
     const reader = openDatabase(undefined, false, filename);
     const revision = () => getSqliteReadOperationRevision(reader);
     using admission = observeReads();
@@ -396,7 +396,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("invalidates warmed row revisions on sibling writes without querying data_version", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-write-receipt-"), "state.sqlite");
+    const filename = databaseFile("openclaw-schema-write-receipt-");
     const reader = openDatabase(undefined, true, filename);
     const writer = openDatabase("", true, filename);
     using observation = observeReads();
@@ -457,7 +457,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("reuses rows only within their explicit snapshot and observes the next committed rows", () => {
-    const filename = path.join(tempDirs.make("openclaw-row-snapshot-"), "state.sqlite");
+    const filename = databaseFile("openclaw-row-snapshot-");
     const reader = openDatabase(
       `
       PRAGMA journal_mode=WAL;
@@ -511,7 +511,7 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-siblings-"), "state.sqlite");
+    const filename = databaseFile("openclaw-schema-siblings-");
     const writer = openDatabase(undefined, true, filename);
     writer.exec("PRAGMA journal_mode=WAL");
     const reader = openDatabase("", true, filename);
@@ -559,32 +559,17 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it.each([
-    { method: "exec", implicitSnapshot: false, admittedBeforeBegin: true, rollback: "ROLLBACK" },
-    { method: "iterate", implicitSnapshot: false, admittedBeforeBegin: true, rollback: "ROLLBACK" },
-    { method: "exec", implicitSnapshot: true, admittedBeforeBegin: true, rollback: "ROLLBACK" },
-    {
-      method: "exec",
-      implicitSnapshot: true,
-      admittedBeforeBegin: true,
-      rollback: "ROLLBACK; SELECT 1",
-    },
-    {
-      method: "exec",
-      implicitSnapshot: true,
-      admittedBeforeBegin: true,
-      rollback: "ROLLBACK; -- cleanup",
-    },
-    {
-      method: "exec",
-      implicitSnapshot: true,
-      admittedBeforeBegin: true,
-      rollback: "ROLLBACK; SELECT 'CREATE'",
-    },
-    { method: "exec", implicitSnapshot: true, admittedBeforeBegin: false, rollback: "ROLLBACK" },
+    ["exec", false, true, "ROLLBACK"],
+    ["iterate", false, true, "ROLLBACK"],
+    ["exec", true, true, "ROLLBACK"],
+    ["exec", true, true, "ROLLBACK; SELECT 1"],
+    ["exec", true, true, "ROLLBACK; -- cleanup"],
+    ["exec", true, true, "ROLLBACK; SELECT 'CREATE'"],
+    ["exec", true, false, "ROLLBACK"],
   ] as const)(
-    "keeps a sibling's committed catalog after a failed WAL upgrade and $method rollback, implicit pin=$implicitSnapshot, admitted=$admittedBeforeBegin, SQL=$rollback",
-    ({ method, implicitSnapshot, admittedBeforeBegin, rollback }) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-busy-snapshot-"), "state.sqlite");
+    "keeps a sibling's catalog after a failed WAL upgrade: %s, implicit pin=%s, admitted=%s, SQL=%s",
+    (method, implicitSnapshot, admittedBeforeBegin, rollback) => {
+      const filename = databaseFile("openclaw-schema-busy-snapshot-");
       const stale = openDatabase(undefined, admittedBeforeBegin, filename);
       stale.exec("PRAGMA journal_mode=WAL");
       const writer = openDatabase("", true, filename);
@@ -593,6 +578,14 @@ describe("admitted SQLite schema facts", () => {
       let generation: number | undefined;
       using observation = observeReads();
       let rollbackStart = 0;
+      const expectCommitted = (database: DatabaseSync) => {
+        const facts = getAdmittedSqliteSchemaFacts(database);
+        expect(facts?.admissionId).toBe(committed?.admissionId);
+        expect(facts?.userVersion).toBe(2);
+        expect(facts?.tables.has("committed_sibling")).toBe(true);
+        expect(facts?.tables.has("rejected_upgrade")).toBe(false);
+        expect(getSqliteDatabaseSchemaRevision(database)).toBe(generation);
+      };
       const rollbackFailedUpgrade = () => {
         stale.exec("BEGIN");
         stale.prepare("SELECT id FROM original").all();
@@ -601,13 +594,9 @@ describe("admitted SQLite schema facts", () => {
         generation = getSqliteDatabaseSchemaRevision(writer);
         expect(committed?.userVersion).toBe(2);
         expect(generation).toEqual(expect.any(Number));
-        let failure: unknown;
-        try {
-          stale.exec("CREATE TABLE rejected_upgrade (id)");
-        } catch (error) {
-          failure = error;
-        }
-        expect(failure).toMatchObject({ errcode: 517 });
+        expect(() => stale.exec("CREATE TABLE rejected_upgrade (id)")).toThrow(
+          expect.objectContaining({ errcode: 517 }),
+        );
         expect(stale.isTransaction).toBe(true);
         if (!admittedBeforeBegin) {
           admitSqliteSchema(stale);
@@ -630,12 +619,7 @@ describe("admitted SQLite schema facts", () => {
         }
         const reopened = openDatabase("", true, filename);
         for (const database of implicitSnapshot ? [writer, reopened] : [stale, writer, reopened]) {
-          const facts = getAdmittedSqliteSchemaFacts(database);
-          expect(facts?.admissionId).toBe(committed?.admissionId);
-          expect(facts?.userVersion).toBe(2);
-          expect(facts?.tables.has("committed_sibling")).toBe(true);
-          expect(facts?.tables.has("rejected_upgrade")).toBe(false);
-          expect(getSqliteDatabaseSchemaRevision(database)).toBe(generation);
+          expectCommitted(database);
         }
       };
       if (implicitSnapshot) {
@@ -643,10 +627,7 @@ describe("admitted SQLite schema facts", () => {
       } else {
         rollbackFailedUpgrade();
       }
-      expect(getAdmittedSqliteSchemaFacts(stale)?.admissionId).toBe(committed?.admissionId);
-      expect(getAdmittedSqliteSchemaFacts(stale)?.userVersion).toBe(2);
-      expect(getAdmittedSqliteSchemaFacts(stale)?.tables.has("committed_sibling")).toBe(true);
-      expect(getSqliteDatabaseSchemaRevision(stale)).toBe(generation);
+      expectCommitted(stale);
       observation.expectNone(
         /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu,
         rollbackStart,
@@ -655,10 +636,7 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("discards rolled-back staged catalog facts before transaction observers unwind", () => {
-    const filename = path.join(
-      tempDirs.make("openclaw-schema-rollback-publication-"),
-      "state.sqlite",
-    );
+    const filename = databaseFile("openclaw-schema-rollback-publication-");
     const database = openDatabase(undefined, true, filename);
     const committed = getAdmittedSqliteSchemaFacts(database);
     const generation = getSqliteDatabaseSchemaRevision(database);
@@ -694,27 +672,22 @@ describe("admitted SQLite schema facts", () => {
       execute("/* nested */ SaVePoInT schema_change");
       database.exec("CREATE TABLE first (id); PRAGMA user_version = 2;");
       const firstCookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
-      expect(tableExists(database, "first")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(2);
+      expectSchema(database, { first: true }, 2);
 
       execute("-- undo\n /* nested */ RoLlBaCk TRANSACTION TO SAVEPOINT schema_change");
       database.exec("CREATE TABLE second (id); PRAGMA user_version = 3;");
       execute("/* done */ ReLeAsE SAVEPOINT schema_change");
       expect(database.prepare("PRAGMA schema_version").get()?.schema_version).toBe(firstCookie);
-      expect(tableExists(database, "first")).toBe(false);
-      expect(tableExists(database, "second")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(3);
+      expectSchema(database, { first: false, second: true }, 3);
 
       execute("/* undo */ RoLlBaCk TRANSACTION;");
-      expect(tableExists(database, "second")).toBe(false);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
+      expectSchema(database, { second: false }, 1);
 
       execute("-- next\n BEGIN EXCLUSIVE TRANSACTION");
       database.exec("CREATE TABLE committed (id); PRAGMA user_version = 4;");
       expect(tableExists(database, "committed")).toBe(true);
       execute("/* publish */ CoMmIt TRANSACTION;");
-      expect(tableExists(database, "committed")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(4);
+      expectSchema(database, { committed: true }, 4);
       execute("BEGIN DEFERRED");
       database.exec("CREATE TABLE ended (id)");
       expect(tableExists(database, "ended")).toBe(true);
@@ -818,8 +791,7 @@ describe("admitted SQLite schema facts", () => {
     expect(() =>
       database.exec("CREATE TABLE completed (id); PRAGMA user_version = 6; SELECT * FROM missing;"),
     ).toThrow(/no such table/iu);
-    expect(tableExists(database, "completed")).toBe(true);
-    expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(6);
+    expectSchema(database, { completed: true }, 6);
   });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function").each([false, true])(
@@ -831,16 +803,14 @@ describe("admitted SQLite schema facts", () => {
       if (!admitted) {
         admitSqliteSchema(database);
       }
-      expect(tableExists(database, "original")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
+      expectSchema(database, { original: true }, 1);
       allowed = false;
       expect(() => tableExists(database, "original")).toThrow(/not authorized/iu);
       expect(() => assertSupportedAgentSchemaVersion(database, ":memory:")).toThrow(
         /not authorized/iu,
       );
       database.setAuthorizer(null);
-      expect(tableExists(database, "original")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(1);
+      expectSchema(database, { original: true }, 1);
     },
   );
 
@@ -864,9 +834,7 @@ describe("admitted SQLite schema facts", () => {
       const database = openDatabase();
       const replacement = openDatabase("CREATE TABLE replacement (id); PRAGMA user_version = 7;");
       database.deserialize(replacement.serialize());
-      expect(tableExists(database, "original")).toBe(false);
-      expect(tableExists(database, "replacement")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(database, ":memory:")).toBe(7);
+      expectSchema(database, { original: false, replacement: true }, 7);
     },
   );
 });
