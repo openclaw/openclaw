@@ -388,12 +388,18 @@ test.each([
   };
   const mutation = mutate();
   try {
-    await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    if (change === "token verification") {
+      await mutation;
+      await entered.promise;
+    } else {
+      await awaitGateBeforeSettlement(entered.promise, mutation, "pairing mutation was not held");
+    }
     expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBinding);
     // Until COMMIT, the stored row remains authoritative for the changing device too.
     expect(getPublishedPairedDeviceBinding("other", baseDir)).toEqual(otherBinding);
     release.resolve();
     await mutation;
+    await withDevicePairingLock(async () => {});
     const committedOther = change === "token revocation" ? null : otherBinding;
     // The first read after COMMIT drains and installs the receipt itself.
     expect(afterCommit).toEqual([committedOther, nodeBinding]);

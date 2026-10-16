@@ -12,6 +12,7 @@ import {
 } from "./device-auth-store.test-support.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
@@ -197,7 +198,8 @@ describe("device pairing tokens", () => {
     baseDir = await suiteRootTracker.setup();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await withDevicePairingLock(async () => {});
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "both");
     persistDeviceBootstrapTokenRecords({}, baseDir);
   });
