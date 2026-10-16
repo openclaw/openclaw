@@ -7,7 +7,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -83,12 +83,7 @@ function waitForWorkerEvent(
   resultOutput?: Promise<void>,
 ): Promise<void> {
   const completed = resultOutput ? Promise.race([command, resultOutput]) : command;
-  return Promise.race([
-    event,
-    completed.then(() => {
-      throw new Error(`Worker completed before ${phase}`);
-    }),
-  ]);
+  return awaitGateBeforeSettlement(event, completed, `Worker completed before ${phase}`);
 }
 
 describe("cloud worker milestone 2 fault injection", () => {
@@ -106,6 +101,18 @@ describe("cloud worker milestone 2 fault injection", () => {
     }
     await harness.close();
   });
+
+  async function createClients(options?: Parameters<ComposedGatewayHarness["createClients"]>[0]) {
+    const current = await harness.createClients(options);
+    clients.push(current);
+    return current;
+  }
+
+  function transcriptGate(phase: NonNullable<ComposedGatewayHarness["transcriptGate"]>["phase"]) {
+    const gate = { phase, entered: createDeferred(), release: createDeferred() };
+    harness.transcriptGate = gate;
+    return gate;
+  }
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
     ["success", "standalone", "skill", "completed", "stop"],
@@ -427,8 +434,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   );
 
   it("survives repeated tunnel partitions without transcript duplication, live replay, or rebilling", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
+    const current = await createClients();
     const firstRelease = createDeferred();
     const secondRelease = createDeferred();
     const started = createDeferred();
@@ -490,18 +496,11 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("fences restart-inherited authority and recovers durable state on a fresh claim", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
+    const current = await createClients();
     const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
     const providerStarted = createDeferred();
-    const commitEntered = createDeferred();
-    const commitRelease = createDeferred();
+    const { entered: commitEntered, release: commitRelease } = transcriptGate("after-apply");
     harness.providerPlan = { kind: "pending", release: providerRelease, started: providerStarted };
-    harness.transcriptGate = {
-      phase: "after-apply",
-      entered: commitEntered,
-      release: commitRelease,
-    };
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
     await current.connection.start();
 
@@ -563,12 +562,11 @@ describe("cloud worker milestone 2 fault injection", () => {
     const freshEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, recoveryRunId);
     expect(freshEpoch).toBeGreaterThan(oldEpoch);
     providerRelease.resolve(doneOutcome("late stale provider result"));
-    const fresh = await harness.createClients({
+    const fresh = await createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: freshEpoch,
       runId: recoveryRunId,
     });
-    clients.push(fresh);
     await fresh.connection.start();
     fresh.live.enqueuePreview(recoveryRunId, {
       kind: "assistant",
@@ -592,8 +590,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
-    const old = await harness.createClients();
-    clients.push(old);
+    const old = await createClients();
     await old.connection.start();
     const oldCommit = await old.transcript.commit([transcriptMessage("old owner")]);
     const pendingRelease = createDeferred<WorkerInferenceTerminalOutcome>();
@@ -621,13 +618,12 @@ describe("cloud worker milestone 2 fault injection", () => {
     harness.providerPlan = { kind: "immediate", text: "new owner reply" };
     // Milestone-3 admission binds the worker to a single run; the fresh owner
     // must be admitted for the run it executes.
-    const fresh = await harness.createClients({
+    const fresh = await createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: newEpoch,
       baseLeafId: oldCommit.newLeafId,
       runId: "fresh-run",
     });
-    clients.push(fresh);
     await fresh.connection.start();
     expect(harness.admissions.at(-1)?.turnClaim).toMatchObject({
       runId: "fresh-run",
@@ -659,11 +655,8 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.transcriptGate = { phase: "before-apply", entered, release };
+    const current = await createClients();
+    const { entered, release } = transcriptGate("before-apply");
     await current.connection.start();
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
@@ -687,8 +680,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
+    const current = await createClients();
     // A visible turn's run context is claimed by the gateway dispatch before the
     // turn hands off to the worker. The worker's first live event must adopt that
     // dispatch-owned context (seq advances from 1) and keep the run visible.
@@ -724,11 +716,8 @@ describe("cloud worker milestone 2 fault injection", () => {
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.transcriptGate = { phase: "before-apply", entered, release };
+    const current = await createClients();
+    const { entered, release } = transcriptGate("before-apply");
     await current.connection.start();
     const commit = current.transcript.commit([transcriptMessage("stopped commit")]);
     await entered.promise;

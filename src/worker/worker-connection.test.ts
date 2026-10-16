@@ -101,38 +101,60 @@ function sendWorkerHello(
   );
 }
 
+async function listen() {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test gateway did not allocate a TCP port");
+  }
+  return {
+    server,
+    endpoint: {
+      kind: "websocket" as const,
+      url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+    },
+  };
+}
+
+function acceptHello(server: WebSocketServer) {
+  const admitted = createDeferred<WebSocket>();
+  server.once("connection", (peer) => {
+    peer.once("message", (data) => {
+      try {
+        const frame: unknown = JSON.parse(rawDataToString(data));
+        if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
+          throw new Error("expected the worker admission request");
+        }
+        sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
+        admitted.resolve(peer);
+      } catch (error) {
+        admitted.reject(error);
+      }
+    });
+  });
+  return admitted.promise;
+}
+
+async function closeServer(server: WebSocketServer) {
+  for (const peer of server.clients) {
+    peer.terminate();
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
 describe("worker presence request lifetime", () => {
   it("keeps a presence read pending through both cold geolocation download windows", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
-    const admitted = createDeferred<WebSocket>();
-    server.once("connection", (peer) => {
-      peer.once("message", (data) => {
-        try {
-          const frame: unknown = JSON.parse(rawDataToString(data));
-          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
-            throw new Error("expected the worker admission request");
-          }
-          sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
-          admitted.resolve(peer);
-        } catch (error) {
-          admitted.reject(error);
-        }
-      });
-    });
+    const { server, endpoint } = await listen();
+    const admitted = acceptHello(server);
     const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-      },
+      endpoint,
       connectParams: FRAME_CONNECT_PARAMS,
     });
     try {
-      const [peer] = await Promise.all([admitted.promise, connection.start()]);
+      const [peer] = await Promise.all([admitted, connection.start()]);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const received = once(peer, "message");
       const pending = connection.invokeGatewayTool(
@@ -169,46 +191,19 @@ describe("worker presence request lifetime", () => {
     } finally {
       vi.useRealTimers();
       await connection.stop();
-      for (const peer of server.clients) {
-        peer.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(server);
     }
   });
 });
 
 describe("worker heartbeat callback lifetime", () => {
   it("settles admitted heartbeat work before stop releases cleanup", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
-    const admitted = createDeferred<WebSocket>();
-    server.once("connection", (peer) => {
-      peer.once("message", (data) => {
-        try {
-          const frame: unknown = JSON.parse(rawDataToString(data));
-          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
-            throw new Error("expected the worker admission request");
-          }
-          sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
-          admitted.resolve(peer);
-        } catch (error) {
-          admitted.reject(error);
-        }
-      });
-    });
+    const { server, endpoint } = await listen();
+    const admitted = acceptHello(server);
     const entered = createDeferred<() => void>();
     const release = createDeferred();
     const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-      },
+      endpoint,
       connectParams: FRAME_CONNECT_PARAMS,
       onHeartbeat: async (_result, assertCurrent) => {
         entered.resolve(assertCurrent);
@@ -217,7 +212,7 @@ describe("worker heartbeat callback lifetime", () => {
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const [peer] = await Promise.all([admitted.promise, connection.start()]);
+      const [peer] = await Promise.all([admitted, connection.start()]);
       const heartbeat = once(peer, "message");
       await vi.advanceTimersByTimeAsync(60_000);
       const [data] = await heartbeat;
@@ -250,12 +245,7 @@ describe("worker heartbeat callback lifetime", () => {
       release.resolve();
       vi.useRealTimers();
       await connection.stop();
-      for (const peer of server.clients) {
-        peer.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(server);
     }
   });
 });
@@ -327,16 +317,13 @@ describe("worker connection endpoint failures", () => {
     let connections = 0;
     let httpBytes = 0;
     let connectFrames = 0;
-    let resolvePeerClosed!: () => void;
-    const peerClosed = new Promise<void>((resolve) => {
-      resolvePeerClosed = resolve;
-    });
+    const peerClosed = createDeferred();
     server.on("connection", (peer) => {
       connections += 1;
       peers.add(peer);
       peer.once("close", () => {
         peers.delete(peer);
-        resolvePeerClosed();
+        peerClosed.resolve();
       });
     });
     server.on("secureConnection", (peer) => {
@@ -372,7 +359,7 @@ describe("worker connection endpoint failures", () => {
 
     try {
       const error = await connection.start().catch((cause: unknown) => cause);
-      await peerClosed;
+      await peerClosed.promise;
       expect(error).toBeInstanceOf(WorkerConnectionEndpointError);
       expect(error).toMatchObject({ message: "gateway tls fingerprint mismatch" });
       expect(states).toEqual(["connecting", "failed"]);
@@ -476,11 +463,8 @@ describe("worker connection endpoint failures", () => {
   );
 
   it("does not report local cancellation as a gateway connection failure", async () => {
-    let acceptConnection!: (socket: net.Socket) => void;
-    const accepted = new Promise<net.Socket>((resolve) => {
-      acceptConnection = resolve;
-    });
-    const server = net.createServer(acceptConnection);
+    const accepted = createDeferred<net.Socket>();
+    const server = net.createServer(accepted.resolve);
     const port = await new Promise<number>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => {
@@ -506,7 +490,7 @@ describe("worker connection endpoint failures", () => {
       },
     });
     const starting = connection.start();
-    const peer = await accepted;
+    const peer = await accepted.promise;
 
     try {
       await connection.stop();
@@ -516,13 +500,7 @@ describe("worker connection endpoint failures", () => {
       peer.destroy();
       await connection.stop();
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
+        server.close((error) => (error ? reject(error) : resolve()));
       });
     }
   });
@@ -535,19 +513,11 @@ describe("worker connection endpoint failures", () => {
     ),
     { terminal: "failed", boundary: "invalid frame" } as const,
   ])("keeps $terminal workers closed after $boundary", async ({ terminal, boundary }) => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
+    const { server, endpoint } = await listen();
     let clientClosed = Promise.resolve();
     let peerClosed = Promise.resolve();
     const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-      },
+      endpoint,
       connectParams: FRAME_CONNECT_PARAMS,
       createSocket: (url, options) => {
         const socket = new WebSocket(url, options);
@@ -624,12 +594,7 @@ describe("worker connection endpoint failures", () => {
       expect.soft(vi.getTimerCount()).toBe(0);
     } finally {
       await connection.stop();
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(server);
       vi.useRealTimers();
     }
   });
@@ -637,12 +602,7 @@ describe("worker connection endpoint failures", () => {
 
 describe("worker connection reconnect backoff", () => {
   it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
+    const { server, endpoint } = await listen();
 
     let available = true;
     let transportInterrupted = false;
@@ -681,10 +641,7 @@ describe("worker connection reconnect backoff", () => {
 
     const workers = Array.from({ length: 20 }, (_, index) =>
       createWorkerConnection({
-        endpoint: {
-          kind: "websocket",
-          url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-        },
+        endpoint,
         connectParams: {
           ...FRAME_CONNECT_PARAMS,
           admission: {

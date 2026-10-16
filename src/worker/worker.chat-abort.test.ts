@@ -229,23 +229,21 @@ describe("worker chat.abort settlement", () => {
             commandOutcome = "rejected";
           },
         );
-        phase = "waiting-live-start";
-        await withinTest(
-          awaitGateBeforeSettlement(
-            liveStarted.promise,
-            command,
-            "worker command completed before live start",
-          ),
-          signal,
-        );
-        phase = "waiting-cancellation-boundary";
-        await withinTest(
-          awaitGateBeforeSettlement(
-            previewGate?.entered.promise ?? providerStarted.promise,
-            command,
-            "worker command completed before cancellation boundary",
-          ),
-          signal,
+        const waitFor = (gate: PromiseLike<void>, boundary: string) => {
+          phase = `waiting-${boundary}`;
+          return withinTest(
+            awaitGateBeforeSettlement(
+              gate,
+              command!,
+              `worker command completed before ${boundary}`,
+            ),
+            signal,
+          );
+        };
+        await waitFor(liveStarted.promise, "live start");
+        await waitFor(
+          previewGate?.entered.promise ?? providerStarted.promise,
+          "cancellation boundary",
         );
         expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
         const respond = await invokeChatAbortHandler({
@@ -255,29 +253,13 @@ describe("worker chat.abort settlement", () => {
           client: { connId: "fault-operator", connect: { scopes: ["operator.admin"] } },
         });
         expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: [RUN_ID] });
-        phase = "waiting-outer-cancellation";
-        await withinTest(
-          awaitGateBeforeSettlement(
-            outerCancelled.promise,
-            command,
-            "worker command completed before outer cancellation",
-          ),
-          signal,
-        );
+        await waitFor(outerCancelled.promise, "outer cancellation");
         expect(owner.signal.aborted).toBe(true);
         expect(getAgentRunContext(RUN_ID)).toBeUndefined();
         expect(harness.placementStore.validateTurnClaim(claim!)).toBe(true);
         const publishedAtAbort = events.length;
         previewGate?.release.resolve();
-        phase = "waiting-worker-finishing";
-        await withinTest(
-          awaitGateBeforeSettlement(
-            finishingGate.entered.promise,
-            command,
-            "worker command completed before cancellation finishing",
-          ),
-          signal,
-        );
+        await waitFor(finishingGate.entered.promise, "cancellation finishing");
         const cursorAtAbort = harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor;
         if (fence === "claim") {
           await harness.settleRun(RUN_ID);
@@ -317,14 +299,7 @@ describe("worker chat.abort settlement", () => {
         }
         finishingGate.release.resolve();
         if (replaceDuringAck) {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              ackEntered.promise,
-              command,
-              "worker command settled before durable ACK boundary",
-            ),
-            signal,
-          );
+          await waitFor(ackEntered.promise, "durable ACK boundary");
           replacement = await createWorkerTurnRunOwner({
             ...ownerInput,
             turn: { ...ownerInput.turn, abortSignal: undefined },

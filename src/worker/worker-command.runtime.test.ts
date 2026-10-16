@@ -132,10 +132,7 @@ function processHarness(properties: Record<string, unknown> = {}) {
 
 function lifetimeHarness() {
   const controller = new AbortController();
-  let resolveStarted!: (started: boolean) => void;
-  const started = new Promise<boolean>((resolve) => {
-    resolveStarted = resolve;
-  });
+  const started = createDeferred<boolean>();
   const dispose = vi.fn();
   const reportConnectionFailure = vi.fn();
   const terminateOwnedTree = vi.fn();
@@ -144,13 +141,13 @@ function lifetimeHarness() {
       dispose,
       reportConnectionFailure,
       signal: controller.signal,
-      started,
+      started: started.promise,
       terminateOwnedTree,
     },
     disconnectAfterStart: () => controller.abort(new Error("worker supervisor lifetime ended")),
-    disconnectBeforeStart: () => resolveStarted(false),
+    disconnectBeforeStart: () => started.resolve(false),
     dispose,
-    open: () => resolveStarted(true),
+    open: () => started.resolve(true),
     terminateOwnedTree,
   };
 }
@@ -202,6 +199,22 @@ function gatedCommandHarness(mode: "standalone" | "managed") {
   const { input, output, turn } = managedHarness();
   turn();
   return { input, output, managed: true };
+}
+
+function waitForRuntimeAbort() {
+  const started = createDeferred<AbortSignal>();
+  vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
+    const signal = options?.signal;
+    if (!signal) {
+      throw new Error("expected managed worker abort signal");
+    }
+    started.resolve(signal);
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+  });
+  return started.promise;
 }
 
 describe("worker command lifetime gate", () => {
@@ -638,18 +651,10 @@ describe("worker command lifetime gate", () => {
 
   it("rejects concurrent turns and aborts the admitted turn before closing state", async () => {
     const harness = managedHarness();
-    const started = createDeferred<AbortSignal>();
-    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
-      const signal = options!.signal!;
-      started.resolve(signal);
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
-    });
+    const started = waitForRuntimeAbort();
     const running = runWorkerCommand({ ...harness, managed: true });
     harness.turn();
-    const signal = await started.promise;
+    const signal = await started;
     const rejected = expect(running).rejects.toThrow("already active");
     const next = structuredClone(harness.launch);
     next.assignment.turnId = "turn-2";
@@ -688,21 +693,10 @@ describe("worker command lifetime gate", () => {
 
   it("delivers cancellation before rejecting a later oversized frame in the same chunk", async () => {
     const harness = managedHarness();
-    const started = createDeferred<AbortSignal>();
-    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
-      const signal = options?.signal;
-      if (!signal) {
-        throw new Error("expected managed worker abort signal");
-      }
-      started.resolve(signal);
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
-    });
+    const started = waitForRuntimeAbort();
     const running = runWorkerCommand({ ...harness, managed: true });
     harness.turn();
-    const signal = await started.promise;
+    const signal = await started;
     const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
     harness.input.write(
       Buffer.concat([
@@ -743,59 +737,46 @@ describe("worker command lifetime gate", () => {
     },
   );
 
-  it.each([
-    { mode: "standalone", delta: 1 },
-    { mode: "managed", delta: 1 },
-  ])("enforces $mode input at cap + $delta bytes", async ({ mode, delta }) => {
-    const harness = managedHarness();
-    const prefix = "wss://worker.invalid/";
-    const suffix = "/__openclaw__/worker";
-    harness.launch.connectionEndpoint = {
-      kind: "websocket",
-      url: prefix + "\0".repeat(4_096 - prefix.length - suffix.length) + suffix,
-      tlsFingerprint: "a".repeat(64),
-      cloudflareAccess: { clientId: "\0".repeat(4_096), clientSecret: "\0".repeat(4_096) },
-    };
-    harness.launch.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(100);
-    const encode = () =>
-      `${JSON.stringify(mode === "managed" ? buildWorkerProcessTurn(harness.launch) : harness.launch)}\n`;
-    const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + delta;
-    const delimiterBytes = mode === "managed" ? 1 : 0;
-    harness.launch.assignment.systemPrompt += "x".repeat(
-      targetBytes + delimiterBytes - Buffer.byteLength(encode()),
-    );
-    const encoded = encode();
-    expect(Buffer.byteLength(encoded) - delimiterBytes).toBe(targetBytes);
-    if (mode === "managed") {
-      const serialize = () => serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch));
-      if (delta > 0) {
-        expect(serialize).toThrow("exceeds the protocol payload limit");
-      } else {
-        expect(Buffer.byteLength(serialize())).toBe(targetBytes + 1);
-      }
-    }
-    const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
-    const outcome =
-      delta > 0 ? expect(running).rejects.toThrow("exceeds the protocol payload limit") : running;
-    if (mode === "managed") {
-      // Raw input independently verifies the receiver, including serializer-rejected bytes.
-      const bytes = Buffer.from(encoded);
-      const split = bytes.indexOf(Buffer.from("漢")) + 1;
-      harness.input.write(bytes.subarray(0, split));
-      harness.input.write(bytes.subarray(split));
-    } else {
-      harness.input.end(encoded);
-    }
-    await outcome;
-    expect(runWorkerDescriptor).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
-    if (delta <= 0) {
-      expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.systemPrompt).toBe(
-        harness.launch.assignment.systemPrompt,
+  it.each(["standalone", "managed"] as const)(
+    "enforces %s input at cap + 1 bytes",
+    async (mode) => {
+      const harness = managedHarness();
+      const prefix = "wss://worker.invalid/";
+      const suffix = "/__openclaw__/worker";
+      harness.launch.connectionEndpoint = {
+        kind: "websocket",
+        url: prefix + "\0".repeat(4_096 - prefix.length - suffix.length) + suffix,
+        tlsFingerprint: "a".repeat(64),
+        cloudflareAccess: { clientId: "\0".repeat(4_096), clientSecret: "\0".repeat(4_096) },
+      };
+      harness.launch.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(100);
+      const encode = () =>
+        `${JSON.stringify(mode === "managed" ? buildWorkerProcessTurn(harness.launch) : harness.launch)}\n`;
+      const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1;
+      const delimiterBytes = mode === "managed" ? 1 : 0;
+      harness.launch.assignment.systemPrompt += "x".repeat(
+        targetBytes + delimiterBytes - Buffer.byteLength(encode()),
       );
-    }
-    console.info(
-      "worker-input-boundary",
-      JSON.stringify({ mode, bytes: targetBytes, accepted: delta <= 0 }),
-    );
-  });
+      const encoded = encode();
+      expect(Buffer.byteLength(encoded) - delimiterBytes).toBe(targetBytes);
+      if (mode === "managed") {
+        expect(() => serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch))).toThrow(
+          "exceeds the protocol payload limit",
+        );
+      }
+      const running = runWorkerCommand({ ...harness, managed: mode === "managed" });
+      const outcome = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+      if (mode === "managed") {
+        // Raw input independently verifies the receiver, including serializer-rejected bytes.
+        const bytes = Buffer.from(encoded);
+        const split = bytes.indexOf(Buffer.from("漢")) + 1;
+        harness.input.write(bytes.subarray(0, split));
+        harness.input.write(bytes.subarray(split));
+      } else {
+        harness.input.end(encoded);
+      }
+      await outcome;
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    },
+  );
 });
