@@ -72,6 +72,51 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(rendered.plainText).toBe("• [ ] todo\n• [x] done");
   });
 
+  it("renders the Markdown list shape the prompt now asks for as native blocks", () => {
+    const rendered = markdownToTelegramRichBlocks(
+      "Here are two options:\n\n- **Option A:** Run `example --check`.\n- **Option B:** See [the documentation](https://example.com/docs).",
+    );
+
+    expect(rendered.blocks).toEqual([
+      { type: "paragraph", text: "Here are two options:" },
+      {
+        type: "list",
+        items: [
+          {
+            blocks: [
+              {
+                type: "paragraph",
+                text: [
+                  { type: "bold", text: "Option A:" },
+                  " Run ",
+                  { type: "code", text: "example --check" },
+                  ".",
+                ],
+              },
+            ],
+          },
+          {
+            blocks: [
+              {
+                type: "paragraph",
+                text: [
+                  { type: "bold", text: "Option B:" },
+                  " See ",
+                  { type: "url", text: "the documentation", url: "https://example.com/docs" },
+                  ".",
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(rendered.blocks)).not.toContain("<ul>");
+    expect(rendered.plainText).toBe(
+      "Here are two options:\n• Option A: Run example --check.\n• Option B: See the documentation.",
+    );
+  });
+
   it("keeps the classic sendMessage list path byte-identical", () => {
     expect(markdownToTelegramHtml("- [ ] todo\n- [x] done\n\n4. fourth\n5. fifth")).toBe(
       "• [ ] todo\n• [x] done\n\n4. fourth\n5. fifth",
