@@ -235,9 +235,13 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
+  const messageIds = Array.from(
+    { length: counts.transcriptMessages },
+    (_, index) => `team-message-${index + 1}`,
+  );
+  const historyMessages = messageIds.map((id, index) => ({
     role: index % 2 ? "assistant" : "user",
-    __openclaw: { id: `team-message-${index + 1}`, seq: index + 1 },
+    __openclaw: { id, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
       ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
@@ -399,8 +403,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     historyMessages,
     sessionReactions: {
       [selectedSessionKey]: Object.fromEntries(
-        historyMessages.map((message) => [
-          message.__openclaw.id,
+        messageIds.map((id) => [
+          id,
           [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
         ]),
       ),

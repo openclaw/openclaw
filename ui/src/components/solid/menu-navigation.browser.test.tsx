@@ -30,6 +30,7 @@ describe("Solid menu navigation", () => {
     await userEvent.keyboard("{ArrowDown}");
     await phase(surface(), "open");
     expect(document.activeElement).toBe(item("First"));
+    expect(document.querySelectorAll(":popover-open")).toHaveLength(1);
     await userEvent.keyboard("{Escape}");
     await phase(surface(), "hidden");
     expect(surface().querySelector("[role=menuitem]")).toBeNull();

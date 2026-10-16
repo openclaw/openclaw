@@ -274,7 +274,7 @@ export function Menu(props: BranchProps): JSX.Element {
     }
     const controls = formControls();
     const row = target.closest<HTMLElement>('[role^="menuitem"]');
-    const firstControl = row ? controls.find((control) => row.contains(control)) : undefined;
+    const firstControl = row ? controls.find((element) => row.contains(element)) : undefined;
     if (
       firstControl &&
       ((!event.shiftKey && target === row) || (event.shiftKey && target === firstControl))
@@ -313,7 +313,8 @@ export function Menu(props: BranchProps): JSX.Element {
     if (!identity.parent) {
       overlay.setParent(findOverlayParent(trigger));
     }
-    anchorBinding = createOverlayAnchor(overlay.surface);
+    // This menu owns its trigger and surface in the same DOM root.
+    anchorBinding = createOverlayAnchor(overlay.surface, { sameRoot: true });
     anchorBinding.update(trigger, placement());
     const disconnectControl = control.connect(
       () =>

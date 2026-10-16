@@ -12,7 +12,13 @@ describe("Solid native popover", () => {
     const [value, setValue] = createSignal("First");
     let handle!: PopoverHandle;
     const view = render(() => (
-      <Popover id="transient" label="Transient" lazy="while-open" ref={(next) => (handle = next)}>
+      <Popover
+        id="transient"
+        label="Transient"
+        lazy="while-open"
+        sameRoot
+        ref={(next) => (handle = next)}
+      >
         <input autofocus aria-label="Current value" value={value()} />
       </Popover>
     ));
@@ -25,6 +31,7 @@ describe("Solid native popover", () => {
     expect(input.value).toBe("Second");
     expect(document.activeElement).toBe(input);
     await phase(handle.overlay.surface, "open");
+    expect(document.querySelectorAll(":popover-open")).toHaveLength(1);
     await userEvent.keyboard("{Escape}");
     await phase(handle.overlay.surface, "hidden");
     expect(handle.overlay.surface.querySelector("input")).toBeNull();
