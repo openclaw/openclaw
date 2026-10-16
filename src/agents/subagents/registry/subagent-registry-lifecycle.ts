@@ -88,6 +88,10 @@ export class SubagentLifecycleController {
   readonly pendingRequesterSettleWakeCommits = new Map<object, PendingRequesterSettleWakeCommit>();
   readonly scheduledResumeTimers = new Map<object, ReturnType<typeof setTimeout>>();
   pendingRequesterSettleWakeRearms = new Set<object>();
+  waitingRequesterSettleWakeRuns = new WeakMap<
+    object,
+    { rearmGeneration?: number; deadline?: number }
+  >();
   readonly cancelledRequesterSettleWakeRuns = new Set<object>();
   readonly scheduledRequesterSettleWakeRuns = new Set<object>();
   private readonly restoredRequesterSettleWakeRuns = new Set<object>();
@@ -158,6 +162,7 @@ export class SubagentLifecycleController {
       this.options.resumedRuns.delete(identity);
       this.pendingRequesterSettleWakeCommits.delete(identity);
       this.pendingRequesterSettleWakeRearms.delete(identity);
+      this.waitingRequesterSettleWakeRuns.delete(identity);
       this.cancelledRequesterSettleWakeRuns.delete(identity);
       this.restoredRequesterSettleWakeRuns.delete(identity);
     }
@@ -312,6 +317,7 @@ export class SubagentLifecycleController {
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms = new Set();
+    this.waitingRequesterSettleWakeRuns = new WeakMap();
     this.cancelledRequesterSettleWakeRuns.clear();
     this.pendingRequesterSettleWakeCommits.clear();
     this.scheduledRequesterSettleWakeRuns.clear();

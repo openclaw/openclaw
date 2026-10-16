@@ -1,6 +1,7 @@
 // Onboard command tests cover guided setup entrypoints, setup aliases, and CLI messaging.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
@@ -790,6 +791,87 @@ describe("setupWizardCommand", () => {
         "Use --custom-base-url and --custom-model-id.",
       ].join("\n"),
     );
+  });
+
+  it("rejects no-auth combined with a custom API key before reset", async () => {
+    await expectAuthPreflightError(
+      {
+        customBaseUrl: "https://example.com/v1",
+        customModelId: "test-model",
+        customApiKey: "conflicting-key",
+        customNoAuth: true,
+      },
+      () =>
+        "Custom provider flags conflict: --custom-no-auth cannot be combined with --custom-api-key. Omit one.",
+    );
+  });
+
+  it("rejects Azure no-auth before reset", async () => {
+    await expectAuthPreflightError(
+      {
+        customBaseUrl: "https://resource.openai.azure.com",
+        customModelId: "test-model",
+        customNoAuth: true,
+      },
+      () =>
+        'auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.',
+    );
+  });
+
+  it.each([false, true])("preflights Responses after reset (no-auth: %s)", async (noAuth) => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: noAuth
+                ? [
+                    makeProviderModelFixture({
+                      provider: "custom",
+                      id: "test-model",
+                      api: "openai-completions",
+                      baseUrl: "https://example.com/v1",
+                    }),
+                  ]
+                : [],
+            },
+          },
+        },
+      },
+    });
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        nonInteractive: true,
+        acceptRisk: true,
+        customProviderId: "custom",
+        customBaseUrl: "https://example.com/v1",
+        customModelId: "test-model",
+        customCompatibility: "openai-responses",
+        customApiKey: noAuth ? undefined : "synthetic-replacement-key",
+        customNoAuth: noAuth,
+      },
+      runtime,
+    );
+
+    expect(runtime.error.mock.calls).toEqual(
+      noAuth
+        ? [
+            [
+              'auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.',
+            ],
+          ]
+        : [],
+    );
+    expect(mocks.handleReset).toHaveBeenCalledTimes(noAuth ? 0 : 1);
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledTimes(noAuth ? 0 : 1);
   });
 
   it("rejects ambiguous interactive provider flags before reset", async () => {

@@ -194,10 +194,6 @@ function createProgressNarrator(params: {
       clearTimeout(retryTimer);
       retryTimer = undefined;
     }
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
-      retryImmediate = false;
-      return;
-    }
     retryTimer = setTimeout(
       () => {
         retryTimer = undefined;

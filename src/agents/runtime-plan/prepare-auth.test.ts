@@ -8,6 +8,7 @@ import {
   createOAuthRefreshCredential,
 } from "../auth-profiles/credential-fixtures.test-support.js";
 import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../failover/error.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import {
@@ -254,7 +255,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         sessionAuthProfileId: "xai:p1",
         sessionAuthProfileSource: "auto",
       }),
-    ).toThrow(/temporarily unavailable/u);
+    ).toThrow(expect.objectContaining({ code: AUTH_PROFILE_COOLDOWN_ERROR_CODE }));
   });
 
   it("fails closed when an explicit generic order contains only missing profiles", () => {
@@ -347,7 +348,13 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         env: {},
         authProfileStore: store,
       }),
-    ).toThrow(/temporarily unavailable/u);
+    ).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining("temporarily unavailable"),
+        code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+        profileId: "openai:platform",
+      }),
+    );
   });
 
   it("keeps same-route native candidates ahead of interleaved route fallbacks", () => {

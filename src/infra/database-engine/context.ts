@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { DatabaseEngineInput } from "./types.js";
 
@@ -7,10 +8,22 @@ const state = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseEngineSelection"),
   (): { selection?: DatabaseEngineSelection } => ({}),
 );
+const maintenance = resolveGlobalSingleton(
+  Symbol.for("openclaw.databaseEngineMaintenanceSelection"),
+  () => new AsyncLocalStorage<DatabaseEngineSelection>(),
+);
 
 /** An explicit SQLite selection is distinct from an entry point awaiting config. */
 export function getDatabaseEngineSelection() {
-  return state.selection;
+  return maintenance.getStore() ?? state.selection;
+}
+
+/** Offline transitions keep source and target work scoped without changing the running Gateway. */
+export function withDatabaseEngineSelection<T>(
+  selection: DatabaseEngineSelection,
+  run: () => T,
+): T {
+  return maintenance.run(selection, run);
 }
 
 /** Boot owns this process-lifetime fact; asynchronous callers never change it. */

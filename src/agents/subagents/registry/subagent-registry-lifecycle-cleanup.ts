@@ -75,7 +75,8 @@ export async function suspendPendingFinalDelivery(
   }
   logAnnounceGiveUp(entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
-  scheduleRequesterSettleWake(context, entry.runId, entry);
+  context.resumeAncestorCleanup(entry);
+  scheduleRequesterSettleWake(context, entry.runId, entry, undefined, true);
 }
 
 export function isSubagentCompletionDeliveryAllowed(
