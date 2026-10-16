@@ -107,21 +107,6 @@ export async function writeTsdownDeclarations(
         const stage = createStage();
         const groupOutput = path.join(stage, "dist");
         requestDeclarationInputs(groupOutput, name, config.dts.entry);
-        const plan = prepareTsdownBuildExecution(
-          {
-            args: ["--config", "tsdown.config.ts", "--filter", name, "--out-dir", groupOutput],
-          },
-          {
-            // Every compiler owns a fresh stage; live runtime outputs stay intact.
-            cleanup() {},
-            reportShortfall(shortfall) {
-              console.error(shortfall.message);
-            },
-          },
-        );
-        if (!plan) {
-          throw new Error("Insufficient memory for declaration build");
-        }
         const receipt = `compiler-inputs/${name}.json`;
         const step: BuildCacheStep = {
           label: `${label}-${name}`,
@@ -150,7 +135,7 @@ export async function writeTsdownDeclarations(
         console.error(
           `[${label}] ${name}: cache ${state?.fresh ? "hit" : "miss"} (${state?.reason ?? "disabled"})`,
         );
-        return { name, output: groupOutput, required, identity, plan, step, params, state };
+        return { name, output: groupOutput, required, identity, step, params, state };
       });
       const required = prepared.flatMap((group) => group.required);
       if (!required.length) {
@@ -162,10 +147,36 @@ export async function writeTsdownDeclarations(
         }
       }
       const misses = prepared.filter((group) => !group.state?.fresh);
-      const plan = {
-        ...prepared[0]!.plan,
-        invocations: misses.flatMap((group) => group.plan.invocations),
-      };
+      let plan: ReturnType<typeof prepareTsdownBuildExecution> = null;
+      for (const group of misses) {
+        const next = prepareTsdownBuildExecution(
+          {
+            args: [
+              "--config",
+              "tsdown.config.ts",
+              "--filter",
+              group.name,
+              "--out-dir",
+              group.output,
+            ],
+          },
+          {
+            // Only cache misses launch compilers and need their memory admission.
+            cleanup() {},
+            reportShortfall(shortfall) {
+              console.error(shortfall.message);
+            },
+          },
+        );
+        if (!next) {
+          throw new Error("Insufficient memory for declaration build");
+        }
+        if (plan) {
+          plan.invocations.push(...next.invocations);
+        } else {
+          plan = next;
+        }
+      }
       await publishStagedDeclarations(
         plan,
         prepared.map((group) => ({ output: group.output, required: group.required })),

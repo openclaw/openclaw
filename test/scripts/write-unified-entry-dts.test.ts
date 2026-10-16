@@ -391,6 +391,11 @@ describe("write-unified-entry-dts", () => {
           "constructor(rootDir: string, policy: CompilerInputPolicy) {",
           "DECLARATION_TEST_DENY_CACHE_SNAPSHOT",
         ],
+        [
+          "scripts/tsdown-build.mts",
+          "  const args = params.args ?? [];\n  const plan = resolveTsdownBuildPlan(params);",
+          "DECLARATION_TEST_DENY_COMPILER_PLAN",
+        ],
       ] as const) {
         const current = fs.readFileSync(path.join(root, file), "utf8");
         expect(current).toContain(marker);
@@ -419,7 +424,10 @@ describe("write-unified-entry-dts", () => {
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-a/index.d.ts"))).toBe(true);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-b/index.d.ts"))).toBe(false);
       const before = treeHashes(path.join(root, "dist"));
-      const repeated = await runUnifiedWriter(command, root, env);
+      const repeated = await runUnifiedWriter(command, root, {
+        ...env,
+        DECLARATION_TEST_DENY_COMPILER_PLAN: "1",
+      });
       expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
       for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
