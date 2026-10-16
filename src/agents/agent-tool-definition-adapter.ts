@@ -37,6 +37,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { copyToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
@@ -278,6 +279,7 @@ export function toToolDefinitions(
       },
     } satisfies ToolDefinition;
     copyCodeModeControlToolIdentity(tool, definition);
+    copyToolInvocationMetadata(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
     }

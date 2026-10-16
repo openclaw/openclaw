@@ -9,6 +9,7 @@ import type { listManagedPlugins } from "../../plugins/management-service.js";
 import { formatSelectedEntry } from "../../plugins/reload-entry-guidance.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { stringEnum } from "../schema/typebox.js";
+import { bindToolInvocationResolver } from "../tool-invocation-metadata.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -121,7 +122,7 @@ export function createPluginsTool(options?: {
     runId: options?.runId,
     sessionId: options?.sessionId,
   });
-  return {
+  const tool: AnyAgentTool = {
     name: "plugins",
     label: "Plugins",
     async: false,
@@ -255,4 +256,7 @@ export function createPluginsTool(options?: {
       };
     },
   };
+  return bindToolInvocationResolver(tool, (args) => ({
+    ownsTurnHandoff: isRecord(args) && args.action === "reloadAndResume",
+  }));
 }
