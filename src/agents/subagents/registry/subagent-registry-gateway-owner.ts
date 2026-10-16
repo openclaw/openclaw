@@ -112,6 +112,10 @@ async function restoreSubagentCompletionSource(
       // Individual completions have no requester cohort to settle this permanent failure.
       // Keep failed writes and unfinished execution retryable through the existing sweep.
       deferredCompletionSources.add(runtimeKey);
+      // The queue may hold a delivered receipt that has not reached this row yet.
+      if (entry.delivery?.queueId) {
+        return;
+      }
       if (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield") {
         const { blockSubagentCompletionDelivery } =
           await import("../completion/subagent-completion-admission.store.js");
