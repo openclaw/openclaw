@@ -140,6 +140,17 @@ describe("advisor", () => {
       expect.objectContaining({ displayText: "Stop polling." }),
     );
     expect(run.followUp).not.toHaveBeenCalled();
+    // One correction per user turn: later tools and run end stay quiet until the next turn.
+    await run.tool();
+    await run.tool();
+    await run.endRun();
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.startRun("run-2");
+    await run.tool("run-2");
+    await run.tool("run-2");
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledTimes(2);
   });
 
   it("reviews tool work at run end and starts a follow-up turn when the run is gone", async () => {
