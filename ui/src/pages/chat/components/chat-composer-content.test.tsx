@@ -1,9 +1,9 @@
+import type { JSX } from "@solidjs/web";
 import { createContext, createSignal, useContext } from "solid-js";
 import { expect, it } from "vitest";
-import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 
 it("keeps the composer owner when lazy content creates native children", () => {
   const Label = createContext<string>();
@@ -12,7 +12,9 @@ it("keeps the composer owner when lazy content creates native children", () => {
   }
   const view = mountSolid(() => (
     <Label value="Composer footer">
-      <LitContent value={<NativeLabel />} />
+      <ComposerContent>
+        <NativeLabel />
+      </ComposerContent>
     </Label>
   ));
   expect(view.getByText("Composer footer")).toBeTruthy();
@@ -21,7 +23,11 @@ it("keeps the composer owner when lazy content creates native children", () => {
 
 it("keeps native composer content mounted while its text updates", () => {
   const [label, setLabel] = createSignal("Connecting");
-  const view = mountSolid(() => <LitContent value={<div role="status">{label()}</div>} />);
+  const view = mountSolid(() => (
+    <ComposerContent>
+      <div role="status">{label()}</div>
+    </ComposerContent>
+  ));
   const status = view.getByRole("status");
   expect(status.textContent).toBe("Connecting");
   setLabel("Connected");
@@ -31,13 +37,13 @@ it("keeps native composer content mounted while its text updates", () => {
 });
 
 it("leaves no empty host for absent composer content", () => {
-  const [content, setContent] = createSignal<unknown>(undefined);
-  const view = mountSolid(() => <LitContent value={content()} />);
+  const [content, setContent] = createSignal<JSX.Element>(undefined);
+  const view = mountSolid(() => <ComposerContent>{content()}</ComposerContent>);
   expect(view.container.children).toHaveLength(0);
   setContent(<p>Available notice</p>);
   flush();
   expect(view.getByText("Available notice")).toBeTruthy();
-  setContent(emptyLegacyContent);
+  setContent(null);
   flush();
   expect(view.container.children).toHaveLength(0);
 });

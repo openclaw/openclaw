@@ -322,7 +322,7 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("updates roster selection without rebuilding an unchanged new-session menu", async () => {
+  it("updates roster selection without reprojecting unchanged rows", async () => {
     const mounted = await mountRoster();
     const sidebar = mounted.sidebar as unknown as Sidebar;
     sidebar.sidebarAgentsMode = "roster";
@@ -335,9 +335,6 @@ describe("sidebar projection memo", () => {
     await settleRoster(mounted.sidebar);
     await vi.dynamicImportSettled();
     flush();
-    const newSession = sidebar.querySelector(".sidebar-new-session-menu")!;
-    const menuItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
-    expect(menuItems).toHaveLength(3);
     const sessionKey = "agent:main:recent";
     const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(row()).not.toBeNull();
@@ -360,10 +357,6 @@ describe("sidebar projection memo", () => {
     );
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
-    expect(sidebar.querySelector(".sidebar-new-session-menu")).toBe(newSession);
-    const retainedItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
-    expect(retainedItems).toHaveLength(menuItems.length);
-    retainedItems.forEach((item, index) => expect(item).toBe(menuItems[index]));
   });
 
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {

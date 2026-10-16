@@ -2,8 +2,6 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import { ChatDivider, ChatNotice, type ChatNoticeRecovery } from "./chat-divider.tsx";
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -21,16 +19,4 @@ export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null |
         timestamp: activeSession.archivedAt,
       } satisfies Extract<ChatItem, { kind: "notice" }>)
     : undefined;
-}
-
-export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) {
-  return solidContent(ChatDivider, { item });
-}
-
-export function renderChatNotice(
-  item: Extract<ChatItem, { kind: "notice" }>,
-  onPermissionRetry?: (message: string) => void,
-  recovery?: ChatNoticeRecovery,
-) {
-  return solidContent(ChatNotice, { item, onPermissionRetry, recovery });
 }
