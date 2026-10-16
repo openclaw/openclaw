@@ -626,7 +626,10 @@ it("replaces cached source groups during a zero-offset refill without losing liv
       senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
     },
   };
-  const sibling = { ...changed, content: "Second projection from the same source" };
+  const sibling = {
+    ...changed,
+    content: [{ type: "text", text: "Second projection from the same source" }],
+  };
   const unchanged = nativeHistoryMessage(4);
   const live = nativeHistoryMessage(5);
   const request = vi.fn(async () => ({
