@@ -15,18 +15,17 @@ const postSchema = z.object({
 });
 const updateSchema = postSchema.partial();
 type Post = z.infer<typeof postSchema>;
+const postPath = "/api/v4/posts/post-fixture";
 
 async function withPostFixture(
   run: (fixture: {
     client: ReturnType<typeof createMattermostClient>;
     read: () => Promise<Post>;
-    setFlags: (enabled: boolean) => void;
     wire: string[];
     stream: ReturnType<typeof createMattermostDraftStream>;
     warnings: string[];
   }) => Promise<void>,
   options: {
-    allowChannelMentions?: boolean;
     assertRequestCurrent?: () => void;
     onLookup?: () => void;
     lookupResponse?: { status: number; body: unknown };
@@ -35,65 +34,50 @@ async function withPostFixture(
   let stored: Post | undefined;
   const wire: string[] = [];
   await withServer(
-    (request, response) => {
+    async (request, response) => {
       let raw = "";
       request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
+      for await (const chunk of request) {
         raw += chunk;
-      });
-      request.on("end", () => {
-        const route = request.url ?? "";
-        wire.push(`${request.method} ${route}`);
-        response.setHeader("content-type", "application/json");
-        try {
-          const input = updateSchema.parse(raw ? JSON.parse(raw) : {});
-          if (request.method === "POST" && route === "/api/v4/posts") {
-            stored = {
-              id: "post-fixture",
-              channel_id: "channel-fixture",
-              message: input.message ?? "",
-              is_pinned: false,
-              has_reactions: false,
-              props: { retained: "provider metadata" },
-              file_ids: ["file-fixture"],
-            };
-          } else if (!stored) {
-            throw new Error("post not created");
-          } else if (request.method === "PUT" && route === "/api/v4/posts/post-fixture") {
-            // Full UpdatePost preserves nil props/files but decodes omitted scalars to zero values.
-            stored = {
-              ...stored,
-              message: input.message ?? "",
-              is_pinned: input.is_pinned ?? false,
-              has_reactions: input.has_reactions ?? false,
-              props: input.props ?? stored.props,
-              file_ids: input.file_ids ?? stored.file_ids,
-            };
-          } else if (request.method === "PUT" && route === "/api/v4/posts/post-fixture/patch") {
-            // PatchPost applies mention suppression before Post.Patch replaces supplied properties.
-            if (
-              options.allowChannelMentions === false &&
-              /\B@(channel|all|here)\b/i.test(input.message ?? "")
-            ) {
-              input.props = { ...input.props, mentionHighlightDisabled: true };
-            }
-            stored = { ...stored, ...input };
-          } else if (request.method === "GET" && route === "/api/v4/posts/post-fixture") {
-            options.onLookup?.();
-            if (options.lookupResponse) {
-              response.statusCode = options.lookupResponse.status;
-              response.end(JSON.stringify(options.lookupResponse.body));
-              return;
-            }
-          } else {
-            throw new Error(`unexpected request ${request.method} ${route}`);
+      }
+      const route = request.url ?? "";
+      wire.push(`${request.method} ${route}`);
+      response.setHeader("content-type", "application/json");
+      try {
+        const input = updateSchema.parse(raw ? JSON.parse(raw) : {});
+        if (request.method === "POST" && route === "/api/v4/posts") {
+          stored = {
+            id: "post-fixture",
+            channel_id: "channel-fixture",
+            message: input.message ?? "",
+            is_pinned: true,
+            has_reactions: true,
+            props: { retained: "provider metadata" },
+            file_ids: ["file-fixture"],
+          };
+        } else if (!stored) {
+          throw new Error("post not created");
+        } else if (request.method === "PUT" && route === `${postPath}/patch`) {
+          // PatchPost applies mention suppression before Post.Patch replaces supplied properties.
+          if (/\B@(channel|all|here)\b/i.test(input.message ?? "")) {
+            input.props = { ...input.props, mentionHighlightDisabled: true };
           }
-          response.end(JSON.stringify(stored));
-        } catch (error) {
-          response.statusCode = 400;
-          response.end(JSON.stringify({ message: String(error) }));
+          stored = { ...stored, ...input };
+        } else if (request.method === "GET" && route === postPath) {
+          options.onLookup?.();
+          if (options.lookupResponse) {
+            response.statusCode = options.lookupResponse.status;
+            response.end(JSON.stringify(options.lookupResponse.body));
+            return;
+          }
+        } else {
+          throw new Error(`unexpected request ${request.method} ${route}`);
         }
-      });
+        response.end(JSON.stringify(stored));
+      } catch (error) {
+        response.statusCode = 400;
+        response.end(JSON.stringify({ message: String(error) }));
+      }
     },
     async (baseUrl) => {
       const client = createMattermostClient({
@@ -114,15 +98,9 @@ async function withPostFixture(
         await run({
           client,
           read: async () => {
-            const response = await fetch(`${baseUrl}/api/v4/posts/post-fixture`);
+            const response = await fetch(`${baseUrl}${postPath}`);
             expect(response.ok).toBe(true);
             return postSchema.parse(await response.json());
-          },
-          setFlags: (enabled) => {
-            if (!stored) {
-              throw new Error("post not created");
-            }
-            stored = { ...stored, is_pinned: enabled, has_reactions: enabled };
           },
           wire,
           stream,
@@ -137,8 +115,7 @@ async function withPostFixture(
 
 describe("Mattermost partial edits preserve provider-owned post state", () => {
   it("preserves message and flags on props-only edit", async () => {
-    await withPostFixture(async ({ client, read, setFlags }) => {
-      setFlags(true);
+    await withPostFixture(async ({ client, read }) => {
       const before = await read();
       const props = { attachments: [{ text: "Completed" }] };
       await updateMattermostPost(client, before.id, { props });
@@ -147,41 +124,31 @@ describe("Mattermost partial edits preserve provider-owned post state", () => {
   });
 
   it("preserves flags and omitted props when channel mentions are restricted", async () => {
-    await withPostFixture(
-      async ({ stream, warnings, read, setFlags }) => {
-        setFlags(true);
-        const before = await read();
-        stream.update("Update for @channel");
-        await stream.flush();
-        expect(warnings).toEqual([]);
-        expect(await read()).toEqual({
-          ...before,
-          message: "Update for @channel",
-          props: {
-            ...before.props,
-            mentionHighlightDisabled: true,
-          },
-        });
-      },
-      { allowChannelMentions: false },
-    );
+    await withPostFixture(async ({ stream, warnings, read }) => {
+      const before = await read();
+      stream.update("Update for @channel");
+      await stream.flush();
+      expect(warnings).toEqual([]);
+      expect(await read()).toEqual({
+        ...before,
+        message: "Update for @channel",
+        props: { ...before.props, mentionHighlightDisabled: true },
+      });
+    });
   });
 
   it("replaces explicit props without looking up the old map", async () => {
-    await withPostFixture(
-      async ({ client, read, wire }) => {
-        const before = await read();
-        const start = wire.length;
-        await updateMattermostPost(client, before.id, { message: "@channel", props: {} });
-        expect(wire.slice(start)).toEqual(["PUT /api/v4/posts/post-fixture/patch"]);
-        expect(await read()).toEqual({
-          ...before,
-          message: "@channel",
-          props: { mentionHighlightDisabled: true },
-        });
-      },
-      { allowChannelMentions: false },
-    );
+    await withPostFixture(async ({ client, read, wire }) => {
+      const before = await read();
+      const start = wire.length;
+      await updateMattermostPost(client, before.id, { message: "@channel", props: {} });
+      expect(wire.slice(start)).toEqual([`PUT ${postPath}/patch`]);
+      expect(await read()).toEqual({
+        ...before,
+        message: "@channel",
+        props: { mentionHighlightDisabled: true },
+      });
+    });
   });
 
   it("does not PUT after authority is revoked during a valid props lookup", async () => {
@@ -199,7 +166,7 @@ describe("Mattermost partial edits preserve provider-owned post state", () => {
           message: revoked.message,
           cause: revoked,
         });
-        expect(wire.slice(start)).toEqual(["GET /api/v4/posts/post-fixture"]);
+        expect(wire.slice(start)).toEqual([`GET ${postPath}`]);
         expect(await read()).toEqual(before);
       },
       {
@@ -228,7 +195,7 @@ describe("Mattermost partial edits preserve provider-owned post state", () => {
         await expect(
           updateMattermostPost(client, "post-fixture", { message: "@channel" }),
         ).rejects.toThrow();
-        expect(wire.slice(start)).toEqual(["GET /api/v4/posts/post-fixture"]);
+        expect(wire.slice(start)).toEqual([`GET ${postPath}`]);
       },
       { lookupResponse },
     );
