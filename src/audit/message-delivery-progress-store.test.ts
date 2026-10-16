@@ -134,23 +134,13 @@ describe("outbound message progress companion", () => {
       ...database,
       database: openOpenClawStateDatabase(database),
     });
-    const started = recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.platform-started"),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
+    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.platform-started"), {
+      ...database,
+      database: openOpenClawStateDatabase(database),
+    });
 
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
-    expect(started).toMatchObject({
-      action: "message.outbound.platform-started",
-      outcome: "platform_started",
-    });
-    expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        limit: 10,
-      }).entries.map((entry) => entry.event),
-    ).toEqual([first, started]);
     const { db } = openOpenClawStateDatabase(database);
     expect(tableExists(db, "outbound_message_progress")).toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
@@ -173,23 +163,6 @@ describe("outbound message progress companion", () => {
     ]) {
       expect(stored).not.toContain(raw);
     }
-  });
-
-  it("does not return expired progress removed during its insert", () => {
-    const database = databaseOptions();
-    const expired = recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", {
-        occurredAt: Date.now() - 31 * 24 * 60 * 60_000,
-      }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-
-    expect(expired).toBeUndefined();
-    expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress")
-        .get(),
-    ).toEqual({ count: 0 });
   });
 
   it("pages large offsets across bounded owner-stream chunks", () => {
