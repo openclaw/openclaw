@@ -37,7 +37,23 @@ import {
 } from "./chat-metadata-runtime.test-support.js";
 import * as metadataProjection from "./chat-metadata-session-projection.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+async function invokeMetadata(
+  context: GatewayRequestContext,
+  sessionKey: string,
+  respond: RespondFn,
+  client: GatewayRequestHandlerOptions["client"] = null,
+) {
+  await handleChatMetadataRequest({
+    params: { sessionKey },
+    context,
+    respond,
+    client,
+    req: { type: "req", id: "metadata", method: "chat.metadata" },
+    isWebchatConnect: () => false,
+  });
+}
 
 const cases = [
   { write: "tracked sibling update", allowed: true },
@@ -89,9 +105,8 @@ it.each(
   cases.flatMap((scenario) =>
     ["exact", "full"].map((cache) => Object.assign({ entryChanged: false, cache }, scenario)),
   ),
-)("metadata read across $write with $cache cache", async (scenario) => {
-  const { write, allowed, entryChanged, cache } = scenario;
-  await withOpenClawTestState({ label: "metadata-cache-boundary" }, async (state) => {
+)("metadata read across $write with $cache cache", ({ write, allowed, entryChanged, cache }) =>
+  withOpenClawTestState({ label: "metadata-cache-boundary" }, async (state) => {
     const config = {};
     let runtimeConfig = config;
     await state.writeConfig(config);
@@ -108,11 +123,7 @@ it.each(
       label: "selected",
       updatedAt: 1,
     });
-    replaceSessionEntrySync(sibling, {
-      sessionId: "sibling",
-      label: "sibling",
-      updatedAt: 1,
-    });
+    replaceSessionEntrySync(sibling, { sessionId: "sibling", label: "sibling", updatedAt: 1 });
     // Prepare optional schema before capture so the probe measures a row mutation only.
     assignSessionOwner(sibling, {
       owner: { type: "agent", id: "main" },
@@ -263,27 +274,20 @@ it.each(
             recordSelected("b", 5);
             break;
           case "selected participant insert then repeat":
-            runOpenClawAgentWriteTransaction(() => {
-              recordSelected("c", 15);
-              recordSelected("a", 30);
-            }, selected);
-            break;
           case "selected participant repeat then insert":
-            runOpenClawAgentWriteTransaction(() => {
-              recordSelected("a", 30);
-              recordSelected("c", 15);
-            }, selected);
-            break;
           case "selected entry write then participant repeat":
-            runOpenClawAgentWriteTransaction((current) => {
-              writeSelected(current, { label: "changed selected", updatedAt: 2 });
-              recordSelected("a", 30);
-            }, selected);
-            break;
           case "selected participant repeat then entry write":
             runOpenClawAgentWriteTransaction((current) => {
-              recordSelected("a", 30);
-              writeSelected(current, { label: "changed selected", updatedAt: 2 });
+              const repeat = () => recordSelected("a", 30);
+              const other = write.includes("entry write")
+                ? () => writeSelected(current, { label: "changed selected", updatedAt: 2 })
+                : () => recordSelected("c", 15);
+              const otherFirst =
+                write === "selected participant insert then repeat" ||
+                write === "selected entry write then participant repeat";
+              for (const operation of otherFirst ? [other, repeat] : [repeat, other]) {
+                operation();
+              }
             }, selected);
             break;
           default:
@@ -373,17 +377,14 @@ it.each(
     const respond = vi.fn<RespondFn>();
     const outcome = await Promise.resolve()
       .then(() =>
-        handleChatMetadataRequest({
-          params: { sessionKey: selected.sessionKey },
-          context: createDirectChatContext({
+        invokeMetadata(
+          createDirectChatContext({
             getRuntimeConfig: () => runtimeConfig,
             readChatMetadata,
           }),
+          selected.sessionKey,
           respond,
-          client: null,
-          req: { type: "req", id: "metadata-cache-boundary", method: "chat.metadata" },
-          isWebchatConnect: () => false,
-        }),
+        ),
       )
       .then(
         () => ({ error: undefined }),
@@ -435,10 +436,7 @@ it.each(
               "SELECT json_extract(entry_json, '$.owner.actor.id') AS legacy_owner, json_array_length(entry_json, '$.participants') AS legacy_participants FROM session_nodes WHERE session_key = ?",
             )
             .get(sibling.sessionKey),
-        ).toEqual({
-          legacy_owner: "json-only-owner",
-          legacy_participants: 1,
-        });
+        ).toEqual({ legacy_owner: "json-only-owner", legacy_participants: 1 });
       } else if (write.startsWith("compound")) {
         const published = listSessionEntriesCore({ ...sibling, projection: "list" }).find(
           (row) => row.sessionKey === writeTarget.sessionKey,
@@ -489,202 +487,188 @@ it.each(
     }
     await cleanupSessionStateForTest({ stateDir: state.stateDir });
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-  });
-});
+  }),
+);
 
 it.each([
-  { write: "read acknowledgment", field: "lastReadAt", committed: false, allowed: true },
-  { write: "local visibility change", field: "visibility", committed: false, allowed: false },
-  { write: "committed visibility change", field: "visibility", committed: true, allowed: false },
-  {
-    write: "local saved-account change",
-    field: "authProfileOverride",
-    committed: false,
-    allowed: false,
-  },
-  {
-    write: "committed saved-account change",
-    field: "authProfileOverride",
-    committed: true,
-    allowed: false,
-  },
-] as const)("revalidates $write before preparing private chat metadata", async (scenario) => {
-  await withOpenClawTestState(
-    {
-      label: "metadata-read-acknowledgment",
-      env: WITHOUT_OPENAI_ENV_AUTH,
-      prepareProfileCatalog: true,
-    },
-    async (state) => {
-      const config = { ...createOpenAIChatMetadataConfig(), ...rolePolicyConfig() };
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
-      const owner = ensureProfileForEmail("metadata-session-owner@example.test");
-      const viewer = ensureProfileForEmail("metadata-session-viewer@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const authProfileId = connectChatMetadataAccount(owner.id);
-      const client = sharingPolicyClient({ user: viewer.id });
-      const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
-      replaceSessionEntrySync(selected, {
-        sessionId: "read-marker-session",
-        lifecycleRevision: "read-marker-lifecycle",
-        sessionStartedAt: 1,
-        updatedAt: 1,
-        lastReadAt: 1,
-        label: "read-marker-label",
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: owner.id },
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-luna",
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: "user",
-        toolOverrides: { webSearch: false },
-      });
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      const database = openOpenClawAgentDatabase(selected);
-      const before = expectDefined(loadSessionEntry(selected), "selected entry");
-      const readRow = () =>
-        expectDefined(
-          database.db
-            .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-            .get(selected.sessionKey),
-          "selected row",
-        );
-      const beforeRow = readRow();
-      const beforePayload = expectDefined(
-        safeParseJsonRecord(String(beforeRow.entry_json)),
-        "selected payload",
-      );
-      const prepareProjection = vi.spyOn(metadataProjection, "prepareChatMetadataModelProjection");
-      const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
-      harness.setOwner(
-        createChatMetadataOwner(config, "gpt-5.6-luna", {}, "openai", "openai-chatgpt-responses"),
-      );
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => config,
-        readChatMetadata: harness.runtime.read,
-      });
-      const invoke = (respond: RespondFn) =>
-        Promise.resolve(
-          handleChatMetadataRequest({
-            params: { sessionKey: selected.sessionKey },
-            context,
-            respond,
-            client,
-            req: { type: "req", id: "metadata-read-marker", method: "chat.metadata" },
-            isWebchatConnect: () => false,
-          }),
-        );
-      let release: (() => void) | undefined;
-      let pending: Promise<void> | undefined;
-      const heldRead = async (changeEntry: boolean) => {
-        const entered = createDeferred();
-        const gate = createDeferred();
-        release = () => gate.resolve();
-        harness.buildCommands.mockImplementationOnce(async () => {
-          entered.resolve();
-          await gate.promise;
-          return { commands: [{ name: "help" }] };
+  ["read acknowledgment", "lastReadAt", false, true],
+  ["local visibility change", "visibility", false, false],
+  ["committed visibility change", "visibility", true, false],
+  ["local saved-account change", "authProfileOverride", false, false],
+  ["committed saved-account change", "authProfileOverride", true, false],
+] as const)(
+  "revalidates %s before preparing private chat metadata",
+  (_name, field, committed, allowed) =>
+    withOpenClawTestState(
+      {
+        label: "metadata-read-acknowledgment",
+        env: WITHOUT_OPENAI_ENV_AUTH,
+        prepareProfileCatalog: true,
+      },
+      async (state) => {
+        const config = { ...createOpenAIChatMetadataConfig(), ...rolePolicyConfig() };
+        await state.writeConfig(config);
+        setRuntimeConfigSnapshot(config);
+        const owner = ensureProfileForEmail("metadata-session-owner@example.test");
+        const viewer = ensureProfileForEmail("metadata-session-viewer@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        const authProfileId = connectChatMetadataAccount(owner.id);
+        const client = sharingPolicyClient({ user: viewer.id });
+        const selected = { agentId: "main", sessionKey: "agent:main:metadata-read-marker" };
+        replaceSessionEntrySync(selected, {
+          sessionId: "read-marker-session",
+          lifecycleRevision: "read-marker-lifecycle",
+          sessionStartedAt: 1,
+          updatedAt: 1,
+          lastReadAt: 1,
+          label: "read-marker-label",
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: owner.id },
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          authProfileOverride: authProfileId,
+          authProfileOverrideSource: "user",
+          toolOverrides: { webSearch: false },
         });
-        const respond = vi.fn<RespondFn>();
-        const request = invoke(respond);
-        pending = request;
-        void request.catch(() => {});
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          request,
-          "Metadata completed before the preparation hold",
-        );
-        try {
-          if (changeEntry && scenario.allowed) {
-            await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
-              preserveActivity: true,
-              skipMaintenance: true,
-            });
-          } else if (changeEntry && scenario.committed) {
-            runOpenClawAgentWriteTransaction((current) => {
-              writeSessionEntry(current, selected.sessionKey, {
-                ...before,
-                [scenario.field]: scenario.field === "visibility" ? "draft" : "openai:replacement",
-              });
-            }, selected);
-          } else if (changeEntry) {
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        const database = openOpenClawAgentDatabase(selected);
+        const before = expectDefined(loadSessionEntry(selected), "selected entry");
+        const readRow = () =>
+          expectDefined(
             database.db
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-              )
-              .run(
-                `$.${scenario.field}`,
-                scenario.field === "visibility" ? "draft" : "openai:replacement",
-                selected.sessionKey,
-              );
-          }
-          if (!changeEntry || scenario.allowed) {
-            expect(loadSessionEntry(selected)).toEqual(
-              changeEntry ? { ...before, lastReadAt: 2 } : before,
-            );
-            expect(readRow()).toEqual(
-              changeEntry
-                ? {
-                    ...beforeRow,
-                    entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
-                    last_read_at: 2,
-                  }
-                : beforeRow,
-            );
-          }
-        } finally {
-          gate.resolve();
-        }
-        const error = await request.then(
-          () => undefined,
-          (cause: unknown) => cause,
+              .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+              .get(selected.sessionKey),
+            "selected row",
+          );
+        const beforeRow = readRow();
+        const beforePayload = expectDefined(
+          safeParseJsonRecord(String(beforeRow.entry_json)),
+          "selected payload",
         );
-        return { respond, error };
-      };
-      try {
-        await harness.runtime.refresh();
-        const control = await heldRead(false);
-        expect(control.error).toBeUndefined();
-        expect(control.respond).toHaveBeenCalledExactlyOnceWith(
-          true,
-          expect.objectContaining({
-            commands: [{ name: "help" }],
-            models: [expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" })],
-          }),
+        const prepareProjection = vi.spyOn(
+          metadataProjection,
+          "prepareChatMetadataModelProjection",
         );
-        expect(prepareProjection).toHaveBeenCalledWith(
-          expect.objectContaining({ preferredProfileId: authProfileId }),
+        const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+        harness.setOwner(
+          createChatMetadataOwner(config, "gpt-5.6-luna", {}, "openai", "openai-chatgpt-responses"),
         );
-        harness.runtime.invalidate();
-        await harness.runtime.refresh();
-        prepareProjection.mockClear();
-        const changed = await heldRead(true);
-        if (!scenario.allowed) {
-          expect(prepareProjection).not.toHaveBeenCalled();
-          expect(changed.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-          expect(changed.error).toMatchObject({
-            message: "Session changed while preparing its metadata. Retry the request.",
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => config,
+          readChatMetadata: harness.runtime.read,
+        });
+        const invoke = (respond: RespondFn) =>
+          invokeMetadata(context, selected.sessionKey, respond, client);
+        let release: (() => void) | undefined;
+        let pending: Promise<void> | undefined;
+        const heldRead = async (changeEntry: boolean) => {
+          const entered = createDeferred();
+          const gate = createDeferred();
+          release = () => gate.resolve();
+          harness.buildCommands.mockImplementationOnce(async () => {
+            entered.resolve();
+            await gate.promise;
+            return { commands: [{ name: "help" }] };
           });
-          expect(changed.respond).not.toHaveBeenCalled();
+          const respond = vi.fn<RespondFn>();
+          const request = invoke(respond);
+          pending = request;
+          void request.catch(() => {});
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            request,
+            "Metadata completed before the preparation hold",
+          );
+          try {
+            if (changeEntry && allowed) {
+              await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
+                preserveActivity: true,
+                skipMaintenance: true,
+              });
+            } else if (changeEntry && committed) {
+              runOpenClawAgentWriteTransaction((current) => {
+                writeSessionEntry(current, selected.sessionKey, {
+                  ...before,
+                  [field]: field === "visibility" ? "draft" : "openai:replacement",
+                });
+              }, selected);
+            } else if (changeEntry) {
+              database.db
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                )
+                .run(
+                  `$.${field}`,
+                  field === "visibility" ? "draft" : "openai:replacement",
+                  selected.sessionKey,
+                );
+            }
+            if (!changeEntry || allowed) {
+              expect(loadSessionEntry(selected)).toEqual(
+                changeEntry ? { ...before, lastReadAt: 2 } : before,
+              );
+              expect(readRow()).toEqual(
+                changeEntry
+                  ? {
+                      ...beforeRow,
+                      entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
+                      last_read_at: 2,
+                    }
+                  : beforeRow,
+              );
+            }
+          } finally {
+            gate.resolve();
+          }
+          const error = await request.then(
+            () => undefined,
+            (cause: unknown) => cause,
+          );
+          return { respond, error };
+        };
+        try {
+          await harness.runtime.refresh();
+          const control = await heldRead(false);
+          expect(control.error).toBeUndefined();
+          expect(control.respond).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({
+              commands: [{ name: "help" }],
+              models: [expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" })],
+            }),
+          );
+          expect(prepareProjection).toHaveBeenCalledWith(
+            expect.objectContaining({ preferredProfileId: authProfileId }),
+          );
+          harness.runtime.invalidate();
+          await harness.runtime.refresh();
+          prepareProjection.mockClear();
+          const changed = await heldRead(true);
+          if (!allowed) {
+            expect(prepareProjection).not.toHaveBeenCalled();
+            expect(changed.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+            expect(changed.error).toMatchObject({
+              message: "Session changed while preparing its metadata. Retry the request.",
+            });
+            expect(changed.respond).not.toHaveBeenCalled();
+            await closeOpenClawAgentDatabasesAsync(state.root);
+            expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+            return;
+          }
+          const fresh = vi.fn<RespondFn>();
+          await invoke(fresh);
+          // Fresh preparation agrees before asserting the held request, including on the old source.
+          expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
+          expect(changed.error).toBeUndefined();
+          expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
           await closeOpenClawAgentDatabasesAsync(state.root);
           expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-          return;
+        } finally {
+          release?.();
+          await pending?.catch(() => {});
+          await harness.runtime.stop();
+          prepareProjection.mockRestore();
         }
-        const fresh = vi.fn<RespondFn>();
-        await invoke(fresh);
-        // Fresh preparation agrees before asserting the held request, including on the old source.
-        expect(fresh.mock.calls).toEqual(control.respond.mock.calls);
-        expect(changed.error).toBeUndefined();
-        expect(changed.respond.mock.calls).toEqual(control.respond.mock.calls);
-        await closeOpenClawAgentDatabasesAsync(state.root);
-        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-      } finally {
-        release?.();
-        await pending?.catch(() => {});
-        await harness.runtime.stop();
-        prepareProjection.mockRestore();
-      }
-    },
-  );
-});
+      },
+    ),
+);

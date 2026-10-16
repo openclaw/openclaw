@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
-import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   resolveUsableAgentCredentialModes,
   type AgentCredentialMap,
@@ -39,12 +38,8 @@ export function connectChatMetadataAccount(profileId: string): string {
 }
 
 export async function createPersonalChatMetadataFixture() {
-  const config = {
-    agents: {
-      defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-      entries: { main: {} },
-    },
-  } satisfies OpenClawConfig;
+  const config = createOpenAIChatMetadataConfig();
+  delete config.agents?.defaults?.models;
   const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
   const owner = createChatMetadataOwner(
     config,
@@ -137,10 +132,7 @@ export function createChatMetadataOwner(
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     allowGatewaySubagentBinding: false,
-    modelCatalog: {
-      entries: [model],
-      routeVariants: api ? [model] : [],
-    },
+    modelCatalog: { entries: [model], routeVariants: api ? [model] : [] },
     configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
@@ -163,14 +155,12 @@ export function createChatMetadataHarness(
   let config = initialConfig;
   let owner = createChatMetadataOwner(config, "first");
   let skillsVersion = 1;
-  let pluginRegistryVersion = 1;
+  const pluginRegistryVersion = 1;
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
   const getPreparedOwner = vi.fn(
-    (
-      _params?: GetPublishedPreparedModelCatalogOwnerParams,
-    ): PreparedModelRuntimeSnapshot | undefined => owner,
+    (_params?: GetPublishedPreparedModelCatalogOwnerParams): typeof owner | undefined => owner,
   );
   const getPreparedAuthStore = vi.fn(() => authStore);
   const getAuthStoreRevision = vi.fn(() => authStoreRevision);
@@ -185,9 +175,6 @@ export function createChatMetadataHarness(
     modelCatalog: facts.modelCatalog.entries,
     models: facts.modelCatalog.entries,
   }));
-  const readProjection = vi.fn(
-    (projection: { modelCatalog: ModelCatalogEntry[]; models?: ModelChoice[] }) => projection,
-  );
   const context = {
     getRuntimeConfig: () => config,
     loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
@@ -205,12 +192,7 @@ export function createChatMetadataHarness(
         catalogComplete: isPreparedModelCatalogFull(modelCatalog),
       };
     },
-    logGateway: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
+    logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   const runtime = createGatewayChatMetadataRuntime({
     getConfig: () => config,
@@ -231,7 +213,7 @@ export function createChatMetadataHarness(
               const projection = await buildProjection(params);
               return {
                 modelCatalog: projection.modelCatalog,
-                read: () => ({ models: readProjection(projection).models }),
+                read: () => ({ models: projection.models }),
                 isCurrent: () => !invalidProjections.has(projection),
               };
             },
@@ -241,7 +223,6 @@ export function createChatMetadataHarness(
   return {
     buildCommands,
     buildProjection,
-    readProjection,
     getPluginRegistryVersion,
     getAuthStoreRevision,
     getPreparedAuthStore,
@@ -249,6 +230,11 @@ export function createChatMetadataHarness(
     getSkillsVersion,
     invalidProjections,
     runtime,
+    read: (params: Partial<Parameters<typeof runtime.read>[0]> = {}) =>
+      runtime.read({ agentId: "main", ...params }),
+    startup: (params: Partial<Parameters<typeof runtime.readStartup>[0]> = {}) =>
+      runtime.readStartup({ agentId: "main", ...params }),
+    refresh: runtime.refresh,
     setConfig(next: OpenClawConfig) {
       config = next;
     },
@@ -260,9 +246,6 @@ export function createChatMetadataHarness(
     },
     setOwner(next: PreparedModelRuntimeSnapshot) {
       owner = next;
-    },
-    setPluginRegistryVersion(next: number) {
-      pluginRegistryVersion = next;
     },
     setSkillsVersion(next: number) {
       skillsVersion = next;
