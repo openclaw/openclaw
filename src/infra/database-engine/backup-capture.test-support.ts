@@ -52,7 +52,7 @@ export async function createUpdateDatabaseBackupWithFixtureTransport(
       stderr: "",
       inspection: createUpdateStateInspectionDiagnostics({
         operation: "State schema inspection",
-        phase: String(params.input.mode),
+        phase: params.input.mode,
         paths: captured.additionalPaths,
       }),
     };
