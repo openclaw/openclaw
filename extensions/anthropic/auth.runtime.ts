@@ -212,7 +212,7 @@ export function buildAnthropicAuthDoctorHint(params: {
 
 export async function runAnthropicCliMigration(
   ctx: Pick<ProviderAuthContext, "config" | "env">,
-): Promise<ProviderAuthResult> {
+): Promise<ReturnType<typeof buildAnthropicCliMigrationResult>> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
     const error =
