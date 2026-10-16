@@ -14,14 +14,12 @@ import {
 import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
+  const counts = (...keys: string[]) => Object.fromEntries(keys.map((key) => [key, size]));
   const invariant: Record<string, number | boolean> =
     scenario === "spawnPipelineInMemory" || scenario === "spawnPipelineDurable"
       ? {
           ok: true,
-          registeredRuns: size,
-          reservationsReleased: size,
-          blockedWaits: size,
-          settledRuns: size,
+          ...counts("registeredRuns", "reservationsReleased", "blockedWaits", "settledRuns"),
           outstandingWaits: 0,
           durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
           durableStateFile: scenario === "spawnPipelineDurable",
@@ -36,16 +34,14 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
               ok: true,
               seededRows: size * 3,
               removedRows: size * 2,
-              retainedCurrent: size,
+              ...counts("retainedCurrent", "recoveryProjections"),
               sessionEffects: 0,
-              recoveryProjections: size,
               lostContextCompletions: 0,
             }
           : {
               ok: true,
               inputRowsPerOrdering: size * 3,
-              newestFirstSelectedRows: size,
-              oldestFirstSelectedRows: size,
+              ...counts("newestFirstSelectedRows", "oldestFirstSelectedRows"),
               newestFirstSelectedNewest: true,
               oldestFirstSelectedNewest: true,
             };
@@ -53,11 +49,7 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
     scenario,
     size,
     timingsMs,
-    memory: {
-      rssStartBytes: 100,
-      rssEndBytes: 120,
-      processMaxRssBytes: 150,
-    },
+    memory: { rssStartBytes: 100, rssEndBytes: 120, processMaxRssBytes: 150 },
     invariant,
   };
 }
@@ -150,18 +142,13 @@ describe("agent concurrency benchmark", () => {
 
     expect(report.invariants.ok).toBe(true);
     expect(progress).toHaveLength(10);
-    expect(progress[0]).toBe(
-      "[bench-agent-concurrency] worker 1/5 start scenario=spawnPipelineInMemory size=2",
-    );
-    expect(progress[1]).toBe(
-      "[bench-agent-concurrency] worker 1/5 complete scenario=spawnPipelineInMemory size=2 elapsed=0.250s",
-    );
-    expect(progress.at(-2)).toBe(
-      "[bench-agent-concurrency] worker 5/5 start scenario=duplicateSuppression size=4",
-    );
-    expect(progress.at(-1)).toBe(
-      "[bench-agent-concurrency] worker 5/5 complete scenario=duplicateSuppression size=4 elapsed=0.250s",
-    );
+    const progressPair = (worker: number, scenario: WorkerScenario, size: number) => {
+      const prefix = `[bench-agent-concurrency] worker ${worker}/5`;
+      const identity = `scenario=${scenario} size=${size}`;
+      return [`${prefix} start ${identity}`, `${prefix} complete ${identity} elapsed=0.250s`];
+    };
+    expect(progress.slice(0, 2)).toEqual(progressPair(1, "spawnPipelineInMemory", 2));
+    expect(progress.slice(-2)).toEqual(progressPair(5, "duplicateSuppression", 4));
   });
 
   it("rejects incomplete synthetic worker sets", () => {
