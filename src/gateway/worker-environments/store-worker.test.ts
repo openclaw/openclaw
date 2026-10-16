@@ -36,6 +36,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerEnvironmentStoreKernel } from "./store.kernel.js";
+import { workerCredential, workerReadyPatch } from "./store.test-support.js";
 
 const delivery = vi.hoisted(() => ({
   afterTransition: undefined as (() => Promise<void>) | undefined,
@@ -48,9 +49,7 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
   return {
     ...actual,
     runOpenClawStateWorkerOperation: (
-      context: Parameters<typeof actual.runOpenClawStateWorkerOperation>[0],
-      operation: Parameters<typeof actual.runOpenClawStateWorkerOperation>[1],
-      options: Parameters<typeof actual.runOpenClawStateWorkerOperation>[2],
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) =>
       actual.runOpenClawStateWorkerOperation(
         context,
@@ -118,6 +117,24 @@ function attachmentIntent(environmentId: string, sessionId: string, provisionOpe
   };
 }
 
+function holdResult(method: "afterTouch" | "afterTransition") {
+  const committed = createDeferredCore();
+  const publish = createDeferredCore();
+  delivery[method] = async () => {
+    committed.resolve();
+    await publish.promise;
+  };
+  return { committed, publish };
+}
+
+function expectRepairedIndex(database: Pick<OpenClawStateDatabase, "db">) {
+  expect(
+    database.db
+      .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
+      .get(),
+  ).toEqual({ name: "idx_audit_events_time" });
+}
+
 it.each([
   { kind: "current", mode: "automatic" },
   { kind: "current", mode: "doctor-preparation" },
@@ -159,11 +176,7 @@ it.each([
       const result = await migrate();
       expect(result.warnings).toEqual([]);
       using repaired = nodeSqlite.openNodeSqliteDatabase(database.path, { readOnly: true });
-      expect(
-        repaired
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
-          .get(),
-      ).toEqual({ name: "idx_audit_events_time" });
+      expectRepairedIndex({ db: repaired });
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = await createWorkerEnvironmentStore({ database });
       expect(reopened.list()).toEqual([]);
@@ -190,11 +203,7 @@ it.each([
       expect(database.db.isOpen).toBe(false);
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = openOpenClawStateDatabase({ env });
-      expect(
-        reopened.db
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
-          .get(),
-      ).toEqual({ name: "idx_audit_events_time" });
+      expectRepairedIndex(reopened);
     } finally {
       opener.mockRestore();
     }
@@ -316,9 +325,8 @@ it("serves committed inventory and performs guarded mutations without host SQLit
   const database = openDatabase("worker-inventory-owner-");
   const store = await openStore(database);
   const intent = {
-    environmentId: "worker-a",
+    ...intentFor("worker-a"),
     providerId: "provider-b",
-    profileId: "profile",
     profileSnapshot: { settings: { region: "fixture" } },
     provisionOperationId: "operation-a",
   };
@@ -416,12 +424,7 @@ it.each(["create", "close"] as const)(
       provisionOperationId: "operation-before",
     };
     await store.createSessionAttachmentIntent(intent, () => {});
-    const committed = createDeferredCore();
-    const publish = createDeferredCore();
-    delivery.afterTransition = async () => {
-      committed.resolve();
-      await publish.promise;
-    };
+    const { committed, publish } = holdResult("afterTransition");
     const prior = store.transition({
       environmentId: intent.environmentId,
       from: "requested",
@@ -459,19 +462,14 @@ it.each(["create", "close"] as const)(
         expect(result).toMatchObject({
           environment: { environmentId: "environment-after", state: "requested" },
         });
-        expect(attachment).toMatchObject({
-          environmentId: "environment-after",
-          generation: 2,
-          closedAtMs: null,
-        });
       } else {
         expect(result).toEqual(attachment);
-        expect(attachment).toMatchObject({
-          environmentId: intent.environmentId,
-          generation: 1,
-          closedAtMs: 1_000,
-        });
       }
+      expect(attachment).toMatchObject({
+        environmentId: method === "create" ? "environment-after" : intent.environmentId,
+        generation: method === "create" ? 2 : 1,
+        closedAtMs: method === "create" ? null : 1_000,
+      });
       expect(delivery.commands).toEqual([
         "workerEnvironments.transition",
         method === "create"
@@ -528,16 +526,22 @@ it("rejects stale, replaced, missing, closed, and revoked attachment touches", a
   const store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
   const intent = attachmentIntent("original-environment", "guarded-session", "original-provision");
   const { attachment } = await store.createSessionAttachmentIntent(intent, () => {});
+  const expectStaleTouch = async (
+    record: typeof attachment,
+    current: ReturnType<typeof store.getSessionAttachmentRecord>,
+  ) => {
+    await expect(store.touchSessionAttachment(record, () => {})).rejects.toThrow(
+      "Conversation environment attachment is no longer current",
+    );
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(current);
+  };
   nowMs = 2_000;
   for (const record of [
     { ...attachment, generation: attachment.generation + 1 },
     { ...attachment, environmentId: "other-environment" },
     { ...attachment, sessionId: "missing-session" },
   ]) {
-    await expect(store.touchSessionAttachment(record, () => {})).rejects.toThrow(
-      "Conversation environment attachment is no longer current",
-    );
-    expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
+    await expectStaleTouch(record, attachment);
   }
   await expect(
     store.touchSessionAttachment(attachment, () => {
@@ -551,16 +555,10 @@ it("rejects stale, replaced, missing, closed, and revoked attachment touches", a
     () => {},
   );
   nowMs = 3_000;
-  await expect(store.touchSessionAttachment(attachment, () => {})).rejects.toThrow(
-    "Conversation environment attachment is no longer current",
-  );
-  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(replacement);
+  await expectStaleTouch(attachment, replacement);
   const closed = await store.closeSessionAttachment(replacement.sessionId);
   nowMs = 4_000;
-  await expect(store.touchSessionAttachment(replacement, () => {})).rejects.toThrow(
-    "Conversation environment attachment is no longer current",
-  );
-  expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(closed);
+  await expectStaleTouch(replacement, closed);
   await store.close();
 });
 
@@ -572,12 +570,7 @@ it("rechecks idle-cleanup activity after a pending attachment touch publishes", 
     attachmentIntent("active-conversation", "active-session", "active-conversation-provision"),
     () => {},
   );
-  const committed = createDeferredCore();
-  const publish = createDeferredCore();
-  delivery.afterTouch = async () => {
-    committed.resolve();
-    await publish.promise;
-  };
+  const { committed, publish } = holdResult("afterTouch");
   nowMs = 2_000;
   const touch = store.touchSessionAttachment(attachment, () => {});
   let cleanup: Promise<unknown> | undefined;
@@ -620,22 +613,7 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
     environmentId,
     from: "provisioning",
     to: "ready",
-    patch: {
-      leaseId: "lease-owner",
-      nodeDeviceId: "node-owner",
-      sharedHost: false,
-      bootstrapReceipt: {
-        bundleHash: "a".repeat(64),
-        openclawVersion: "test",
-        protocolFeatures: [],
-      },
-      credential: {
-        credentialHash: "b".repeat(43),
-        sessionId: null,
-        rpcSetVersion: 1,
-        expiresAtMs: 2_000,
-      },
-    },
+    patch: workerReadyPatch("lease-owner", "node-owner"),
   });
   const revoked: string[] = [];
   store.onCredentialRevoked((id) => revoked.push(id));
@@ -646,12 +624,7 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
     expectedOwnerEpoch: previous.ownerEpoch,
     patch: {
       attachedSessionIds: ["successor-session"],
-      credential: {
-        credentialHash: "c".repeat(43),
-        sessionId: "successor-session",
-        rpcSetVersion: 1,
-        expiresAtMs: 2_000,
-      },
+      credential: workerCredential("c".repeat(43), "successor-session"),
     },
   });
   const cleanup = store.revokeEnvironmentCredential(environmentId, {
