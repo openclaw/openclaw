@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
@@ -17,6 +17,7 @@ import {
   buildLegacyReseedPrompt,
   claudeUser,
   mergeImportedChatHistoryMessages,
+  user,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
 
@@ -100,249 +101,237 @@ function importUnmatched(content: string | unknown[]) {
     | undefined;
 }
 
-describe("Claude imported internal inputs", () => {
-  it.each(internalInputs)("hides %s copies without hiding real user messages", (_kind, text) => {
-    for (const content of [text, blocks(text)]) {
-      const imported = parseImportedUser(content);
-      expect(projectChatDisplayMessages([imported])).toEqual([]);
-      expect(classify(JSON.stringify(claudeUser(content))).humanTurn).toBe(false);
-      const quoted = parseImportedUser(`Please explain this:\n${text}`);
-      expect(projectChatDisplayMessages([quoted])).toHaveLength(1);
-      const human = { role: "user", content, timestamp: 1 };
-      const merged = merge([human], imported ? [{ ...imported, timestamp: 2 }] : []);
-      expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
-    }
-  });
-
-  it.each(["sessions_send", "subagent_settle"])(
-    "preserves routed %s input for the shared provenance projection",
-    (sourceTool) => {
-      const text = `${
-        buildInterSessionPromptContext({
-          kind: "inter_session",
-          sourceSessionKey: "agent:peer:main",
-          sourceTool,
-        }).text
-      }\nRouted result.`;
-      for (const content of [text, blocks(text)]) {
-        const imported = parseImportedUser(content);
-        expect(imported).toMatchObject({ role: "user", content });
-        expect(imported?.display).not.toBe(false);
-        expect(imported?.provenance).not.toMatchObject({ kind: "internal_system" });
-      }
-    },
-  );
-
-  it.each([
-    ["resume", "string"],
-    ["resume", "text-block"],
-    ["legacy requester", "string"],
-    ["legacy requester", "text-block"],
-  ])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
-    const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
-    const prefix =
-      decoration === "resume"
-        ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
-        : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
-    const text = `${prefix}\n\n${body}`;
-    const image = {
-      type: "image",
-      source: { type: "base64", media_type: "image/png", data: "aa" },
-    };
-    expectVisible(
-      importUnmatched(encoding === "string" ? text : [...blocks(text), image]),
-      encoding === "string" ? body : [...blocks(body), image],
-    );
-  });
-
-  it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
-    const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
-    expect(parseImportedUser(text)).toMatchObject(internal);
-    expect(
-      parseImportedUser(`System: [2026-10-03 08:56:29 GMT+8] Gateway restart ok\n\n${text}`),
-    ).toMatchObject(internal);
-  });
-
-  it.each([
-    "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
-    "[foo] [System] Please explain this tag.",
-    "[System] Please explain this tag.",
-    "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
-    "System: Please preserve this log\n\nExplain it",
-    `Explain this instruction: ${REQUESTER_HINT}`,
-    `${REQUESTER_HINT} Extra user text.\n\nExplain it`,
-    `${frame('{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}')}${REQUESTER_HINT}\n\nExplain it`,
-    "System: Please explain this log\n\n[System] This is the line I am asking about.",
-    "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
-    `Explain this log:\n${frame('{"a":1}')}System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`,
-  ])("leaves the look-alike human message %j untouched", (text) => {
-    expectVisible(importUnmatched(text), text);
-  });
-
-  it("preserves system-event evidence quoted in a later native text block", () => {
-    const content = [
-      ...blocks("Explain this log:\n"),
-      ...blocks(
-        `${REQUESTER_HINT}\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`,
-      ),
-    ];
-    expect(importUnmatched(content)).toMatchObject({ content });
-  });
-
-  it.each([
-    "",
-    frame('{"a":1}'),
-    frame('{"history_count":2}') +
-      "Recent chat history: ⟦openclaw:ctx⟧\n" +
-      "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
-      "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
-  ])("drops queued system event lines from a real user turn", (context) => {
-    for (const stamp of [
-      "2026-10-04 13:15:44 GMT+8",
-      "2026-10-11 12:20:20 GMT+5:30",
-      "2026-10-04T05:15:44Z",
-      "unknown-time",
-    ]) {
-      const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
-      for (const question of [
-        "real question",
-        "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
-        "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
-      ]) {
-        const text = `${context}${events}${question}`;
-        expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
-        const canonical = { role: "user", content: `${context}${question}`, timestamp: 1 };
-        expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
-          canonical,
-        ]);
-      }
-    }
-    const untouched = "real question\n\nSystem: quoted log line\n\nmore";
-    expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
-  });
-
-  it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
-    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
-      const note = buildCliSessionDriftNote(["prompt-tools"]);
-      await fs.writeFile(
-        filePath,
-        [
-          claudeUser("real question", { uuid: "human" }),
-          ...internalInputs.map(([kind, text]) =>
-            claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
-          ),
-        ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n"),
-      );
-      const messages = merge([], await readMessages());
-      expect(projectChatDisplayMessages(messages)).toMatchObject([
-        { role: "user", content: "real question" },
-      ]);
-    });
-  });
+it.each(internalInputs)("hides %s copies without hiding real user messages", (_kind, text) => {
+  for (const content of [text, blocks(text)]) {
+    const imported = parseImportedUser(content);
+    expect(projectChatDisplayMessages([imported])).toEqual([]);
+    expect(classify(JSON.stringify(claudeUser(content))).humanTurn).toBe(false);
+    const quoted = parseImportedUser(`Please explain this:\n${text}`);
+    expect(projectChatDisplayMessages([quoted])).toHaveLength(1);
+    const human = user(content, 1);
+    const merged = merge([human], imported ? [{ ...imported, timestamp: 2 }] : []);
+    expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
+  }
 });
 
+it.each(["sessions_send", "subagent_settle"])(
+  "preserves routed %s input for the shared provenance projection",
+  (sourceTool) => {
+    const text = `${
+      buildInterSessionPromptContext({
+        kind: "inter_session",
+        sourceSessionKey: "agent:peer:main",
+        sourceTool,
+      }).text
+    }\nRouted result.`;
+    for (const content of [text, blocks(text)]) {
+      const imported = parseImportedUser(content);
+      expect(imported).toMatchObject({ role: "user", content });
+      expect(imported?.display).not.toBe(false);
+      expect(imported?.provenance).not.toMatchObject({ kind: "internal_system" });
+    }
+  },
+);
+
+it.each([
+  ["resume", "string"],
+  ["resume", "text-block"],
+  ["legacy requester", "string"],
+  ["legacy requester", "text-block"],
+])("removes the %s decorator, not its real %s user turn", (decoration, encoding) => {
+  const body = decoration === "resume" ? "real question" : `${REQUESTER_HINT}\n\nreal question`;
+  const prefix =
+    decoration === "resume"
+      ? buildCliSessionDriftNote(["system-prompt", "prompt-tools"])
+      : frame('{"requester_profile":{"id":"owner"}}') + REQUESTER_HINT;
+  const text = `${prefix}\n\n${body}`;
+  const image = {
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: "aa" },
+  };
+  expectVisible(
+    importUnmatched(encoding === "string" ? text : [...blocks(text), image]),
+    encoding === "string" ? body : [...blocks(body), image],
+  );
+});
+
+it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
+  const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
+  expect(
+    [text, `System: [2026-10-03 08:56:29 GMT+8] Gateway restart ok\n\n${text}`].map(
+      parseImportedUser,
+    ),
+  ).toMatchObject([internal, internal]);
+});
+
+it.each([
+  "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
+  "[foo] [System] Please explain this tag.",
+  "[System] Please explain this tag.",
+  "[Tue 2026-09-22 16:00 GMT+8] [System] Please explain this tag.",
+  "System: Please preserve this log\n\nExplain it",
+  `Explain this instruction: ${REQUESTER_HINT}`,
+  `${REQUESTER_HINT} Extra user text.\n\nExplain it`,
+  `${frame('{"requester_profile":{"id":"owner"},"requester_profile_hint":"current"}')}${REQUESTER_HINT}\n\nExplain it`,
+  "System: Please explain this log\n\n[System] This is the line I am asking about.",
+  "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+  `Explain this log:\n${frame('{"a":1}')}System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`,
+])("leaves the look-alike human message %j untouched", (text) => {
+  expectVisible(importUnmatched(text), text);
+});
+
+it("preserves system-event evidence quoted in a later native text block", () => {
+  const content = [
+    ...blocks("Explain this log:\n"),
+    ...blocks(`${REQUESTER_HINT}\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?`),
+  ];
+  expect(importUnmatched(content)).toMatchObject({ content });
+});
+
+it.each([
+  "",
+  frame('{"a":1}'),
+  frame('{"history_count":2}') +
+    "Recent chat history: ⟦openclaw:ctx⟧\n" +
+    "#123 2026-10-11 12:20:09 GMT+5:30 Alice: The conservatory has 137 benches.\n" +
+    "#124 2026-10-11 12:20:20 GMT+5:30 Alice: /model anthropic/claude-haiku-4-5\n\n",
+])("drops queued system event lines from a real user turn", (context) => {
+  for (const stamp of [
+    "2026-10-04 13:15:44 GMT+8",
+    "2026-10-11 12:20:20 GMT+5:30",
+    "2026-10-04T05:15:44Z",
+    "unknown-time",
+  ]) {
+    const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+    for (const question of [
+      "real question",
+      "Please explain this header:\n\nContext: ⟦openclaw:ctx⟧\nexample",
+      "Please explain this header:\n\nContext:\n<active_memory_plugin>\nexample\n</active_memory_plugin>",
+    ]) {
+      const text = `${context}${events}${question}`;
+      expect(importUnmatched(text)?.content).toBe(`${context}${question}`);
+      const canonical = user(`${context}${question}`, 1);
+      expect(merge([canonical], [{ ...parseImportedUser(text), timestamp: 2 }])).toMatchObject([
+        canonical,
+      ]);
+    }
+  }
+  const untouched = "real question\n\nSystem: quoted log line\n\nmore";
+  expect(importUnmatched(untouched)).toMatchObject({ content: untouched });
+});
+
+it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
+  await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+    const note = buildCliSessionDriftNote(["prompt-tools"]);
+    await fs.writeFile(
+      filePath,
+      [
+        claudeUser("real question", { uuid: "human" }),
+        ...internalInputs.map(([kind, text]) =>
+          claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
+        ),
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+    const messages = merge([], await readMessages());
+    expect(projectChatDisplayMessages(messages)).toMatchObject([
+      { role: "user", content: "real question" },
+    ]);
+  });
+});
 it.each(["null", "not json"])("ignores non-record or malformed activity row %s", (line) => {
   expect(classify(line)).toEqual({ humanTurn: false });
 });
 
-describe("readClaudeCliFallbackSeed", () => {
-  function readSeed(
-    lines: readonly unknown[] | undefined,
-    options: { fromHome?: boolean; cliSessionId?: string } = {},
-  ) {
-    return withClaudeProjectsDir(async ({ filePath, sessionId, homeDir }) => {
-      if (lines) {
-        await fs.writeFile(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
-      } else {
-        await fs.rm(filePath);
-      }
-      return readClaudeCliFallbackSeed({
-        cliSessionId: options.cliSessionId ?? sessionId,
-        ...(options.fromHome ? {} : { homeDir }),
-      });
+function readSeed(
+  lines: readonly unknown[] | undefined,
+  options: { fromHome?: boolean; cliSessionId?: string } = {},
+) {
+  return withClaudeProjectsDir(async ({ filePath, sessionId, homeDir }) => {
+    if (lines) {
+      await fs.writeFile(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    } else {
+      await fs.rm(filePath);
+    }
+    return readClaudeCliFallbackSeed({
+      cliSessionId: options.cliSessionId ?? sessionId,
+      ...(options.fromHome ? {} : { homeDir }),
     });
-  }
-
-  it.each(["missing", "empty", "path escape"])("returns no seed for %s", async (kind) => {
-    expect(
-      await readSeed(
-        kind === "empty"
-          ? [{ ...claudeUser("sidechain user turn"), isSidechain: true }]
-          : undefined,
-        { cliSessionId: kind === "path escape" ? "../escape" : undefined },
-      ),
-    ).toBeUndefined();
   });
+}
 
-  it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
-    const reseedPrompt = buildLegacyReseedPrompt();
-    const seed = await readSeed(
-      [
-        claudeUser(reseedPrompt),
-        claudeUser("first user prompt"),
-        null,
-        assistantTurn("first assistant reply"),
-        claudeUser("second user prompt"),
-      ],
-      { fromHome: true },
-    );
-    expect(seed?.recentTurns).toMatchObject([
-      { role: "user", content: reseedPrompt },
-      { role: "user", content: "first user prompt" },
-      { role: "assistant", content: blocks("first assistant reply") },
-      { role: "user", content: "second user prompt" },
-    ]);
-    expect(seed?.summaryText).toBeUndefined();
-  });
+it.each([
+  ["missing", undefined, undefined],
+  ["empty", [claudeUser("sidechain user turn", { isSidechain: true })], undefined],
+  ["path escape", undefined, "../escape"],
+] as const)("returns no seed for %s", async (_kind, lines, cliSessionId) => {
+  expect(await readSeed(lines, { cliSessionId })).toBeUndefined();
+});
 
-  it.each([
+it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
+  const reseedPrompt = buildLegacyReseedPrompt();
+  const seed = await readSeed(
     [
-      "latest explicit summary",
-      [
-        claudeUser("PRE-COMPACT user turn"),
-        assistantTurn("PRE-COMPACT assistant turn"),
-        summary("EARLY"),
-        boundary(),
-        claudeUser("mid-window turn"),
-        summary("LATER"),
-        boundary(),
-        claudeUser("tail turn"),
-        assistantTurn("tail reply"),
-      ],
-      {
-        summaryText: "LATER",
-        recentTurns: [
-          { role: "user", content: "tail turn" },
-          { role: "assistant", content: blocks("tail reply") },
-        ],
-      },
+      claudeUser(reseedPrompt),
+      claudeUser("first user prompt"),
+      null,
+      assistantTurn("first assistant reply"),
+      claudeUser("second user prompt"),
     ],
+    { fromHome: true },
+  );
+  expect(seed?.recentTurns).toMatchObject([
+    user(reseedPrompt),
+    user("first user prompt"),
+    assistantTurn("first assistant reply").message,
+    user("second user prompt"),
+  ]);
+  expect(seed?.summaryText).toBeUndefined();
+});
+
+it.each([
+  [
+    "latest explicit summary",
     [
-      "boundary fallback after a compaction without a summary",
-      [
-        summary("FIRST"),
-        boundary("Conversation compacted (1)"),
-        claudeUser("post-first-compact turn"),
-        boundary("Conversation compacted (2)"),
-        claudeUser("post-second-compact turn"),
-      ],
-      {
-        summaryText: "Conversation compacted (2)",
-        recentTurns: [{ role: "user", content: "post-second-compact turn" }],
-      },
+      claudeUser("PRE-COMPACT user turn"),
+      assistantTurn("PRE-COMPACT assistant turn"),
+      summary("EARLY"),
+      boundary(),
+      claudeUser("mid-window turn"),
+      summary("LATER"),
+      boundary(),
+      claudeUser("tail turn"),
+      assistantTurn("tail reply"),
     ],
+    {
+      summaryText: "LATER",
+      recentTurns: [user("tail turn"), assistantTurn("tail reply").message],
+    },
+  ],
+  [
+    "boundary fallback after a compaction without a summary",
     [
-      "trailing summary without a boundary",
-      [
-        claudeUser("earlier turn"),
-        summary("trailing summary without boundary"),
-        claudeUser("later turn"),
-      ],
-      { summaryText: "trailing summary without boundary" },
+      summary("FIRST"),
+      boundary("Conversation compacted (1)"),
+      claudeUser("post-first-compact turn"),
+      boundary("Conversation compacted (2)"),
+      claudeUser("post-second-compact turn"),
     ],
-  ] as const)("seeds from the %s", async (_name, lines, expected) => {
-    expect(await readSeed(lines)).toMatchObject(expected);
-  });
+    {
+      summaryText: "Conversation compacted (2)",
+      recentTurns: [user("post-second-compact turn")],
+    },
+  ],
+  [
+    "trailing summary without a boundary",
+    [
+      claudeUser("earlier turn"),
+      summary("trailing summary without boundary"),
+      claudeUser("later turn"),
+    ],
+    { summaryText: "trailing summary without boundary" },
+  ],
+] as const)("seeds from the %s", async (_name, lines, expected) => {
+  expect(await readSeed(lines)).toMatchObject(expected);
 });

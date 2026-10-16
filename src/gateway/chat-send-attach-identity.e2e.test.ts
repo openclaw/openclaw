@@ -7,11 +7,11 @@ import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
-import type { AuditEventWriter } from "../audit/audit-event-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 async function startProvider(requests: string[], finalText: string) {
@@ -39,15 +39,9 @@ it(
       {
         label: "chat-send-attach-identity",
         env: {
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          ...KERNEL_TEST_ENV,
+          VITEST: process.env.VITEST,
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
       },
@@ -56,18 +50,11 @@ it(
         state.applyEnv();
         const requests: string[] = [];
         const finalText = "attach-identity-provider-proof";
+        const clientIdentity = { id: "openclaw-control-ui", mode: "webchat" } as const;
         let providerServer: Awaited<ReturnType<typeof startProvider>> | undefined;
         let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
         const audit = await import("../audit/audit-event-writer.js");
-        const createAuditWriter = audit.createAuditEventWriter;
-        const writers: AuditEventWriter[] = [];
-        const auditFactory = vi
-          .spyOn(audit, "createAuditEventWriter")
-          .mockImplementation((options) => {
-            const writer = createAuditWriter(options);
-            writers.push(writer);
-            return writer;
-          });
+        const auditFactory = vi.spyOn(audit, "createAuditEventWriter");
         await runQaGatewayFixture(
           async () => {
             providerServer = await startProvider(requests, finalText);
@@ -100,8 +87,8 @@ it(
               cfg,
               configPath: state.configPath,
               token,
-              clientName: "openclaw-control-ui",
-              mode: "webchat",
+              clientName: clientIdentity.id,
+              mode: clientIdentity.mode,
               origin: "http://localhost",
               scopes: ["operator.admin", "operator.read", "operator.write"],
             });
@@ -110,7 +97,6 @@ it(
             expect(self.profile.id).toBe("gateway-owner");
             const created = await client.request<{ key: string }>("sessions.create", {
               agentId: "main",
-              label: "Attach identity proof",
             });
             const runId = randomUUID();
             const params = {
@@ -143,9 +129,7 @@ it(
                 __openclaw: {
                   idempotencyKey: `${runId}:user`,
                   senderIdentity: { type: "profile", id: self.profile.id },
-                  transport: {
-                    clients: [{ id: "openclaw-control-ui", mode: "webchat" }],
-                  },
+                  transport: { clients: [clientIdentity] },
                 },
               },
               {
@@ -157,6 +141,9 @@ it(
             expect(await client.request("chat.send", params)).toMatchObject({ runId });
             expect((await readHistory()).messages).toEqual(history.messages);
             expect(requests).toHaveLength(1);
+            const writers = auditFactory.mock.results.flatMap((result) =>
+              result.type === "return" ? [result.value] : [],
+            );
             expect(writers).toHaveLength(1);
             // Turn completion does not drain diagnostic persistence. Keep the real
             // writer live through replay, then join its FIFO before inspecting it.

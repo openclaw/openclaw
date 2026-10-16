@@ -1,7 +1,6 @@
 import path from "node:path";
-import { constants } from "node:sqlite";
 import { expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   appendTranscriptMessage,
@@ -11,8 +10,6 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   prepareForwardedMessageCronJobNameResolver,
@@ -21,7 +18,7 @@ import {
 import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
-  readSessionHistorySnapshotAsync,
+  readSessionHistorySnapshotAsync as readSnapshot,
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
@@ -35,16 +32,7 @@ async function appendInline(
 
 it("batches automation names across history reads after rename and deletion without a source session", () =>
   withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
-    const jobCount = 32;
     await captureRuntimeConfigAsyncReader()();
-    const job = makeCronJob({
-      id: "daily-report",
-      name: "Daily report",
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      payload: { kind: "agentTurn", message: "Check the queue." },
-    });
-    const storePath = resolveCronJobsStorePath();
     const bindingIds = [
       "daily-report",
       "report-\ufffd",
@@ -53,10 +41,11 @@ it("batches automation names across history reads after rename and deletion with
       "DAILY-report",
       "report-é",
     ];
-    const jobs = Array.from({ length: jobCount }, (_, index) =>
-      index === 0
-        ? job
-        : { ...job, id: bindingIds[index] ?? `report-${index}`, name: `Report ${index}` },
+    const jobs = Array.from({ length: 32 }, (_, index) =>
+      makeCronJob({
+        id: bindingIds[index] ?? `report-${index}`,
+        name: index === 0 ? "Daily report" : `Report ${index}`,
+      }),
     );
     const entry = { sessionId: "destination", updatedAt: 1 };
     const scope = {
@@ -104,28 +93,26 @@ it("batches automation names across history reads after rename and deletion with
       maxHistoryBytes: 1_000_000,
       effectiveMaxChars: 100_000,
     };
-    const database = openOpenClawStateDatabase({ env: state.env });
-    const db = requireNativeSqliteDatabase(database.db);
     // Host-boundary counts exclude the history worker's independent connection.
-    const measure = async <T>(read: () => T | Promise<T>): Promise<T> => {
-      const counter = trackSqliteStatementExecutions(db, ["names"], (sql) =>
-        /\bfrom\s+"?cron_jobs"?\b/iu.test(sql) ? "names" : null,
-      );
+    const measure = async <T>(
+      read: () => T | Promise<T>,
+      forbidden = /\bfrom\s+"?cron_jobs"?\b/iu,
+    ): Promise<T> => {
+      const sql = observeHostDataSql();
       try {
         const result = await read();
-        expect(counter.counts.names).toBe(0);
+        expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
         return result;
       } finally {
-        counter.restore();
+        sql.restore();
       }
     };
     expect((await measure(() => readChatHistoryPage(pageParams))).messages).toEqual([]);
-    const emptySnapshot = await measure(() => readSessionHistorySnapshotAsync(snapshotOptions));
+    const emptySnapshot = await measure(() => readSnapshot(snapshotOptions));
     expect(emptySnapshot.history.messages).toEqual([]);
-    const emptySse = SessionHistorySseState.fromSnapshot({
-      target,
-      snapshot: emptySnapshot,
-    });
+    const fromSnapshot = (snapshot: typeof emptySnapshot, maxChars?: number) =>
+      SessionHistorySseState.fromSnapshot({ target, snapshot, maxChars });
+    const emptySse = fromSnapshot(emptySnapshot);
     const ordinaryMessage = { role: "user", content: "An ordinary message." };
     const emptyAppend = await measure(() => appendInline(emptySse, ordinaryMessage));
     expect(emptyAppend?.message).toMatchObject(ordinaryMessage);
@@ -139,15 +126,14 @@ it("batches automation names across history reads after rename and deletion with
     });
     let sse: SessionHistorySseState | undefined;
     for (const name of ["Daily report", "Renamed report", undefined]) {
-      await saveCronJobsStore(storePath, {
+      await saveCronJobsStore(resolveCronJobsStorePath(), {
         version: 1,
         jobs: name
-          ? jobs.map((current, index) =>
-              Object.assign({}, current, {
-                name: index === 0 ? name : `${name} ${index}`,
-                updatedAtMs: 3,
-              }),
-            )
+          ? jobs.map((current, index) => ({
+              ...current,
+              name: index === 0 ? name : `${name} ${index}`,
+              updatedAtMs: 3,
+            }))
           : [],
       });
       const expected = messages.map((current, index) => ({
@@ -156,7 +142,7 @@ it("batches automation names across history reads after rename and deletion with
         senderSession: {
           sessionKey: current.provenance.sourceSessionKey,
           agentId: "main",
-          label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
+          label: name ? (index % jobs.length === 0 ? name : `${name} ${index}`) : "Automation",
         },
       }));
       for (const messageId of [undefined, "forwarded-result"]) {
@@ -169,31 +155,20 @@ it("batches automation names across history reads after rename and deletion with
         );
       }
       for (const limit of [messages.length + 10, undefined]) {
-        const snapshot = await measure(() =>
-          readSessionHistorySnapshotAsync({ ...snapshotOptions, limit }),
-        );
+        const snapshot = await measure(() => readSnapshot({ ...snapshotOptions, limit }));
         expect(snapshot.history.messages).toMatchObject(expected);
         if (limit === undefined) {
-          const currentSse = (sse ??= SessionHistorySseState.fromSnapshot({
-            ...snapshotOptions,
-            snapshot,
-          }));
-          const appended = await measure(() =>
-            appendInline(
-              currentSse,
-              name === "Renamed report"
-                ? { role: "assistant", content: "NO_REPLY" }
-                : { role: "user", content: `Next message after ${name}.` },
-            ),
-          );
+          const currentSse = (sse ??= fromSnapshot(snapshot, snapshotOptions.maxChars));
+          const nextMessage =
+            name === "Renamed report"
+              ? { role: "assistant", content: "NO_REPLY" }
+              : { role: "user", content: `Next message after ${name}.` };
+          const appended = await measure(() => appendInline(currentSse, nextMessage));
           expect(currentSse.snapshot().messages.slice(0, messages.length)).toMatchObject(expected);
           if (name !== "Daily report") {
             expect(appended).toEqual({ shouldRefresh: true });
           } else {
-            expect(appended?.message).toMatchObject({
-              role: "user",
-              content: `Next message after ${name}.`,
-            });
+            expect(appended?.message).toMatchObject(nextMessage);
           }
         }
       }
@@ -206,24 +181,12 @@ it("batches automation names across history reads after rename and deletion with
       );
       expect(projected.payload?.message).toMatchObject(expected[0]!);
     }
-    let deniedNameReads = 0;
-    db.setAuthorizer((action, table, column) => {
-      if (action === constants.SQLITE_READ && table === "cron_jobs" && column === "name") {
-        deniedNameReads++;
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
-    });
-    try {
+    await measure(() => {
       expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
         /prepared/iu,
       );
-      expect(deniedNameReads).toBe(0);
-      db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];
       expect(projectForwardedMessages(ordinary)).toBe(ordinary);
-    } finally {
-      db.setAuthorizer(null);
-    }
+    }, /./su);
   }));

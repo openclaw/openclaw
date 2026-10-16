@@ -22,7 +22,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
-import { withClaudeProjectsDir } from "./cli-session-history.test-support.js";
+import { cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
@@ -78,7 +78,7 @@ function withPagingHistory<T>(
   );
 }
 
-function native(uuid: string, content: string, timestamp: number, role = "assistant") {
+function native(uuid: string, content = uuid, timestamp = 0, role = "assistant") {
   return JSON.stringify({
     type: role,
     uuid,
@@ -135,212 +135,182 @@ async function withCliReader<T>(
 }
 
 function readNativePage(params: ReturnType<typeof historyParams>, readers: CliHistoryReaders) {
-  return withCliReader(params, readers, (cli) =>
-    readChatHistoryPageKernel(params, {
-      readers: cli.readers,
-      readMessageSequence: cli.sequence,
-      deferProfileDisplay: true,
-    }),
-  );
+  return withCliReader(params, readers, (cli) => readPreparedPage(params, cli));
+}
+
+function readPreparedPage(
+  params: ReturnType<typeof historyParams>,
+  cli: NonNullable<Awaited<ReturnType<typeof prepareCliSessionHistoryReader>>>,
+) {
+  return readChatHistoryPageKernel(params, {
+    readers: cli.readers,
+    readMessageSequence: cli.sequence,
+    deferProfileDisplay: true,
+  });
 }
 
 it("serves a captured history prefix while both transcripts append and observes the next revision", async () => {
-  await withPagingHistory(
-    "cli-prefix",
-    async ({ scope, entry, setEvents, homeDir, filePath, target, owner, readers: base }) => {
-      await setEvents(
-        Array.from({ length: 70 }, (_, index) =>
-          local(
-            `local-${index + 1}`,
-            index ? `local-${index}` : null,
-            `Local ${index + 1}`,
-            index + 1,
-          ),
-        ),
-      );
-      await fs.writeFile(filePath, native("external-prefix", "external-prefix", 0));
-      const nativePath = await fs.realpath(filePath);
-      const createReadStream = rawFs.createReadStream;
-      let nativeAppended = false;
-      const stream = vi.spyOn(rawFs, "createReadStream").mockImplementation((file, options) => {
-        if (file === nativePath && !nativeAppended) {
-          nativeAppended = true;
-          rawFs.appendFileSync(
-            filePath,
-            `\n${native("external-appended", "external-appended", 1000)}`,
-          );
-        }
-        return createReadStream(file, options);
-      });
-      let localAppended = false;
-      const readers = {
-        ...base,
-        async readSessionMessagesPageWithStatsAsync(
-          ...args: Parameters<typeof base.readSessionMessagesPageWithStatsAsync>
-        ) {
-          const page = await base.readSessionMessagesPageWithStatsAsync(...args);
-          if (!localAppended && args[1].captureReadWindow) {
-            localAppended = true;
-            await appendTranscriptMessage(scope, {
-              eventId: "local-appended",
-              message: { role: "assistant", content: "Local appended", timestamp: 1001 },
-            });
-          }
-          return page;
-        },
-      };
-      const params = historyParams({ scope, entry }, homeDir, 4);
-      const read = () => owner.run(target.database, () => readNativePage(params, readers));
-      try {
-        const first = await read();
-        expect(first.messages.map(readChatHistoryMessageId)).toEqual([
-          "local-67",
-          "local-68",
-          "local-69",
-          "local-70",
-        ]);
-        expect(first.activeLeafEntryId).toBe("local-70");
-        const next = await read();
-        expect(next.messages.map(readChatHistoryMessageId)).toEqual([
-          "local-69",
-          "local-70",
-          "external-appended",
-          "local-appended",
-        ]);
-        expect(next.activeLeafEntryId).toBe("local-appended");
-      } finally {
-        stream.mockRestore();
+  await withPagingHistory("cli-prefix", async (fixture) => {
+    const { scope, entry, readers: base, filePath } = fixture;
+    await fixture.setEvents(
+      Array.from({ length: 70 }, (_, index) =>
+        local(`local-${index + 1}`, index ? `local-${index}` : null, "Local", index + 1),
+      ),
+    );
+    await fs.writeFile(filePath, native("external-prefix"));
+    const nativePath = await fs.realpath(filePath);
+    const createReadStream = rawFs.createReadStream;
+    let nativeAppended = false;
+    const stream = vi.spyOn(rawFs, "createReadStream").mockImplementation((file, options) => {
+      if (file === nativePath && !nativeAppended) {
+        nativeAppended = true;
+        rawFs.appendFileSync(filePath, `\n${native("external-appended", undefined, 1000)}`);
       }
-    },
-  );
+      return createReadStream(file, options);
+    });
+    let localAppended = false;
+    const readers = {
+      ...base,
+      async readSessionMessagesPageWithStatsAsync(
+        ...args: Parameters<typeof base.readSessionMessagesPageWithStatsAsync>
+      ) {
+        const page = await base.readSessionMessagesPageWithStatsAsync(...args);
+        if (!localAppended && args[1].captureReadWindow) {
+          localAppended = true;
+          await appendTranscriptMessage(scope, {
+            eventId: "local-appended",
+            message: { role: "assistant", content: "Local appended", timestamp: 1001 },
+          });
+        }
+        return page;
+      },
+    };
+    const params = historyParams({ scope, entry }, fixture.homeDir, 4);
+    const read = () =>
+      fixture.owner.run(fixture.target.database, () => readNativePage(params, readers));
+    try {
+      const first = await read();
+      expect(first.messages.map(readChatHistoryMessageId)).toEqual([
+        "local-67",
+        "local-68",
+        "local-69",
+        "local-70",
+      ]);
+      expect(first.activeLeafEntryId).toBe("local-70");
+      const next = await read();
+      expect(next.messages.map(readChatHistoryMessageId)).toEqual([
+        "local-69",
+        "local-70",
+        "external-appended",
+        "local-appended",
+      ]);
+      expect(next.activeLeafEntryId).toBe("local-appended");
+    } finally {
+      stream.mockRestore();
+    }
+  });
 });
 
 it("applies native history eligibility to actual empty, message, and marker-only source pages", async () => {
-  await withPagingHistory(
-    "cli-eligibility",
-    async ({ scope, entry, setEvents, homeDir, nativeId, target, owner, readers }) => {
-      const message = local("local", null, "Local answer");
-      const marker = {
-        type: "compaction",
-        id: "compact",
-        parentId: null,
-        summary: "Compacted",
-        tokensBefore: 100,
-        firstKeptEntryId: null,
-      };
-      for (const cell of [
-        { provider: "claude-cli", events: [message], imported: true },
-        { provider: "anthropic", events: [message], imported: true },
-        { provider: "openai", events: [message], imported: false },
-        { provider: "openai", events: [marker], imported: false },
-        { provider: "openai", events: [], imported: true },
-      ]) {
-        await setEvents(cell.events);
-        await owner.run(target.database, async () => {
-          const cli = await prepareCliSessionHistoryReader(
-            {
-              ...historyParams({ scope, entry }, homeDir),
-              provider: cell.provider,
-            },
-            readers,
-          );
-          try {
-            expect(
-              Boolean(cli),
-              `${cell.provider} with ${cell.events[0]?.type ?? "empty"} history`,
-            ).toBe(cell.imported);
-            if (cli) {
-              const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
-                maxMessages: 10,
-              });
-              expect(page.messages).toContainEqual(
-                expect.objectContaining({
-                  __openclaw: expect.objectContaining({ cliSessionId: nativeId }),
-                }),
-              );
-            }
-          } finally {
-            cli?.dispose();
+  await withPagingHistory("cli-eligibility", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    const message = local("local", null, "Local answer");
+    const marker = {
+      type: "compaction",
+      id: "compact",
+      parentId: null,
+      summary: "Compacted",
+      tokensBefore: 100,
+      firstKeptEntryId: null,
+    };
+    for (const cell of [
+      { provider: "claude-cli", events: [message], imported: true },
+      { provider: "anthropic", events: [message], imported: true },
+      { provider: "openai", events: [message], imported: false },
+      { provider: "openai", events: [marker], imported: false },
+      { provider: "openai", events: [], imported: true },
+    ]) {
+      await fixture.setEvents(cell.events);
+      await fixture.owner.run(fixture.target.database, async () => {
+        const cli = await prepareCliSessionHistoryReader(
+          {
+            ...historyParams({ scope, entry }, fixture.homeDir),
+            provider: cell.provider,
+          },
+          readers,
+        );
+        try {
+          expect(
+            Boolean(cli),
+            `${cell.provider} with ${cell.events[0]?.type ?? "empty"} history`,
+          ).toBe(cell.imported);
+          if (cli) {
+            const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+              maxMessages: 10,
+            });
+            expect(page.messages).toContainEqual(
+              expect.objectContaining({
+                __openclaw: expect.objectContaining({ cliSessionId: fixture.nativeId }),
+              }),
+            );
           }
-        });
-      }
-    },
-  );
+        } finally {
+          cli?.dispose();
+        }
+      });
+    }
+  });
 });
 
 it("observes newly available reset archives and refuses changed archive bodies under older identities", async () => {
-  await withPagingHistory(
-    "cli-archive",
-    async ({
-      scope,
-      entry,
-      header,
-      setEvents,
-      state,
-      homeDir,
-      filePath,
-      target,
-      owner,
-      readers,
-    }) => {
-      await setEvents([]);
-      await fs.writeFile(filePath, native("native-only", "Native body", 1));
-      const params = historyParams({ scope, entry }, homeDir);
-      const read = () => readNativePage(params, readers);
-      const archive = (id: string, content: string) =>
-        [header, local(id, null, content, 0)].map((event) => JSON.stringify(event)).join("\n") +
-        "\n";
-      await owner.run(target.database, async () => {
-        const revision = readers.readHistoryRevision();
-        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual(["native-only"]);
-        const legacyPath = path.join(state.sessionsDir(), `${scope.sessionId}.jsonl`);
-        await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-        await fs.writeFile(legacyPath, archive("retained", "Retained body"));
-        const archived = archiveSessionTranscriptPaths({
-          paths: [legacyPath],
-          reason: "reset",
-        })[0];
-        if (!archived) {
-          throw new Error("Expected reset archive fixture");
-        }
-        expect(readers.readHistoryRevision()).toMatchObject({
-          generation: revision.generation,
-          indexedSeq: revision.indexedSeq,
-        });
-        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
-          "retained",
-          "native-only",
-        ]);
-
-        await withCliReader(params, readers, async (cli) => {
-          const replacement = `${archived.archivedPath}.replacement`;
-          await fs.writeFile(replacement, archive("replacement", "Replacement body"));
-          await fs.rename(replacement, archived.archivedPath);
-          await expect(
-            readChatHistoryPageKernel(params, {
-              readers: cli.readers,
-              readMessageSequence: cli.sequence,
-              deferProfileDisplay: true,
-            }),
-          ).rejects.toMatchObject({
-            name: "SessionTranscriptProjectionUnavailableError",
-            reason: "window-changed",
-          });
-        });
-        const refreshed = await read();
-        expect(refreshed.messages.map(readChatHistoryMessageId)).toEqual([
-          "replacement",
-          "native-only",
-        ]);
-        expect(refreshed.messages).toContainEqual(
-          expect.objectContaining({
-            content: "Replacement body",
-            __openclaw: expect.objectContaining({ id: "replacement" }),
-          }),
-        );
+  await withPagingHistory("cli-archive", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    await fixture.setEvents([]);
+    await fs.writeFile(fixture.filePath, native("native-only", "Native body", 1));
+    const params = historyParams({ scope, entry }, fixture.homeDir);
+    const read = () => readNativePage(params, readers);
+    const archive = (id: string, content: string) =>
+      [fixture.header, local(id, null, content, 0)]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n";
+    await fixture.owner.run(fixture.target.database, async () => {
+      const revision = readers.readHistoryRevision();
+      expect((await read()).messages.map(readChatHistoryMessageId)).toEqual(["native-only"]);
+      const legacyPath = path.join(fixture.state.sessionsDir(), `${scope.sessionId}.jsonl`);
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, archive("retained", "Retained body"));
+      const archived = archiveSessionTranscriptPaths({
+        paths: [legacyPath],
+        reason: "reset",
+      })[0];
+      if (!archived) {
+        throw new Error("Expected reset archive fixture");
+      }
+      expect(readers.readHistoryRevision()).toMatchObject({
+        generation: revision.generation,
+        indexedSeq: revision.indexedSeq,
       });
-    },
-  );
+      expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "retained",
+        "native-only",
+      ]);
+
+      await withCliReader(params, readers, async (cli) => {
+        const replacement = `${archived.archivedPath}.replacement`;
+        await fs.writeFile(replacement, archive("replacement", "Replacement body"));
+        await fs.rename(replacement, archived.archivedPath);
+        await expect(readPreparedPage(params, cli)).rejects.toMatchObject({
+          name: "SessionTranscriptProjectionUnavailableError",
+          reason: "window-changed",
+        });
+      });
+      const refreshed = await read();
+      expect(refreshed.messages).toMatchObject([
+        { content: "Replacement body", __openclaw: { id: "replacement" } },
+        { __openclaw: { id: "native-only" } },
+      ]);
+    });
+  });
 });
 
 it.each([
@@ -352,60 +322,61 @@ it.each([
   "legacy context CRLF",
 ])("matches original native text and cleans unmatched imports with %s", async (decoration) => {
   const kind = decoration.replace(" CRLF", "");
-  await withPagingHistory(
-    "cli-generated-prefixes",
-    async ({ scope, entry, setEvents, homeDir, filePath, target, owner, readers }) => {
-      const note = buildCliSessionDriftNote(["prompt-tools"]);
-      const hint =
-        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
-      const context =
-        'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
-      const prefix = (
-        kind === "resume"
-          ? `${note}\n\n`
-          : kind === "legacy hint"
-            ? hint
-            : kind === "legacy context"
-              ? context + hint
-              : `${note}\n\n${context}${hint}`
-      ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
-      const literal = `${prefix}hello`;
-      const plain =
-        kind === "legacy context"
-          ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
-          : "hello";
-      const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
-      await setEvents([
-        local("plain", null, plain, 1_000, "user"),
-        local("literal", "plain", literal, 2_000, "user"),
-        local("question", "literal", "real question", 3_000, "user"),
-      ]);
-      const nativeUser = (uuid: string, content: string, timestamp: number) =>
-        native(uuid, content, timestamp, "user");
-      await fs.writeFile(
-        filePath,
-        [
-          nativeUser("native-literal", literal, 1_001),
-          nativeUser(
-            "native-plain",
-            kind === "legacy context" ? `${prefix}${events}hello` : "hello",
-            2_001,
-          ),
-          nativeUser("native-question", `${prefix}${events}real question`, 3_001),
-          nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-          nativeUser(
-            "native-exec",
-            `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
-            5_000,
-          ),
-        ].join("\n"),
-      );
-      await owner.run(target.database, async () => {
-        await withCliReader(historyParams({ scope, entry }, homeDir), readers, async (cli) => {
+  await withPagingHistory("cli-generated-prefixes", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    const note = buildCliSessionDriftNote(["prompt-tools"]);
+    const hint =
+      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
+    const context =
+      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
+    const prefix = (
+      kind === "resume"
+        ? `${note}\n\n`
+        : kind === "legacy hint"
+          ? hint
+          : kind === "legacy context"
+            ? context + hint
+            : `${note}\n\n${context}${hint}`
+    ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
+    const literal = `${prefix}hello`;
+    const plain =
+      kind === "legacy context"
+        ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
+        : "hello";
+    const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
+    await fixture.setEvents([
+      local("plain", null, plain, 1_000, "user"),
+      local("literal", "plain", literal, 2_000, "user"),
+      local("question", "literal", "real question", 3_000, "user"),
+    ]);
+    const nativeUser = (uuid: string, content: string, timestamp: number) =>
+      native(uuid, content, timestamp, "user");
+    await fs.writeFile(
+      fixture.filePath,
+      [
+        nativeUser("native-literal", literal, 1_001),
+        nativeUser(
+          "native-plain",
+          kind === "legacy context" ? `${prefix}${events}hello` : "hello",
+          2_001,
+        ),
+        nativeUser("native-question", `${prefix}${events}real question`, 3_001),
+        nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
+        nativeUser(
+          "native-exec",
+          `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
+          5_000,
+        ),
+      ].join("\n"),
+    );
+    await fixture.owner.run(fixture.target.database, async () => {
+      await withCliReader(
+        historyParams({ scope, entry }, fixture.homeDir),
+        readers,
+        async (cli) => {
           const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
             maxMessages: 10,
           });
-          // Three canonical rows absorb their native copies; the literal note stays literal.
           expect(page.messages).toMatchObject([
             { content: plain, __openclaw: { id: "plain", externalId: "native-plain" } },
             { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
@@ -416,11 +387,10 @@ it.each([
             },
             { display: false, provenance: { kind: "internal_system", sourceTool: "exec" } },
           ]);
-          expect(page.messages).toHaveLength(5);
-        });
-      });
-    },
-  );
+        },
+      );
+    });
+  });
 });
 
 it("pages merged incognito CLI history without allocating SQLite", async () => {
@@ -432,45 +402,29 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
       storePath: path.join(homeDir, "sessions.json"),
     };
     const media = [{ kind: "image", contentType: "image/png", path: "/media/inbound/test.png" }];
-    const memoryMessage = (
-      id: string,
-      seq: number,
-      content: string,
-      metadata = {},
-      role = "user",
-    ) => ({
+    const nativePhoto = `Photo\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("photo"))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`;
+    const turns = [
+      ["first", "native-first", "user", "repeat", "repeat"],
+      ["edited", "known", "assistant", "locally edited", "original answer"],
+      ["second", "native-second", "user", "repeat", "repeat"],
+      ["photo", "native-photo", "user", "Photo", nativePhoto],
+    ] as const;
+    const memoryMessages = turns.map(([id, externalId, role, content], index) => ({
       role,
       content,
-      timestamp: seq * 1000,
-      __openclaw: { id, seq, ...metadata },
-    });
-    const memoryMessages = [
-      memoryMessage("first", 1, "repeat"),
-      memoryMessage(
-        "edited",
-        2,
-        "locally edited",
-        {
-          importedFrom: "claude-cli",
-          externalId: "known",
-          cliSessionId: nativeId,
-        },
-        "assistant",
-      ),
-      memoryMessage("second", 3, "repeat"),
-      memoryMessage("photo", 4, "Photo", { media }),
-    ];
+      timestamp: (index + 1) * 1000,
+      __openclaw: {
+        id,
+        seq: index + 1,
+        ...(id === "edited" ? cliMeta(externalId, nativeId) : {}),
+        ...(id === "photo" ? { media } : {}),
+      },
+    }));
     await fs.writeFile(
       filePath,
       [
-        native("native-first", "repeat", 1001, "user"),
-        native("known", "original answer", 2001),
-        native("native-second", "repeat", 3001, "user"),
-        native(
-          "native-photo",
-          `Photo\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId("photo"))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
-          4001,
-          "user",
+        ...turns.map(([, externalId, role, , content], index) =>
+          native(externalId, content, (index + 1) * 1000 + 1, role),
         ),
         native("native-only", "Native only", 5000),
       ].join("\n"),
@@ -497,7 +451,6 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
       throw new Error("Incognito history must not allocate SQLite");
     });
-    let cli: Awaited<ReturnType<typeof prepareCliSessionHistoryReader>> = undefined;
     const entry = {
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -505,40 +458,32 @@ it("pages merged incognito CLI history without allocating SQLite", async () => {
       cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
     };
     try {
-      cli = await prepareCliSessionHistoryReader(
-        historyParams({ scope, entry }, homeDir, 3),
-        readers,
-      );
-      expect(cli).toBeDefined();
-      const latest = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
-        offset: 0,
-        maxMessages: 3,
-      });
-      expect(latest.totalMessages).toBe(5);
-      expect(latest.messages).toMatchObject([
-        { content: "repeat", __openclaw: { id: "second", externalId: "native-second" } },
-        {
-          content: "Photo",
-          __openclaw: {
-            id: "photo",
-            externalId: "native-photo",
-            media,
+      await withCliReader(historyParams({ scope, entry }, homeDir, 3), readers, async (cli) => {
+        const read = (offset: number) =>
+          cli.readers.readSessionMessagesPageWithStatsAsync(scope, { offset, maxMessages: 3 });
+        const latest = await read(0);
+        expect(latest.totalMessages).toBe(5);
+        expect(latest.messages).toMatchObject([
+          { content: "repeat", __openclaw: { id: "second", externalId: "native-second" } },
+          {
+            content: "Photo",
+            __openclaw: {
+              id: "photo",
+              externalId: "native-photo",
+              media,
+            },
           },
-        },
-        { content: "Native only", __openclaw: { id: "native-only" } },
-      ]);
-      const older = await cli!.readers.readSessionMessagesPageWithStatsAsync(scope, {
-        offset: 3,
-        maxMessages: 3,
+          { content: "Native only", __openclaw: { id: "native-only" } },
+        ]);
+        const older = await read(3);
+        expect(older.messages).toMatchObject([
+          { content: "repeat", __openclaw: { id: "first", externalId: "native-first" } },
+          { content: "locally edited", __openclaw: { id: "edited", externalId: "known" } },
+        ]);
+        expect([...older.messages, ...latest.messages].map(cli.sequence)).toEqual([1, 2, 3, 4, 5]);
+        expect(open).not.toHaveBeenCalled();
       });
-      expect(older.messages).toMatchObject([
-        { content: "repeat", __openclaw: { id: "first", externalId: "native-first" } },
-        { content: "locally edited", __openclaw: { id: "edited", externalId: "known" } },
-      ]);
-      expect([...older.messages, ...latest.messages].map(cli!.sequence)).toEqual([1, 2, 3, 4, 5]);
-      expect(open).not.toHaveBeenCalled();
     } finally {
-      cli?.dispose();
       open.mockRestore();
     }
   });
