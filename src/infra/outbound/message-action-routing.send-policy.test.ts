@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -16,43 +17,37 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: ttsMocks.maybeApplyTtsToPayload,
 }));
 
-const slackConfig = {
-  channels: {
-    slack: {
-      enabled: true,
-    },
-  },
-} as OpenClawConfig;
+const slackConfig: OpenClawConfig = { channels: { slack: { enabled: true } } };
+const sourceContext = { currentChannelProvider: "slack", currentChannelId: "channel:C123" };
+type SendInput = Omit<Parameters<typeof runMessageAction>[0], "action" | "cfg"> & {
+  cfg?: OpenClawConfig;
+};
+function runSend(input: SendInput) {
+  return runMessageAction({ cfg: slackConfig, action: "send", dryRun: false, ...input });
+}
+function runSourceSend(input: SendInput) {
+  return runSend({
+    toolContext: sourceContext,
+    sessionKey: "agent:main:slack:channel:C123",
+    sourceReplyDeliveryMode: "message_tool_only",
+    ...input,
+  });
+}
+function registerPlugin(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+}
 
 function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
-  const sendText = vi.fn().mockResolvedValue({
-    channel: "slack",
-    messageId: "m1",
-    chatId: "C123",
+  const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "m1", chatId: "C123" });
+  registerPlugin({
+    ...createOutboundTestPlugin({ id: "slack", outbound: { deliveryMode: "direct", sendText } }),
+    config: {
+      listAccountIds: () => accountIds,
+      resolveAccount: () => ({ enabled: true }),
+      isConfigured: () => true,
+    },
+    threading: { threadAddressing: "message" },
   });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "slack",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-          config: {
-            listAccountIds: () => accountIds,
-            resolveAccount: () => ({ enabled: true }),
-            isConfigured: () => true,
-          },
-          threading: { threadAddressing: "message" },
-        },
-      },
-    ]),
-  );
   return sendText;
 }
 
@@ -103,10 +98,9 @@ describe("runMessageAction core send routing", () => {
     expect(recovery?.messageChannel).toBe("webchat");
     expect(recovery?.channel).toBeUndefined();
 
-    const send = runMessageAction({
+    const send = runSend({
       cfg,
       agentId: "main",
-      action: "send",
       params: {
         channel: "slack",
         target: "channel:C123",
@@ -114,7 +108,6 @@ describe("runMessageAction core send routing", () => {
         bestEffort: true,
       },
       toolContext: { currentChannelProvider: recovery?.messageChannel },
-      dryRun: false,
     });
     if (!policy.allowed) {
       await expect(send).rejects.toMatchObject({
@@ -137,38 +130,20 @@ describe("runMessageAction core send routing", () => {
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: {
-              deliveryMode: "direct",
-              sendText: vi.fn(),
-            },
-            messaging: {
-              normalizeTarget: (raw) =>
-                raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
-              targetResolver: {
-                looksLikeId: (raw) => raw === "-1001234567890:topic:42",
-              },
-            },
-          }),
+    registerPlugin(
+      createOutboundTestPlugin({
+        id: "telegram",
+        outbound: { deliveryMode: "direct", sendText: vi.fn() },
+        messaging: {
+          normalizeTarget: (raw) =>
+            raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
+          targetResolver: { looksLikeId: (raw) => raw === "-1001234567890:topic:42" },
         },
-      ]),
+      }),
     );
 
-    const result = await runMessageAction({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "123:test",
-          },
-        },
-      } as OpenClawConfig,
-      action: "send",
+    const result = await runSend({
+      cfg: { channels: { telegram: { botToken: "123:test" } } },
       params: {
         channel: "telegram",
         target: "-1001234567890:topic:42",
@@ -182,65 +157,44 @@ describe("runMessageAction core send routing", () => {
     }
     const payload = result.payload as { dryRun?: boolean; to?: string };
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
-    expect(payload.to).toBe("telegram:-1001234567890:topic:42");
-    expect(payload.dryRun).toBe(true);
+    expect(payload).toMatchObject({ to: "telegram:-1001234567890:topic:42", dryRun: true });
   });
 
   it("uses best-effort delivery for implicit message-tool-only source replies", async () => {
     const sendText = registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        message: "visible source reply",
-        bestEffort: false,
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      sessionKey: "agent:main:slack:channel:C123",
-      sourceReplyDeliveryMode: "message_tool_only",
-      dryRun: false,
+    const result = await runSourceSend({
+      params: { message: "visible source reply", bestEffort: false },
     });
 
     expect(result.kind).toBe("send");
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it.each(["channel:agent:main:main"])(
-    "rejects implicit delivery to internal session %s before sending",
-    async (currentChannelId) => {
-      const sendText = registerSlackTextPlugin();
+  it("rejects implicit delivery to an internal session before sending", async () => {
+    const sendText = registerSlackTextPlugin();
 
-      await expect(
-        runMessageAction({
-          cfg: slackConfig,
-          action: "send",
-          params: {
-            channel: "slack",
-            message: "do not deliver to a session key",
-          },
-          toolContext: {
-            currentChannelProvider: "slack",
-            currentChannelId,
-          },
-          sessionKey: "agent:main:subagent:worker",
-          dryRun: false,
-        }),
-      ).rejects.toThrow(/requires a target/i);
+    await expect(
+      runSend({
+        params: {
+          channel: "slack",
+          message: "do not deliver to a session key",
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:agent:main:main",
+        },
+        sessionKey: "agent:main:subagent:worker",
+      }),
+    ).rejects.toThrow(/requires a target/i);
 
-      expect(sendText).not.toHaveBeenCalled();
-    },
-  );
+    expect(sendText).not.toHaveBeenCalled();
+  });
 
   it("delivers to a real current conversation instead of an internal session channel", async () => {
     const sendText = registerSlackTextPlugin();
 
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
+    const result = await runSend({
       params: {
         channel: "slack",
         message: "deliver to the actual conversation",
@@ -251,14 +205,9 @@ describe("runMessageAction core send routing", () => {
         currentMessagingTarget: "channel:C123",
       },
       sessionKey: "agent:main:subagent:worker",
-      dryRun: false,
     });
 
-    expect(result).toMatchObject({
-      kind: "send",
-      channel: "slack",
-      to: "channel:C123",
-    });
+    expect(result).toMatchObject({ kind: "send", channel: "slack", to: "channel:C123" });
     expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
       to: "channel:C123",
       text: "deliver to the actual conversation",
@@ -270,21 +219,12 @@ describe("runMessageAction core send routing", () => {
     const sendText = registerSlackTextPlugin();
 
     await expect(
-      runMessageAction({
-        cfg: slackConfig,
-        action: "send",
+      runSourceSend({
         params: {
           target: "channel:C999",
           message: "explicit durable send",
           bestEffort: false,
         },
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-        },
-        sessionKey: "agent:main:slack:channel:C123",
-        sourceReplyDeliveryMode: "message_tool_only",
-        dryRun: false,
       }),
     ).rejects.toThrow("missing reconcileUnknownSend");
     expect(sendText).not.toHaveBeenCalled();
@@ -296,51 +236,24 @@ describe("runMessageAction core send routing", () => {
       messageId: "m1",
       chatId: "C999",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: {
-              deliveryMode: "direct",
-              sendText,
-            },
-          }),
-        },
-      ]),
+    registerPlugin(
+      createOutboundTestPlugin({
+        id: "telegram",
+        outbound: { deliveryMode: "direct", sendText },
+      }),
     );
 
     await expect(
-      runMessageAction({
+      runSourceSend({
         cfg: {
-          channels: {
-            telegram: {
-              enabled: true,
-            },
-          },
-          tools: {
-            message: {
-              crossContext: {
-                allowAcrossProviders: true,
-              },
-            },
-          },
+          channels: { telegram: { enabled: true } },
+          tools: { message: { crossContext: { allowAcrossProviders: true } } },
         } as OpenClawConfig,
-        action: "send",
         params: {
           channel: "telegram",
           message: "explicit channel-only durable send",
           bestEffort: false,
         },
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-        },
-        sessionKey: "agent:main:slack:channel:C123",
-        sourceReplyDeliveryMode: "message_tool_only",
-        dryRun: false,
       }),
     ).rejects.toThrow("missing reconcileUnknownSend");
     expect(sendText).not.toHaveBeenCalled();

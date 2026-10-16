@@ -44,13 +44,16 @@ const stoppedAfterFirst = [
   { to: "second", ...notAttempted },
   { to: "third", ...notAttempted },
 ];
+function setPlugin(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+}
 function registerPlugin(overrides: Pick<ChannelPlugin, "outbound" | "actions">) {
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({ id: channel }),
     messaging: { targetResolver: { looksLikeId: () => true } },
     ...overrides,
   };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: channel, plugin, source: "test" }]));
+  setPlugin(plugin);
 }
 type Actions = NonNullable<ChannelPlugin["actions"]>;
 function registerNative(actions: Omit<Actions, "describeMessageTool">) {
@@ -444,7 +447,7 @@ describe("broadcast send outcomes through native actions", () => {
         sendMedia,
       },
     });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    setPlugin(plugin);
     await runMessageAction({
       cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
       action: "send",
@@ -472,6 +475,18 @@ describe("broadcast send outcomes through native actions", () => {
     sessionKey: "agent:main:telegram:direct:123456789",
     sourceReplyDeliveryMode: "message_tool_only",
   } as const;
+  const explicitRoute = (allowAcrossProviders = true, options: Partial<MessageActionInput> = {}) =>
+    runMessageAction({
+      ...sourceInput,
+      cfg: {
+        ...workspaceConfig,
+        tools: { message: { crossContext: { allowAcrossProviders } } },
+      },
+      params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
+      toolContext: { currentChannelProvider: "webchat" },
+      sessionKey: "agent:main:main",
+      ...options,
+    });
   function expectInternalReply(result: MessageActionResult, text: string) {
     expect(result).toMatchObject({
       kind: "send",
@@ -499,11 +514,7 @@ describe("broadcast send outcomes through native actions", () => {
   }
   describe("runMessageAction send validation", () => {
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          { pluginId: "workspace", source: "test", plugin: workspaceTestPlugin },
-        ]),
-      );
+      setPlugin(workspaceTestPlugin);
     });
 
     it.each([
@@ -548,16 +559,7 @@ describe("broadcast send outcomes through native actions", () => {
     });
 
     it("sends an explicit target from a route-less run through the channel", async () => {
-      const result = await runMessageAction({
-        cfg: {
-          ...workspaceConfig,
-          tools: { message: { crossContext: { allowAcrossProviders: true } } },
-        },
-        action: "send",
-        params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
-        toolContext: { currentChannelProvider: "webchat" },
-        sessionKey: "agent:main:main",
-        sourceReplyDeliveryMode: "message_tool_only",
+      const result = await explicitRoute(true, {
         sourceReplyTranscriptOnly: true,
       });
 
@@ -621,24 +623,7 @@ describe("broadcast send outcomes through native actions", () => {
     it.each([false, true])(
       "checks explicit-route provider policy (allowed=%s)",
       async (allowAcrossProviders) => {
-        const send = runMessageAction({
-          cfg: {
-            ...workspaceConfig,
-            tools: { message: { crossContext: { allowAcrossProviders } } },
-          },
-          action: "send",
-          params: {
-            channel: "workspace",
-            target: "#C12345678",
-            message: "hello from codex",
-          },
-          toolContext: {
-            currentChannelProvider: "webchat",
-          },
-          sessionKey: "agent:main:main",
-          sourceReplyDeliveryMode: "message_tool_only",
-          dryRun: true,
-        });
+        const send = explicitRoute(allowAcrossProviders, { dryRun: true });
 
         if (!allowAcrossProviders) {
           await expect(send).rejects.toMatchObject({
