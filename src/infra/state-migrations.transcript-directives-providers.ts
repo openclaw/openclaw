@@ -38,11 +38,11 @@ export function createMaskedProviderResolver(database: DatabaseSync): MaskedProv
         database,
         db
           .selectFrom("trajectory_runtime_events")
-          .select([
-            jsonPathValue<unknown>(database, sql.ref("event_json"), sql.lit("$.modelId")).as(
+          .select((eb) => [
+            jsonPathValue<unknown>(database, eb.ref("event_json"), sql.lit("$.modelId")).as(
               "model",
             ),
-            jsonPathValue<unknown>(database, sql.ref("event_json"), sql.lit("$.provider")).as(
+            jsonPathValue<unknown>(database, eb.ref("event_json"), sql.lit("$.provider")).as(
               "provider",
             ),
           ])
