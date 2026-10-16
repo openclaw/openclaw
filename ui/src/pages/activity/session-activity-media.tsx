@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled, untrack } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -116,29 +116,6 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       setRevision((value) => value + 1);
     }
   };
-
-  function connect() {
-    // Visibility is required before transcript discovery; never fall back to an eager scan.
-    if (typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    observer = new IntersectionObserver(
-      (entries) => {
-        visible = entries.some((observation) => observation.isIntersecting);
-        refresh();
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(host);
-  }
-
-  function dispose() {
-    disposed = true;
-    observer?.disconnect();
-    visible = false;
-    closeImage(false);
-    releaseChatMediaResourceSubscriber(refresh);
-  }
 
   const closeImage = (notify = true) => {
     imageRequest++;
@@ -352,10 +329,12 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
   }
   // The projection is seeded once; its source follows the tracked effect below.
   const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
+  // Keep the Gateway observer attached to the presented connection owner.
   createEffect(
     () => props.context.gateway,
     (source) => gatewayProjection.replaceSource(source),
   );
+  // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [
       gatewayProjection.read(),
@@ -364,10 +343,28 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       props.revision,
       props.session,
     ],
-    () => untrack(refresh),
+    refresh,
   );
-  onSettled(connect);
-  onCleanup(dispose);
+  onSettled(() => {
+    // Visibility is required before transcript discovery; never fall back to an eager scan.
+    if (typeof IntersectionObserver !== "undefined") {
+      observer = new IntersectionObserver(
+        (entries) => {
+          visible = entries.some((observation) => observation.isIntersecting);
+          refresh();
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(host);
+    }
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      visible = false;
+      closeImage(false);
+      releaseChatMediaResourceSubscriber(refresh);
+    };
+  });
   const displayEntry = () => {
     revision();
     return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;
