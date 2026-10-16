@@ -136,7 +136,7 @@ async function assertColdLoad(view: "sessions" | "pages") {
     ],
   };
   const now = Date.now();
-  const owner = { actor: { type: "human", id: "riley", label: "Riley" } };
+  const owner = { actor: { type: "human" as const, id: "riley", label: "Riley" } };
   const sessions = Array.from({ length: 11 }, (_, index) =>
     createControlUiSessionRow(
       `agent:main:dashboard:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,

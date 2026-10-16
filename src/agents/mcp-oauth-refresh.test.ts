@@ -31,7 +31,7 @@ function withProvider<T>(run: (provider: OAuthClientProvider) => Promise<T>) {
 }
 
 function saveTokens(tokens: Parameters<OAuthClientProvider["saveTokens"]>[0]) {
-  return withProvider((provider) => provider.saveTokens(tokens));
+  return withProvider(async (provider) => await provider.saveTokens(tokens));
 }
 
 function gateRefresh(saveBeforeGate = false) {

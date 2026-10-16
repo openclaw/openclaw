@@ -30,7 +30,7 @@ async function openOutbox(
 }
 
 function outboxSession(key: string, displayName: string) {
-  return { key, displayName, kind: "direct" };
+  return { key, displayName, kind: "direct" as const };
 }
 
 async function reconnectUnconfirmed(

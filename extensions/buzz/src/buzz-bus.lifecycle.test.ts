@@ -1,7 +1,7 @@
 import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("nostr-tools", async (importOriginal) => {
   const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
@@ -56,6 +56,10 @@ function stallDiscovery() {
 }
 
 describe("Buzz bus lifecycle", () => {
+  beforeEach(() => {
+    relayMocks.auth.mockResolvedValue("ok");
+  });
+
   it.each([
     { mode: "one-shot", stopped: false },
     { mode: "one-shot", stopped: true },
@@ -66,7 +70,6 @@ describe("Buzz bus lifecycle", () => {
   ] as const)(
     "prepares $mode before relay handoff (stopped=$stopped)",
     async ({ mode, stopped }) => {
-      relayMocks.auth.mockResolvedValue("ok");
       const bus = mode === "one-shot" ? undefined : await startTestBus();
       const preparing = createDeferred<void>();
       const prepared = createDeferred<void>();

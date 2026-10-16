@@ -33,7 +33,9 @@ function resolvePolicy(
   });
 }
 
-function preparePolicy(overrides: Parameters<typeof prepareCodexNativeExecutionPolicy>[0]) {
+function preparePolicy(
+  overrides: Partial<Parameters<typeof prepareCodexNativeExecutionPolicy>[0]>,
+) {
   return prepareCodexNativeExecutionPolicy({
     config: { tools: { exec: { host: "gateway" } } },
     readRuntimeSessionEntry: true,
