@@ -22,6 +22,7 @@ export const {
   InteractionContextType,
   InteractionResponseType,
   InteractionType,
+  Locale,
   MessageFlags,
   MessageReferenceType,
   MessageType,

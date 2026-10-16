@@ -6,7 +6,11 @@ export async function replySilently(
   onError?: (error: unknown) => void,
 ) {
   try {
-    await interaction.reply(params);
+    if (interaction.responseState === "deferred-update") {
+      await interaction.followUp({ ...params, ephemeral: true });
+    } else {
+      await interaction.reply(params);
+    }
   } catch (error) {
     onError?.(error);
   }
