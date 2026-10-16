@@ -32,7 +32,7 @@ import { createGoalComposerController } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
-import type { ComposerPredictionController } from "./chat-composer-prediction.ts";
+import type { ComposerPrediction } from "./chat-composer-prediction.ts";
 import { resolveComposerQuestionPanel } from "./chat-composer-question.tsx";
 import {
   isSkillMenuVisible,
@@ -63,7 +63,7 @@ registerChatGoalsEnglish();
 
 export function createChatComposerContext(
   props: ChatComposerProps,
-  prediction?: ComposerPredictionController,
+  prediction?: ComposerPrediction,
 ) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
@@ -97,7 +97,6 @@ export function createChatComposerContext(
     state.textareaRef?.();
     state.composerComposing = false;
     state.composingDraft = null;
-    state.emojiMenu.close();
     state.dictation?.dispose();
     state.dictation = null;
     state.dictationSelection = null;
@@ -156,9 +155,8 @@ export function createChatComposerContext(
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const goalComposer = createGoalComposerController(props, state, requestUpdate);
   const mentionsUnsupported = props.mentionsUnsupported || goalComposer.active;
-  state.mentionMenu.syncDirectory(
-    props.connected && canCompose && !mentionsUnsupported ? props.mentionDirectory : undefined,
-  );
+  const mentionDirectory =
+    props.connected && canCompose && !mentionsUnsupported ? props.mentionDirectory : undefined;
   const getMentions = () => props.getMentions?.() ?? props.mentions ?? [];
   const mentionError =
     getMentions().length > 0 && (mentionsUnsupported || visibleDraft.trimStart().startsWith("/"))
@@ -304,7 +302,6 @@ export function createChatComposerContext(
       return;
     }
     prediction?.acceptInto(state.composerTextarea);
-    requestUpdate();
   };
   const handleKeyDown = createComposerKeyDownHandler({
     prediction,
@@ -326,7 +323,6 @@ export function createChatComposerContext(
   const updateEmojiMenu = (target: HTMLTextAreaElement) =>
     state.emojiMenu.update(
       target,
-      requestUpdate,
       !state.composerComposing &&
         !state.skillMenuOpen &&
         !state.slashMenuOpen &&
@@ -355,7 +351,7 @@ export function createChatComposerContext(
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
       updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
       const mentionIntent = typedAtSign ? "trigger" : "input";
-      state.mentionMenu.update(target, requestUpdate, mentionIntent);
+      state.mentionMenu.update(target, mentionIntent);
     }
     updateEmojiMenu(target);
     // The textarea owns ordinary edits; only redraw the pane when surrounding
@@ -382,7 +378,7 @@ export function createChatComposerContext(
     };
     if (!state.composerComposing && !event.isComposing) {
       markComposerInputIntent(state, composerDraftKey(props));
-      state.emojiMenu.complete(event, requestUpdate, canCompose);
+      state.emojiMenu.complete(event, canCompose);
     }
   };
   const handleInput = (event: InputEvent) => {
@@ -432,7 +428,7 @@ export function createChatComposerContext(
     if (goalComposer.active) {
       return;
     }
-    state.mentionMenu.update(target, requestUpdate);
+    state.mentionMenu.update(target);
     if (event.type === "keyup") {
       return;
     }
@@ -456,11 +452,7 @@ export function createChatComposerContext(
       return;
     }
     clearCompositionEnd(event);
-    const emojiWasOpen = state.emojiMenu.open;
     state.emojiMenu.close();
-    if (emojiWasOpen) {
-      requestUpdate();
-    }
     // SAFETY: The identity check above requires the current composer textarea.
     const target = event.target as HTMLTextAreaElement;
     // A dropped compositionend (detach/blur mid-IME) must not wedge the
@@ -674,14 +666,11 @@ export function createChatComposerContext(
   if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
     resetSlashMenuState(state);
   }
-  if (
-    !canCompose ||
-    state.composerComposing ||
-    state.dictation?.locksComposer ||
-    goalComposer.pending
-  ) {
-    state.emojiMenu.close();
-  }
+  const emojiEnabled =
+    canCompose &&
+    !state.composerComposing &&
+    !state.dictation?.locksComposer &&
+    !goalComposer.pending;
   const commandsVisible = props.connected && canCompose;
   if (
     !(commandsVisible && isSkillMenuVisible(state)) &&
@@ -728,6 +717,8 @@ export function createChatComposerContext(
     runControlsProps,
     menus,
     mentionMenuHost,
+    mentionDirectory,
+    emojiEnabled,
     mentionError,
     skillMenuHost,
     slashMenuHost,

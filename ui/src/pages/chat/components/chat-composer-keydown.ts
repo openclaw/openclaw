@@ -61,11 +61,11 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+    if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;
     }
 
-    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost)) {
       return;
     }
 

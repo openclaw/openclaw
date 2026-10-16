@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import {
@@ -133,6 +134,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     textarea.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType: "insertText", data: value.at(-1) }),
     );
+    flush();
   };
   const key = (keyName: string, extra: KeyboardEventInit = {}) => {
     const event = new KeyboardEvent("keydown", {
@@ -142,6 +144,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       ...extra,
     });
     textarea.dispatchEvent(event);
+    flush();
     return event;
   };
   const colon = () => {
@@ -152,6 +155,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       data: ":",
     });
     textarea.dispatchEvent(event);
+    flush();
     return event;
   };
   return { container, textarea, input, key, colon, send, backgroundSend, draft: () => draft };
@@ -177,6 +181,7 @@ describe("chat emoji acceptance", () => {
     f.input(":smi");
     f.key("Escape");
     f.textarea.dispatchEvent(new Event("select"));
+    flush();
     expect(f.container.querySelector('[role="listbox"]')).toBeNull();
     expect(f.draft()).toBe(":smi");
     f.input(":smil");
@@ -196,6 +201,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     f.textarea.setSelectionRange(4, 4);
     f.textarea.blur();
     f.textarea.dispatchEvent(new Event("select"));
+    flush();
     expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
     expect(f.draft()).toBe(":smi");
   });
