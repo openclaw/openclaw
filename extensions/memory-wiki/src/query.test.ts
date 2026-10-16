@@ -59,7 +59,11 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
   };
 });
 
-function writePage(
+function managedBlock(kind: string, body = "") {
+  return `<!-- openclaw:${kind}:start -->\n${body ? body + "\n" : ""}<!-- openclaw:${kind}:end -->`;
+}
+
+function writeVaultPage(
   rootDir: string,
   relativePath: string,
   title: string,
@@ -102,13 +106,15 @@ function collectWikiResultPaths(results: readonly { corpus: string; path?: strin
 }
 
 beforeEach(() => {
-  getActiveMemorySearchManagerMock.mockReset();
-  getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
+  getActiveMemorySearchManagerMock
+    .mockReset()
+    .mockResolvedValue({ manager: null, error: "unavailable" });
   getActiveMemoryProviderMock.mockReset();
   // Memory Core owns the slot unless a test selects a native provider.
   isActiveMemoryProviderNativeMock.mockReset().mockResolvedValue(false);
-  loadCombinedSessionStoreForGatewayAsyncMock.mockReset();
-  loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({ storePath: "(test)", store: {} });
+  loadCombinedSessionStoreForGatewayAsyncMock
+    .mockReset()
+    .mockResolvedValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
   vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
@@ -128,12 +134,16 @@ async function createQueryVault(options?: {
   config?: MemoryWikiPluginConfig;
   initialize?: boolean;
 }) {
-  return createVault({
+  const vault = await createVault({
     prefix: "memory-wiki-query-",
     rootDir: path.join(suiteRoot, `case-${caseIndex++}`),
     initialize: options?.initialize ?? true,
     config: options?.config,
   });
+  return {
+    ...vault,
+    writePage: writeVaultPage.bind(null, vault.rootDir),
+  };
 }
 
 function createSharedVault(corpus: "all" | "wiki" | "memory") {
@@ -142,9 +152,7 @@ function createSharedVault(corpus: "all" | "wiki" | "memory") {
 
 function createAppConfig(): OpenClawConfig {
   return {
-    agents: {
-      entries: { main: {} },
-    },
+    agents: { entries: { main: {} } },
   } as OpenClawConfig;
 }
 
@@ -187,22 +195,11 @@ function mockSessionTranscriptStore() {
 
 function memoryHit(
   hitPath: string,
-  startLine: number,
-  endLine: number,
-  score: number,
-  snippet: string,
-  source: "memory" | "sessions",
-  citation?: string,
+  score = 1,
+  source: "memory" | "sessions" = "sessions",
+  details: { startLine?: number; endLine?: number; citation?: string } = {},
 ) {
-  return {
-    path: hitPath,
-    startLine,
-    endLine,
-    score,
-    snippet,
-    source,
-    ...(citation ? { citation } : {}),
-  };
+  return { path: hitPath, startLine: 1, endLine: 2, score, snippet: hitPath, source, ...details };
 }
 
 function createMemoryManager(overrides?: {
@@ -226,7 +223,7 @@ function createMemoryManager(overrides?: {
 
 describe("searchMemoryWiki", () => {
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { rootDir, config, writePage } = await createQueryVault();
     await fs.writeFile(
       path.join(rootDir, "sources", "broken.md"),
       [
@@ -243,12 +240,7 @@ describe("searchMemoryWiki", () => {
       ].join("\n"),
       "utf8",
     );
-    await writePage(
-      rootDir,
-      "sources/healthy.md",
-      "Healthy Source",
-      "# Healthy Source\n\nhealthy needle\n",
-    );
+    await writePage("sources/healthy.md", "Healthy Source", "# Healthy Source\n\nhealthy needle\n");
 
     const results = await searchWiki(config, "needle", { maxResults: Number.NaN });
 
@@ -256,27 +248,19 @@ describe("searchMemoryWiki", () => {
   });
 
   it("does not match generated related blocks during wiki search", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     await writePage(
-      rootDir,
       "entities/alpha.md",
       "Alpha",
-      [
-        "# Alpha",
-        "",
-        "Alpha body.",
-        "",
-        "## Related",
-        "<!-- openclaw:wiki:related:start -->",
-        "### Related Pages",
-        "- [Needle Person](entities/needle-person.md)",
-        "<!-- openclaw:wiki:related:end -->",
-        "",
-      ].join("\n"),
+      "# Alpha\n\nAlpha body.\n\n## Related\n" +
+        managedBlock(
+          "wiki:related",
+          "### Related Pages\n- [Needle Person](entities/needle-person.md)",
+        ) +
+        "\n",
       { sourceIds: ["source.alpha"] },
     );
     await writePage(
-      rootDir,
       "entities/needle-person.md",
       "Needle Person",
       "# Needle Person\n\nNeedle body.\n",
@@ -289,33 +273,20 @@ describe("searchMemoryWiki", () => {
   });
 
   it("filters standalone structural markers from matching, snippets, and ranking", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     await Promise.all([
       writePage(
-        rootDir,
         "entities/marker-only.md",
         "Marker Only",
-        [
-          "<!-- openclaw:wiki:generated:start -->",
-          "<!-- openclaw:wiki:generated:end -->",
-          "<!-- openclaw:human:start -->",
-          "<!-- openclaw:human:end -->",
-          "<!-- openclaw:wiki:raw-source -->",
-          "",
-        ].join("\n"),
+        managedBlock("wiki:generated") +
+          "\n" +
+          managedBlock("human") +
+          "\n<!-- openclaw:wiki:raw-source -->\n",
       ),
       writePage(
-        rootDir,
         "entities/evidence.md",
         "Evidence Page",
-        [
-          "<!-- openclaw:human:start -->",
-          "# Evidence Page",
-          "",
-          "Readable release evidence summary.",
-          "<!-- openclaw:human:end -->",
-          "",
-        ].join("\n"),
+        managedBlock("human", "# Evidence Page\n\nReadable release evidence summary.") + "\n",
         {
           description: "openclaw release evidence",
           claims: [
@@ -330,27 +301,15 @@ describe("searchMemoryWiki", () => {
         },
       ),
       writePage(
-        rootDir,
         "entities/marker-heavy.md",
         "Marker Heavy",
-        [
-          "# Marker Heavy",
-          "",
-          "<!-- openclaw:wiki:generated:start -->",
-          "openclaw body reference",
-          "<!-- openclaw:wiki:generated:end -->",
-          "<!-- openclaw:human:start -->",
-          "<!-- openclaw:human:end -->",
-          "<!-- openclaw:wiki:raw-source -->",
-          "",
-        ].join("\n"),
+        "# Marker Heavy\n\n" +
+          managedBlock("wiki:generated", "openclaw body reference") +
+          "\n" +
+          managedBlock("human") +
+          "\n<!-- openclaw:wiki:raw-source -->\n",
       ),
-      writePage(
-        rootDir,
-        "entities/clean.md",
-        "Clean",
-        "# Clean\n\nopenclaw openclaw body reference\n",
-      ),
+      writePage("entities/clean.md", "Clean", "# Clean\n\nopenclaw openclaw body reference\n"),
     ]);
 
     const evidenceResults = await searchWiki(config, "openclaw release", { maxResults: 10 });
@@ -368,31 +327,19 @@ describe("searchMemoryWiki", () => {
   });
 
   it("keeps managed-block content and inline marker prose searchable", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     await Promise.all([
       writePage(
-        rootDir,
         "entities/managed-content.md",
         "Managed Content",
-        [
-          "# Managed Content",
-          "",
-          "<!-- openclaw:wiki:generated:start -->",
-          "Cobalt content remains searchable.",
-          "<!-- openclaw:wiki:generated:end -->",
-          "",
-        ].join("\n"),
+        "# Managed Content\n\n" +
+          managedBlock("wiki:generated", "Cobalt content remains searchable.") +
+          "\n",
       ),
       writePage(
-        rootDir,
         "entities/inline-marker.md",
         "Inline Marker",
-        [
-          "# Inline Marker",
-          "",
-          "The literal <!-- openclaw:wiki:generated:start --> inline-needle stays searchable.",
-          "",
-        ].join("\n"),
+        "# Inline Marker\n\nThe literal <!-- openclaw:wiki:generated:start --> inline-needle stays searchable.\n",
       ),
     ]);
 
@@ -406,7 +353,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("matches non-ASCII query terms without an exact phrase", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     const pages = [
       ["ru", "Альфа — это новый внутренний проект."],
       ["ja", "会議は来週東京で開きます。"],
@@ -414,13 +361,9 @@ describe("searchMemoryWiki", () => {
       ["controller", "The controller strategy is documented here."],
     ] as const;
     for (const [slug, body] of pages) {
-      await writePage(
-        rootDir,
-        `entities/${slug}.md`,
-        `Notes ${slug}`,
-        `# Notes ${slug}\n\n${body}\n`,
-        { id: `entity.${slug}` },
-      );
+      await writePage(`entities/${slug}.md`, `Notes ${slug}`, `# Notes ${slug}\n\n${body}\n`, {
+        id: `entity.${slug}`,
+      });
     }
 
     const search = async (query: string) =>
@@ -432,50 +375,43 @@ describe("searchMemoryWiki", () => {
   });
 
   it("supports people-routing search modes and claim evidence drilldown metadata", async () => {
-    const { rootDir, config } = await createQueryVault();
-    await writePage(
-      rootDir,
-      "entities/brad.md",
-      "Brad Groux",
-      "# Brad Groux\n\nAgent card summary.\n",
-      {
-        entityType: "person",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["bgroux"],
-        privacyTier: "local-private",
-        personCard: {
-          handles: ["@bgroux"],
-          lane: "Microsoft Teams",
-          askFor: ["Teams and Azure rollout questions"],
-        },
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "works-with",
-            note: "Teams escalation buddy",
-          },
-        ],
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is a strong route for Microsoft Teams questions.",
-            status: "supported",
-            confidence: 0.88,
-            evidence: [
-              {
-                kind: "maintainer-whois",
-                sourceId: "source.maintainers",
-                privacyTier: "local-private",
-              },
-            ],
-          },
-        ],
+    const { config, writePage } = await createQueryVault();
+    await writePage("entities/brad.md", "Brad Groux", "# Brad Groux\n\nAgent card summary.\n", {
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["bgroux"],
+      privacyTier: "local-private",
+      personCard: {
+        handles: ["@bgroux"],
+        lane: "Microsoft Teams",
+        askFor: ["Teams and Azure rollout questions"],
       },
-    );
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      relationships: [
+        {
+          targetId: "entity.alice",
+          targetTitle: "Alice",
+          kind: "works-with",
+          note: "Teams escalation buddy",
+        },
+      ],
+      claims: [
+        {
+          id: "claim.brad.teams",
+          text: "Brad is a strong route for Microsoft Teams questions.",
+          status: "supported",
+          confidence: 0.88,
+          evidence: [
+            {
+              kind: "maintainer-whois",
+              sourceId: "source.maintainers",
+              privacyTier: "local-private",
+            },
+          ],
+        },
+      ],
+    });
     await writePage(
-      rootDir,
       "sources/maintainers.md",
       "Maintainers Source",
       "# Maintainers Source\n\nmaintainer-whois Teams sample.\n",
@@ -483,11 +419,13 @@ describe("searchMemoryWiki", () => {
     await compileMemoryWikiVault(config);
 
     const personResults = await searchWiki(config, "bgroux", { mode: "find-person" });
-    expect(personResults[0]?.path).toBe("entities/brad.md");
-    expect(personResults[0]?.canonicalId).toBe("maintainer.brad-groux");
-    expect(personResults[0]?.aliases).toEqual(["bgroux"]);
-    expect(personResults[0]?.privacyTier).toBe("local-private");
-    expect(personResults[0]?.searchMode).toBe("find-person");
+    expect(personResults[0]).toMatchObject({
+      path: "entities/brad.md",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["bgroux"],
+      privacyTier: "local-private",
+      searchMode: "find-person",
+    });
 
     const routeResults = await searchWiki(config, "who should I ask about Teams?", {
       mode: "route-question",
@@ -495,11 +433,13 @@ describe("searchMemoryWiki", () => {
     expect(routeResults[0]?.path).toBe("entities/brad.md");
 
     const claimResults = await searchWiki(config, "strong route Teams", { mode: "raw-claim" });
-    expect(claimResults[0]?.path).toBe("entities/brad.md");
-    expect(claimResults[0]?.matchedClaimId).toBe("claim.brad.teams");
-    expect(claimResults[0]?.matchedClaimConfidence).toBe(0.88);
-    expect(claimResults[0]?.evidenceKinds).toEqual(["maintainer-whois"]);
-    expect(claimResults[0]?.evidenceSourceIds).toEqual(["source.maintainers"]);
+    expect(claimResults[0]).toMatchObject({
+      path: "entities/brad.md",
+      matchedClaimId: "claim.brad.teams",
+      matchedClaimConfidence: 0.88,
+      evidenceKinds: ["maintainer-whois"],
+      evidenceSourceIds: ["source.maintainers"],
+    });
 
     const evidenceResults = await searchWiki(config, "maintainer-whois", {
       mode: "source-evidence",
@@ -509,26 +449,19 @@ describe("searchMemoryWiki", () => {
   });
 
   it("keeps route-question relationship matches in compiled digest prefilter", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
+    await writePage("entities/brad.md", "Brad Groux", "# Brad Groux\n\nAgent card summary.\n", {
+      entityType: "person",
+      relationships: [
+        {
+          targetId: "entity.alice",
+          targetTitle: "Alice",
+          kind: "collaborates-with",
+          note: "Azure escalation buddy",
+        },
+      ],
+    });
     await writePage(
-      rootDir,
-      "entities/brad.md",
-      "Brad Groux",
-      "# Brad Groux\n\nAgent card summary.\n",
-      {
-        entityType: "person",
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "collaborates-with",
-            note: "Azure escalation buddy",
-          },
-        ],
-      },
-    );
-    await writePage(
-      rootDir,
       "entities/fallback.md",
       "Fallback Router",
       "# Fallback Router\n\nGeneric routing note.\n",
@@ -561,9 +494,8 @@ describe("searchMemoryWiki", () => {
   ])(
     "bounds $name before search results reach model context",
     async ({ source, text, expected }) => {
-      const { rootDir, config } = await createQueryVault();
+      const { config, writePage } = await createQueryVault();
       await writePage(
-        rootDir,
         "entities/bounded-snippet.md",
         "Bounded Snippet",
         source === "claim" ? "# Bounded Snippet\n\nUnrelated body.\n" : `# Wiki\n\n${text}\n`,
@@ -591,13 +523,12 @@ describe("searchMemoryWiki", () => {
   );
 
   it("ranks fresh supported claims ahead of stale contested claims", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     for (const [slug, title, updatedAt, status, confidence, sourceId, lines] of [
       ["fresh", "Fresh", "2026-04-01T00:00:00.000Z", "supported", 0.91, "source.alpha", "4-7"],
       ["stale", "Stale", "2025-10-01T00:00:00.000Z", "contested", 0.92, "source.alpha.old", "1-2"],
     ] as const) {
       await writePage(
-        rootDir,
         `entities/alpha-${slug}.md`,
         `Alpha ${title}`,
         `# Alpha ${title}\n\nsummary without the keyword\n`,
@@ -640,10 +571,9 @@ describe("searchMemoryWiki", () => {
   });
 
   it("includes memory results and backfills wiki capacity for all-corpus search", async () => {
-    const { rootDir, config } = await createSharedVault("all");
+    const { config, writePage } = await createSharedVault("all");
     for (const index of [1, 2, 3, 4, 5]) {
       await writePage(
-        rootDir,
         `entities/alpha-${index}.md`,
         `Alpha ${index}`,
         `# Alpha ${index}\n\nalpha wiki ${index}\n`,
@@ -652,7 +582,11 @@ describe("searchMemoryWiki", () => {
     }
     const manager = createMemoryManager({
       searchResults: [
-        memoryHit("MEMORY.md", 4, 8, 0.9, "alpha durable memory", "memory", "MEMORY.md#L4-L8"),
+        memoryHit("MEMORY.md", 0.9, "memory", {
+          startLine: 4,
+          endLine: 8,
+          citation: "MEMORY.md#L4-L8",
+        }),
       ],
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
@@ -673,101 +607,81 @@ describe("searchMemoryWiki", () => {
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
   });
 
-  for (const { name, sandboxed } of [
-    { name: "filters session memory hits outside the caller visibility policy", sandboxed: true },
-  ] satisfies ReadonlyArray<{ name: string; sandboxed: boolean }>) {
-    it(name, async () => {
-      const { config } = await createSharedVault("memory");
-      mockSessionTranscriptStore();
-      const manager = createMemoryManager({
-        searchResults: [
-          memoryHit("sessions/child-session.jsonl", 1, 2, 30, "caller transcript", "sessions"),
-          memoryHit(
-            "sessions/main/sibling-session.jsonl",
-            3,
-            4,
-            20,
-            "sibling transcript",
-            "sessions",
-          ),
-          memoryHit("MEMORY.md", 5, 6, 10, "durable memory", "memory"),
-        ],
-      });
-      getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-      const results = await searchWiki(config, "transcript", {
-        appConfig: createSessionVisibilityAppConfig(),
-        agentSessionKey: "agent:main:child-session",
-        sandboxed,
-        maxResults: 10,
-      });
-
-      expect(results.map((result) => result.path)).toEqual([
-        "sessions/child-session.jsonl",
-        "MEMORY.md",
-      ]);
+  it("filters session memory hits outside the caller visibility policy", async () => {
+    const { config } = await createSharedVault("memory");
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      searchResults: [
+        memoryHit("sessions/child-session.jsonl", 30),
+        memoryHit("sessions/main/sibling-session.jsonl", 20),
+        memoryHit("MEMORY.md", 10, "memory"),
+      ],
     });
-  }
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
-  it.each([{ configuredCorpus: "all" as const, requestedCorpus: "wiki" as const }])(
-    "keeps protected session recall inside its trusted corpus ($configuredCorpus/$requestedCorpus)",
-    async ({ configuredCorpus, requestedCorpus }) => {
-      const { rootDir, config } = await createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: configuredCorpus } },
-      });
-      await writePage(rootDir, "sources/alpha.md", "Alpha", "# Alpha\n\nalpha wiki secret\n");
-      const anchorSessionKey = "agent:main:telegram:direct:owner";
-      const requesterSessionKey = `${anchorSessionKey}:active-memory:abcdef123456`;
-      loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
-        storePath: "(test)",
-        store: {
-          [anchorSessionKey]: {
-            sessionId: "current",
-            updatedAt: 1,
-            sessionFile: "/tmp/current.jsonl",
-            chatType: "direct",
-          },
+    const results = await searchWiki(config, "transcript", {
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/child-session.jsonl",
+      "MEMORY.md",
+    ]);
+  });
+
+  it("keeps protected session recall inside its trusted corpus (all/wiki)", async () => {
+    const { config, writePage } = await createSharedVault("all");
+    await writePage("sources/alpha.md", "Alpha", "# Alpha\n\nalpha wiki secret\n");
+    const anchorSessionKey = "agent:main:telegram:direct:owner";
+    const requesterSessionKey = `${anchorSessionKey}:active-memory:abcdef123456`;
+    loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
+      storePath: "(test)",
+      store: {
+        [anchorSessionKey]: {
+          sessionId: "current",
+          updatedAt: 1,
+          sessionFile: "/tmp/current.jsonl",
+          chatType: "direct",
         },
-      });
-      const manager = createMemoryManager({
-        searchResults: [memoryHit("MEMORY.md", 1, 1, 1, "alpha durable secret", "memory")],
-      });
-      getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-      const conversationRecall = {
-        anchorSessionKey,
-        scope: "same-agent-private",
-        corpus: "sessions",
-      } as const;
+      },
+    });
+    const manager = createMemoryManager({
+      searchResults: [memoryHit("MEMORY.md", 1, "memory")],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+    const conversationRecall = {
+      anchorSessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    } as const;
 
-      const results = await searchWiki(config, "alpha", {
-        appConfig: createSessionVisibilityAppConfig(),
-        agentId: "main",
-        agentSessionKey: requesterSessionKey,
+    const results = await searchWiki(config, "alpha", {
+      appConfig: createSessionVisibilityAppConfig(),
+      agentId: "main",
+      agentSessionKey: requesterSessionKey,
+      conversationRecall,
+      searchCorpus: "wiki",
+    });
+
+    expect(results).toStrictEqual([]);
+    expect(manager.search).toHaveBeenCalledWith("alpha", {
+      maxResults: 10,
+      sources: ["sessions"],
+      sessionKey: requesterSessionKey,
+    });
+    expect(filterMemorySearchHitsBySessionVisibility).toHaveBeenCalledWith(
+      expect.objectContaining({
         conversationRecall,
-        ...(requestedCorpus ? { searchCorpus: requestedCorpus } : {}),
-      });
-
-      expect(results).toStrictEqual([]);
-      expect(manager.search).toHaveBeenCalledWith("alpha", {
-        maxResults: 10,
-        sources: ["sessions"],
-        sessionKey: requesterSessionKey,
-      });
-      expect(filterMemorySearchHitsBySessionVisibility).toHaveBeenCalledWith(
-        expect.objectContaining({
-          conversationRecall,
-          hits: [expect.objectContaining({ source: "memory" })],
-        }),
-      );
-    },
-  );
+        hits: [expect.objectContaining({ source: "memory" })],
+      }),
+    );
+  });
 
   it("keeps context-free shared searches and reads inside the default agent", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
+    const { config } = await createSharedVault("memory");
     loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
       storePath: "(test)",
       store: {
@@ -780,22 +694,8 @@ describe("searchMemoryWiki", () => {
     });
     const manager = createMemoryManager({
       searchResults: [
-        memoryHit(
-          "sessions/visible-session.jsonl",
-          1,
-          1,
-          2,
-          "default agent transcript",
-          "sessions",
-        ),
-        memoryHit(
-          "sessions/secondary/private-session.jsonl",
-          1,
-          1,
-          1,
-          "other agent transcript",
-          "sessions",
-        ),
+        memoryHit("sessions/visible-session.jsonl", 2),
+        memoryHit("sessions/secondary/private-session.jsonl", 1),
       ],
       readResult: {
         status: "ok",
@@ -819,27 +719,24 @@ describe("searchMemoryWiki", () => {
     });
   });
 
-  it("requires appConfig for session-bound shared memory searches", async () => {
-    const { config } = await createSharedVault("memory");
-
-    await expect(
-      searchWiki(config, "transcript", {
-        agentSessionKey: "agent:main:child-session",
-        sandboxed: true,
-      }),
-    ).rejects.toThrow(/wiki_search requires appConfig/);
-  });
+  it.each(["search", "get"] as const)(
+    "requires appConfig for session-bound shared memory %s",
+    async (operation) => {
+      const { config } = await createSharedVault("memory");
+      const caller = { config, agentSessionKey: "agent:main:child-session", sandboxed: true };
+      const pending =
+        operation === "search"
+          ? searchMemoryWiki({ ...caller, query: "transcript" })
+          : getMemoryWikiPage({ ...caller, lookup: "sessions/child-session.jsonl" });
+      await expect(pending).rejects.toThrow(`wiki_${operation} requires appConfig`);
+    },
+  );
 
   it("allows per-call corpus overrides without changing config defaults", async () => {
-    const { rootDir, config } = await createSharedVault("wiki");
-    await writePage(
-      rootDir,
-      "sources/alpha.md",
-      "Alpha Source",
-      "# Alpha Source\n\nalpha body text\n",
-    );
+    const { config, writePage } = await createSharedVault("wiki");
+    await writePage("sources/alpha.md", "Alpha Source", "# Alpha Source\n\nalpha body text\n");
     const manager = createMemoryManager({
-      searchResults: [memoryHit("MEMORY.md", 10, 12, 99, "memory-only alpha", "memory")],
+      searchResults: [memoryHit("MEMORY.md", 99, "memory")],
     });
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
@@ -856,9 +753,8 @@ describe("searchMemoryWiki", () => {
 
 describe("getMemoryWikiPage", () => {
   it("returns provenance for imported wiki source pages", async () => {
-    const { rootDir, config } = await createQueryVault();
+    const { config, writePage } = await createQueryVault();
     await writePage(
-      rootDir,
       "sources/imported-source-alpha.md",
       "Unsafe Alpha",
       "# Unsafe Alpha\n\nsecret alpha\n",
@@ -887,10 +783,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("reports genuinely missing shared memory files through the wiki_get tool", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
+    const { config } = await createSharedVault("memory");
     const manager = createMemoryManager({
       readResult: { status: "not_found", path: "memory/missing.md", text: "" },
     });
@@ -906,10 +799,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("keeps existing empty shared memory files distinct from missing files", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
+    const { config } = await createSharedVault("memory");
     const manager = createMemoryManager({
       readResult: { status: "ok", path: "memory/empty.md", text: "", from: 1, lines: 0 },
     });
@@ -922,22 +812,17 @@ describe("getMemoryWikiPage", () => {
       lineCount: Number.POSITIVE_INFINITY,
     });
 
-    expect(result.details).toEqual(
-      expect.objectContaining({
-        found: true,
-        path: "memory/empty.md",
-        content: "",
-        fromLine: 1,
-        lineCount: 200,
-      }),
-    );
+    expect(result.details).toMatchObject({
+      found: true,
+      path: "memory/empty.md",
+      content: "",
+      fromLine: 1,
+      lineCount: 200,
+    });
   });
 
   it("reports a clean error instead of crashing for malformed wiki_get params", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: { search: { backend: "shared", corpus: "memory" } },
-    });
+    const { config } = await createSharedVault("memory");
     const tool = createWikiGetTool(config, createAppConfig());
     const malformedParams = [
       null,
@@ -990,43 +875,9 @@ describe("getMemoryWikiPage", () => {
     expect(result).toBeNull();
     expect(manager.readFile).not.toHaveBeenCalled();
   });
-
-  it("requires appConfig for session-bound shared memory reads", async () => {
-    const { config } = await createSharedVault("memory");
-
-    await expect(
-      readWiki(config, "sessions/child-session.jsonl", {
-        agentSessionKey: "agent:main:child-session",
-        sandboxed: true,
-      }),
-    ).rejects.toThrow(/wiki_get requires appConfig/);
-  });
 });
 
 describe("wiki corpus bridge page agent scoping", () => {
-  async function writeBridgePage(params: {
-    rootDir: string;
-    slug: string;
-    title: string;
-    agentIds: string[];
-    marker: string;
-  }) {
-    await writePage(
-      params.rootDir,
-      `sources/${params.slug}.md`,
-      params.title,
-      `# ${params.title}\n\n${params.marker}\n`,
-      {
-        id: `source.${params.slug}`,
-        sourceType: "memory-bridge",
-        sourcePath: `/tmp/workspace/${params.slug}.md`,
-        bridgeRelativePath: `${params.slug}.md`,
-        bridgeWorkspaceDir: "/tmp/workspace",
-        bridgeAgentIds: params.agentIds,
-      },
-    );
-  }
-
   async function createBridgeVisibilityVault() {
     const vault = await createQueryVault({
       initialize: true,
@@ -1037,16 +888,20 @@ describe("wiki corpus bridge page agent scoping", () => {
       ["secondary", "Secondary", ["secondary"]],
       ["unowned", "Unowned", []],
     ] as const) {
-      await writeBridgePage({
-        rootDir: vault.rootDir,
-        slug: `${owner}-daily-note`,
-        title: `${title} Daily Note`,
-        agentIds: [...agentIds],
-        marker: `wikiscope marker ${owner}`,
-      });
+      await vault.writePage(
+        `sources/${owner}-daily-note.md`,
+        `${title} Daily Note`,
+        `# ${title} Daily Note\n\nwikiscope marker ${owner}\n`,
+        {
+          sourceType: "memory-bridge",
+          sourcePath: `/tmp/workspace/${owner}-daily-note.md`,
+          bridgeRelativePath: `${owner}-daily-note.md`,
+          bridgeWorkspaceDir: "/tmp/workspace",
+          bridgeAgentIds: agentIds,
+        },
+      );
     }
-    await writePage(
-      vault.rootDir,
+    await vault.writePage(
       "sources/shared-note.md",
       "Shared Note",
       "# Shared Note\n\nwikiscope marker shared\n",
@@ -1063,22 +918,11 @@ describe("wiki corpus bridge page agent scoping", () => {
       sandboxed: true,
     };
 
-    const owned = await getMemoryWikiPage({
-      ...caller,
-      lookup: "main-daily-note",
-    });
-    const shared = await getMemoryWikiPage({
-      ...caller,
-      lookup: "shared-note",
-    });
-    const foreign = await getMemoryWikiPage({
-      ...caller,
-      lookup: "secondary-daily-note",
-    });
-    const unowned = await getMemoryWikiPage({
-      ...caller,
-      lookup: "unowned-daily-note",
-    });
+    const read = (lookup: string) => getMemoryWikiPage({ ...caller, lookup });
+    const owned = await read("main-daily-note");
+    const shared = await read("shared-note");
+    const foreign = await read("secondary-daily-note");
+    const unowned = await read("unowned-daily-note");
 
     expect(owned?.content).toContain("wikiscope marker main");
     expect(shared?.content).toContain("wikiscope marker shared");
@@ -1127,7 +971,6 @@ describe("wiki corpus bridge page agent scoping", () => {
     ]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 registerSessionlessAgentScopeQueryTests({
   createQueryVault,
   createAppConfig: createAgentSessionVisibilityAppConfig,

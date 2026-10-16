@@ -35,20 +35,18 @@ function createImportedSourceState(pagePath: string, group: "bridge" | "unsafe-l
   };
 }
 
-function renderSourcePage(notes: string, content = "generated content", bridgeSource = false) {
-  return [
-    "# Memory Bridge (test)",
-    ...(bridgeSource ? ["## Bridge Source"] : []),
-    "## Content",
-    "```",
-    content,
-    "```",
-    "## Notes",
-    "<!-- openclaw:human:start -->",
-    ...(notes ? [notes] : []),
-    "<!-- openclaw:human:end -->",
-    "",
-  ].join("\n");
+function renderNotes(notes: string) {
+  return `## Notes\n<!-- openclaw:human:start -->\n${notes ? `${notes}\n` : ""}<!-- openclaw:human:end -->\n`;
+}
+
+function renderSourcePage(
+  notes: string,
+  content = "generated content",
+  bridgeSource = false,
+  language = "",
+) {
+  const header = "# Memory Bridge (test)\n" + (bridgeSource ? "## Bridge Source\n" : "");
+  return `${header}## Content\n\`\`\`${language}\n${content}\n\`\`\`\n${renderNotes(notes)}`;
 }
 
 function expectMissing(read: Promise<unknown>) {
@@ -336,22 +334,12 @@ describe("memory wiki source sync state", () => {
     const { vaultRoot, pageAbsPath } = await createSourceFixture(pagePath);
     await fs.writeFile(
       pageAbsPath,
-      [
-        "# Memory Bridge (test)",
-        "## Content",
-        "```markdown",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "generated content, not durable annotations",
-        "<!-- openclaw:human:end -->",
-        "x".repeat(16 * 1024 * 1024),
-        "```",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
+      renderSourcePage(
         "oversized annotations must survive",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
+        renderNotes("generated content, not durable annotations") + "x".repeat(16 * 1024 * 1024),
+        false,
+        "markdown",
+      ),
       "utf-8",
     );
     const state = createImportedSourceState(pagePath);
@@ -384,23 +372,14 @@ describe("memory wiki source sync state", () => {
     const { vaultRoot, pageAbsPath } = await createSourceFixture(pagePath);
     await fs.writeFile(
       pageAbsPath,
-      [
-        "# Memory Bridge (test)",
-        "## Content",
-        "```markdown",
+      renderSourcePage(
+        "n".repeat(16 * 1024 * 1024) +
+          "\n```\n" +
+          renderNotes("this boundary-shaped fence belongs to the human annotation").trimEnd(),
         "s".repeat(1024 * 1024),
-        "```",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "n".repeat(16 * 1024 * 1024),
-        "```",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "this boundary-shaped fence belongs to the human annotation",
-        "<!-- openclaw:human:end -->",
-        "<!-- openclaw:human:end -->",
-        "",
-      ].join("\n"),
+        false,
+        "markdown",
+      ),
       "utf8",
     );
     const state = createImportedSourceState(pagePath, "unsafe-local");

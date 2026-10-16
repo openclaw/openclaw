@@ -139,9 +139,7 @@ describe("importMemoryWikiOkfBundle", () => {
       nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
     });
 
-    expect(result.okfVersion).toBe("0.1");
-    expect(result.importedCount).toBe(3);
-    expect(result.skippedCount).toBe(1);
+    expect(result).toMatchObject({ okfVersion: "0.1", importedCount: 3, skippedCount: 1 });
     expect(result.warnings[0]).toMatchObject({
       code: "missing-type",
       path: "tables/draft.md",
@@ -152,8 +150,7 @@ describe("importMemoryWikiOkfBundle", () => {
       bundlePath,
       nowMs: Date.UTC(2026, 5, 12, 10, 5, 0),
     });
-    expect(repeat.importedCount).toBe(3);
-    expect(repeat.updatedCount).toBe(0);
+    expect(repeat).toMatchObject({ importedCount: 3, updatedCount: 0 });
 
     const ordersPath = result.pagePaths.find((pagePath) => pagePath.includes("orders"));
     expect(ordersPath).toBeTruthy();
@@ -243,17 +240,7 @@ describe("importMemoryWikiOkfBundle", () => {
     const deepSegments = Array.from({ length: 40 }, (_, index) => `segment-${index}`);
     const deepDir = path.join(bundlePath, ...deepSegments);
     await fs.mkdir(deepDir, { recursive: true });
-    await fs.writeFile(
-      path.join(deepDir, "orders.md"),
-      `---
-type: BigQuery Table
-title: Long Orders
----
-
-Long concept body.
-`,
-      "utf8",
-    );
+    await writeConcept(path.join(deepDir, "orders.md"), "Long Orders", "Long concept body.\n");
 
     const result = await run();
 
@@ -286,8 +273,7 @@ Long concept body.
     await fs.rm(ordersPath);
     const second = await run();
 
-    expect(second.importedCount).toBe(1);
-    expect(second.removedCount).toBe(1);
+    expect(second).toMatchObject({ importedCount: 1, removedCount: 1 });
     expect(second.removedPagePaths).toEqual([stalePagePath]);
     await expect(fs.stat(path.join(config.vault.path, stalePagePath))).rejects.toThrow();
     const results = await searchMemoryWiki({
@@ -316,28 +302,16 @@ Long concept body.
 
   it("rewrites percent-encoded OKF markdown links and preserves suffixes", async () => {
     const { bundlePath, config, run } = await createImport("encoded-okf");
-    await fs.mkdir(bundlePath, { recursive: true });
-    await fs.writeFile(
+    await writeConcept(
       path.join(bundlePath, "BigQuery Table.md"),
-      `---
-type: BigQuery Table
-title: BigQuery Table
----
-
-Table body.
-`,
-      "utf8",
+      "BigQuery Table",
+      "Table body.\n",
     );
-    await fs.writeFile(
+    await writeConcept(
       path.join(bundlePath, "links.md"),
-      `---
-type: Concept
-title: Links
----
-
-See [table](BigQuery%20Table.md?view=compact#columns).
-`,
-      "utf8",
+      "Links",
+      "See [table](BigQuery%20Table.md?view=compact#columns).\n",
+      "Concept",
     );
 
     const result = await run();
@@ -377,8 +351,7 @@ See [table](BigQuery%20Table.md?view=compact#columns).
 
     const result = await run();
 
-    expect(result.importedCount).toBe(0);
-    expect(result.skippedCount).toBe(1);
+    expect(result).toMatchObject({ importedCount: 0, skippedCount: 1 });
     expect(result.warnings[0]).toMatchObject({
       code: "unreadable-entry",
       path: "tables/private.md",

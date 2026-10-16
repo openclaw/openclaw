@@ -19,6 +19,11 @@ function statusConfig(config: Parameters<typeof resolveMemoryWikiConfig>[0]) {
   return resolveMemoryWikiConfig(config, { homedir: "/Users/tester" });
 }
 
+const bridgeOptions = {
+  vaultMode: "bridge",
+  bridge: { enabled: true, readMemoryArtifacts: true },
+} as const;
+
 const statusDeps = { pathExists: async () => true, resolveCommand: async () => null };
 
 function publicArtifact(
@@ -49,13 +54,7 @@ async function writeSource(rootDir: string, name: string, title: string, fields 
 }
 
 async function resolveBridgeMissingArtifactsStatus() {
-  const config = statusConfig({
-    vaultMode: "bridge",
-    bridge: {
-      enabled: true,
-      readMemoryArtifacts: true,
-    },
-  });
+  const config = statusConfig(bridgeOptions);
 
   return resolveMemoryWikiStatus(config, {
     appConfig: {
@@ -80,7 +79,7 @@ async function resolveMissingVaultStatus() {
   });
 }
 
-describe("resolveMemoryWikiStatus", () => {
+describe("memory wiki status and doctor", () => {
   it("warns when unsafe-local is selected without explicit private access", async () => {
     const config = statusConfig({
       vaultMode: "unsafe-local",
@@ -96,9 +95,8 @@ describe("resolveMemoryWikiStatus", () => {
 
   it("counts only artifacts owned by the resolved agent in agent scope", async () => {
     const unresolvedConfig = statusConfig({
-      vaultMode: "bridge",
+      ...bridgeOptions,
       vault: { scope: "agent", path: "/tmp/wiki/support" },
-      bridge: { enabled: true, readMemoryArtifacts: true },
     });
     const config = { ...unresolvedConfig, agentId: "support" };
     const artifacts: MemoryPluginPublicArtifact[] = [
@@ -116,16 +114,15 @@ describe("resolveMemoryWikiStatus", () => {
       ...statusDeps,
     });
 
-    expect(status.vaultScope).toBe("agent");
-    expect(status.agentId).toBe("support");
-    expect(status.bridgePublicArtifactCount).toBe(2);
+    expect(status).toMatchObject({
+      vaultScope: "agent",
+      agentId: "support",
+      bridgePublicArtifactCount: 2,
+    });
   });
 
   it("scopes global-vault status metadata when called by an agent tool", async () => {
-    const config = statusConfig({
-      vaultMode: "bridge",
-      bridge: { enabled: true, readMemoryArtifacts: true },
-    });
+    const config = statusConfig(bridgeOptions);
     const artifacts: MemoryPluginPublicArtifact[] = [
       publicArtifact("support", ["support"]),
       publicArtifact("marketing", ["marketing"]),
@@ -144,21 +141,20 @@ describe("resolveMemoryWikiStatus", () => {
     });
     const operatorStatus = await resolveMemoryWikiStatus(config, deps);
 
-    expect(agentStatus.vaultScope).toBe("global");
-    expect(agentStatus.agentId).toBeNull();
-    expect(agentStatus.bridgePublicArtifactCount).toBe(2);
+    expect(agentStatus).toMatchObject({
+      vaultScope: "global",
+      agentId: null,
+      bridgePublicArtifactCount: 2,
+    });
     expect(operatorStatus.bridgePublicArtifactCount).toBe(4);
   });
 
   it("rejects status for an unresolved agent-scoped config", async () => {
     const config = statusConfig({ vault: { scope: "agent", path: "/tmp/wiki/support" } });
 
-    await expect(
-      resolveMemoryWikiStatus(config, {
-        pathExists: async () => true,
-        resolveCommand: async () => null,
-      }),
-    ).rejects.toThrow("Memory Wiki agent-scoped vault requires a resolved agent id");
+    await expect(resolveMemoryWikiStatus(config, statusDeps)).rejects.toThrow(
+      "Memory Wiki agent-scoped vault requires a resolved agent id",
+    );
   });
 
   it("excludes malformed pages from status counts (#96125)", async () => {
@@ -182,9 +178,7 @@ describe("resolveMemoryWikiStatus", () => {
     );
     await writeSource(rootDir, "healthy", "Healthy");
 
-    const status = await resolveMemoryWikiStatus(config, {
-      ...statusDeps,
-    });
+    const status = await resolveMemoryWikiStatus(config, statusDeps);
 
     expect(status.pageCounts.source).toBe(1);
     expect(status.sourceCounts.native).toBe(1);
@@ -203,9 +197,7 @@ describe("resolveMemoryWikiStatus", () => {
       provenanceMode: "unsafe-local",
     });
 
-    const status = await resolveMemoryWikiStatus(config, {
-      ...statusDeps,
-    });
+    const status = await resolveMemoryWikiStatus(config, statusDeps);
 
     expect(status.pageCounts.source).toBe(4);
     expect(status.sourceCounts).toEqual({
@@ -216,9 +208,7 @@ describe("resolveMemoryWikiStatus", () => {
       other: 0,
     });
   });
-});
 
-describe("renderMemoryWikiStatus", () => {
   it("includes warnings in the text output", async () => {
     const rendered = renderMemoryWikiStatus(await resolveMissingVaultStatus());
 
@@ -231,9 +221,7 @@ describe("renderMemoryWikiStatus", () => {
     expect(rendered).toContain("Warnings:");
     expect(rendered).toContain("Wiki vault has not been initialized yet.");
   });
-});
 
-describe("memory wiki doctor", () => {
   it("suggests bridge fixes when no public artifacts are exported", async () => {
     const status = await resolveBridgeMissingArtifactsStatus();
     expect(status.bridgePublicArtifactCount).toBe(0);
