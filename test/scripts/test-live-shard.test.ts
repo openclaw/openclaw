@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
@@ -14,7 +13,9 @@ import {
   waitForProcessExit,
 } from "./live-process-fixture.test-support.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import { createScriptTestHarness } from "./test-helpers.js";
 
+const { createTempDir } = createScriptTestHarness();
 const ACP_FILE = "src/gateway/gateway-acp-bind.live.test.ts";
 const BACKEND_FILE = "src/gateway/gateway-cli-backend.live.test.ts";
 const CODEX_FILE = "src/gateway/gateway-codex-harness.live.test.ts";
@@ -285,18 +286,13 @@ it("does not count disabled opt-in sentinel assertions as live shard proof", () 
 });
 
 it("removes stale live shard reports before running a shard", () => {
-  const root = fs.mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-"));
+  const root = createTempDir("openclaw-live-shard-");
   const reportPath = path.join(root, "stale.vitest.json");
   fs.writeFileSync(reportPath, JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }), "utf8");
 
-  try {
-    live.removeLiveShardReportFile(reportPath);
-
-    expect(fs.existsSync(reportPath)).toBe(false);
-    expect(() => live.removeLiveShardReportFile(reportPath)).not.toThrow();
-  } finally {
-    fs.rmSync(root, { force: true, recursive: true });
-  }
+  live.removeLiveShardReportFile(reportPath);
+  expect(fs.existsSync(reportPath)).toBe(false);
+  expect(() => live.removeLiveShardReportFile(reportPath)).not.toThrow();
 });
 
 it.each([

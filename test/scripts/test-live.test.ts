@@ -1,14 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,8 +32,8 @@ describe("scripts/test-live", () => {
     { runtime: undefined, exitCode: 0 },
   ])(
     "runs the cache package lane through $runtime and preserves exit $exitCode",
-    async ({ runtime, exitCode }, { signal }) => {
-      await fixtureLifetime.run(async () => {
+    ({ runtime, exitCode }, { signal }) =>
+      fixtureLifetime.run(async () => {
         const root = fixtureLifetime.createTempDir("openclaw-cache-runtime-");
         const home = join(root, "home");
         const tmp = join(root, "tmp");
@@ -102,28 +93,17 @@ if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(pr
           cache: "1",
         });
         expect(invocation.args).toContain("src/agents/live-cache-regression.live.test.ts");
-      });
-    },
+      }),
   );
 
   it.each([
-    {
-      flags: ["--codex-harness", "--no-quiet"],
-      forwardedArgs: ["src/gateway/gateway-codex-harness.live.test.ts", "--reporter=verbose"],
-      forceCodexHarness: true,
-      quietOverride: "0",
-    },
-    {
-      flags: ["--quiet"],
-      forwardedArgs: ["--help", "--no-quiet", "--codex-harness"],
-      forceCodexHarness: false,
-      quietOverride: "1",
-    },
-  ])(
-    "parses $flags before -- and preserves $forwardedArgs after it",
-    ({ flags, forwardedArgs, ...expected }) => {
+    [["--codex-harness", "--no-quiet"], ["x.live.test.ts", "--reporter=verbose"], true, "0"],
+    [["--quiet"], ["--help", "--no-quiet", "--codex-harness"], false, "1"],
+  ] as const)(
+    "parses %j before -- and preserves %j after it",
+    (flags, forwardedArgs, forceCodexHarness, quietOverride) => {
       const args = parseTestLiveArgs([...flags, "--", ...forwardedArgs]);
-      expect(args).toEqual({ ...expected, forwardedArgs, help: false });
+      expect(args).toEqual({ forceCodexHarness, quietOverride, forwardedArgs, help: false });
       expect(buildTestLiveVitestArgs(args)).toEqual([
         "run",
         "--config",
@@ -164,9 +144,7 @@ if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(pr
 
         expect(runner.pid).toBeGreaterThan(0);
         process.kill(runner.pid!, stopSignal);
-        const result = await withinTest(completion, signal);
-
-        expect(result).toEqual({ code: null, signal: stopSignal });
+        expect(await withinTest(completion, signal)).toEqual({ code: null, signal: stopSignal });
         expect(readFileSync(join(root, "signaled"), "utf8")).toBe(stopSignal);
         expect(existsSync(invocation.args[3])).toBe(false);
       }),
@@ -200,7 +178,6 @@ if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(pr
       process.execPath,
       ["--import", "tsx", "scripts/test-live.mts", "--help"],
       {
-        cwd: process.cwd(),
         encoding: "utf8",
       },
     );
@@ -222,7 +199,7 @@ function withLiveFixture(
   }) => Promise<void>,
 ) {
   return fixtureLifetime.run(async () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-test-live-"));
+    const root = fixtureLifetime.createTempDir("openclaw-test-live-");
     const fakeBunPath = join(root, "bun");
     writeFakeBun(fakeBunPath);
     // Advance the watchdog only after both real process-group signal handlers are ready.
@@ -257,16 +234,14 @@ main(["--", "fake.live.test.ts"]);`,
     runner.stderr?.on("data", (chunk) => stderr.push(chunk));
     let pids: number[] = [];
     try {
-      const { childPid, descendantPid } = await waitForFixtureReady(runner, signal);
-      pids = [childPid, descendantPid];
+      pids = await waitForFixtureReady(runner, signal);
       await check({ root, runner, completion, stderr });
       for (const pid of pids) {
         await waitForProcessExit(pid, signal);
       }
       expect(existsSync(readFileSync(join(root, "namespace"), "utf8"))).toBe(false);
     } finally {
-      await stopFixture(runner, completion, pids);
-      rmSync(root, { force: true, recursive: true });
+      await fixtureLifetime.verifyCleanup(() => stopFixture(runner, completion, pids));
     }
   });
 }
@@ -321,12 +296,12 @@ async function waitForFixtureReady(runner: ReturnType<typeof spawn>, signal: Abo
   runner.once("error", onError);
   try {
     for await (const line of lines) {
-      const [child, descendant] = line.split(" ");
-      const childPid = Number(child);
-      const descendantPid = Number(descendant);
-      expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
-      expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
-      return { childPid, descendantPid };
+      const pids = line.split(" ").map(Number);
+      expect(pids).toHaveLength(2);
+      for (const pid of pids) {
+        expect(Number.isInteger(pid) && pid > 0).toBe(true);
+      }
+      return pids;
     }
     throw spawnError ?? new Error("fixture closed before reporting readiness");
   } finally {

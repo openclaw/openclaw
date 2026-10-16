@@ -39,50 +39,46 @@ esac
     );
     const nativeV2Args = "app-server --listen stdio:// -c features.multi_agent_v2=true";
     const explicitArgs = 'app-server --listen stdio:// -c model="caller model"';
-    const cases: Array<{ env: Record<string, string>; expected: string }> = [
-      { env: {}, expected: nativeV2Args },
-      { env: { OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "yes" }, expected: nativeV2Args },
-      { env: { OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "0" }, expected: "" },
-      {
-        env: {
+    const cases: Array<[Record<string, string>, string]> = [
+      [{}, nativeV2Args],
+      [{ OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "yes" }, nativeV2Args],
+      [{ OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE: "0" }, ""],
+      [
+        {
           OPENCLAW_CODEX_APP_SERVER_ARGS: explicitArgs,
           OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE: "",
           OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS: "quoted value = 'ok'",
         },
-        expected: explicitArgs,
-      },
+        explicitArgs,
+      ],
     ];
     const capture = path.join(root, "docker-args");
-    for (const testCase of cases) {
-      const result = runBash(
-        [SCRIPT_PATH],
-        {
-          HOME: path.join(root, "home"),
-          PATH: `${path.join(root, "bin")}:${process.env.PATH}`,
-          RUNNER_TEMP: path.join(root, "runtime"),
-          CI: "true",
-          CAPTURE: capture,
-          OPENAI_API_KEY: "test-openai-key",
-          OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
-          OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR: root,
-          ...testCase.env,
-        },
-        "/bin/bash",
-      );
+    const baseEnv = {
+      HOME: path.join(root, "home"),
+      PATH: `${path.join(root, "bin")}:${process.env.PATH}`,
+      RUNNER_TEMP: path.join(root, "runtime"),
+      CI: "true",
+      CAPTURE: capture,
+      OPENAI_API_KEY: "test-openai-key",
+      OPENCLAW_LIVE_CODEX_HARNESS_AUTH: "api-key",
+      OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR: root,
+    };
+    for (const [env, expected] of cases) {
+      const result = runBash([SCRIPT_PATH], { ...baseEnv, ...env }, "/bin/bash");
       expect(result.status, result.stderr).toBe(0);
       const argv = fs.readFileSync(capture, "utf8").split("\0");
       expect(argv[0]).toBe("run");
       const forwardedEnv = argv.flatMap((arg, index) => (arg === "-e" ? [argv[index + 1]] : []));
-      expect(forwardedEnv).toContain(`OPENCLAW_CODEX_APP_SERVER_ARGS=${testCase.expected}`);
+      expect(forwardedEnv).toContain(`OPENCLAW_CODEX_APP_SERVER_ARGS=${expected}`);
       expect(forwardedEnv.filter((value) => value?.startsWith(harnessPrefix))).toEqual([
         ...harnessArgs(`AUTH=api-key CHAT_IMAGE_PROBE=0 CODE_MODE_ONLY=0
 COMPACTION_STRESS=0 COMPACTION_STRESS_TURNS=4 DEBUG= DISABLE_LOOP_RELAY=0
 GUARDIAN_PROBE=1 IMAGE_PROBE=1 LARGE_OUTPUT_BYTES=300000 MCP_PROBE=1 MULTI_SESSION_PROBE=0
 MODEL=openai/gpt-5.6-luna TARGETS= THINKING=low EXPECTED_EFFORT= REQUIRE_GUARDIAN_EVENTS=1`),
-        `${harnessPrefix}REQUEST_TIMEOUT_MS=${testCase.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS ?? ""}`,
+        `${harnessPrefix}REQUEST_TIMEOUT_MS=${env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS ?? ""}`,
         ...harnessArgs(`RESUME_STRESS=0 RESUME_STRESS_HISTORY_TURNS=4 RESUME_STRESS_RESTARTS=3
 SETUP_TIMEOUT_SECONDS=180 SUBAGENT_ONLY= SUBAGENT_COUNT=1`),
-        `${harnessPrefix}SUBAGENT_PROBE=${testCase.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE ?? "1"}`,
+        `${harnessPrefix}SUBAGENT_PROBE=${env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE ?? "1"}`,
         `${harnessPrefix}USE_CI_SAFE_CODEX_CONFIG=1`,
       ]);
       expect(forwardedEnv.filter((value) => value?.startsWith("OPENCLAW_LIVE_CODEX_BIND"))).toEqual(

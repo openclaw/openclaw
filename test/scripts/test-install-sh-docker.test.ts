@@ -666,8 +666,7 @@ for (let index = 0; index < args.length; index++) {
           OPENCLAW_INSTALL_SMOKE_UPDATE_HOST: "127.0.0.1",
         },
       });
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
       const served = readFileSync(receipts, "utf8")
         .trim()
         .split("\n")
@@ -737,8 +736,7 @@ for (let index = 0; index < args.length; index++) {
         ),
       },
     );
-    expect(noPolicyResult.status, noPolicyResult.stderr).toBe(0);
-    expect(noPolicyResult.stdout).toBe("ok");
+    expect(noPolicyResult, noPolicyResult.stderr).toMatchObject({ status: 0, stdout: "ok" });
 
     const noHomeResult = spawnSync(
       "bash",
@@ -811,6 +809,16 @@ for (let index = 0; index < args.length; index++) {
     const projectDir = join(root, "project");
     const workspaceDir = join(projectDir, "packages", "fixture");
     const nestedProjectDir = join(workspaceDir, "nested");
+    const expectConfig = (
+      command: string,
+      expected: unknown[],
+      cwd = nestedProjectDir,
+      env: NodeJS.ProcessEnv = { ...process.env, HOME: root },
+    ) => {
+      const configResult = runNpmFixture(`source "$1"; ${command}`, cwd, env);
+      expect(configResult.status, configResult.stderr).toBe(0);
+      expect(configResult.stdout.trim().split("\n")).toEqual(expected);
+    };
     writeFiles(root, {
       "project/package.json":
         '{"name":"npm-policy-root","workspaces":["!packages/private","./packages/*/"]}\n',
@@ -828,27 +836,19 @@ ca[]=user-ca`,
       "project/packages/fixture/nested/.npmrc": "registry=https://nested.example.test/\n",
       "project/packages/fixture/.npmrc": "registry=https://workspace.example.test/\n",
     });
-    const projectResult = runNpmFixture(
-      'source "$1"; quiet_npm config get before; quiet_npm config get registry; quiet_npm config get fetch-retries; quiet_npm config get ca --json; quiet_npm config get cafile',
-      nestedProjectDir,
-      { ...process.env, HOME: root },
+    expectConfig(
+      "quiet_npm config get before; quiet_npm config get registry; quiet_npm config get fetch-retries; quiet_npm config get ca --json; quiet_npm config get cafile",
+      [
+        "null",
+        "https://project-registry.example.test/",
+        "17",
+        "project-ca",
+        join(nestedProjectDir, "certs", "ca.pem"),
+      ],
     );
-    expect(projectResult.status, projectResult.stderr).toBe(0);
-    expect(projectResult.stdout.trim().split("\n")).toEqual([
-      "null",
-      "https://project-registry.example.test/",
-      "17",
-      "project-ca",
-      join(nestedProjectDir, "certs", "ca.pem"),
+    expectConfig("quiet_npm config get registry --location global", [
+      "https://user-registry.example.test/",
     ]);
-
-    const globalResult = runNpmFixture(
-      'source "$1"; quiet_npm config get registry --location global',
-      nestedProjectDir,
-      { ...process.env, HOME: root },
-    );
-    expect(globalResult.status, globalResult.stderr).toBe(0);
-    expect(globalResult.stdout.trim()).toBe("https://user-registry.example.test/");
 
     const excludedWorkspaceDir = join(projectDir, "packages", "private");
     const excludedNestedDir = join(excludedWorkspaceDir, "nested");
@@ -857,13 +857,11 @@ ca[]=user-ca`,
       ".npmrc": "registry=https://private-registry.example.test/\n",
     });
     mkdirSync(excludedNestedDir);
-    const excludedResult = runNpmFixture(
-      'source "$1"; quiet_npm config get registry',
+    expectConfig(
+      "quiet_npm config get registry",
+      ["https://private-registry.example.test/"],
       excludedNestedDir,
-      { ...process.env, HOME: root },
     );
-    expect(excludedResult.status, excludedResult.stderr).toBe(0);
-    expect(excludedResult.stdout.trim()).toBe("https://private-registry.example.test/");
 
     const lowercaseUserConfigPath = join(root, "lowercase#user.npmrc");
     writeFileSync(lowercaseUserConfigPath, "fetch-timeout=1234\n");
@@ -885,17 +883,12 @@ ca[]=user-ca`,
         Npm_Config_Userconfig: "${HOME}/lowercase#user.npmrc",
       },
     ]) {
-      const configEnvResult = runNpmFixture(
-        'source "$1"; quiet_npm config get fetch-timeout; quiet_npm config get fetch-retries; quiet_npm config get globalconfig',
+      expectConfig(
+        "quiet_npm config get fetch-timeout; quiet_npm config get fetch-retries; quiet_npm config get globalconfig",
+        ["1234", "17", expect.stringMatching(/^\/dev\/fd\/\d+$/u)],
         nestedProjectDir,
         { ...configPathNeutralEnv, HOME: root, ...configEnv },
       );
-      expect(configEnvResult.status, configEnvResult.stderr).toBe(0);
-      expect(configEnvResult.stdout.trim().split("\n")).toEqual([
-        "1234",
-        "17",
-        expect.stringMatching(/^\/dev\/fd\/\d+$/u),
-      ]);
     }
   });
 
@@ -949,8 +942,10 @@ ensure_local_update_dist_import_closure || status=$?
 printf 'status=%s\\n' "$status"
 `);
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("status=1");
+    expect(result, result.stderr).toMatchObject({
+      status: 0,
+      stdout: expect.stringContaining("status=1"),
+    });
     expect(result.stdout).not.toContain("pnpm-called");
     expect(result.stderr).toContain("exact-image mode forbids a local rebuild");
   });
@@ -1727,6 +1722,31 @@ fs.readFileSync = (file, ...args) => {
 });
 
 describe("bun global install smoke", () => {
+  const runTimeout = (
+    timeout: string,
+    grace: string,
+    command: string[],
+    options: { preload?: string; timeout?: number } = {},
+  ) =>
+    spawnSync(
+      testNodeExecPath,
+      [
+        ...(options.preload ? ["--import", options.preload] : []),
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "run-with-timeout",
+        timeout,
+        ...command,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: grace },
+        timeout: options.timeout,
+      },
+    );
+  const bunCase = (
+    name: string,
+    overrides: { bunRuntime?: string; statusExit?: number; aiVersion?: string } = {},
+  ) => ({ name, bunRuntime: "supported", statusExit: 0, aiVersion: "2026.6.17", ...overrides });
   const runForceKillOrderingFixture = (
     first: "timer" | "drain",
     failure?: "permission" | "uncleared",
@@ -1800,14 +1820,7 @@ childProcess.spawn = () => {
 syncBuiltinESMExports();
 `,
     );
-    return spawnSync(
-      testNodeExecPath,
-      ["--import", preloadPath, BUN_GLOBAL_ASSERTIONS_PATH, "run-with-timeout", "60000", "fixture"],
-      {
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "100" },
-      },
-    );
+    return runTimeout("60000", "100", ["fixture"], { preload: preloadPath });
   };
 
   it.runIf(process.platform !== "win32").each([
@@ -1868,33 +1881,18 @@ syncBuiltinESMExports();
   });
 
   it.runIf(process.platform !== "win32").each([
-    {
-      name: "uses bundled AI bytes when a prebuilt tarball is provided",
-      bunRuntime: "supported",
-      statusExit: 0,
-    },
-    {
-      name: "rejects a mismatched bundled AI candidate before installation",
-      bunRuntime: "supported",
-      statusExit: 0,
+    bunCase("uses bundled AI bytes when a prebuilt tarball is provided"),
+    bunCase("rejects a mismatched bundled AI candidate before installation", {
       aiVersion: "2026.6.18",
-    },
-    {
-      name: "preserves redirected Bun command diagnostics and exit status",
-      bunRuntime: "supported",
-      statusExit: 23,
-    },
-    {
-      name: "uses Node for a Bun-installed package that explicitly rejects the Bun runtime",
+    }),
+    bunCase("preserves redirected Bun command diagnostics and exit status", { statusExit: 23 }),
+    bunCase("uses Node for a Bun-installed package that explicitly rejects the Bun runtime", {
       bunRuntime: "unsupported",
-      statusExit: 0,
-    },
-    {
-      name: "does not hide an unexpected direct Bun runtime failure",
+    }),
+    bunCase("does not hide an unexpected direct Bun runtime failure", {
       bunRuntime: "unexpected-failure",
-      statusExit: 0,
-    },
-  ])("$name", ({ bunRuntime, statusExit, aiVersion = "2026.6.17" }) => {
+    }),
+  ])("$name", ({ bunRuntime, statusExit, aiVersion }) => {
     const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
     const packageDir = join(tempDir, "fixture", "package");
     const packageTgz = join(tempDir, "openclaw-prebuilt.tgz");
@@ -2044,10 +2042,12 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     });
 
     if (aiVersion !== "2026.6.17") {
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "candidate version mismatch: openclaw=2026.6.17, dependency=2026.6.17, @openclaw/ai=2026.6.18",
-      );
+      expect(result).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining(
+          "candidate version mismatch: openclaw=2026.6.17, dependency=2026.6.17, @openclaw/ai=2026.6.18",
+        ),
+      });
       expect(existsSync(statePath)).toBe(false);
       return;
     }
@@ -2093,31 +2093,17 @@ process.on('SIGTERM', () => {
 fs.writeFileSync(process.argv[1], 'ready');
 setInterval(() => {}, 1000);`;
 
-      const result = spawnSync(
-        testNodeExecPath,
-        [
-          BUN_GLOBAL_ASSERTIONS_PATH,
-          "run-with-timeout",
-          "500",
-          "/usr/bin/time",
-          testNodeExecPath,
-          "-e",
-          childScript,
-          readyPath,
-          drainedPath,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "1000",
-          },
-          timeout: 5_000,
-        },
+      const result = runTimeout(
+        "500",
+        "1000",
+        ["/usr/bin/time", testNodeExecPath, "-e", childScript, readyPath, drainedPath],
+        { timeout: 5_000 },
       );
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("command timed out after 500ms: /usr/bin/time");
+      expect(result).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining("command timed out after 500ms: /usr/bin/time"),
+      });
       expect(readFileSync(readyPath, "utf8")).toBe("ready");
       expect(readFileSync(drainedPath, "utf8")).toBe("drained");
     },
@@ -2234,28 +2220,14 @@ setInterval(() => {}, 1000);`;
   );
 
   it("kills Bun global install smoke commands that ignore TERM after timeout", () => {
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        BUN_GLOBAL_ASSERTIONS_PATH,
-        "run-with-timeout",
-        "50",
-        testNodeExecPath,
-        "-e",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "50",
-        },
-        timeout: 5000,
-      },
+    const result = runTimeout(
+      "50",
+      "50",
+      [testNodeExecPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      { timeout: 5000 },
     );
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
+    expect(result).toMatchObject({ error: undefined, status: 1 });
     expect(result.stderr).toContain(`command timed out after 50ms: ${testNodeExecPath}`);
   });
 });
