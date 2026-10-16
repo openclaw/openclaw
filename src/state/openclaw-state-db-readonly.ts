@@ -551,7 +551,9 @@ function startRetainedOpenClawStateRead(
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   }
-  const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
+  const preserveArtifacts = context.databaseEngineInput
+    ? false
+    : requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
   const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const run = () => {

@@ -5,13 +5,17 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readPluginMetadataStateRows } from "../plugins/plugin-metadata-state-worker.js";
+import type { PluginMetadataStateRow } from "../plugins/plugin-metadata-state.kernel.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
   maintenanceOwnerMayCopySourcesInProcess,
 } from "../state/openclaw-state-maintenance-context.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveDatabaseEngineInput } from "./database-engine/config.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
@@ -20,6 +24,7 @@ import {
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { resolveUserPath } from "./home-dir.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
@@ -89,21 +94,6 @@ type BackupInput = {
   postgresOffline?: boolean;
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
-
-async function loadUpdateDatabaseBackupRuntime() {
-  const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
-    import("./backup-sqlite-snapshot.js"),
-    import("../snapshot/database-backup.js"),
-  ]);
-  return { discoverBackupDatabasePaths, readBackupEngine };
-}
-
-let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefined;
-
-/** Resolve the backup's lazy modules before an updater replaces its own dist tree. */
-export function prepareUpdateDatabaseBackupRuntime() {
-  return (backupRuntime ??= loadUpdateDatabaseBackupRuntime());
-}
 
 async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
@@ -282,6 +272,8 @@ export async function createUpdateDatabaseBackupInProcess(
     inspectionPlan: InspectionPlan;
     /** Exact families admitted by the owning Doctor before launching this backup child. */
     excludedDatabasePaths?: readonly string[];
+    /** PostgreSQL metadata facts read under the parent's maintenance admission. */
+    pluginMetadataRows?: readonly PluginMetadataStateRow[];
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<UpdateDatabaseBackup> {
@@ -289,12 +281,67 @@ export async function createUpdateDatabaseBackupInProcess(
   // Older parents strip owners from discovery before calling the candidate worker.
   // Compare the same admitted dialect; absent metadata must not become an inventory change.
   const inspectionPlan = input.inspectionPlan;
+  // The installed package may already be replaced. Keep cold backup imports and
+  // engine discovery in this retained child, alongside the native snapshots.
+  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
+  const { readBackupEngine, capturePostgresBackup } =
+    await import("../snapshot/database-backup.js");
+  const discoverPostgresPaths = async () => {
+    const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
+    const { prepareBundledDiscoveryMode } = await import("../plugins/bundled-discovery-state.js");
+    const { preparePersistedInstalledPluginIndexCacheEntry } =
+      await import("../plugins/installed-plugin-index-record-state.js");
+    const { readPluginMetadataStateRowsInDatabase } =
+      await import("../plugins/plugin-metadata-state.kernel.js");
+    const { openNodeSqliteDatabase } = await import("./node-sqlite.js");
+    const { withPreparedSqliteSnapshot } = await import("./sqlite-readonly-location-cleanup.js");
+    const { prepareSqliteReadOnlyLocationInProcess, prepareSqliteReadOnlyLocationSyncInProcess } =
+      await import("./sqlite-readonly-location.js");
+    const { updateStateDatabaseExists } = await import("./update-candidate-state.sizes.js");
+    const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+    const env = { ...process.env, ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+    // Parent admission supplies PostgreSQL facts; SQLite metadata comes from private
+    // bytes because maintenance authority does not cross this process boundary.
+    const rows =
+      input.pluginMetadataRows ??
+      ((await updateStateDatabaseExists(shared))
+        ? await withPreparedSqliteSnapshot(
+            input.stopped || input.preserveSourceArtifacts
+              ? prepareSqliteReadOnlyLocationSyncInProcess(shared, input.stagingRoot)
+              : await prepareSqliteReadOnlyLocationInProcess(shared, input.stagingRoot),
+            (location) => {
+              using db = openNodeSqliteDatabase(location, { readOnly: true });
+              return readPluginMetadataStateRowsInDatabase(db, [
+                "plugins.bundledDiscovery",
+                "plugins.installedIndex",
+              ]);
+            },
+          )
+        : []);
+    await using cache = createPluginCache();
+    return await withPluginCache(cache, async () => {
+      const activate = await prepareBundledDiscoveryMode(env, async () =>
+        rows.find((row) => row.state_key === "plugins.bundledDiscovery"),
+      );
+      const installed = await preparePersistedInstalledPluginIndexCacheEntry(
+        { stateDir: input.stateDir, env },
+        async () => rows.find((row) => row.state_key === "plugins.installedIndex"),
+      );
+      activate();
+      installed.assertCurrent();
+      return (await discoverBackupDatabasePaths({ ...input, env })).filter(
+        (file) => readBackupEngine(file).engine === "postgres",
+      );
+    });
+  };
+  const postgresPaths = await discoverPostgresPaths();
+  const additionalPaths = [...(input.additionalPaths ?? []), ...postgresPaths];
   const includeOwners = inspectionPlan.files.some(([, database]) => database.owners !== undefined);
   const inventoryFor = (plan: InspectionPlan) =>
     canonicalDatabaseInventory(
       plan,
       includeOwners,
-      input.additionalPaths,
+      additionalPaths,
       input.additionalFiles,
       input.excludedDatabasePaths,
     );
@@ -318,8 +365,6 @@ export async function createUpdateDatabaseBackupInProcess(
       return undefined;
     }
   };
-  const { readBackupEngine, capturePostgresBackup } =
-    await import("../snapshot/database-backup.js");
   const engines = new Map(inventory.present.map((file) => [file, readBackupEngine(file)]));
   if (
     [...engines.values()].some((engine) => engine.engine === "postgres") &&
@@ -433,14 +478,21 @@ export async function createUpdateDatabaseBackup({
   retryAdvice?: boolean;
 }): Promise<UpdateDatabaseBackup> {
   const controller = new AbortController();
-  const { discoverBackupDatabasePaths, readBackupEngine } =
-    await prepareUpdateDatabaseBackupRuntime();
-  const postgresPaths = (await discoverBackupDatabasePaths(input)).filter(
-    (file) => readBackupEngine(file).engine === "postgres",
-  );
-  const additionalPaths = [...(input.additionalPaths ?? []), ...postgresPaths].map((file) =>
-    path.resolve(file),
-  );
+  const loadPaths = input.config.plugins?.load?.paths;
+  // The child parks its cwd and cannot inherit the updater's invocation-path scope.
+  const config = loadPaths?.length
+    ? {
+        ...input.config,
+        plugins: {
+          ...input.config.plugins,
+          load: {
+            ...input.config.plugins?.load,
+            paths: loadPaths.map((file) => resolveUserPath(file, input.env)),
+          },
+        },
+      }
+    : input.config;
+  const additionalPaths = (input.additionalPaths ?? []).map((file) => path.resolve(file));
   const additionalFiles = input.additionalFiles?.map((file) => path.resolve(file));
   const signal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
@@ -457,6 +509,7 @@ export async function createUpdateDatabaseBackup({
       // Each SQLite reader owns its token-protected scratch beneath this private backup directory.
       const workerInput = {
         ...input,
+        config,
         preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
         additionalPaths,
         additionalFiles,
@@ -464,6 +517,23 @@ export async function createUpdateDatabaseBackup({
         stagingRoot: directory,
       };
       const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+      const databaseEngineInput = await resolveDatabaseEngineInput(input.config, sourceEnv);
+      // A PostgreSQL anchor has no machine-state rows. The existing retained reader
+      // keeps parent admission, but engine facts belong to this service's config.
+      const pluginMetadataRows = databaseEngineInput
+        ? await readPluginMetadataStateRows(
+            ["plugins.bundledDiscovery", "plugins.installedIndex"],
+            {
+              path: shared,
+              env: sourceEnv,
+              context: {
+                ...captureOpenClawStateReadWorkerContext({ path: shared, env: sourceEnv }),
+                databaseEngineInput,
+              },
+            },
+            true,
+          )
+        : undefined;
       const scope = getOpenClawDatabaseMaintenanceScope();
       const custody =
         acquisition?.mode === "maintenance-owner" &&
@@ -491,7 +561,7 @@ export async function createUpdateDatabaseBackup({
       const excludedDatabasePaths = rehearsal?.admit(
         inspectionPlan.files.flatMap(([, database]) => database.spellings),
       );
-      const capturedInput = { ...workerInput, excludedDatabasePaths };
+      const capturedInput = { ...workerInput, excludedDatabasePaths, pluginMetadataRows };
       const files = [
         ...inspectionPlan.files.flatMap(([, database]) => database.spellings),
         ...(additionalPaths ?? []),

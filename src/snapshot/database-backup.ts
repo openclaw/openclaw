@@ -13,8 +13,10 @@ import { requireDirectorySync, syncDirectory } from "../infra/directory-durabili
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   exportPostgresBackup,
   restorePostgresBackup,
@@ -194,13 +196,14 @@ type BackupReply =
 
 async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Promise<T> {
   assertCurrent();
-  // This one-shot worker is joined before publication; it never survives a runtime swap.
-  const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
+  // Recovery can first run after activation. Retain its original code through worker close.
+  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
   const pool = new WorkerTaskPool<BackupTask, T>({
-    workerUrl: new URL(import.meta.url),
+    workerUrl: source.moduleUrl,
     maxWorkers: 1,
     workerOptions: { workerData: { openclawDatabaseBackup: true } },
   });
+  source.runtimeGeneration?.retain(pool, () => pool.close());
   try {
     const result = await pool.run(task, {});
     assertCurrent();
