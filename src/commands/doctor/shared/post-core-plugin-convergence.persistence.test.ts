@@ -169,10 +169,7 @@ describe("post-core plugin persistence cancellation", () => {
           resolvedVersion: "1.0.0",
         };
       }
-      await seedInstalledPluginIndex(records, {
-        config: cfg,
-        env: state.env,
-      });
+      await seedInstalledPluginIndex(records, { config: cfg, env: state.env });
       const configBefore = fs.readFileSync(state.configPath, "utf8");
       const firstMarker = resolveRetainedManagedNpmInstallMarkerPath(
         expectDefined(records["first-retained"], "first retained record").installPath,
@@ -255,10 +252,7 @@ describe("post-core plugin persistence cancellation", () => {
       const cfg = { plugins: { enabled: false } };
       const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
       const next: Record<string, PluginInstallRecord> = { next: { source: "archive" } };
-      await seedInstalledPluginIndex(previous, {
-        config: cfg,
-        env: state.env,
-      });
+      await seedInstalledPluginIndex(previous, { config: cfg, env: state.env });
       const controller = new AbortController();
       const refusal = new Error("initiating operation cancelled during repair");
       await withPluginLifecycleLease({ env: state.env }, async () => {

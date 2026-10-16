@@ -110,10 +110,7 @@ describe("persisted provider rename", () => {
         applyProviderRenames(source, renames).config,
         state.env,
         state.configPath,
-        {
-          shouldWriteConfig: true,
-          providerRenames: renames,
-        },
+        { shouldWriteConfig: true, providerRenames: renames },
       );
       ctx.cfgForPersistence = source;
       await runInitialConfigWriteHealth(ctx);
@@ -239,9 +236,7 @@ describe("persisted provider rename", () => {
           const laterPlans = planProviderRenames(local, renames);
           expect(laterPlans).toEqual([]);
           await runInitialConfigWriteHealth(
-            repairContext(local, state.env, state.configPath, {
-              providerRenames: laterPlans,
-            }),
+            repairContext(local, state.env, state.configPath, { providerRenames: laterPlans }),
           );
           expect(loadSessionEntry(scope)?.modelProvider).toBe("ollama");
           expect(

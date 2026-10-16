@@ -169,10 +169,7 @@ describe("provider rename config migration", () => {
     expect(config).toEqual(before);
     expect(
       applyProviderRenames(result.config, planProviderRenames(result.config, renames)),
-    ).toEqual({
-      config: result.config,
-      changes: [],
-    });
+    ).toEqual({ config: result.config, changes: [] });
   });
 
   it("rewrites every reference location, drops profile pins once, and preserves policy denials", () => {

@@ -1,4 +1,3 @@
-// Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
@@ -33,11 +32,7 @@ async function shouldRunConfiguredPluginInstallReleaseStepThroughDoctor(params: 
   currentVersion?: string | null;
   touchedVersion?: string | null;
 }): Promise<boolean> {
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({
-    cfg: {},
-    env: {},
-    ...params,
-  });
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({ cfg: {}, env: {}, ...params });
   expect(result.touchedConfig).toBe(false);
   expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
   return result.completed;
@@ -57,10 +52,7 @@ async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
     [MissingPluginInstallRepairCall]
   >;
   const call = calls[0]?.[0];
-  return {
-    pluginIds: call?.pluginIds ?? [],
-    channelIds: call?.channelIds ?? [],
-  };
+  return { pluginIds: call?.pluginIds ?? [], channelIds: call?.channelIds ?? [] };
 }
 
 vi.mock("../../../config/plugin-auto-enable.js", () => ({
@@ -89,49 +81,25 @@ describe("configured plugin install release step", () => {
     mocks.detectPluginAutoEnableCandidates.mockReturnValue([]);
     mocks.getOfficialExternalPluginCatalogEntry.mockReturnValue(undefined);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
-      warnings: [],
-    });
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({ changes: [], warnings: [] });
   });
 
   it("runs only for configs last touched before 2026.5.2", async () => {
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.1",
-        touchedVersion: "2026.4.30",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2-beta.1",
-        touchedVersion: "2026.5.1",
-      }),
-    ).toBe(true);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "2026.5.1",
-      }),
-    ).toBe(true);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "2026.5.2",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.3",
-        touchedVersion: "2026.5.3",
-      }),
-    ).toBe(false);
-    expect(
-      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-        currentVersion: "2026.5.2",
-        touchedVersion: "not-a-version",
-      }),
-    ).toBe(true);
+    for (const [currentVersion, touchedVersion, expected] of [
+      ["2026.5.1", "2026.4.30", false],
+      ["2026.5.2-beta.1", "2026.5.1", true],
+      ["2026.5.2", "2026.5.1", true],
+      ["2026.5.2", "2026.5.2", false],
+      ["2026.5.3", "2026.5.3", false],
+      ["2026.5.2", "not-a-version", true],
+    ] as const) {
+      expect(
+        await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
+          currentVersion,
+          touchedVersion,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it("collects used plugin ids without treating allow-only entries as usage", async () => {
@@ -141,36 +109,17 @@ describe("configured plugin install release step", () => {
       { pluginId: "disabled-entry", kind: "setup-auto-enable", reason: "test" },
     ]);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      {
-        pluginId: "anthropic-provider",
-        providerId: "anthropic",
-      },
-      {
-        pluginId: "unused-provider",
-        providerId: "unused",
-      },
+      { pluginId: "anthropic-provider", providerId: "anthropic" },
+      { pluginId: "unused-provider", providerId: "unused" },
     ]);
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        auth: {
-          profiles: {
-            work: {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-        },
-        channels: {
-          wecom: { enabled: true },
-          off: { enabled: false },
-        },
+        auth: { profiles: { work: { provider: "anthropic", mode: "api_key" } } },
+        channels: { wecom: { enabled: true }, off: { enabled: false } },
         plugins: {
           allow: ["allow-only"],
           deny: ["denied"],
-          slots: {
-            memory: "memory-lancedb",
-            contextEngine: "none",
-          },
+          slots: { memory: "memory-lancedb", contextEngine: "none" },
           entries: {
             configured: { config: { nested: true } },
             "disabled-entry": { enabled: false, config: { nested: true } },
@@ -195,20 +144,11 @@ describe("configured plugin install release step", () => {
 
   it("collects provider plugins from channel-only model overrides", async () => {
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
-      {
-        pluginId: "anthropic-provider",
-        providerId: "anthropic",
-      },
+      { pluginId: "anthropic-provider", providerId: "anthropic" },
     ]);
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        channels: {
-          modelByChannel: {
-            discord: {
-              default: "anthropic/claude-opus-4-7",
-            },
-          },
-        },
+        channels: { modelByChannel: { discord: { default: "anthropic/claude-opus-4-7" } } },
       },
       env: {},
     });
@@ -220,24 +160,9 @@ describe("configured plugin install release step", () => {
   it("collects external speech and web-fetch plugins selected by config", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        agents: {
-          defaults: {
-            model: "groq/openai/gpt-oss-120b",
-          },
-        },
-        tts: {
-          provider: "gradium",
-          providers: {
-            inworld: {},
-          },
-        },
-        tools: {
-          web: {
-            fetch: {
-              provider: "firecrawl",
-            },
-          },
-        },
+        agents: { defaults: { model: "groq/openai/gpt-oss-120b" } },
+        tts: { provider: "gradium", providers: { inworld: {} } },
+        tools: { web: { fetch: { provider: "firecrawl" } } },
       },
       env: {},
     });
@@ -271,10 +196,7 @@ describe("configured plugin install release step", () => {
   it("collects env-only web provider plugins before auto-detection", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {},
-      env: {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
+      env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
     });
 
     expect(result.pluginIds).toEqual(["exa", "firecrawl"]);
@@ -284,21 +206,9 @@ describe("configured plugin install release step", () => {
   it("does not collect env-only web provider plugins when search is disabled", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-            },
-            fetch: {
-              enabled: false,
-            },
-          },
-        },
+        tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
       },
-      env: {
-        EXA_API_KEY: "exa-key",
-        FIRECRAWL_API_KEY: "firecrawl-key",
-      },
+      env: { EXA_API_KEY: "exa-key", FIRECRAWL_API_KEY: "firecrawl-key" },
     });
 
     expect(result.pluginIds).toEqual([]);
@@ -308,10 +218,7 @@ describe("configured plugin install release step", () => {
   it("collects env-only external provider plugins before model discovery", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {},
-      env: {
-        GROQ_API_KEY: "groq-key",
-        MODELSTUDIO_API_KEY: "qwen-key",
-      },
+      env: { GROQ_API_KEY: "groq-key", MODELSTUDIO_API_KEY: "qwen-key" },
     });
 
     expect(result.pluginIds).toEqual(["groq", "qwen"]);
@@ -328,26 +235,10 @@ describe("configured plugin install release step", () => {
     ]);
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        agents: {
-          defaults: {
-            model: "gmi-cloud/google/gemini-3.1-flash-lite",
-          },
-        },
-        auth: {
-          profiles: {
-            gmi: {
-              provider: "gmi-cloud",
-              mode: "api_key",
-            },
-          },
-        },
+        agents: { defaults: { model: "gmi-cloud/google/gemini-3.1-flash-lite" } },
+        auth: { profiles: { gmi: { provider: "gmi-cloud", mode: "api_key" } } },
         models: {
-          providers: {
-            gmicloud: {
-              baseUrl: "https://api.gmi-serving.com/v1",
-              models: [],
-            },
-          },
+          providers: { gmicloud: { baseUrl: "https://api.gmi-serving.com/v1", models: [] } },
         },
       },
       env: {},
@@ -360,17 +251,8 @@ describe("configured plugin install release step", () => {
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
-        acp: {
-          enabled: true,
-          backend: "acpx",
-        },
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-            },
-          },
-        },
+        acp: { enabled: true, backend: "acpx" },
+        tools: { web: { search: { provider: "brave" } } },
       },
       env: {},
     });
@@ -384,12 +266,8 @@ describe("configured plugin install release step", () => {
       (
         await collectReleaseConfiguredPluginIdsThroughDoctor({
           cfg: {
-            channels: {
-              matrix: { accessToken: "test" },
-            },
-            plugins: {
-              deny: ["matrix"],
-            },
+            channels: { matrix: { accessToken: "test" } },
+            plugins: { deny: ["matrix"] },
           },
           env: {},
         })
@@ -400,14 +278,8 @@ describe("configured plugin install release step", () => {
       (
         await collectReleaseConfiguredPluginIdsThroughDoctor({
           cfg: {
-            channels: {
-              matrix: { accessToken: "test" },
-            },
-            plugins: {
-              entries: {
-                matrix: { enabled: false },
-              },
-            },
+            channels: { matrix: { accessToken: "test" } },
+            plugins: { entries: { matrix: { enabled: false } } },
           },
           env: {},
         })
@@ -417,11 +289,7 @@ describe("configured plugin install release step", () => {
     expect(
       (
         await collectReleaseConfiguredPluginIdsThroughDoctor({
-          cfg: {
-            channels: {
-              Matrix: { enabled: false, accessToken: "test" },
-            },
-          },
+          cfg: { channels: { Matrix: { enabled: false, accessToken: "test" } } },
           env: { MATRIX_ACCESS_TOKEN: "test" },
         })
       ).channelIds,
@@ -437,12 +305,7 @@ describe("configured plugin install release step", () => {
       pluginInventoryChanged: true,
     });
     const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-          agentRuntime: { id: "codex" },
-        },
-      },
+      agents: { defaults: { model: "openai/gpt-5.4", agentRuntime: { id: "codex" } } },
     };
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg,
@@ -472,13 +335,7 @@ describe("configured plugin install release step", () => {
       ],
     });
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
+      cfg: { plugins: { entries: { discord: { enabled: true } } } },
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {
@@ -517,13 +374,7 @@ describe("configured plugin install release step", () => {
       warnings: [],
     });
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        channels: {
-          whatsapp: {
-            allowFrom: ["+15555550123"],
-          },
-        },
-      },
+      cfg: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
       currentVersion: "2026.5.12",
       touchedVersion: "2026.5.12",
       env: {},
@@ -548,11 +399,7 @@ describe("configured plugin install release step", () => {
       return undefined;
     });
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        plugins: {
-          allow: ["lobster", "unofficial-custom"],
-        },
-      },
+      cfg: { plugins: { allow: ["lobster", "unofficial-custom"] } },
       env: {},
     });
 
@@ -568,14 +415,7 @@ describe("configured plugin install release step", () => {
       return undefined;
     });
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        plugins: {
-          allow: ["lobster"],
-          entries: {
-            lobster: { enabled: true },
-          },
-        },
-      },
+      cfg: { plugins: { allow: ["lobster"], entries: { lobster: { enabled: true } } } },
       env: {},
     });
 

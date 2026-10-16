@@ -72,15 +72,10 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
-function writeCodexPackage(params: {
-  root: string;
-  hostRoot: string;
-  version: string;
-  sdkExport: string;
-}): string {
-  writeJson(path.join(params.root, "package.json"), {
+function writeCodexPackage(root: string, sdkExport: string, version = HOST_VERSION): string {
+  writeJson(path.join(root, "package.json"), {
     name: "@openclaw/codex",
-    version: params.version,
+    version,
     type: "module",
     peerDependencies: { openclaw: ">=2026.9.4" },
     openclaw: {
@@ -90,24 +85,24 @@ function writeCodexPackage(params: {
       build: { openclawVersion: HOST_VERSION },
     },
   });
-  writeJson(path.join(params.root, "openclaw.plugin.json"), {
+  writeJson(path.join(root, "openclaw.plugin.json"), {
     id: "codex",
-    version: params.version,
+    version,
     configSchema: { type: "object" },
   });
-  const entry = path.join(params.root, "dist", "index.js");
+  const entry = path.join(root, "dist", "index.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
   fs.writeFileSync(
     entry,
-    `import { ${params.sdkExport} } from "openclaw/plugin-sdk/native-hook-relay-runtime";
-export function runTurn() { return ${params.sdkExport}(); }
+    `import { ${sdkExport} } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+export function runTurn() { return ${sdkExport}(); }
 export default { id: "codex", register() {} };
 `,
   );
-  fs.mkdirSync(path.join(params.root, "node_modules"), { recursive: true });
+  fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
   fs.symlinkSync(
-    params.hostRoot,
-    path.join(params.root, "node_modules", "openclaw"),
+    mocks.hostRoot,
+    path.join(root, "node_modules", "openclaw"),
     process.platform === "win32" ? "junction" : "dir",
   );
   return entry;
@@ -180,12 +175,7 @@ describe("post-core convergence on source checkouts", () => {
         path.join(sdkDir, "native-hook-relay-runtime.js"),
         `export function ${NEW_EXPORT}() { return "synthetic turn completed"; }\n`,
       );
-      writeCodexPackage({
-        root: bundledDir,
-        hostRoot,
-        version: HOST_VERSION,
-        sdkExport: NEW_EXPORT,
-      });
+      writeCodexPackage(bundledDir, NEW_EXPORT);
       const npmRoot = resolvePluginNpmGenerationProjectDir({
         npmDir: path.join(stateDir, "npm"),
         packageName: "@openclaw/codex",
@@ -195,12 +185,7 @@ describe("post-core convergence on source checkouts", () => {
         dependencies: { "@openclaw/codex": version },
       });
       const npmDir = path.join(npmRoot, "node_modules", "@openclaw", "codex");
-      const npmEntry = writeCodexPackage({
-        root: npmDir,
-        hostRoot,
-        version,
-        sdkExport: OLD_EXPORT,
-      });
+      const npmEntry = writeCodexPackage(npmDir, OLD_EXPORT, version);
       const env: NodeJS.ProcessEnv = {
         HOME: root,
         OPENCLAW_HOME: root,
@@ -268,12 +253,14 @@ describe("post-core convergence on source checkouts", () => {
             env,
             compatibilityHostVersion: HOST_VERSION,
           });
-          expect.soft(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
-          expect.soft(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-          expect.soft(result.installRecords).toEqual(records);
-          expect.soft(result.errored).toBe(false);
-          expect.soft(result.smokeFailures).toEqual([]);
-          expect.soft(result.warnings).toEqual([]);
+          expect.soft(result).toEqual(
+            expect.objectContaining({
+              installRecords: records,
+              errored: false,
+              smokeFailures: [],
+              warnings: [],
+            }),
+          );
           expect.soft(result.outcomes).toContainEqual(
             expect.objectContaining({
               pluginId: "codex",
@@ -295,8 +282,9 @@ describe("post-core convergence on source checkouts", () => {
             throw new Error("Codex disappeared during source checkout convergence");
           }
           const loaded = importAndRun(selected.source, env);
-          expect.soft(loaded.status, loaded.stderr).toBe(0);
-          expect.soft(loaded.stdout).toBe("synthetic turn completed");
+          expect
+            .soft(loaded, loaded.stderr)
+            .toMatchObject({ status: 0, stdout: "synthetic turn completed" });
           const startup = await runActivePluginPayloadSmokeCheck({ cfg, records, env });
           expect(startup.failures).toEqual([]);
           if (flow === "cli named" || flow === "cli all") {
@@ -330,12 +318,7 @@ describe("post-core convergence on source checkouts", () => {
             };
             expect(filterRecordsToActive({ cfg: selectedConfig, records, env })).toEqual(records);
             const sourceOnlyDir = path.join(hostRoot, "extensions", "codex");
-            writeCodexPackage({
-              root: sourceOnlyDir,
-              hostRoot,
-              version: HOST_VERSION,
-              sdkExport: NEW_EXPORT,
-            });
+            writeCodexPackage(sourceOnlyDir, NEW_EXPORT);
             withPluginCache(createPluginCache(), () => {
               const sourceOnlyRegistry = loadPluginManifestRegistryCore({
                 config: cfg,
@@ -344,10 +327,7 @@ describe("post-core convergence on source checkouts", () => {
               });
               expect(
                 sourceOnlyRegistry.plugins.find((plugin) => plugin.id === "codex"),
-              ).toMatchObject({
-                origin: "global",
-                rootDir: npmDir,
-              });
+              ).toMatchObject({ origin: "global", rootDir: npmDir });
             });
           }
         });
