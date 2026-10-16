@@ -60,6 +60,10 @@ it("carries cron Codex runtime policy targets only during repair", async () => {
     repairPrefixedConfig: true,
   });
 
+  expect(mocks.repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+    cfg: { gateway },
+    migrateCodexModelRefs: false,
+  });
   expect(mocks.collectCronCodexRuntimePolicyTargetsReadOnly).toHaveBeenCalledWith({
     cfg: { gateway },
   });
