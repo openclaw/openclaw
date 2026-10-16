@@ -23,7 +23,7 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
     string,
     { readyMs: number; frameMs: number; renderOpportunityMs: number }
   > = {};
-  for (const [name, triggerSelector, contentSelector] of [
+  for (const [name, triggerQuery, contentQuery] of [
     ["reaction", "openclaw-message-reaction-picker .trigger", ".chat-reaction-picker .palette"],
     [
       "widget",
@@ -63,11 +63,16 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
         // A task posted after the ready rAF bounds rendering opportunity, not compositor presentation.
         await new Promise<void>((resolve) => {
           const channel = new MessageChannel();
-          channel.port1.onmessage = () => {
-            channel.port1.close();
-            channel.port2.close();
-            resolve();
-          };
+          channel.port1.addEventListener(
+            "message",
+            () => {
+              channel.port1.close();
+              channel.port2.close();
+              resolve();
+            },
+            { once: true },
+          );
+          channel.port1.start();
           channel.port2.postMessage(null);
         });
         return {
@@ -76,7 +81,7 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
           renderOpportunityMs: performance.now() - started,
         };
       },
-      { triggerSelector, contentSelector },
+      { triggerSelector: triggerQuery, contentSelector: contentQuery },
     );
     if (run === 0) {
       await page.screenshot({
@@ -85,6 +90,8 @@ export async function probeColdLoadOverlays(page: Page, artifactDir: string, run
       });
     }
     await page.keyboard.press("Escape");
+    // Keep the next first-open sample separate from this overlay's finite exit.
+    await page.waitForFunction(() => !document.querySelector('.oc-overlay[data-phase="closing"]'));
   }
   return { cold, firstOpen };
 }
