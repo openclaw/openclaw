@@ -11,6 +11,7 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 const mocks = vi.hoisted(() => {
   const liveRuns = new Map<string, SubagentRunRecord>();
@@ -37,9 +38,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./subagent-registry-memory.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-registry-memory.js")>()),
+// mock-isolation: Scoped reads use fixture rows without initializing the live registry owner.
+vi.mock("./subagent-registry-memory.js", () => ({
   getSubagentRunsForChildSession: mocks.getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup: (runs: ReadonlyMap<string, SubagentRunRecord>) =>
+    new SubagentSessionReadLookup(runs),
   immutableSubagentRunSessionList: (entry: SubagentRunRecord) =>
     projectSubagentRunForSessionList(entry),
   subagentRuns: mocks.liveRuns,
