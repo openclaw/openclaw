@@ -90,6 +90,11 @@ describe("offline device abandonment with retained physical cleanup", () => {
         owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
       });
       await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      const expectClaimRevoked = () => {
+        expect(placements.validateTurnClaim(claim)).toBe(false);
+        expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
+        expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+      };
       const replacementId = "worker-replacement";
       await seedDevice(replacementId);
       const attachReplacement = () =>
@@ -119,6 +124,15 @@ describe("offline device abandonment with retained physical cleanup", () => {
           workspaceTransfer: transfer,
         });
       let tunnels = createTunnels();
+      const startTunnel = (targetEnvironmentId: string, ownerEpoch: number) =>
+        tunnels.start({
+          environmentId: targetEnvironmentId,
+          ownerEpoch,
+          deviceId,
+          sessionId: active.sessionId,
+          executionMode: "worker-turn",
+          expectedBuild: build,
+        });
       const destroy = vi.fn(async () => {});
       const cleanupStarted = createDeferred();
       const releaseCleanup = createDeferred();
@@ -165,14 +179,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
       vi.mocked(harness.environments.get).mockImplementation(service.get);
       vi.mocked(harness.environments.destroy).mockImplementation(service.destroy);
       vi.mocked(harness.environments.stopTunnel).mockImplementation(service.stopTunnel);
-      await tunnels.start({
-        environmentId,
-        ownerEpoch: attached.ownerEpoch,
-        deviceId,
-        sessionId: active.sessionId,
-        executionMode: "worker-turn",
-        expectedBuild: build,
-      });
+      await startTunnel(environmentId, attached.ownerEpoch);
       listNodes.mockResolvedValue([]);
 
       try {
@@ -181,16 +188,9 @@ describe("offline device abandonment with retained physical cleanup", () => {
           await expect(tunnels.stop(environmentId, attached.ownerEpoch)).rejects.toThrow(
             "not connected",
           );
-          await expect(
-            tunnels.start({
-              environmentId,
-              ownerEpoch: attached.ownerEpoch,
-              deviceId,
-              sessionId: active.sessionId,
-              executionMode: "worker-turn",
-              expectedBuild: build,
-            }),
-          ).rejects.toThrow("not connected");
+          await expect(startTunnel(environmentId, attached.ownerEpoch)).rejects.toThrow(
+            "not connected",
+          );
           // Join the failed replacement's own retirement before testing another stop.
           await expect(tunnels.stop(environmentId, attached.ownerEpoch)).rejects.toThrow();
           if (cleanup === "retired-mixed") {
@@ -253,9 +253,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
         } else {
           expect.soft(outcome).toMatchObject({ state: "local", turnClaim: null });
         }
-        expect(placements.validateTurnClaim(claim)).toBe(false);
-        expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
-        expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+        expectClaimRevoked();
         expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
         await expect(service.acquireTurnCredential(claim)).rejects.toThrow(
           "claim is not authoritative",
@@ -308,14 +306,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
           await placements.authorizeWorkerTurnTools(replacementClaim, ["sessions_send"]);
           const grant = await service.acquireTurnCredential(replacementClaim);
           expect(await service.acknowledgeCredentialDelivery(grant)).toBe(true);
-          await tunnels.start({
-            environmentId: replacementId,
-            ownerEpoch: replacement.ownerEpoch,
-            deviceId,
-            sessionId: active.sessionId,
-            executionMode: "worker-turn",
-            expectedBuild: build,
-          });
+          await startTunnel(replacementId, replacement.ownerEpoch);
         }
         const replacementCredential = support.testState.store.getCredential(replacementId);
         await service.reconcileOnce();
@@ -369,9 +360,7 @@ describe("offline device abandonment with retained physical cleanup", () => {
           expect(placements.isWorkerTurnToolAuthorized(replacementClaim, "sessions_send")).toBe(
             true,
           );
-          expect(placements.validateTurnClaim(claim)).toBe(false);
-          expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
-          expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
+          expectClaimRevoked();
         }
       } finally {
         releaseCleanup.resolve();

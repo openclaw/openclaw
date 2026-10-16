@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
@@ -20,6 +20,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { nodeWorkspaceTransferReconcilePath } from "../../worker/node-workspace-transfer-protocol.js";
 import { hashWorkerCredential } from "./credential.js";
+import { workspaceFiles } from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
@@ -30,6 +31,23 @@ import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+async function listen(server: Server) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("HTTP fixture did not bind");
+  }
+  return `127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server) {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
 
 describe("workspace upload cancellation", () => {
   it.each([
@@ -106,18 +124,12 @@ describe("workspace upload cancellation", () => {
         )
         .finally(() => finished.resolve());
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP fixture did not bind");
-    }
+    const address = await listen(server);
     const raw = Buffer.from(snapshot.rawManifest);
     const length = Buffer.alloc(4);
     length.writeUInt32BE(raw.length);
     const request = fetch(
-      `http://127.0.0.1:${address.port}${nodeWorkspaceTransferReconcilePath("environment", snapshot.manifestRef)}`,
+      `http://${address}${nodeWorkspaceTransferReconcilePath("environment", snapshot.manifestRef)}`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
@@ -206,9 +218,7 @@ describe("workspace upload cancellation", () => {
       await request;
       await finished.promise;
       await cleanup?.catch(() => undefined);
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       await service.closeAll().catch((error: unknown) => {
         if (error !== expectedDisposalError) {
           throw error;
@@ -236,6 +246,7 @@ describe("attachment transfer revocation", () => {
   ] as const)("$boundary revoked=$revoke", async ({ boundary, revoke }) => {
     const root = await fs.realpath(tempDirs.make("attachment-revocation-"));
     const workspaceDir = path.join(root, "workspace");
+    const files = workspaceFiles(workspaceDir);
     const source = path.join(root, "source");
     const directory = stagedInputDirectory("a".repeat(64));
     const fresh = `${directory}/input-new.txt`;
@@ -387,16 +398,10 @@ describe("attachment transfer revocation", () => {
       }
       return guarded;
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP fixture did not bind");
-    }
+    const address = await listen(server);
     try {
       const result = await runNodeWorkerWorkspaceTransfer({
-        gatewayUrl: `ws://127.0.0.1:${address.port}`,
+        gatewayUrl: `ws://${address}`,
         environmentId: "environment",
         workspaceDir,
         manifestHome: root,
@@ -413,12 +418,8 @@ describe("attachment transfer revocation", () => {
         () => "rejected",
       );
       expect(reached).toBe(true);
-      await expect(fs.readFile(path.join(workspaceDir, existing), "utf8")).resolves.toBe(
-        "prior worker edit",
-      );
-      await expect(fs.readFile(path.join(workspaceDir, "project.txt"), "utf8")).resolves.toBe(
-        "unrelated project",
-      );
+      await files.expect(existing, "prior worker edit");
+      await files.expect("project.txt", "unrelated project");
       expect(
         (await fs.readdir(root)).filter((name) =>
           name.startsWith(".workspace.workspace-transfer-"),
@@ -437,38 +438,27 @@ describe("attachment transfer revocation", () => {
           boundary === "after-final-publish" ||
           boundary === "after-publish-replaced"
         ) {
-          await expect(fs.readFile(path.join(workspaceDir, fresh), "utf8")).resolves.toBe(
+          await files.expect(
+            fresh,
             boundary === "after-publish-replaced" ? "later user replacement" : "private new input",
           );
         } else {
-          await expect(fs.stat(path.join(workspaceDir, fresh))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await files.missing(fresh);
         }
         if (boundary === "after-final-publish") {
-          await expect(fs.readFile(path.join(workspaceDir, subsequent), "utf8")).resolves.toBe(
-            "subsequent private input",
-          );
+          await files.expect(subsequent, "subsequent private input");
         } else {
-          await expect(fs.stat(path.join(workspaceDir, subsequent))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await files.missing(subsequent);
         }
       } else {
         expect(result).toBe("completed");
-        await expect(fs.readFile(path.join(workspaceDir, subsequent), "utf8")).resolves.toBe(
-          "subsequent private input",
-        );
-        await expect(fs.readFile(path.join(workspaceDir, fresh), "utf8")).resolves.toBe(
-          "private new input",
-        );
+        await files.expect(subsequent, "subsequent private input");
+        await files.expect(fresh, "private new input");
       }
     } finally {
       admission.close();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       await service.closeAll();
     }
   });
@@ -515,89 +505,6 @@ describe("durable credential revocation fencing", () => {
       expect(service.isAuthorizationCurrent(authorization)).toBe(false);
       expect(service.authorize({ route, token })).toBeUndefined();
     } finally {
-      await service.closeAll().catch(() => undefined);
-    }
-  });
-
-  it("a fencing revocation stops an in-flight blob response", async () => {
-    const root = tempDirs.make("workspace-transfer-revoke-blob-");
-    const localPath = path.join(root, "source");
-    await fs.mkdir(localPath);
-    // Large enough that the HTTP client cannot buffer the whole body before the fence.
-    const payload = Buffer.alloc(8 * 1024 * 1024, 0x53);
-    await fs.writeFile(path.join(localPath, "secret.txt"), payload);
-    const service = makeService(root);
-    await service.initialize();
-    const { snapshot, token } = await service.prepareSync({
-      environmentId: "environment",
-      ownerEpoch: 1,
-      sessionId: "session",
-      localPath,
-      isAuthorized: () => true,
-    });
-    const entry = snapshot.manifest.entries.find((candidate) => candidate.path === "secret.txt");
-    if (!entry || entry.type !== "file") {
-      throw new Error("snapshot missing proof file");
-    }
-    const callback = createNodeWorkspaceTransferHttpCallback(service);
-    const server = createServer((req, res) => {
-      void handleNodeWorkspaceTransferHttpRequest({
-        req,
-        res,
-        clientIp: "127.0.0.1",
-        callback,
-      }).catch((error: unknown) =>
-        res.destroy(error instanceof Error ? error : new Error(String(error))),
-      );
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP fixture did not bind");
-    }
-    const controller = new AbortController();
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/environment/blobs/${entry.sha256}`,
-        { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
-      );
-      expect(response.status).toBe(200);
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error("blob response has no body");
-      }
-      let bytes = 0;
-      // Confirm the stream is live, then fence while most of the body is unconsumed.
-      const first = await reader.read();
-      bytes += first.value?.byteLength ?? 0;
-      service.fenceEnvironment("environment");
-      const drained = (async () => {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            return;
-          }
-          bytes += value.byteLength;
-        }
-      })();
-      await Promise.allSettled([drained]);
-      // The aborted response must not have delivered the whole workspace blob.
-      expect(bytes).toBeLessThan(payload.byteLength);
-      const route = {
-        kind: "blob",
-        direction: "download",
-        environmentId: "environment",
-        sha256: entry.sha256,
-      } as const;
-      expect(service.authorize({ route, token })).toBeUndefined();
-    } finally {
-      controller.abort();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
       await service.closeAll().catch(() => undefined);
     }
   });
@@ -717,17 +624,11 @@ describe("durable credential revocation fencing through the real store", () => {
         res.destroy(error instanceof Error ? error : new Error(String(error))),
       );
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP fixture did not bind");
-    }
+    const address = await listen(server);
     const controller = new AbortController();
     try {
       const response = await fetch(
-        `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/${environmentId}/blobs/${entry.sha256}`,
+        `http://${address}/__openclaw__/worker-transfer/v1/environments/${environmentId}/blobs/${entry.sha256}`,
         { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
       );
       expect(response.status).toBe(200);
@@ -763,9 +664,7 @@ describe("durable credential revocation fencing through the real store", () => {
       unsubscribe();
       controller.abort();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeServer(server);
       await service.closeAll().catch(() => undefined);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();

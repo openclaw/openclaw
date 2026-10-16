@@ -14,6 +14,7 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
+import { workspaceFiles } from "./node-workspace-transfer-fixtures.test-support.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import {
   startNodeWorkspaceTransferTestServer,
@@ -29,6 +30,42 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+type ActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
+
+function createRuntimeWorkspaceActions(
+  options: Omit<ActionsOptions, "runWorkspaceCommand" | "supportsNativeQuiescence">,
+  runtime: NodeWorkerWorkspaceRuntime,
+  gatewayUrl: string,
+  gatewayNamespace: string,
+) {
+  const { environmentId, sessionId, ownerEpoch } = options;
+  return createNodeWorkerWorkspaceActions({
+    ...options,
+    supportsNativeQuiescence: async () => process.platform === "linux",
+    runWorkspaceCommand: (command) =>
+      runtime.exec(
+        {
+          ...command,
+          ...(process.platform === "linux" &&
+          !command.quiescence &&
+          !command.process &&
+          !command.transfer &&
+          !command.seed &&
+          !command.legacyQuiescence
+            ? { nativeProcessOwner: true as const }
+            : {}),
+          argv: [...command.argv],
+          gatewayNamespace,
+          environmentId,
+          sessionId,
+          generation: ownerEpoch,
+        },
+        command.signal,
+        { url: gatewayUrl },
+      ),
+  });
+}
+
 it.each([
   "git",
   "git-with-empty-include",
@@ -40,6 +77,7 @@ it.each([
   async (mode) => {
     const root = await fs.realpath(tempDirs.make("node-workspace-input-retention-"));
     const localPath = path.join(root, "gateway-workspace");
+    const localFiles = workspaceFiles(localPath);
     await fs.mkdir(localPath);
     await fs.writeFile(path.join(localPath, "project.txt"), "existing project file\n");
     await fs.writeFile(
@@ -81,36 +119,19 @@ it.each([
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
     const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
-    const actions = createNodeWorkerWorkspaceActions({
-      environmentId,
-      ownerEpoch,
-      sessionId,
-      ownerSignal: owner.signal,
-      supportsNativeQuiescence: async () => process.platform === "linux",
-      isOwnerCurrent: () => !owner.signal.aborted,
-      workspaceTransfer: service,
-      runWorkspaceCommand: (command) =>
-        runtime.exec(
-          {
-            ...command,
-            ...(process.platform === "linux" &&
-            !command.quiescence &&
-            !command.process &&
-            !command.transfer &&
-            !command.seed &&
-            !command.legacyQuiescence
-              ? { nativeProcessOwner: true as const }
-              : {}),
-            argv: [...command.argv],
-            gatewayNamespace: "gateway-input-test",
-            environmentId,
-            sessionId,
-            generation: ownerEpoch,
-          },
-          command.signal,
-          { url: server.gatewayUrl },
-        ),
-    });
+    const actions = createRuntimeWorkspaceActions(
+      {
+        environmentId,
+        ownerEpoch,
+        sessionId,
+        ownerSignal: owner.signal,
+        isOwnerCurrent: () => !owner.signal.aborted,
+        workspaceTransfer: service,
+      },
+      runtime,
+      server.gatewayUrl,
+      "gateway-input-test",
+    );
     let initiatingTurnCurrent = true;
     try {
       const synced = await actions.syncWorkspace({
@@ -127,6 +148,7 @@ it.each([
       initiatingTurnCurrent = false;
       expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
+      const remoteFiles = workspaceFiles(remote);
       for (const relative of ownership.ownedFiles) {
         await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
           await fs.readFile(path.join(localPath, relative)),
@@ -240,12 +262,11 @@ it.each([
 
       const assertRetained = async () => {
         if (ordinaryOutput) {
-          await expect(fs.readFile(path.join(localPath, ordinaryOutput), "utf8")).resolves.toBe(
-            "ordinary project output\n",
-          );
+          await localFiles.expect(ordinaryOutput, "ordinary project output\n");
         }
         for (const relative of ownership.unownedFiles) {
-          await expect(fs.readFile(path.join(localPath, relative), "utf8")).resolves.toBe(
+          await localFiles.expect(
+            relative,
             selectedProjectFile(relative)
               ? "worker project bytes\n"
               : `fixture bytes: ${relative}\n`,
@@ -253,20 +274,14 @@ it.each([
         }
         for (const [relative, bytes] of expected) {
           // Assert Gateway bytes first: a successful upload alone did not prove retention.
-          await expect(fs.readFile(path.join(localPath, relative))).resolves.toEqual(bytes);
-          await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(bytes);
+          await localFiles.expect(relative, bytes);
+          await remoteFiles.expect(relative, bytes);
         }
-        await expect(fs.readFile(path.join(localPath, "proof-output.png"))).resolves.toEqual(png);
-        await expect(fs.readFile(path.join(localPath, "unrelated-keep.txt"), "utf8")).resolves.toBe(
-          "unrelated worker file\n",
-        );
-        await expect(fs.readFile(path.join(localPath, "project.txt"), "utf8")).resolves.toBe(
-          "existing project file\n",
-        );
+        await localFiles.expect("proof-output.png", png);
+        await localFiles.expect("unrelated-keep.txt", "unrelated worker file\n");
+        await localFiles.expect("project.txt", "existing project file\n");
         if (mode !== "plain") {
-          await expect(
-            fs.stat(path.join(localPath, "unrelated-private.txt")),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          await localFiles.missing("unrelated-private.txt");
           const publication = await captureGitHubPublicationWorkspaceSnapshot({ cwd: localPath });
           const published = (
             await requireGit(localPath, ["ls-tree", "-r", "--name-only", publication.workspaceTree])
@@ -295,7 +310,7 @@ it.each([
       );
       // The source still contains originalNotes; repeated staging must preserve the worker edit.
       await stage();
-      await expect(fs.readFile(path.join(remote, notesPath))).resolves.toEqual(editedNotes);
+      await remoteFiles.expect(notesPath, editedNotes);
       const editedCache = Buffer.from("edited input cache\n");
       await fs.writeFile(path.join(remote, directory, "input-cache.pyc"), editedCache);
       expected.set(`${directory}/input-cache.pyc`, editedCache);
@@ -403,37 +418,20 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   const createActions = (
     restoredWorkspace?: Parameters<typeof createNodeWorkerWorkspaceActions>[0]["restoredWorkspace"],
   ) =>
-    createNodeWorkerWorkspaceActions({
-      environmentId,
-      ownerEpoch,
-      sessionId,
-      ownerSignal: owner.signal,
-      supportsNativeQuiescence: async () => process.platform === "linux",
-      isOwnerCurrent: () => !owner.signal.aborted,
-      workspaceTransfer: service,
-      restoredWorkspace,
-      runWorkspaceCommand: (command) =>
-        runtime.exec(
-          {
-            ...command,
-            ...(process.platform === "linux" &&
-            !command.quiescence &&
-            !command.process &&
-            !command.transfer &&
-            !command.seed &&
-            !command.legacyQuiescence
-              ? { nativeProcessOwner: true as const }
-              : {}),
-            argv: [...command.argv],
-            gatewayNamespace: "gateway-restart-test",
-            environmentId,
-            sessionId,
-            generation: ownerEpoch,
-          },
-          command.signal,
-          { url: server.gatewayUrl },
-        ),
-    });
+    createRuntimeWorkspaceActions(
+      {
+        environmentId,
+        ownerEpoch,
+        sessionId,
+        ownerSignal: owner.signal,
+        isOwnerCurrent: () => !owner.signal.aborted,
+        workspaceTransfer: service,
+        restoredWorkspace,
+      },
+      runtime,
+      server.gatewayUrl,
+      "gateway-restart-test",
+    );
   try {
     const actions = createActions();
     const synced = await actions.syncWorkspace({
@@ -516,17 +514,11 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       await quiescence.resume();
     }
     for (const workspace of [localPath, remote]) {
-      await expect(fs.readFile(path.join(workspace, "project.txt"), "utf8")).resolves.toBe(
-        "Gateway project edit\n",
-      );
-      await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-        "worker result\n",
-      );
+      await workspaceFiles(workspace).expect("project.txt", "Gateway project edit\n");
+      await workspaceFiles(workspace).expect("result.txt", "worker result\n");
     }
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
-      await expect(fs.readFile(path.join(localPath, name), "utf8")).resolves.toBe(
-        `local bootstrap ${name}\n`,
-      );
+      await workspaceFiles(localPath).expect(name, `local bootstrap ${name}\n`);
     }
     expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
     expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(nodeCommit);
@@ -542,9 +534,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       "+refs/heads/*:refs/remotes/origin/*",
     );
     for (const workspace of [localPath, remote]) {
-      expect(await fs.readFile(path.join(workspace, "worker-commit.txt"), "utf8")).toBe(
-        "node commit content\n",
-      );
+      await workspaceFiles(workspace).expect("worker-commit.txt", "node commit content\n");
     }
     owner.abort();
     await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
