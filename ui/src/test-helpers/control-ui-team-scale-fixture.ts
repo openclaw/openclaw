@@ -11,6 +11,7 @@ import type {
 } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
@@ -52,6 +53,7 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  duplicateBootReads?: boolean;
 };
 
 function personId(index: number) {
@@ -134,6 +136,12 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       status: running ? "running" : "done",
       model: "gpt-5-mini",
       modelProvider: "openai",
+      thinkingLevel: "medium",
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
       contextTokens: 200_000,
       totalTokens: 4_000 + index * 31,
       pinned,
@@ -170,6 +178,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
+  const duplicateReads = options.duplicateBootReads
+    ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
+    : undefined;
+  if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
+  }
+  pinnedRows[0]!.sharingRole = "admin";
+  pinnedRows[0]!.visibility = "shared";
+  if (duplicateReads) {
+    pinnedRows[0]!.worktree = duplicateReads.worktree;
+  }
   if (options.liveRun) {
     Object.assign(pinnedRows[0]!, {
       hasActiveRun: true,
@@ -226,10 +245,18 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const historyMessages = Array.from({ length: counts.transcriptMessages }, (_, index) => ({
+  const messageIds = Array.from(
+    { length: counts.transcriptMessages },
+    (_, index) => `team-message-${index + 1}`,
+  );
+  const historyMessages = messageIds.map((id, index) => ({
     role: index % 2 ? "assistant" : "user",
+    __openclaw: { id, seq: index + 1 },
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
+      ...(duplicateReads && index === counts.transcriptMessages - 1
+        ? duplicateReads.attachments
+        : []),
       {
         type: "text",
         text: [
@@ -376,6 +403,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sessions,
     presenceUsers: people,
     historyMessages,
+    sessionReactions: {
+      [selectedSessionKey]: Object.fromEntries(
+        messageIds.map((id) => [
+          id,
+          [{ emoji: "👍", count: 1, identities: [{ id: people[1]!.id, label: people[1]!.name! }] }],
+        ]),
+      ),
+    },
     ...(options.liveRun
       ? {
           inFlightRun: {
@@ -401,9 +436,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "board.get",
       "canvas.document.view",
       "progressCard.get",
+      ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
       "question.list": { questions: [] },
+      ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({

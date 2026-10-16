@@ -314,7 +314,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 if modeChanged, self.state.connectionMode == mode,
                    AppLaunchRuntimePlan.current.allowsAutomaticPresentation
                 {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded()
                 }
             }
             if modeChanged {

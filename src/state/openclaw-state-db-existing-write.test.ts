@@ -8,7 +8,9 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -23,7 +25,10 @@ import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const recordSchema = "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT;";
-const contract = { schemaSql: recordSchema, operationLabel: "retained writer test" };
+const contract = {
+  schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"),
+  operationLabel: "retained writer test",
+};
 const schemaInventorySql =
   /\b(?:sqlite_schema|sqlite_master|(?:pragma_)?(?:table|index)_(?:list|info|xinfo))\b/iu;
 
@@ -40,9 +45,7 @@ function fixture(fullSchema = false) {
         meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
         created_at INTEGER, updated_at INTEGER
       );
-      CREATE TABLE config_machine_state (
-        state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
-      );
+      ${contract.schemaSql}
     `,
     );
     database.exec(`
@@ -79,7 +82,7 @@ describe("retained existing-state writer", () => {
     const options = fixture(true);
     const queries: Array<{ query: string; database?: DatabaseSync }> = [];
     const sql = observeHostDataSql((query, database) => queries.push({ query, database }));
-    let writer: DatabaseSync | undefined;
+    let writer: EngineConnection | undefined;
     try {
       runExistingOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -89,7 +92,6 @@ describe("retained existing-state writer", () => {
         options,
         {
           ...contract,
-          schemaSql: recordSchema.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS"),
           initializeAdditiveSchema: true,
         },
       );
@@ -150,7 +152,7 @@ describe("retained existing-state writer", () => {
           return operation();
         }),
       );
-    const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
+    const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
       db.exec("INSERT INTO records VALUES (1, 'wrong generation')");
     });
     try {
@@ -173,7 +175,7 @@ describe("retained existing-state writer", () => {
     const options = fixture();
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const writer = openExistingOpenClawStateWriter(options, contract);
-    let retained: DatabaseSync | undefined;
+    let retained: EngineConnection | undefined;
     try {
       writer.run(({ db }) => {
         retained = db;
@@ -390,7 +392,7 @@ describe("retained existing-state writer", () => {
       }
       const writer = openExistingOpenClawStateWriter(options, contract);
       try {
-        const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
+        const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
           db.exec("INSERT INTO records VALUES (2, 'refused')");
         });
         expect(() => writer.run(mutate, options)).toThrow(error);

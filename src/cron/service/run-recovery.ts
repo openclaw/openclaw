@@ -14,7 +14,7 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
     input: {
       storeKey,
       nowMs: state.deps.nowMs(),
-      cronConfig: structuredClone(state.deps.cronConfig),
+      cronConfig: state.deps.cronConfig,
       failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
     },
   });

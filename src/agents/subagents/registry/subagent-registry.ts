@@ -108,6 +108,7 @@ export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
 const resumedRuns = new Set<object>();
 const resumeReader = createSubagentResumeReader({
   resumedRuns,
+  runBackgroundWork: (entry, run) => subagentLifecycleController.runBackgroundWork(entry, run),
   getGatewayContextResolver: () => activeGatewayContextResolver,
   resume: resumeCheckedSubagentRun,
   retryAfterDrain: (runId, entry, stateContext) => {
@@ -208,7 +209,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
 ) {
   const stateContext = captureOpenClawStateWorkerContext();
   const resumeKey = getSubagentRunRuntimeKey(entry);
-  void runWithGatewayDetachedWorkAdmission(async () => {
+  const finalize = async () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (!isSameSubagentRunOwner(subagentRuns.get(runId), entry)) {
       resumedRuns.delete(resumeKey);
@@ -218,7 +219,11 @@ function finalizeResumedAnnounceGiveUpInBackground(
     if (current) {
       await finalizeResumedAnnounceGiveUp({ entry: current, reason, stateContext });
     }
-  }, "subagents:delivery-finalize").catch((error: unknown) => {
+  };
+  void runWithGatewayDetachedWorkAdmission(
+    () => subagentLifecycleController.runBackgroundWork(entry, finalize),
+    "subagents:delivery-finalize",
+  ).catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     try {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -296,12 +301,9 @@ function resumeCheckedSubagentRun(
     return;
   }
   if (entry.killReconciliation) {
-    const generation = entry.generation;
     resumedRuns.add(getSubagentRunRuntimeKey(entry));
     const stillCurrent = () =>
-      isHostCurrent?.() !== false &&
-      isSameSubagentRunOwner(subagentRuns.get(runId), entry) &&
-      entry.generation === generation;
+      isHostCurrent?.() !== false && isSameSubagentRunOwner(subagentRuns.get(runId), entry);
     const failed = (error: unknown) => {
       log.warn("subagent settlement deferred before cleanup", { runId, error });
       if (stillCurrent()) {
@@ -654,13 +656,6 @@ const testing = {
   runSweeperTickForTests: subagentSweeper.runTick,
 } as const;
 
-async function addSubagentRunForTests(entry: SubagentRunRecord) {
-  await mutateSubagentRuns([entry.runId], () => ({
-    value: undefined,
-    postimages: new Map([[entry.runId, entry]]),
-  }));
-}
-
 export const finalizeInterruptedSubagentRun = completionRuntime.finalizeInterruptedSubagentRun;
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;
 export const cancelSubagentRequesterSettleWake =
@@ -718,8 +713,6 @@ export const adoptSubagentRunForRequesterTurn =
 const SUBAGENT_REGISTRY_TEST_HANDLE = Symbol.for("openclaw.subagentRegistryTestApi");
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_HANDLE] = {
-    addSubagentRunForTests,
-    finalizeInterruptedSubagentRun: completionRuntime.finalizeInterruptedSubagentRun,
     releaseSubagentRun: subagentRunManager.releaseSubagentRun,
     resetSubagentRegistryForTests,
     testing,

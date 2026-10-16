@@ -49,10 +49,3 @@ export type WorkspaceStateWorkerOperations = {
     output: WorkspaceStateDeletionReceipt;
   };
 };
-
-export type WorkspaceStateWorkerCommand = {
-  [K in keyof WorkspaceStateWorkerOperations]: {
-    type: K;
-    input: WorkspaceStateWorkerOperations[K]["input"];
-  };
-}[keyof WorkspaceStateWorkerOperations];

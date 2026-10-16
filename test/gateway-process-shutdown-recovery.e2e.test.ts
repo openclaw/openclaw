@@ -110,6 +110,10 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   const toolStarted = createDeferred();
   const resetResponseClosed = createDeferred();
   const failed = createDeferred<never>();
+  const fourRecoveriesSeen = createDeferred();
+  const recoveryStarts = new Set<Scenario>();
+  const activeRecoveryResponses = new Map<ServerResponse, Scenario>();
+  let peakRecoveryConcurrency = 0;
   void failed.promise.catch(() => {});
   let effects = 0;
   let forbiddenEffects = 0;
@@ -201,6 +205,15 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             return;
           }
           expect(input).toContain("interrupted by a gateway restart");
+          activeRecoveryResponses.set(response, scenario);
+          response.once("close", () => activeRecoveryResponses.delete(response));
+          const activeRecoveries = new Set(activeRecoveryResponses.values()).size;
+          peakRecoveryConcurrency = Math.max(peakRecoveryConcurrency, activeRecoveries);
+          expect(activeRecoveries).toBeLessThanOrEqual(4);
+          recoveryStarts.add(scenario);
+          if (recoveryStarts.size === 4) {
+            fourRecoveriesSeen.resolve();
+          }
           if (scenario.name === "reset") {
             response.once("close", () => resetResponseClosed.resolve());
           }
@@ -257,6 +270,9 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   return {
     baseUrl: `${origin}/v1`,
     failed: failed.promise,
+    fourRecoveriesSeen: fourRecoveriesSeen.promise,
+    recoveryStarts: () => [...recoveryStarts],
+    peakRecoveryConcurrency: () => peakRecoveryConcurrency,
     toolStarted: toolStarted.promise,
     resetResponseClosed: resetResponseClosed.promise,
     effects: () => effects,
@@ -283,9 +299,12 @@ it(
     const tool = createScenario("raw-tool");
     const stopped = createScenario("stop");
     const reset = createScenario("reset");
+    const parallelA = createScenario("parallel-a");
+    const parallelB = createScenario("parallel-b");
+    const rawRecoveries = [stream, tool, reset, parallelA, parallelB];
     const managed = createScenario("managed");
     const killed = createScenario("killed");
-    const scenarios = [stream, tool, stopped, reset, managed, killed];
+    const scenarios = [...rawRecoveries, stopped, managed, killed];
     const provider = await startProvider(scenarios, signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     const instance = await createOpenClawTestInstance({
@@ -464,7 +483,7 @@ it(
                   },
                 },
                 heartbeat: { every: "0m" },
-                maxConcurrent: 4,
+                maxConcurrent: 8,
                 timeoutSeconds: 120,
                 skipBootstrap: true,
                 skills: [],
@@ -498,8 +517,10 @@ it(
           ).toMatchObject({ status: "error" });
           stopped.phase = "cancelled";
           await start(reset);
+          await start(parallelA);
+          await start(parallelB);
           const predecessor = await stopProcess("raw");
-          for (const scenario of [stream, tool, reset]) {
+          for (const scenario of rawRecoveries) {
             const entry = readStoppedEntry(scenario);
             expect(entry).toMatchObject({
               sessionId: scenario.sessionId,
@@ -515,10 +536,23 @@ it(
           await instance.startGateway();
           expect(instance.child?.pid).not.toBe(predecessor);
           await connect();
-          // Release these independently: the background recovery lane is one-wide.
-          const finishing = Promise.all([finish(stream), finish(tool)]);
+          // Four distinct turns must reach the provider while every response is held.
+          await gate(provider.fourRecoveriesSeen);
+          const firstRecoveries = provider.recoveryStarts();
+          expect(firstRecoveries).toHaveLength(4);
+          expect(provider.peakRecoveryConcurrency()).toBe(4);
+          const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
+          if (!firstFinished) {
+            throw new Error("Expected a started recovery that is not being reset");
+          }
+          await finish(firstFinished);
+          await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
+          const finishing = Promise.all(
+            rawRecoveries
+              .filter((scenario) => scenario !== reset && scenario !== firstFinished)
+              .map(finish),
+          );
           void finishing.catch(() => {});
-          await gate(reset.recoverySeen.promise);
           phase = "revoke-recovery";
           const resetResult = await client!.request<{
             ok: boolean;
@@ -574,12 +608,18 @@ it(
             "recovery",
           ]);
           expect(killed.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+          for (const scenario of [parallelA, parallelB]) {
+            expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+          }
+          expect(provider.peakRecoveryConcurrency()).toBe(4);
           expect(provider.effects()).toBe(1);
           expect(provider.forbiddenEffects()).toBe(0);
           console.info(
             JSON.stringify({
               proof: "process-shutdown-custody",
-              rawSigterm: ["stream", "tool"],
+              rawSigterm: ["stream", "tool", "parallel-a", "parallel-b"],
+              interruptedSessions: rawRecoveries.length,
+              recoveryConcurrency: provider.peakRecoveryConcurrency(),
               managedRestart: true,
               sigkill: true,
               secondRestartDuringRecovery: true,

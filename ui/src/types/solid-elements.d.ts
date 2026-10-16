@@ -170,6 +170,7 @@ declare module "@solidjs/web" {
             | "client"
             | "readers"
             | "agentId"
+            | "sessionKey"
             | "previewSeeds"
             | "pagePreviewContext"
             | "claimedReaders"

@@ -72,6 +72,7 @@ export type {
 
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { isPostgresSqlConnection } from "../infra/sql-connection.js";
 export { DatabaseSearchCapabilityUnavailableError } from "../infra/database-engine/capability-unavailable.js";
 
 /** Health probe result for embedding provider availability checks. */

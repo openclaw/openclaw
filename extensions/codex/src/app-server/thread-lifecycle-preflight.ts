@@ -9,7 +9,6 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveModelServiceTierContextTokens } from "openclaw/plugin-sdk/provider-model-metadata";
 import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
-import { getCodexAppServerClientInstanceId } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
@@ -559,9 +558,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         )!,
       })
     : undefined;
-  const ringZeroClientInstanceId = ringZeroActive
-    ? getCodexAppServerClientInstanceId(params.client)
-    : undefined;
+  const ringZeroClientInstanceId = ringZeroActive ? params.client.getInstanceId() : undefined;
   return {
     nativeModelInputTools:
       nativeHooksRequired || modelAdmissionAvailable

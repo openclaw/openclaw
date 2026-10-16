@@ -8,8 +8,14 @@ import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
-import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import {
+  assertHomogeneousDatabaseEngines,
+  resolveDatabaseFamilyEngines,
+  type DatabaseEngineId,
+} from "../infra/database-engine/registry.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import {
+  archiveDatabasePortManifest,
   databasePortManifestPath,
   databasePortArtifactSchema,
   writeDatabasePortArtifact,
@@ -21,6 +27,27 @@ import type { prepareVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { captureDatabaseArtifact } from "../snapshot/database-backup.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+
+export function assertPortSelection(config: OpenClawConfig, to?: DatabaseEngineId) {
+  try {
+    assertHomogeneousDatabaseEngines(config, "port");
+    if (to) {
+      const candidate = { ...config, database: { ...config.database, engine: to } };
+      assertHomogeneousDatabaseEngines(candidate, "port");
+      if (resolveDatabaseFamilyEngines(candidate).state !== to) {
+        throw new Error(
+          "port with engine-pinning family overrides is not supported yet; use a single engine without family overrides, or wait for family-scoped port support.",
+        );
+      }
+    }
+  } catch (error) {
+    // This owner-generated refusal is safe to preserve through the outer I/O redaction.
+    if (error instanceof Error) {
+      throw new DatabasePortError(error.message);
+    }
+    throw error;
+  }
+}
 
 export const inputsSchema = z.object({
   originalEngine: z.string().nullable(),
@@ -38,7 +65,7 @@ export type Context = {
   stateDir: string;
   configPath: string;
   env: NodeJS.ProcessEnv;
-  engineSelection: { input: DatabaseEngineInput };
+  engineSelection: DatabaseEngineSelection;
   stateReceipt?: {
     path: string;
     engine: "sqlite" | "postgres";
@@ -153,4 +180,29 @@ export function capacity(ctx: Context, files: { path: string; size: number }[]) 
       );
     }
   }
+}
+
+export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
+  ctx.phase = "finalize/archive";
+  const current = manifest(ctx);
+  if (current.state !== "complete") {
+    current.state = "complete";
+    current.outcome = outcome;
+    revise(ctx);
+  }
+  const archived = archiveDatabasePortManifest(
+    ctx.stateDir,
+    current.operationId,
+    ctx.assertCurrent,
+  );
+  return {
+    phase: "complete",
+    engine: outcome === "ported" ? current.direction.to : current.direction.from,
+    stores: current.targets.map(livePath),
+    backup: ctx.directory,
+    remainingSqlite: ctx.inputs?.remainingSqlite ?? [],
+    manifest: archived,
+    serverCapacity: "unknown; former PostgreSQL namespaces retained",
+    restart: "Start the Gateway through its service owner.",
+  };
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
+import * as globals from "../globals.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
 import { summarizeText } from "./tts-core.js";
 import {
@@ -186,14 +187,31 @@ describe("TTS summary visible text", () => {
     });
   });
 
-  it("keeps the existing original-text fallback when the summary has no visible content", async () => {
-    completion.complete.mockResolvedValue(
-      assistant([{ type: "text", text: "<think>Private only</think>" }]),
-    );
-    const result = await applySummaryToSpeech();
-    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
-    );
-    expect(result.text).toBe(originalText);
-  });
+  it.each(["no visible content", "provider text echo"])(
+    "keeps original-text fallback for %s without logging content",
+    async (failure) => {
+      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      try {
+        if (failure === "provider text echo") {
+          completion.complete.mockImplementationOnce(async ({ context }) => {
+            throw new Error(JSON.stringify(context.messages));
+          });
+        } else {
+          completion.complete.mockResolvedValue(
+            assistant([{ type: "text", text: "<think>Private only</think>" }]),
+          );
+        }
+        const result = await applySummaryToSpeech();
+        expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
+        );
+        expect(result.text).toBe(originalText);
+        expect(log).toHaveBeenCalledWith("TTS: summarization failed, truncating instead.");
+        expect(JSON.stringify(log.mock.calls)).not.toContain("The original reply remains visible.");
+        expect(JSON.stringify(log.mock.calls)).not.toContain("Private only");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });

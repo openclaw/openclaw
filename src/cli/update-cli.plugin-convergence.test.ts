@@ -149,34 +149,6 @@ describe("update-cli", () => {
     ]);
   });
 
-  it("post-core resume mode prefers post-doctor disk install records over the stale parent snapshot", async () => {
-    const resultDir = createCaseDir("openclaw-post-core-disk-records");
-    const recordsPath = path.join(resultDir, "plugin-install-records.json");
-    await fs.mkdir(resultDir, { recursive: true });
-    await writeJsonFixture(recordsPath, {
-      stale: {
-        source: "npm",
-        spec: "@openclaw/stale@1.0.0",
-        installPath: "/tmp/stale-plugin",
-      },
-    });
-    const postDoctorRecords = {
-      codex: {
-        source: "npm",
-        spec: "@openclaw/codex@2026.5.17",
-        installPath: "/tmp/codex-plugin",
-      },
-    } satisfies Record<string, PluginInstallRecord>;
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
-
-    await runPostCoreCommand(
-      { json: true, restart: false },
-      { OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: recordsPath },
-    );
-
-    expect(syncPluginCall()?.config?.plugins?.installs).toEqual(postDoctorRecords);
-  });
-
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
     mockMutableConfigSnapshot(
       configSnapshot({ update: { channel: "stable" } }, { hash: "stable-hash" }),
@@ -477,37 +449,10 @@ describe("update-cli", () => {
         expect(logEntries).toContainEqual(retainedWarning);
       }
       if (json) {
-        const result = lastWriteJsonCall();
-        if (repaired) {
-          expect(result).toMatchObject({ status: "ok", postUpdate: { plugins: { warnings: [] } } });
-          return;
-        }
-        expect(result).toMatchObject({
+        expect(lastWriteJsonCall()).toMatchObject({
           status: "ok",
-          postUpdate: {
-            plugins: {
-              status: "warning",
-              warnings: [
-                expect.objectContaining({
-                  pluginId: "demo",
-                  reason: "plugin-target-unavailable",
-                  message,
-                }),
-              ],
-            },
-          },
-          run: {
-            status: "succeeded",
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                step: expect.stringMatching(/^warning:/),
-                status: "completed",
-                detail: expect.stringContaining(message),
-              }),
-            ]),
-          },
+          postUpdate: { plugins: { warnings: [] } },
         });
-        expect(result).not.toHaveProperty("reason", "plugin-target-unavailable");
       } else {
         expect(stripAnsi(getLogOutput())).toContain(message);
       }

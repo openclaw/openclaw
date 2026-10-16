@@ -18,7 +18,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { renderApprovalPresentation } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
@@ -621,7 +621,10 @@ function ApprovalContent(props: {
     <>
       <div class="approval-page__status" aria-live="polite" aria-atomic="true">
         <span
-          class={`approval-page__status-dot approval-page__status-dot--${props.approval.status}`}
+          class={[
+            "approval-page__status-dot",
+            `approval-page__status-dot--${props.approval.status}`,
+          ]}
           aria-hidden="true"
         />
         {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}

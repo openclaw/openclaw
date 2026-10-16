@@ -778,9 +778,20 @@ describe("native SQLite schema snapshots and callbacks", () => {
   });
 
   it("resets eagerly without retaining custody for unstepped iterators", () => {
+    const schema = "CREATE TABLE original(id); INSERT INTO original VALUES(1),(2)";
+    using native = new DatabaseSync(":memory:");
+    native.exec(schema);
+    const control = native.prepare("SELECT id FROM original");
+    const previous = control.iterate();
+    previous.next();
+    const next = control.iterate();
+    next.next();
+    previous.return?.();
+    const expected = next.next().value;
+    next.return?.();
     const filename = path.join(tempDirs.make("openclaw-schema-unstepped-"), "state.sqlite");
     const reader = openDatabase(
-      "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1),(2); PRAGMA user_version=1",
+      `PRAGMA journal_mode=WAL; ${schema}; PRAGMA user_version=1`,
       true,
       filename,
     );
@@ -794,11 +805,10 @@ describe("native SQLite schema snapshots and callbacks", () => {
       reader.exec("CREATE TABLE while_unstepped(id)");
       expect(tableExists(sibling, "while_unstepped")).toBe(true);
       expect(current.next().value).toEqual({ id: 1 });
-      // Native return on the old iterator resets the statement without invalidating
-      // the newer iterator's generation; its next step can start the query again.
+      // Preserve the runtime's obsolete-cursor return behavior without losing schema facts.
       old.return?.();
       reader.exec("CREATE TABLE after_old_return(id)");
-      expect(current.next().value).toEqual({ id: 1 });
+      expect(current.next().value).toEqual(expected);
     } finally {
       current.return?.();
       old.return?.();

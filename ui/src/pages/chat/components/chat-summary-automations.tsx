@@ -148,8 +148,8 @@ export function ChatSummaryAutomations(props: Props) {
     },
   );
   createEffect(presented, (value) => {
+    dirty ||= !value;
     if (value) {
-      dirty = true;
       void load();
     }
   });

@@ -31,6 +31,7 @@ import { CodexAppServerClient } from "./client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
 } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -247,7 +248,7 @@ describe.skipIf(process.platform === "win32")(
       { timeout: 60_000 },
       async (closure) => {
         await withNativeFixture(tempDir, async (fixture, cleanups) => {
-          const pluginConfig = {
+          const pluginConfig: CodexPluginConfig = {
             ...fixture.pluginConfig,
             appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
           };

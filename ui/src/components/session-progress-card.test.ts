@@ -13,7 +13,7 @@ vi.mock("./markdown.ts", async () => {
   return { ...actual, toSanitizedMarkdownHtml: vi.fn(actual.toSanitizedMarkdownHtml) };
 });
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
+import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
 const containers: HTMLDivElement[] = [];
 function createContainer() {
@@ -135,6 +135,28 @@ describe("renderSessionProgressCard", () => {
 
     render({ card: progressCard, placement: "composer", sessionStatus: "done" }, container);
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
+  });
+
+  it("keeps disclosure attributes unchanged across progress snapshots", () => {
+    const container = createContainer();
+    render({ card: progressCard, placement: "composer" }, container);
+    const details = container.querySelector("details")!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(details, { attributes: true, attributeFilter: ["open", "data-reveal"] });
+    render(
+      {
+        card: {
+          ...progressCard,
+          revision: 3,
+          steps: [...progressCard.steps!, { step: "Updated progress", status: "pending" }],
+        },
+        placement: "composer",
+      },
+      container,
+    );
+    expect(container.textContent).toContain("Updated progress");
+    expect(observer.takeRecords()).toEqual([]);
+    observer.disconnect();
   });
 
   it("refreshes relative time while connected and stops after disconnect", () => {
@@ -361,7 +383,7 @@ describe("renderSessionProgressCard", () => {
     };
     render({ card: completed, placement: "composer", onDismiss: () => undefined }, container);
 
-    expect(container.querySelector(".session-progress-card__dismiss")).not.toBeNull();
+    expect(container.querySelector(".session-progress-card__options")).not.toBeNull();
     expect(container.querySelector(".session-progress-card__chevron svg")).not.toBeNull();
   });
 
@@ -389,7 +411,7 @@ describe("renderSessionProgressCard", () => {
         ?.querySelector(".session-progress-card__heading-actions")
         ?.textContent?.replaceAll(/\s+/gu, " ")
         .trim(),
-    ).toBe("Updated 2m ago · 2 of 3");
+    ).toBe("Step 2 of 3 · Updated 2m ago");
     expect(card?.querySelector("progress")).toBeNull();
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
   });

@@ -121,7 +121,9 @@ function settledSuccessfulAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
 let admittedRunContext: AdmittedRunContext;
 
 function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
-  return createSettledFinalizationTestInput(attempt, admittedRunContext);
+  const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
+  input.terminalBase.runParams.onAttemptTerminalReplaced = vi.fn();
+  return input;
 }
 
 describe("prepareTerminalWithSettledTurnFinalization", () => {
@@ -187,6 +189,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(result.finalizationOutcome).toBe("failed");
+    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
     expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
     for (const [preparedAttempt, settledAttempt] of backendMocks.runSettledFinalization.mock
       .calls) {
@@ -427,6 +430,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       });
       const result = await prepareTerminalWithSettledTurnFinalization(input);
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(silent ? 1 : 2);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
       if (!errorText) {
         expect(result.finalizationOutcome).toBe("answered");
         expect(result.attempt.assistantTexts).toEqual([]);
@@ -477,6 +481,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
+    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
     expect(result.prepared.timedOutDuringPrompt).toBe(true);
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
@@ -574,6 +579,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
 
     expect(input.finalization.abortSignal.aborted).toBe(false);
+    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
     expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
@@ -593,6 +599,33 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       replayMetadata: attempt.replayMetadata,
       toolMetas: attempt.toolMetas,
     });
+  });
+
+  it("does not replace terminal ownership when cancellation arrives during delivery observation", async () => {
+    const input = finalizationInput(settledFailedAttempt());
+    const controller = new AbortController();
+    input.finalization.abortSignal = AbortSignal.any([
+      input.finalization.abortSignal,
+      controller.signal,
+    ]);
+    let observations = 0;
+    input.terminalBase.runParams.resolveReplyDelivery = async () => {
+      if (++observations === 2) {
+        controller.abort(new Error("cancelled before acceptance"));
+      }
+      return "missing";
+    };
+    const text = "The completed tools produced a result.";
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] }),
+        preparedTerminalReply: prepareAgentRunTerminalReply({ rawText: text }),
+      },
+    });
+    await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toThrow();
+    expect(observations).toBe(2);
+    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
   });
 
   it.each(["outer", "Stop"])(
@@ -621,6 +654,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
       expect(input.finalization.abortSignal.aborted).toBe(true);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
       expect(result.finalizationOutcome).toBe("failed");
       expect(result.attempt).toBe(attempt);
       expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });

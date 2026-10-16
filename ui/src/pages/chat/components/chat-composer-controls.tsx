@@ -7,7 +7,7 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
   realtimeTalkDeviceIssueMessage,
@@ -302,7 +302,7 @@ type ComposerVoiceButtonProps = {
   connected: boolean;
   disabled?: boolean;
   submitDisabledReason?: string | null;
-  readDictation?: () => ComposerDictationController;
+  readDictation?: () => ComposerDictationOwner;
   microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
   idleLabel?: string;
@@ -400,7 +400,7 @@ function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | und
 }
 
 export function ComposerDictationSendAction(props: {
-  readDictation: () => ComposerDictationController;
+  readDictation: () => ComposerDictationOwner;
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
@@ -415,58 +415,60 @@ export function ComposerDictationSendAction(props: {
     send(event);
   };
   return (
-    <>
-      {props.readDictation().active ? (
-        <>
-          {props.readDictation().connecting ? null : (
-            <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-              {props.readDictation().finalizing
-                ? t("chat.composer.dictationFinalizing")
-                : t("chat.composer.dictationListening")}
-            </span>
-          )}
-          <openclaw-tooltip prop:content={t("chat.runControls.send")}>
-            <button
-              class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
-              type="button"
-              ref={primaryPointerDownRef(() => props.onPointerDown)}
-              onClick={(event: MouseEvent) => void finishAndSend(event)}
-              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-              aria-label={t("chat.runControls.send")}
-            >
-              <Icon name="arrowUp" />
-            </button>
-          </openclaw-tooltip>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-export function renderComposerDictationStatusSolid(dictation?: ComposerDictationController) {
-  if (!dictation?.active) {
-    return null;
-  }
-  if (dictation.connecting) {
-    return (
-      <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
-    );
-  }
-  return (
-    <div class="agent-chat__composer-status-stack">
-      <div
-        class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
-      >
-        <span
-          class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
-        >
-          {dictation.finalizing
+    <Show when={props.readDictation().active}>
+      {props.readDictation().connecting ? null : (
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {props.readDictation().finalizing
             ? t("chat.composer.dictationFinalizing")
             : t("chat.composer.dictationListening")}
         </span>
-      </div>
-    </div>
+      )}
+      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
+        <button
+          class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+          type="button"
+          ref={primaryPointerDownRef(() => props.onPointerDown)}
+          onClick={(event: MouseEvent) => void finishAndSend(event)}
+          aria-disabled={props.readDictation().finalizing ? "true" : "false"}
+          aria-label={t("chat.runControls.send")}
+        >
+          <Icon name="arrowUp" />
+        </button>
+      </openclaw-tooltip>
+    </Show>
   );
+}
+
+export function ComposerDictationStatus(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  const content = createMemo(() => {
+    const dictation = props.readDictation();
+    if (!dictation?.active) {
+      return null;
+    }
+    if (dictation.connecting) {
+      return (
+        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
+      );
+    }
+    return (
+      <div class="agent-chat__composer-status-stack">
+        <div
+          class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+        >
+          <span
+            class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
+          >
+            {dictation.finalizing
+              ? t("chat.composer.dictationFinalizing")
+              : t("chat.composer.dictationListening")}
+          </span>
+        </div>
+      </div>
+    );
+  });
+  return <>{content()}</>;
 }
 
 export function renderChatAbortActionSolid(

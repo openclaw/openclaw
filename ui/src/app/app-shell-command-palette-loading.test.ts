@@ -8,10 +8,7 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import "../components/modal-dialog.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
-import {
-  COMMAND_PALETTE_ELEMENT,
-  LazyCustomElementRequestController,
-} from "./lazy-custom-element.ts";
+import { COMMAND_PALETTE_ELEMENT, createLazyCustomElementRequests } from "./lazy-custom-element.ts";
 
 let restoreDialog: () => void;
 let container: HTMLDivElement;
@@ -41,7 +38,7 @@ function mountLoader() {
     const loading = new ShellCommandPaletteOwner(
       {
         commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-        lazyCustomElements: new LazyCustomElementRequestController({ requestUpdate: () => {} }),
+        lazyCustomElements: createLazyCustomElementRequests(),
         chatNavigationOptions: () => undefined,
         navigate: () => {},
       },

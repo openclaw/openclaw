@@ -336,12 +336,12 @@ describe("extractDeliveryInfoBatch", () => {
 
     expect(
       await extractDeliveryInfoBatch([
-        canonicalKey,
-        queriedKey,
-        `${queriedKey}:topic:55`,
-        undefined,
-        "agent:main:missing",
-        queriedKey,
+        { sessionKey: canonicalKey },
+        { sessionKey: queriedKey },
+        { sessionKey: `${queriedKey}:topic:55` },
+        {},
+        { sessionKey: "agent:main:missing" },
+        { sessionKey: queriedKey },
       ]),
     ).toEqual([
       { deliveryContext: canonicalDelivery, threadId: undefined },
@@ -366,7 +366,11 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      await extractDeliveryInfoBatch([brokenKey, healthyKey, "agent:main:missing", healthyKey]),
+      await extractDeliveryInfoBatch(
+        [brokenKey, healthyKey, "agent:main:missing", healthyKey].map((sessionKey) => ({
+          sessionKey,
+        })),
+      ),
     ).toEqual([
       { deliveryContext: undefined, threadId: undefined },
       { deliveryContext: createTelegramUserDelivery(), threadId: undefined },
@@ -394,12 +398,15 @@ describe("extractDeliveryInfoBatch", () => {
     });
 
     expect(
-      await extractDeliveryInfoBatch(["agent:worker:main", shadowKey, "agent:ops:main"], {
-        cfg: {
-          session: { scope: "global" },
-          agents: { ownership: "explicit", entries: { ops: {}, worker: {}, shadow: {} } },
+      await extractDeliveryInfoBatch(
+        ["agent:worker:main", shadowKey, "agent:ops:main"].map((sessionKey) => ({ sessionKey })),
+        {
+          cfg: {
+            session: { scope: "global" },
+            agents: { ownership: "explicit", entries: { ops: {}, worker: {}, shadow: {} } },
+          },
         },
-      }),
+      ),
     ).toEqual([
       { deliveryContext: workerDelivery, threadId: undefined },
       { deliveryContext: shadowDelivery, threadId: undefined },

@@ -12,7 +12,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
@@ -375,7 +378,7 @@ describe("Codex native configuration", () => {
           ...(transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
         },
         supervision: { enabled: true },
-      };
+      } satisfies CodexPluginConfig;
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-existing",
         cwd: workspaceDir,

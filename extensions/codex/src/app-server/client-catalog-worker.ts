@@ -54,7 +54,7 @@ export class CodexCatalogWorker {
     if (line.byteLength > CATALOG_MAX_BYTES) {
       const error = new CodexCatalogResponseTooLargeError();
       return route === "unresolved"
-        ? { failures: [{ value: "<oversized catalog response>", error, fragmentCount: 1 }] }
+        ? { failures: [{ byteCount: line.byteLength, fragmentCount: 1 }] }
         : { failures: [], projectionError: { id: route.id, error } };
     }
     if (route !== "unresolved" && line.byteLength <= INLINE_CATALOG_MAX_BYTES) {

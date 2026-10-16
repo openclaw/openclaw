@@ -490,27 +490,6 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
           );
         }
 
-        const longWrapper = longBubble.locator(".code-block-wrapper");
-        const expand = longWrapper.locator(".code-block-expand");
-        expect(await expand.textContent()).toContain("34 hidden lines");
-        const clippedHeight = await longWrapper
-          .locator(".code-block-viewport")
-          .evaluate((viewport) => viewport.clientHeight);
-        const visibleCodeHeight = await longWrapper.locator("pre code").evaluate((code) => ({
-          height: code.getBoundingClientRect().height,
-          lineHeight: Number.parseFloat(getComputedStyle(code).lineHeight),
-        }));
-        // The hidden-line label counts seven visible lines, not an eighth clipped row.
-        expect(visibleCodeHeight.height).toBe(7 * visibleCodeHeight.lineHeight);
-        await expand.click();
-        await expect.poll(() => longWrapper.getAttribute("class")).toContain("is-expanded");
-        expect(await expand.isVisible()).toBe(false);
-        expect(
-          await longWrapper
-            .locator(".code-block-viewport")
-            .evaluate((viewport) => viewport.clientHeight),
-        ).toBeGreaterThan(clippedHeight);
-
         // The wrap control only appears once a line measurably overflows, and it
         // reverses; the transcript itself must never grow a horizontal scrollbar.
         const wideWrapper = wideBubble.locator(".code-block-wrapper");
@@ -545,6 +524,28 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await shortBubble.scrollIntoViewIfNeeded();
         await expect.poll(() => shortWrap.isVisible()).toBe(false);
+
+        // Expand last; the tall row moves the other fences outside the viewport.
+        const longWrapper = longBubble.locator(".code-block-wrapper");
+        const expand = longWrapper.locator(".code-block-expand");
+        expect(await expand.textContent()).toContain("34 hidden lines");
+        const clippedHeight = await longWrapper
+          .locator(".code-block-viewport")
+          .evaluate((viewport) => viewport.clientHeight);
+        const visibleCodeHeight = await longWrapper.locator("pre code").evaluate((code) => ({
+          height: code.getBoundingClientRect().height,
+          lineHeight: Number.parseFloat(getComputedStyle(code).lineHeight),
+        }));
+        // The hidden-line label counts seven visible lines, not an eighth clipped row.
+        expect(visibleCodeHeight.height).toBe(7 * visibleCodeHeight.lineHeight);
+        await expand.click();
+        await expect.poll(() => longWrapper.getAttribute("class")).toContain("is-expanded");
+        expect(await expand.isVisible()).toBe(false);
+        expect(
+          await longWrapper
+            .locator(".code-block-viewport")
+            .evaluate((viewport) => viewport.clientHeight),
+        ).toBeGreaterThan(clippedHeight);
 
         // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
         const thread = page.locator(".chat-thread");

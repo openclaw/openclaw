@@ -3,10 +3,10 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { currentChatComments } from "./chat-comment-controller.ts";
-import { dispatchChatCommentAction } from "./chat-selection-annotations.ts";
+import { dispatchChatCommentAction } from "./chat-selection-annotations.tsx";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();

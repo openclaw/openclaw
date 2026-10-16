@@ -220,6 +220,7 @@ async function startRegisteredSentinel(
   const warn = vi.fn();
   try {
     await startGatewaySidecars({
+      trackStartupWork: (run) => run(new AbortController().signal),
       ...params,
       scheduler: sidecarScheduler,
       deps: {},
@@ -350,7 +351,7 @@ it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
         context: captureDeliveryQueueStateContext(),
         shouldRun: () => true,
       }),
-    ).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+    ).rejects.toThrow('Run "openclaw doctor --fix" to migrate or archive them, then retry.');
 
     expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
     expect(await readRestartSentinel(env)).toEqual(retained);
@@ -378,7 +379,7 @@ it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
         defaultWorkspaceDir: stateDir,
         startChannels: async () => {},
       }),
-    ).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+    ).rejects.toThrow('Run "openclaw doctor --fix" to migrate or archive them, then retry.');
 
     expect(await fs.readFile(sourcePath, "utf8")).toBe(source);
     expect(await readRestartSentinel(env)).toBeNull();

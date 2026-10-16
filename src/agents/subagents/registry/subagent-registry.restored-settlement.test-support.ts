@@ -21,6 +21,7 @@ import {
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
+import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
 import { makeQueuedRun } from "./subagent-registry.run-fixtures.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRun } from "./subagent-run-generation.js";
@@ -470,6 +471,7 @@ export function registerRestoredLegacyAuthorityTests({
       updatedAt: Date.now(),
     };
     mocks.entries[entry.childSessionKey] = currentChild;
+    await prepareSubagentRecoveryFixture(entry, { entries: mocks.entries });
     mockRestoredRuns(() => [entry]);
 
     await hydrateAndActivateRegistry();

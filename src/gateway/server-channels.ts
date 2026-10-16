@@ -64,7 +64,6 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   channelStartFailurePatch,
   sanitizeAbortedTaskStatusPatch,
@@ -101,7 +100,6 @@ const RESTART_POLICY: BackoffPolicy = {
 const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
-const CHANNEL_STARTUP_CONCURRENCY = 4;
 // Private context key carried through the generic Plugin SDK registry. This is
 // not a new public capability surface; only the host installs its authority.
 const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
@@ -534,9 +532,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
 
     const startOutcomes = new Map<string, ChannelAccountStartOutcome>();
-    const startup = await runTasksWithConcurrency({
-      limit: CHANNEL_STARTUP_CONCURRENCY,
-      tasks: accountIds.map((id) => async () => {
+    // Each account owns its preparation; a database wait must not occupy a
+    // shared startup slot and prevent a healthy account from starting.
+    const startup = await Promise.allSettled(
+      accountIds.map(async (id) => {
         const rKey = restartKey(channelId, id);
         const setRestartState = (restartPending: boolean, reconnectAttempts = 0) =>
           setRuntime(channelId, id, { restartPending, reconnectAttempts });
@@ -1052,9 +1051,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           startGate.resolve();
         }
       }),
-    });
-    if (startup.hasError) {
-      throw startup.firstError;
+    );
+    const failed = startup.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
     }
     return startOutcomes;
   };
@@ -1345,41 +1345,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     withRegistry((registry) => stopChannelInRegistry(registry, ...args));
 
   const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
-    let releaseAccountStarts: (() => void) | undefined;
-    const deferAccountStartUntil =
-      opts.deferStartupAccountStartsUntil ??
-      (startupTrace
-        ? new Promise<void>((resolve) => {
-            releaseAccountStarts = () => {
-              const handle = setImmediate(resolve);
-              handle.unref?.();
-            };
-          })
-        : undefined);
-    try {
-      await runTasksWithConcurrency({
-        limit: CHANNEL_STARTUP_CONCURRENCY,
-        tasks: listLoadedChannelPluginsForRegistry(getPluginRegistry()).map(
-          (plugin) => async () => {
-            try {
-              await measureStartup(`channels.${plugin.id}.start`, () =>
-                startChannelInternal(plugin.id, undefined, {
-                  reason: "startup",
-                  ...startOptions,
-                  ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
-                }),
-              );
-            } catch (err) {
-              ensureChannelLog(plugin.id).error?.(
-                `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-              );
-            }
-          },
-        ),
-      });
-    } finally {
-      releaseAccountStarts?.();
-    }
+    const deferAccountStartUntil = opts.deferStartupAccountStartsUntil;
+    await Promise.all(
+      listLoadedChannelPluginsForRegistry(getPluginRegistry()).map(async (plugin) => {
+        try {
+          await measureStartup(`channels.${plugin.id}.start`, () =>
+            startChannelInternal(plugin.id, undefined, {
+              reason: "startup",
+              ...startOptions,
+              ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
+            }),
+          );
+        } catch (err) {
+          ensureChannelLog(plugin.id).error?.(
+            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }),
+    );
   };
 
   const recoverAutostartSuppression = createChannelAutostartRecovery({

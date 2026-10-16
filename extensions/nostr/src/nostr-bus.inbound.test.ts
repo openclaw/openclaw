@@ -10,16 +10,15 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
-import type { MetricEvent } from "./metrics.js";
 import { startNostrBus } from "./nostr-bus.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount, TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
 const BOT_PUBKEY = "b".repeat(64);
-const onMetric = vi.fn<(event: MetricEvent) => void>();
+const onRejected = vi.fn<NonNullable<Parameters<typeof startNostrBus>[0]["onRejected"]>>();
 
-function countMetric(name: MetricEvent["name"]): number {
-  return onMetric.mock.calls.filter(([event]) => event.name === name).length;
+function countRejection(reason: Parameters<typeof onRejected>[0]): number {
+  return onRejected.mock.calls.filter(([value]) => value === reason).length;
 }
 
 type TestNostrBusState = {
@@ -168,7 +167,7 @@ describe("startNostrBus inbound guards", () => {
       },
     } as unknown as PluginRuntime);
     mockState.handlers = [];
-    onMetric.mockClear();
+    onRejected.mockClear();
     ingressTasks = [];
     mockState.subscribeMany.mockClear();
     mockState.publish.mockReset();
@@ -208,7 +207,7 @@ describe("startNostrBus inbound guards", () => {
       startTestNostrBus({
         ...buildResolvedNostrAccount(),
         onMessage: vi.fn(async () => {}),
-        onMetric,
+        onRejected,
       }),
     ).rejects.toMatchObject({
       name: "ChannelIngressUnavailableError",
@@ -229,7 +228,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       ...buildResolvedNostrAccount(),
       onMessage: vi.fn(async () => {}),
-      onMetric,
+      onRejected,
       guardPolicy: { rateLimit: { maxGlobalPerWindow: 1 } },
     });
     expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
@@ -257,7 +256,7 @@ describe("startNostrBus inbound guards", () => {
         relays: ["wss://one.example", "wss://two.example"],
       }),
       onMessage: vi.fn(async () => {}),
-      onMetric,
+      onRejected,
     });
 
     await emitEvent(createEvent({ id: "cursor-high", created_at: 2_000 }));
@@ -293,14 +292,14 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       ...buildResolvedNostrAccount(),
       onMessage,
-      onMetric,
+      onRejected,
     });
 
     await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
     await emitEvent(createEvent({ id: "live-old", created_at: 1_001 }));
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(enqueue).not.toHaveBeenCalled();
-    expect(countMetric("event.rejected.stale")).toBe(1);
+    expect(countRejection("stale")).toBe(1);
 
     await bus.close();
   });
@@ -317,7 +316,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       relays: ["wss://relay.example"],
       onMessage: vi.fn(async () => {}),
-      onMetric,
+      onRejected,
     });
 
     const closing = bus.close();
@@ -347,7 +346,7 @@ describe("startNostrBus inbound guards", () => {
       relays: ["wss://relay.example"],
       onMessage,
       onError,
-      onMetric,
+      onRejected,
     });
 
     await emitEvent(createEvent({ id: "admission-failure" }));
@@ -367,7 +366,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       ...buildResolvedNostrAccount(),
       onMessage,
-      onMetric,
+      onRejected,
     });
 
     await emitEvent(createEvent({ id: "raw-oversized", content: "x".repeat(40_000) }));
@@ -413,7 +412,7 @@ describe("startNostrBus inbound guards", () => {
     const startup = startTestNostrBus({
       ...buildResolvedNostrAccount(),
       onMessage: vi.fn(async () => {}),
-      onMetric,
+      onRejected,
     });
     const settled = vi.fn();
     void startup.then(settled, settled);
@@ -445,7 +444,7 @@ describe("startNostrBus inbound guards", () => {
       relays: ["wss://relay.example"],
       onMessage: vi.fn(async () => {}),
       authorizeSender,
-      onMetric,
+      onRejected,
     });
 
     await emitEvent(createEvent({ id: inboundEventId, pubkey: senderPubkey }));
@@ -471,7 +470,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
       authorizeSender,
-      onMetric,
+      onRejected,
     });
 
     const invalidEvent = createEvent({ id: "invalid-replay" });
@@ -483,8 +482,7 @@ describe("startNostrBus inbound guards", () => {
     expect(authorizeSender).not.toHaveBeenCalled();
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
-    expect(countMetric("event.rejected.invalid_signature")).toBe(1);
-    expect(countMetric("event.duplicate")).toBe(1);
+    expect(countRejection("invalid_signature")).toBe(1);
 
     await bus.close();
   });
@@ -496,7 +494,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
       authorizeSender,
-      onMetric,
+      onRejected,
     });
 
     const selfEvent = createEvent({
@@ -511,7 +509,6 @@ describe("startNostrBus inbound guards", () => {
     expect(authorizeSender).not.toHaveBeenCalled();
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
-    expect(countMetric("event.duplicate")).toBe(1);
 
     await bus.close();
   });
@@ -521,7 +518,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
-      onMetric,
+      onRejected,
     });
 
     for (let i = 0; i < 21; i += 1) {
@@ -532,7 +529,7 @@ describe("startNostrBus inbound guards", () => {
       );
     }
 
-    expect(countMetric("event.rejected.rate_limited")).toBe(1);
+    expect(countRejection("rate_limited")).toBe(1);
     expect(mockState.decrypt).toHaveBeenCalledTimes(20);
     expect(onMessage).toHaveBeenCalledTimes(20);
 
@@ -546,7 +543,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
       authorizeSender,
-      onMetric,
+      onRejected,
     });
 
     const blockedEvent = createEvent({
@@ -573,7 +570,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
-      onMetric,
+      onRejected,
     });
 
     const event = createEvent({
@@ -587,7 +584,6 @@ describe("startNostrBus inbound guards", () => {
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(2);
     expect(mockState.decrypt).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(2);
-    expect(countMetric("event.processed")).toBe(1);
 
     await bus.close();
   });
@@ -610,7 +606,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
       authorizeSender,
-      onMetric,
+      onRejected,
       guardPolicy: {
         rateLimit: {
           windowMs: 60_000,
@@ -643,7 +639,7 @@ describe("startNostrBus inbound guards", () => {
       expect(authorizeSender).toHaveBeenCalledTimes(2);
       expect(mockState.decrypt).toHaveBeenCalledTimes(1);
       expect(onMessage).toHaveBeenCalledTimes(1);
-      expect(countMetric("event.rejected.rate_limited")).toBe(0);
+      expect(countRejection("rate_limited")).toBe(0);
     } finally {
       blocked.resolve("block");
       await bus.close();
@@ -658,7 +654,7 @@ describe("startNostrBus inbound guards", () => {
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
       authorizeSender,
-      onMetric,
+      onRejected,
       guardPolicy: {
         rateLimit: {
           windowMs: 60_000,
@@ -674,8 +670,8 @@ describe("startNostrBus inbound guards", () => {
 
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
     expect(authorizeSender).not.toHaveBeenCalled();
-    expect(countMetric("event.rejected.invalid_signature")).toBe(1);
-    expect(countMetric("event.rejected.rate_limited")).toBe(1);
+    expect(countRejection("invalid_signature")).toBe(1);
+    expect(countRejection("rate_limited")).toBe(1);
 
     await bus.close();
   });
@@ -685,7 +681,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
-      onMetric,
+      onRejected,
       guardPolicy: {
         maxCiphertextBytes: 4,
         rateLimit: {
@@ -712,8 +708,8 @@ describe("startNostrBus inbound guards", () => {
       }),
     );
 
-    expect(countMetric("event.rejected.oversized_ciphertext")).toBe(1);
-    expect(countMetric("event.rejected.rate_limited")).toBe(1);
+    expect(countRejection("oversized_ciphertext")).toBe(1);
+    expect(countRejection("rate_limited")).toBe(1);
     expect(mockState.verifyEvent).not.toHaveBeenCalled();
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
@@ -726,7 +722,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
-      onMetric,
+      onRejected,
       guardPolicy: {
         maxCiphertextBytes: 4,
         rateLimit: {
@@ -757,8 +753,8 @@ describe("startNostrBus inbound guards", () => {
       }),
     );
 
-    expect(countMetric("event.rejected.oversized_ciphertext")).toBe(2);
-    expect(countMetric("event.rejected.rate_limited")).toBe(0);
+    expect(countRejection("oversized_ciphertext")).toBe(2);
+    expect(countRejection("rate_limited")).toBe(0);
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
     expect(mockState.decrypt).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -771,7 +767,7 @@ describe("startNostrBus inbound guards", () => {
     const bus = await startTestNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
       onMessage,
-      onMetric,
+      onRejected,
     });
 
     await emitEvent(
@@ -780,7 +776,7 @@ describe("startNostrBus inbound guards", () => {
       }),
     );
 
-    expect(countMetric("event.rejected.future")).toBe(1);
+    expect(countRejection("future")).toBe(1);
     expect(mockState.verifyEvent).not.toHaveBeenCalled();
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();

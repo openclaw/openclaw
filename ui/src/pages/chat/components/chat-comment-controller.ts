@@ -2,7 +2,7 @@ import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { focusWithoutTooltip } from "../../../components/tooltip.ts";
 import type { ChatAttachment, ChatSelectionAnnotation } from "../../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments } from "./chat-attachment-draft.ts";

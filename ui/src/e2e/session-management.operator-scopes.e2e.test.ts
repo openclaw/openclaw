@@ -160,6 +160,10 @@ suite.define(() => {
             gateway,
             (params) => params.key === own.key && params.label === "List workspace",
           );
+          const listRow = page.locator(".session-data-row").filter({ hasText: "List workspace" });
+          await listRow.getByRole("button", { name: "Open session menu", exact: true }).click();
+          await menu.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
+          await waitForPatch(gateway, (params) => params.key === own.key && params.unread === true);
         }
         await navigateToControlUiSession(page, shared.key);
         await historyText.waitFor();
@@ -179,12 +183,24 @@ suite.define(() => {
         expect(await rename.getAttribute("disabled")).not.toBeNull();
         expect(await archive.getAttribute("disabled")).not.toBeNull();
         expect(await fork.getAttribute("disabled")).not.toBeNull();
+        expect(await menu.locator('[data-value="toggle-unread"]').isDisabled()).toBe(true);
         await rename.click({ force: true });
         await archive.click({ force: true });
         await page.keyboard.press("Escape");
 
         await navigateToControlUiSession(page, own.key);
         await historyText.waitFor();
+        const unreadBadge = ownRow.locator(".sidebar-session-indicator .session-unread-dot");
+        if (canOrganize) {
+          await waitForPatch(
+            gateway,
+            (params) =>
+              params.key === own.key &&
+              params.unread === false &&
+              typeof params.expectedMarkedUnreadAt === "number",
+          );
+          await unreadBadge.waitFor({ state: "hidden" });
+        }
         expect(await composer.isEditable()).toBe(canOrganize);
         expect(await send.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe(String(!canOrganize));
@@ -202,13 +218,26 @@ suite.define(() => {
         expect((await rename.getAttribute("disabled")) === null).toBe(canOrganize);
         expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
         expect(await fork.getAttribute("disabled")).not.toBeNull();
-        for (const action of [
-          menu.locator('[data-value="toggle-unread"]'),
-          menu.getByRole("menuitem", { name: "Move to group" }),
-        ]) {
-          expect(await action.getAttribute("disabled")).not.toBeNull();
-          await action.click({ force: true });
+        const unread = menu.locator('[data-value="toggle-unread"]');
+        expect(await unread.isDisabled()).toBe(!canOrganize);
+        if (canOrganize) {
+          await unread.click();
+          await unreadBadge.waitFor();
+          await activePane.locator(".chat-header-session-menu__trigger").click();
+          await activePane
+            .locator("openclaw-chat-header-session-menu")
+            .getByRole("menuitem", { name: "Mark as read", exact: true })
+            .click();
+          await activePane.locator(".chat-header-session-menu__panel").waitFor({ state: "hidden" });
+          await unreadBadge.waitFor({ state: "hidden" });
+          await ownRow.click({ button: "right" });
+          await rename.waitFor();
+        } else {
+          await unread.click({ force: true });
         }
+        const moveToGroup = menu.getByRole("menuitem", { name: "Move to group" });
+        expect(await moveToGroup.getAttribute("disabled")).not.toBeNull();
+        await moveToGroup.click({ force: true });
         await openSessionMenuSubmenu(page, "Advanced");
         const appearance = menu.getByRole("menuitem", { name: "Icon & color", exact: true });
         expect(await appearance.getAttribute("disabled")).not.toBeNull();
@@ -315,7 +344,12 @@ suite.define(() => {
         const patches = requests
           .filter((request) => request.method === "sessions.patch")
           .map((request) => requireRecord(request.params));
-        const envelopeKeys = new Set(["agentId", "expectedSessionId", "expectedLifecycleRevision"]);
+        const envelopeKeys = new Set([
+          "agentId",
+          "expectedSessionId",
+          "expectedLifecycleRevision",
+          "expectedMarkedUnreadAt",
+        ]);
         expect(
           patches.map((params) =>
             Object.fromEntries(Object.entries(params).filter(([key]) => !envelopeKeys.has(key))),
@@ -324,6 +358,10 @@ suite.define(() => {
           canOrganize
             ? [
                 { key: own.key, label: "List workspace" },
+                { key: own.key, unread: true },
+                { key: own.key, unread: false },
+                { key: own.key, unread: true },
+                { key: own.key, unread: false },
                 { key: own.key, label: "Organized workspace" },
                 { key: own.key, archived: true },
                 { key: own.key, archived: false },

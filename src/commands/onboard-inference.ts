@@ -15,6 +15,7 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeDir } from "../infra/home-dir.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 import {
@@ -64,7 +65,7 @@ async function probeCodexCommand(params: {
   platform: NodeJS.Platform;
 }): Promise<LocalCommandProbe> {
   const pathProbe = await params.probe("codex");
-  if (pathProbe.found || params.platform !== "darwin") {
+  if (pathProbe.found || pathProbe.failure === "error" || params.platform !== "darwin") {
     return pathProbe;
   }
   const home = params.env.HOME?.trim() || os.homedir();
@@ -81,7 +82,7 @@ async function probeCodexCommand(params: {
     const appProbe = await params.probe(executable, ["--version"], {
       timeoutMs: CODEX_MACOS_APP_PROBE_TIMEOUT_MS,
     });
-    if (appProbe.found) {
+    if (appProbe.found || appProbe.failure === "error") {
       return appProbe;
     }
   }
@@ -150,6 +151,11 @@ export async function detectInferenceBackends(
     probeCodexCommand({ probe, env, platform }),
     probe("gemini"),
   ]);
+  if (codexProbe.failure === "error" || codexProbe.timedOut) {
+    throw new Error(
+      `Codex detection failed (${codexProbe.command}): ${codexProbe.error ?? "version probe failed"}. Check the Codex installation and execution permissions, then retry setup.`,
+    );
+  }
   const cliCandidates: InferenceBackendCandidate[] = [];
   if (claudeProbe.found && !claudeProbe.timedOut) {
     cliCandidates.push({
@@ -159,8 +165,16 @@ export async function detectInferenceBackends(
       detail: "installed; login status unverified",
     });
   }
-  const storedCodexCredentials = hasCodexLogin();
-  if ((codexProbe.found && !codexProbe.timedOut) || storedCodexCredentials) {
+  let storedCodexCredentials: boolean;
+  try {
+    storedCodexCredentials = hasCodexLogin();
+  } catch (error) {
+    throw new Error(
+      `Codex sign-in detection failed: ${formatErrorMessage(error)}. Check access to the Codex home, then retry setup.`,
+      { cause: error },
+    );
+  }
+  if (codexProbe.found || storedCodexCredentials) {
     // Native status starts provider initialization (including migrations and
     // token refresh). A saved record proves neither the active store nor login.
     cliCandidates.push({
@@ -168,7 +182,7 @@ export async function detectInferenceBackends(
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
       detail: storedCodexCredentials
-        ? codexProbe.found && !codexProbe.timedOut
+        ? codexProbe.found
           ? "installed; stored credentials found; login status unverified"
           : "stored credentials found; runtime installation required"
         : "installed; login status unverified",

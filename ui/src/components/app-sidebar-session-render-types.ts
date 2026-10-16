@@ -12,7 +12,7 @@ import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
 import type {
@@ -20,7 +20,7 @@ import type {
   CatalogSessionMenuRequest,
   SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import type { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
@@ -123,7 +123,7 @@ export interface SessionListHost {
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicatorsController, "summary">;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary">;
   mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;

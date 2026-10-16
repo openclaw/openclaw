@@ -123,6 +123,19 @@ export function GroupedMessage(props: GroupedMessageProps) {
               <ReplyLineView line={props.options.replyLine!} actions={props.options} inline />
             </Show>
             <Switch>
+              <Match when={state().voiceTranscript}>
+                <ChatBubbleActivity
+                  label={t("chat.messages.voiceTranscript")}
+                  open={props.options.searchResult}
+                >
+                  <BubbleContents
+                    state={state}
+                    messageKey={props.messageKey}
+                    options={props.options}
+                    onOpenSidebar={props.onOpenSidebar}
+                  />
+                </ChatBubbleActivity>
+              </Match>
               <Match when={state().onlyToolCards}>
                 <InlineToolCards cards={state().toolCards} options={state().toolRenderOptions} />
               </Match>

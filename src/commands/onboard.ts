@@ -9,7 +9,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -157,6 +157,7 @@ async function validateResetAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  discoveryConfig: OpenClawConfig;
   workspaceDir: string;
   resetScope: ResetScope;
 }): Promise<boolean> {
@@ -277,6 +278,8 @@ async function validateResetAuthChoice(params: {
       CustomApiError,
       parseNonInteractiveCustomApiFlags,
       resolveCustomProviderId,
+      resolveCustomProviderNoAuth,
+      resolveNonInteractiveCustomApiModelIds,
     } = await import("./onboard-custom-config.js");
     try {
       const custom = parseNonInteractiveCustomApiFlags({
@@ -289,11 +292,18 @@ async function validateResetAuthChoice(params: {
         supportsImageInput: params.opts.customImageInput,
       });
       const customProviderId = resolveCustomProviderId({
-        config: params.baseConfig,
+        config: params.discoveryConfig,
         baseUrl: custom.baseUrl,
         providerId: custom.providerId,
       }).providerId;
-      const customCredential = custom.noAuth
+      const configuredKey = params.discoveryConfig.models?.providers?.[customProviderId]?.apiKey;
+      const noAuth = resolveCustomProviderNoAuth({
+        ...custom,
+        config: params.discoveryConfig,
+        providerId: customProviderId,
+        apiKey: custom.apiKey ?? process.env.CUSTOM_API_KEY?.trim(),
+      });
+      const customCredential = noAuth
         ? undefined
         : await resolveNonInteractiveCredential({
             provider: customProviderId,
@@ -304,7 +314,8 @@ async function validateResetAuthChoice(params: {
             runtime: params.runtime,
             agentDir: target.agentDir,
             workspaceDir: params.workspaceDir,
-            allowProfile: params.resetScope === "config",
+            allowProfile:
+              params.resetScope === "config" && !hasConfiguredSecretInput(configuredKey),
             required: false,
             secretInputMode: params.opts.secretInputMode,
             json: params.opts.json,
@@ -312,11 +323,35 @@ async function validateResetAuthChoice(params: {
       if (params.opts.customApiKey?.trim() && !customCredential) {
         return false;
       }
+      if (
+        !custom.modelId &&
+        !noAuth &&
+        !customCredential &&
+        hasConfiguredSecretInput(configuredKey)
+      ) {
+        return reject(
+          "Reset would remove the configured discovery credential. Pass --custom-api-key or rerun without --reset.",
+        );
+      }
+      const modelIds = await resolveNonInteractiveCustomApiModelIds({
+        ...custom,
+        config: params.discoveryConfig,
+        noAuth,
+        apiKey: customCredential?.key,
+        agentDir: target.agentDir,
+      });
       applyCustomApiConfig({
         ...custom,
+        modelId: modelIds[0] ?? "",
         config: params.baseConfig,
+        noAuth,
         apiKey: customCredential?.key,
       });
+      if (noAuth) {
+        params.opts.customNoAuth = true;
+      }
+      params.opts.customModelIds = modelIds;
+      params.opts.customProviderId = customProviderId;
     } catch (error) {
       const message =
         error instanceof CustomApiError &&
@@ -597,6 +632,7 @@ export async function setupWizardCommand(
           opts: normalizedOpts,
           runtime,
           baseConfig: setupBaseConfig,
+          discoveryConfig: baseConfig,
           workspaceDir: setupWorkspaceDir,
           resetScope,
         }))

@@ -13,7 +13,7 @@ import {
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
-import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
+import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import {
@@ -44,7 +44,6 @@ type ApplyGroupGatingParams = {
   selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: {
-    debug: (obj: object, msg: string) => void;
     warn: (obj: object, msg: string) => void;
   };
 };
@@ -180,16 +179,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     );
   }
 
-  const mentionDebug = debugMention(mentionMsg, mentionConfig, params.authDir);
-  params.replyLogger.debug(
-    {
-      conversationId,
-      wasMentioned: mentionDebug.wasMentioned,
-      ...mentionDebug.details,
-    },
-    "group mention debug",
-  );
-  const wasMentioned = mentionDebug.wasMentioned;
+  const wasMentioned = isBotMentioned(mentionMsg, mentionConfig, params.authDir);
   const activation = await resolveGroupActivationFor({
     cfg: params.cfg,
     accountId: inboundPolicy.account.accountId,

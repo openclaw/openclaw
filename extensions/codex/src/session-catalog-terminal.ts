@@ -91,7 +91,7 @@ function resolveCodexCatalogTerminalHome(
   const startOptions =
     sources.source?.appServer.start ??
     sources.resolveRuntimeOptions({
-      pluginConfig: sources.getPluginConfig(),
+      pluginConfig: readCodexPluginConfig(sources.getPluginConfig()),
     }).start;
   if (startOptions.transport !== "stdio") {
     throw new CatalogParamsError("Native terminal requires a local Codex source");

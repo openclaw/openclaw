@@ -252,11 +252,61 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           `[shard:compact] ${lines[6]}`,
           lines[7],
           "[shard:compact] end (exit 1)",
+          "[shard-failure:compact] FAILED (exit 1)",
+          ...lines.map((line) => `[shard-failure:compact:tail] ${line}`),
           "",
         ].join("\n"),
       );
     },
   );
+
+  it.each([
+    { code: 7, signal: null, exit: 7 },
+    { code: null, signal: "SIGTERM", exit: 143 },
+    { code: 0, signal: null, exit: 0 },
+  ] as const)("keeps invocation diagnostics searchable after exit $exit", async (outcome) => {
+    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+    const child = new childProcess.ChildProcess();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const started = createDeferred();
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+      started.resolve();
+      return child;
+    });
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    const pending = runShardPlans(
+      [{ kind: "group", name: "compact", plan: { configs: ["one.config.ts"] } }],
+      { env: {}, scratchDir: makeScratchDir() },
+    );
+    await started.promise;
+    child.stdout.emit("data", `${"old output".repeat(3_000)}\n`);
+    child.stdout.emit("data", "binary\0output\n");
+    child.stderr.emit("data", "::error::root failure\nunterminated diagnostic");
+    child.emit("close", outcome.code, outcome.signal);
+    await expect(pending).resolves.toBe(outcome.exit);
+
+    const log = output.join("");
+    expect(log).not.toContain("\0");
+    expect(log).toContain("binary\\0output");
+    const summary = log.slice(log.indexOf(`[shard:compact] end (exit ${outcome.exit})`));
+    if (outcome.exit === 0) {
+      expect(summary).not.toContain("FAILED");
+      expect(summary).not.toContain("[shard-failure:compact:tail]");
+    } else {
+      expect(summary).toContain(
+        `[shard-failure:compact] FAILED (exit ${outcome.exit}${outcome.signal ? `, signal ${outcome.signal}` : ""})`,
+      );
+      expect(summary).toContain("[shard-failure:compact:tail] ::error::root failure");
+      expect(summary).toContain("[shard-failure:compact:tail] unterminated diagnostic");
+      expect(summary.length).toBeLessThan(17_000);
+      expect(summary).not.toContain("old output".repeat(3_000));
+    }
+  });
 
   it("uses the compiled child runner from a frozen candidate", () => {
     const entrypoint = resolveTestProjectsEntrypoint((candidate) => candidate.endsWith(".mjs"));
@@ -1022,6 +1072,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "extensions/team-reports/src/render/theme.test.ts",
       ],
       sibling: "extensions/team-reports/src/render/site.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.infra.config.ts",
+      dir: ".",
+      targets: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+        "src/state/openclaw-state-lease.retention.test.ts",
+      ],
+      sibling: "src/state/openclaw-state-ownership.test.ts",
       glob: "**/*.test.ts",
     },
   ])("admits only the qualified complete selections in $config", (row) => {
@@ -2010,7 +2073,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       return { child, completion };
     });
     const receipts: string[] = [];
+    const output: string[] = [];
     vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
       if (String(chunk).startsWith("[shard:completion] ")) {
         expect(directories.some(existsSync)).toBe(false);
         receipts.push(String(chunk));
@@ -2031,6 +2096,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(spawn).toHaveBeenCalledTimes(
       "stop" in scenario || "unjoined" in scenario || scenario.code === null ? 1 : 2,
     );
+    if (scenario.code !== 0 && !("unjoined" in scenario)) {
+      expect(output.join("")).toContain(
+        `[shard-failure:one] FAILED (exit ${scenario.signal === "SIGKILL" ? 137 : (scenario.code ?? 2)}${scenario.signal ? `, signal ${scenario.signal}` : ""})`,
+      );
+    }
     expect(receipts).toEqual(
       "complete" in scenario
         ? [

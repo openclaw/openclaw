@@ -214,7 +214,6 @@ export function JsonTextareaControl(props: {
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
 }): JSX.Element {
   let textarea!: HTMLTextAreaElement;
-  let previous: { sourceValue: unknown; fallback: string; pathKey: string } | undefined;
   const errorId = createMemo(() => configFieldId(props.path, "json-error"));
   const renderedFallback = createMemo(() =>
     props.sensitiveState.isRedacted ? "" : props.fallback,
@@ -246,7 +245,7 @@ export function JsonTextareaControl(props: {
       fallback: renderedFallback(),
       pathKey: JSON.stringify(props.path.filter((segment) => typeof segment === "string")),
     }),
-    (current) => {
+    (current, previous) => {
       // Equal autosave acknowledgments must not erase invalid JSON still being edited.
       if (
         !previous ||
@@ -258,7 +257,6 @@ export function JsonTextareaControl(props: {
         textarea.value = current.fallback;
         setValidity(textarea, "");
       }
-      previous = current;
     },
   );
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {

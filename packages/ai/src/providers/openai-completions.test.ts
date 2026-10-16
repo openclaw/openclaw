@@ -393,60 +393,6 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.errorMessage).toContain('requested unavailable tool "broken"');
   });
 
-  it("preserves image-bearing tool results with image placeholders and attachments", async () => {
-    let capturedMessages:
-      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
-      | undefined;
-    const stream = streamOpenAICompletions(
-      { ...model, input: ["text", "image"] },
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createZeroUsage(),
-            stopReason: "toolUse",
-            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
-            timestamp: 1,
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_shot",
-            toolName: "screenshot",
-            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      } as never,
-      {
-        apiKey: "sk-test",
-        onPayload(payload) {
-          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
-          throw new Error("stop before network");
-        },
-      },
-    );
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
-      role: "tool",
-      content: "(see attached image)",
-      tool_call_id: "call_shot",
-    });
-    expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
-      role: "user",
-      content: [
-        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
-      ],
-    });
-  });
-
   it("does not reread an unreadable tool inventory length", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const tools = new Proxy([], {

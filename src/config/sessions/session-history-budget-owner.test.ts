@@ -1,9 +1,7 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
@@ -26,6 +24,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import * as diskBudget from "./disk-budget.js";
 import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-accessor.js";
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
@@ -48,23 +47,17 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 const states: OpenClawTestState[] = [];
 const work: Promise<unknown>[] = [];
 const releaseGates: Array<() => void> = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const trackWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
-beforeEach(() => workerChannel.subscribe(trackWorker));
 afterEach(async () => {
   for (const release of releaseGates.splice(0)) {
     release();
   }
   await Promise.allSettled(work.splice(0));
   vi.restoreAllMocks();
+  await drainSessionDiskBudgetWorkers();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  workerChannel.unsubscribe(trackWorker);
-  // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.
-  await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
   vi.unstubAllEnvs();
   for (const state of states.splice(0).toReversed()) {
     await state.cleanup();

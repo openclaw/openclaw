@@ -4,9 +4,8 @@ import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
-import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -419,27 +418,27 @@ export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
   const rawText =
     typeof inlineText === "string" ? inlineText : blocks.map((block) => block.text).join("");
-  if (isSilentReplyText(rawText)) {
+  const prepared = prepareAgentRunTerminalReply({ rawText });
+  const text = prepared.text;
+  if (prepared.terminalReply.disposition === "silent" || text === rawText) {
     return message;
   }
-  const text = stripMixedSilentReplyTokens(rawText);
-  if (text === null) {
-    return message;
-  }
-  // History is projected more than once. The suffix is already prepared text,
+  // History is projected more than once. This is already prepared text,
   // even when it is itself NO_REPLY or starts with another control-looking line.
   if (typeof inlineText === "string") {
     return { ...entry, [field]: text, display: true };
   }
-  let remaining = rawText.length - text.length;
+  let remainingPrefix = rawText.endsWith(text) ? rawText.length - text.length : 0;
+  let remainingLength = text.length;
   const replacements = new Map<unknown, unknown>();
   for (const block of blocks) {
-    if (remaining === 0) {
-      break;
+    const removed = Math.min(remainingPrefix, block.text.length);
+    remainingPrefix -= removed;
+    const visible = block.text.slice(removed, removed + remainingLength);
+    remainingLength -= visible.length;
+    if (visible !== block.text) {
+      replacements.set(block, { ...block, text: visible });
     }
-    const consumed = Math.min(remaining, block.text.length);
-    replacements.set(block, { ...block, text: block.text.slice(consumed) });
-    remaining -= consumed;
   }
   return {
     ...entry,

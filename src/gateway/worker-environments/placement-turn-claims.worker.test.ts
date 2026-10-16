@@ -772,6 +772,8 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   const requested = input("late-reply");
   const claim = await placements.claimTurn(requested);
   const previous = await placements.prepareTurnClaimAuthority(claim);
+  const releaseCommitted = createDeferredCore();
+  previous.onRevoked(() => releaseCommitted.resolve());
   const replyArrived = createDeferredCore<() => void>();
   const receive = brokerReply.receiveSqliteWorkerReply;
   let delayed = false;
@@ -797,8 +799,9 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     return receive(slot, reply, owner);
   });
   const releasing = placements.releaseTurn(claim);
-  const deliver = await replyArrived.promise;
-  let delivered = false;
+  // Commit receipts and command replies arrive on separate ports.
+  const [deliver] = await Promise.all([replyArrived.promise, releaseCommitted.promise]);
+  let pendingDelivery: (() => void) | undefined = deliver;
   let next: Awaited<ReturnType<typeof placements.prepareTurnClaimAuthority>> | undefined;
   try {
     expect(previous.isCurrent()).toBe(false);
@@ -813,7 +816,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     const replacement = native.claimTurn(requested).claim;
     next = await placements.prepareTurnClaimAuthority(replacement);
     expect(next.isCurrent()).toBe(true);
-    delivered = true;
+    pendingDelivery = undefined;
     deliver();
     await releasing;
     expect(previous.isCurrent()).toBe(false);
@@ -823,9 +826,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
     });
     await placements.releaseTurn(replacement);
   } finally {
-    if (!delivered) {
-      deliver();
-    }
+    pendingDelivery?.();
     await Promise.allSettled([releasing]);
     previous.release();
     next?.release();

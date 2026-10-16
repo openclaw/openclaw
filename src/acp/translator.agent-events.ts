@@ -94,7 +94,7 @@ export class AcpTranslatorAgentEvents {
         preambles.set(previous.itemId, previous.text);
         pending.preamblePreview = undefined;
       }
-      if (isNewPreamble && typeof projection.retainedText === "string") {
+      if (isNewPreamble && projection.retainedText !== undefined) {
         sent = "";
         const retained = projection.retainedText.trimEnd();
         const answer = pending.sentText ?? "";

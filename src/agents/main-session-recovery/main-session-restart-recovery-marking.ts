@@ -354,12 +354,18 @@ type OrphanMarkParams = {
 };
 
 function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
   return (
     entry.archivedAt === undefined &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
     (hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
-      entry.status === "interrupted")
+      (entry.status === "interrupted" && !settledInterruption))
   );
 }
 

@@ -12,7 +12,7 @@ import {
 export function registerGatewayCronStartupTests(
   startGatewayCronWithLogging: typeof import("./server-runtime-services.js").startGatewayCronWithLogging,
 ) {
-  it("owns cron startup, watcher reconciliation, and completion after the requester closes", async () => {
+  it("owns cron startup and completion after the requester closes", async () => {
     const order: string[] = [];
     const callerContext = new AsyncLocalStorage<string>();
     const callerWork = new AsyncWorkScope();
@@ -26,10 +26,6 @@ export function registerGatewayCronStartupTests(
         order.push("start");
       }),
     };
-    const afterStart = vi.fn(async () => {
-      observed.push(callerContext.getStore());
-      order.push("after-start");
-    });
     const cronReconciliation = createTestCronReconciliation(async () => {
       observed.push(callerContext.getStore());
       order.push("hook");
@@ -45,7 +41,6 @@ export function registerGatewayCronStartupTests(
           cronReconciliation,
           reason: "startup",
           config,
-          afterStart,
           logCron,
         }),
       ),
@@ -53,8 +48,8 @@ export function registerGatewayCronStartupTests(
     await callerWork.drain();
     startup.resolve();
 
-    await waitForFast(() => expect(order).toEqual(["start", "after-start", "hook"]));
-    expect(observed).toEqual([undefined, "started", undefined, undefined]);
+    await waitForFast(() => expect(order).toEqual(["start", "hook"]));
+    expect(observed).toEqual([undefined, "started", undefined]);
     expect(cronReconciliation.arm).toHaveBeenCalledWith({
       reason: "startup",
       config,
@@ -88,28 +83,6 @@ export function registerGatewayCronStartupTests(
       expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
     );
     expect(onStartError).toHaveBeenCalledOnce();
-    expect(cronReconciliation.complete).not.toHaveBeenCalled();
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("does not complete cron reconciliation when exit-watcher reconciliation rejects", async () => {
-    const cronReconciliation = createTestCronReconciliation();
-    const logCron = { error: vi.fn() };
-
-    startGatewayCronWithLogging({
-      cronState: createTestCronState(),
-      cronReconciliation,
-      reason: "reload",
-      config: {} as never,
-      afterStart: async () => {
-        throw new Error("watcher unavailable");
-      },
-      logCron,
-    });
-
-    await waitForFast(() =>
-      expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: watcher unavailable"),
-    );
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });

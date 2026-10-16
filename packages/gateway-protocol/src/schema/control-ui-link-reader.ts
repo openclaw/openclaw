@@ -12,6 +12,8 @@ export const ControlUiLinkReaderMetadataSchema = closedObject({
   previewMethod: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   /** Optional same-plugin read method resolving inline images without browser CORS. */
   imageMethod: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Forward this pane's session key; the receiving owner still authorizes every read. */
+  sessionScoped: Type.Optional(Type.Boolean()),
 });
 
 export const ControlUiLinkReaderDescriptorSchema = closedObject({

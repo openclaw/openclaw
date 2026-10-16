@@ -468,3 +468,4 @@ export { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js"
 export type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 export { RuntimeSystemAgentChatEngine };
 export { mocks };
+export { operationMocks } from "./chat-engine.mocks.test-support.js";

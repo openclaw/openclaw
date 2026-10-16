@@ -14,7 +14,7 @@ import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contr
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
 import { shouldCloseDebugOverlay, type DebugOverlayMode } from "./debug-overlay-state.ts";

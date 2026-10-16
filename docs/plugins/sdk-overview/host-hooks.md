@@ -521,6 +521,12 @@ The `linkReader` fields are:
 | `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
 | `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
 
+A reader may set `sessionScoped: true` to receive the foreground pane's `sessionKey`
+on preview and detail requests. This is a context hint, never authority: its Gateway
+method must authorize the current operator and exact session before reading private
+data. Hovercard caches and seeds retire when that pane changes sessions. Readers
+without this flag retain the public request shape.
+
 Preview and detail requests include the selected `agentId` when available; detail
 requests also accept `refresh: true`. The receiving owner must authorize identity
 selection rather than treating this hint as access authority.

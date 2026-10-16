@@ -75,7 +75,6 @@ export function startGatewayCronWithLogging(params: {
   cronReconciliation: GatewayCronReconciliation;
   reason: "startup" | "reload";
   config: OpenClawConfig;
-  afterStart?: () => Promise<void>;
   onStartError?: (error: unknown) => void;
   logCron: { error: (message: string) => void };
 }): void {
@@ -88,7 +87,6 @@ export function startGatewayCronWithLogging(params: {
     runWithGatewayIndependentRootWorkAdmission(async () => {
       try {
         await params.cronState.cron.start();
-        await params.afterStart?.();
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
@@ -123,6 +121,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
 }): void {
   const isRecovering = () =>
     getQueueSize(CommandLane.Background) > 0 ||
+    getQueueSize(CommandLane.RestartRecovery) > 0 ||
     getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   const idle = {
     scheduler: params.scheduler,

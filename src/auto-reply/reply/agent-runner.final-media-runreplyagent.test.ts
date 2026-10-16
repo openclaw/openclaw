@@ -35,6 +35,7 @@ vi.mock("../../agents/sandbox.js", async () => {
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
+    prepareSandboxWorkspaceForSession: async () => null,
   };
 });
 

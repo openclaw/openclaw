@@ -592,7 +592,8 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-expanded-before.png");
-          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          await card.getByRole("button", { name: "Task progress options" }).click();
+          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
           await expect.poll(() => card.count()).toBe(0);
           await captureProof(page, "hide-" + name + "-after.png");
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
@@ -637,7 +638,8 @@ suite.define(() => {
             await card.locator("summary").click();
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
-          await card.getByRole("button", { name: "Dismiss progress card" }).press("Enter");
+          await card.getByRole("button", { name: "Task progress options" }).press("Enter");
+          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
           await expect.poll(() => card.count()).toBe(0);
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
           await page.reload();
@@ -740,7 +742,8 @@ suite.define(() => {
         await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
         expect(await card.locator('[data-value="clear"]').count()).toBe(0);
-        await card.getByRole("button", { name: "Dismiss progress card" }).click();
+        await card.getByRole("button", { name: "Task progress options" }).click();
+        await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
         await expect.poll(() => card.count()).toBe(0);
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
         await page.reload();

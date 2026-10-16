@@ -32,7 +32,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
-import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -75,6 +74,7 @@ import {
   renderChatInto,
   renderChatPropsInto,
   renderChatView,
+  renderChatModelControls,
   getComposerTextarea,
   requireElement,
   stubAnimationFrames,
@@ -102,6 +102,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
+import { saveChatSessionScrollPosition } from "./scroll.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -538,22 +539,15 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   };
 }
 
-const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
-
 function renderModelControls(
   state: ChatHeaderTestState,
   overrides: Partial<ChatModelControlsProps> = {},
   container = document.createElement("div"),
 ) {
-  const props = { ...createChatModelControlsProps(state), ...overrides };
-  const update = modelControlsUpdates.get(container);
-  if (update) {
-    update(props);
-  } else {
-    const view = mountSolidComponent(ChatModelControls, props, container);
-    modelControlsUpdates.set(container, (next) => view.update(next));
-  }
-  return container;
+  return renderChatModelControls(
+    { ...createChatModelControlsProps(state), ...overrides },
+    container,
+  );
 }
 
 describe("chat typing status", () => {
@@ -637,7 +631,10 @@ describe("chat run error", () => {
       vi.mocked(chatThread.buildCachedChatItems).mockRestore();
       const onRetrySessionPlacementStartup = vi.fn();
       const onQueueRetry = vi.fn();
+      const paneId = `startup-${action}`;
+      saveChatSessionScrollPosition(paneId, "main", { scrollTop: 0, anchorToEnd: false });
       const container = renderChatView({
+        transcript: createTestTranscript(paneId),
         canSend: false,
         messages: [
           { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
@@ -1952,6 +1949,8 @@ describe("chat loading skeleton", () => {
 
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
+    container.querySelector<HTMLElement>(".context-usage summary")!.click();
+    flush();
     expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
       "OpenAI",
     );
@@ -2837,6 +2836,7 @@ describe("chat slash menu accessibility", () => {
     textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
 
     expect(container.querySelector(".skill-menu")).toBeNull();
   });

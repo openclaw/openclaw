@@ -278,12 +278,7 @@ function setupDeps(params: {
     runAppRecommendations:
       params.runAppRecommendations ??
       vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
-    runBrowserHandoff:
-      params.runBrowserHandoff ??
-      (vi.fn(async () => ({
-        handedOff: false as const,
-        reason: "timeout" as const,
-      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
+    runBrowserHandoff: params.runBrowserHandoff ?? vi.fn(async () => false),
     runSystemAgentChat,
     platform: "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),

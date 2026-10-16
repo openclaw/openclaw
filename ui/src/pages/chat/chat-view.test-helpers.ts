@@ -10,6 +10,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -18,7 +19,30 @@ import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./components/chat-message-markdown.ts";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import { ChatModelControls } from "./components/chat-model-controls.tsx";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
+import {
+  createTranscriptTestOwner,
+  type TestChatTranscript,
+} from "./components/chat-transcript-owner.test-support.ts";
+
+type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
+const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
+
+export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+  const update = modelControlsUpdates.get(container);
+  if (update) {
+    update(props);
+  } else {
+    if (!container.isConnected) {
+      document.body.append(container);
+      onTestFinished(() => container.remove());
+    }
+    const view = mountSolidComponent(ChatModelControls, props, container);
+    modelControlsUpdates.set(container, (next) => view.update(next));
+  }
+  return container;
+}
 
 export function requireElement(container: Element, selector: string, label: string): Element {
   const element = container.querySelector(selector);
@@ -40,14 +64,14 @@ let nextTestTranscriptId = 0;
 
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
-): ChatTranscriptController {
-  return new ChatTranscriptController(
+): TestChatTranscript {
+  return createTranscriptTestOwner(
     {
       addController: () => undefined,
       removeController: () => undefined,
       requestUpdate: () => undefined,
       updateComplete: Promise.resolve(true),
-    } satisfies ConstructorParameters<typeof ChatTranscriptController>[0],
+    } satisfies Parameters<typeof createTranscriptTestOwner>[0],
     () => paneId,
   );
 }
@@ -218,7 +242,7 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
   return container;
 }
 
-const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscript>();
 const mountedViews = new WeakMap<
   HTMLElement,
   { update: (props: ChatProps, application?: ApplicationContext) => void; unmount: () => void }
@@ -227,7 +251,7 @@ const mountedViews = new WeakMap<
 export function disposeChatView(container: HTMLElement) {
   mountedViews.get(container)?.unmount();
   mountedViews.delete(container);
-  renderedTranscripts.get(container)?.hostDisconnected();
+  renderedTranscripts.get(container)?.dispose();
   renderedTranscripts.delete(container);
 }
 
@@ -268,15 +292,15 @@ export function renderChatPropsInto(
       }
     });
   } else if (previous !== props.transcript) {
-    previous.hostDisconnected();
+    previous.dispose();
   }
   renderedTranscripts.set(container, props.transcript);
   if (previous) {
     mountedViews.get(container)?.update(props, application);
   }
   flush();
-  props.transcript.hostConnected();
-  props.transcript.hostUpdated();
+  props.transcript.start();
+  props.transcript.update();
   flush();
 }
 
@@ -312,7 +336,17 @@ export function getThinkingSelect(container: Element): HTMLElement {
   return select;
 }
 
+function openThinkingPicker(container: Element): void {
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
+  if (picker && !picker.open) {
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+    flush();
+  }
+}
+
 export function getThinkingSlider(container: Element): HTMLInputElement | null {
+  openThinkingPicker(container);
   return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
 }
 
@@ -322,6 +356,7 @@ export function getThinkingSliderValues(container: Element): string[] {
 }
 
 export function getThinkingReasoningValueLabel(container: Element): string {
+  openThinkingPicker(container);
   const preview = container.querySelector(
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",
@@ -355,11 +390,13 @@ export function replaceSkillCommands(
   ]);
 }
 
+// Separate user gestures run in separate browser tasks, after Solid has settled.
 export function inputDraft(container: HTMLElement, value: string) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   textarea!.value = value;
   textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
 }
 
 export function inputDraftAtEnd(container: HTMLElement, value: string) {
@@ -367,6 +404,7 @@ export function inputDraftAtEnd(container: HTMLElement, value: string) {
   textarea.value = value;
   textarea.setSelectionRange(value.length, value.length);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
 }
 
 export function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
@@ -374,6 +412,7 @@ export function keydownComposer(container: HTMLElement, key: string, init: Keybo
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
   textarea!.dispatchEvent(event);
+  flush();
   return event;
 }
 

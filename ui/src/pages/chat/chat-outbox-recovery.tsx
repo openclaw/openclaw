@@ -22,7 +22,7 @@ import { formatDateTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;

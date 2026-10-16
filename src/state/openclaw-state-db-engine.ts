@@ -1,6 +1,9 @@
 import { getEnvironmentData } from "node:worker_threads";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
   admitPostgresPhysicalFacts,
@@ -37,9 +40,9 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection()?.input;
+  const selected = getDatabaseEngineSelection();
   if (selected) {
-    return selected;
+    return getDatabaseEngineInput("state");
   }
   const connection: unknown =
     process.env.NODE_ENV === "test"
@@ -85,12 +88,15 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       fragment.tables.some((table) => tables.has(table)) ? [] : fragment.tables,
     ),
   );
-  assertPostgresCatalog(
-    facts.catalog.filter(
-      (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
-    ),
-    runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
-  );
+  // Older inspection schemas are checked against their migration's exact source DDL.
+  if (facts.version === OPENCLAW_STATE_SCHEMA_VERSION) {
+    assertPostgresCatalog(
+      facts.catalog.filter(
+        (fact) => !fact.kind.endsWith("Definition") && fact.table !== "openclaw_schema_meta",
+      ),
+      runtime.expectedCatalog.filter((fact) => !absent.has(fact.table)),
+    );
+  }
   if (fresh) {
     const now = Date.now();
     db.prepare(
@@ -110,10 +116,10 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
     .get();
   // SQLite may publish the current header without a redundant content-version row.
   if (
-    meta?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    meta?.schema_version !== facts.version ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    (content !== undefined && content.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION))
+    (content !== undefined && content.value_json !== String(facts.version))
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -124,10 +130,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   publishStateRuntimeSchemaAdmission(db, true);
 }
 
-export const stateEngineSchema = {
-  id: "state",
-  version: OPENCLAW_STATE_SCHEMA_VERSION,
-  sqlite: "",
+const statePostgresSchema = {
   postgres: runtime.eagerSql,
   postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
     const { activation } = fragment;
@@ -142,6 +145,37 @@ export const stateEngineSchema = {
       activation,
     };
   }),
+};
+
+export const stateEngineSchema: StoreSchema = {
+  id: "state",
+  version: OPENCLAW_STATE_SCHEMA_VERSION,
+  sqlite: "",
+  ...statePostgresSchema,
+  postgresMigrations: [
+    {
+      version: 25,
+      sql: runtime.operatorRecoveryV25Sql,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+    },
+    {
+      version: 26,
+      // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+      sql: `UPDATE schema_meta
+        SET schema_version = 26,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '26',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+  ],
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
@@ -198,7 +232,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   admitStatePostgres(db, false);
 }
 
-export function openStatePostgresReadConnection(pathname: string, expectedIdentity?: string) {
+export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
   const input = stateEngineInput();
   if (!input) {
     return undefined;
@@ -215,6 +249,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
       prepareAnchor: () => {},
       openSqlite: () => {},
       existingOnly: true,
+      existingVersion: true,
       admitPostgres: admitStatePostgres,
       closeOnFailure: (connection, error) => {
         db = connection;
@@ -233,7 +268,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
             db: selected,
             path: pathname,
           }),
-          "PostgreSQL state reader cleanup failed.",
+          "PostgreSQL state connection cleanup failed.",
         );
         return !selected.isOpen && !anchor.isOpen;
       },
@@ -246,7 +281,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
     if (errors.length) {
       throw createSqliteLifecycleAggregateError(
         [error, ...errors],
-        "PostgreSQL state reader acquisition and cleanup failed.",
+        "PostgreSQL state connection acquisition and cleanup failed.",
         error,
       );
     }

@@ -1,9 +1,5 @@
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
-import {
-  TooltipController,
-  consumeTooltipEscape,
-  type TooltipPolicyProps,
-} from "./tooltip-controller.ts";
+import { TooltipOwner, consumeTooltipEscape, type TooltipPolicyProps } from "./tooltip-owner.ts";
 
 export { consumeTooltipEscape };
 
@@ -33,7 +29,7 @@ export class TooltipProvider extends HTMLElement {
   disconnectedCallback() {
     this.ownerDocument.removeEventListener("keydown", this.#handleDocumentKeyDown, true);
     this.ownerDocument.removeEventListener("pointerdown", this.#handleDocumentPointerDown, true);
-    TooltipController.closeForProvider(this);
+    TooltipOwner.closeForProvider(this);
     this.#clearSkipDelayTimer();
     this.delayed = true;
   }
@@ -120,7 +116,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   readonly #contentSlot: HTMLSlotElement;
   readonly #surface: HTMLDivElement;
   readonly #rich: HTMLSpanElement;
-  readonly #controller: TooltipController;
+  readonly #owner: TooltipOwner;
   readonly #children: MutationObserver;
   #runtime: TooltipRuntime | undefined;
   #pendingUpdate: Promise<boolean> | undefined;
@@ -159,7 +155,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     this.#rich.append(this.#contentSlot);
     this.#surface.append(this.#rich);
     root.append(this.#triggerSlot, this.#surface);
-    this.#controller = new TooltipController(this, {
+    this.#owner = new TooltipOwner(this, {
       props: () => this,
       trigger: () =>
         this.#triggerSlot.assignedElements({ flatten: true }).find(isTooltipTriggerElement) ?? null,
@@ -172,18 +168,18 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
       retire: () => this.#retire(),
       requestOpen: (open) => this.#requestOpen(open),
     });
-    this.#surface.id = this.#controller.id;
-    this.#children = new MutationObserver(() => this.#controller.refresh());
-    this.#triggerSlot.addEventListener("slotchange", () => this.#controller.refresh());
-    this.#contentSlot.addEventListener("slotchange", () => this.#controller.contentChanged());
+    this.#surface.id = this.#owner.id;
+    this.#children = new MutationObserver(() => this.#owner.refresh());
+    this.#triggerSlot.addEventListener("slotchange", () => this.#owner.refresh());
+    this.#contentSlot.addEventListener("slotchange", () => this.#owner.contentChanged());
     this.#rich.addEventListener("pointerenter", (event) =>
-      this.#controller.handleContentPointerEnter(event),
+      this.#owner.handleContentPointerEnter(event),
     );
     this.#rich.addEventListener("pointerleave", (event) =>
-      this.#controller.handleContentPointerLeave(event),
+      this.#owner.handleContentPointerLeave(event),
     );
-    this.#rich.addEventListener("focusin", () => this.#controller.handleFocusIn());
-    this.#rich.addEventListener("focusout", (event) => this.#controller.handleFocusOut(event));
+    this.#rich.addEventListener("focusin", () => this.#owner.handleFocusIn());
+    this.#rich.addEventListener("focusout", (event) => this.#owner.handleFocusOut(event));
   }
 
   get updateComplete(): Promise<boolean> {
@@ -195,17 +191,17 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   connectedCallback() {
     this.style.display = "contents";
     this.#children.observe(this, { childList: true });
-    this.#controller.refresh();
+    this.#owner.refresh();
   }
 
   connectedMoveCallback() {
-    // Native atomic parking preserves the controller and its current presentation.
+    // Native atomic parking preserves the owner and its current presentation.
   }
 
   disconnectedCallback() {
-    this.#retire();
+    this.#wanted = false;
     this.#children.disconnect();
-    this.#controller.dispose();
+    this.#owner.dispose();
     this.#runtime?.dispose();
     this.#runtime = undefined;
   }
@@ -223,18 +219,18 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   }
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
-    this.#controller.previewForAnchor(anchor, content, input);
+    this.#owner.previewForAnchor(anchor, content, input);
   }
 
   focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
-    this.#controller.focusTriggerWithoutOpening(target, options);
+    this.#owner.focusTriggerWithoutOpening(target, options);
   }
 
   #scheduleUpdate() {
     this.#pendingUpdate ??= Promise.resolve().then(() => {
       this.#pendingUpdate = undefined;
       if (this.isConnected) {
-        this.#controller.refresh();
+        this.#owner.refresh();
         this.#runtime?.update();
       }
       return true;
@@ -246,7 +242,7 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     if (this.#runtime) {
       this.#runtime.retire();
     } else {
-      this.#controller.acceptedOpen(false);
+      this.#owner.acceptedOpen(false);
     }
   }
 
@@ -256,10 +252,10 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
       return this.#runtime.request(open);
     }
     if (!open) {
-      this.#controller.acceptedOpen(false);
+      this.#owner.acceptedOpen(false);
       return true;
     }
-    this.#controller.pendingOpen();
+    this.#owner.pendingOpen();
     // Even a cached view mounts after the caller's Solid focus effect has finished.
     viewImport ??= import("./solid/tooltip.tsx")
       .then((module) => module.mountTooltipView)
@@ -270,16 +266,16 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     this.#loading ??= viewImport
       .then((mount) => {
         if (this.isConnected && this.#wanted) {
-          this.#runtime ??= mount(this, this.#surface, this.#rich, this.#controller);
+          this.#runtime ??= mount(this, this.#surface, this.#rich, this.#owner);
           if (!this.#runtime.request(true)) {
-            this.#controller.acceptedOpen(false);
+            this.#owner.acceptedOpen(false);
           }
         }
         return true;
       })
       .catch((error: unknown) => {
         this.#wanted = false;
-        this.#controller.acceptedOpen(false);
+        this.#owner.acceptedOpen(false);
         console.warn("OpenClaw tooltip could not load.", error);
         return false;
       })

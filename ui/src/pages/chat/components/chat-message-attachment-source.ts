@@ -115,7 +115,7 @@ function resolveManagedAttachmentAvailability(
   if (!sessionKey) {
     return unavailableManagedAttachment();
   }
-  const cacheKey = `${connectionEpoch ?? 0}::${attachment.url}::${attachment.artifactId}`;
+  const cacheKey = `${connectionEpoch ?? 0}::${sessionKey}::${attachment.artifactId}`;
   const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
     "managed-media",
     cacheKey,
@@ -249,7 +249,7 @@ function retryManagedAttachmentAvailability(
   }
   const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
     "managed-media",
-    `${connectionEpoch ?? 0}::${attachment.url}::${attachment.artifactId}`,
+    `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
     onRequestUpdate,
     attachment.url,
   );

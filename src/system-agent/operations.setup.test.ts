@@ -12,6 +12,8 @@ import {
 } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
+import { verifySetupInferenceConfig } from "./setup-inference.js";
 import { loadLocalSetupRecovery } from "./setup-recovery.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
@@ -28,6 +30,14 @@ const model = "openai/gpt-5.5";
 const previousModel = "anthropic/claude-sonnet-4-6";
 const workspace = "/tmp/approved-workspace";
 const configPath = "/tmp/openclaw.json";
+vi.mock("./setup-apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-apply.js")>()),
+  applySystemAgentSetup: vi.fn(),
+}));
+vi.mock("./setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-inference.js")>()),
+  verifySetupInferenceConfig: vi.fn(),
+}));
 const localOnboarding = vi.hoisted(() => {
   const states = new Map<string, LocalOnboardingState>();
   return {
@@ -146,12 +156,26 @@ let metadata: SystemAgentPluginMetadataTestSnapshot;
 let restoreBackend: () => void;
 let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
 let lines: string[];
-type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
-type ApplySetup = NonNullable<SystemAgentCommandDeps["applySetup"]>;
+type ApplySetup = typeof applySystemAgentSetup;
 let applySetup: ReturnType<typeof vi.fn<ApplySetup>>;
-type Verify = NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>;
+type Verify = typeof verifySetupInferenceConfig;
+type Options = Omit<NonNullable<Parameters<typeof executeOperation>[2]>, "deps"> & {
+  deps?: SystemAgentCommandDeps & {
+    applySetup?: ApplySetup;
+    verifyInferenceConfig?: Verify;
+  };
+};
 function run(operation: Parameters<typeof executeOperation>[0], options: Options = {}) {
-  return metadata.run(() => executeOperation(operation, runtime, { approved: true, ...options }));
+  const { applySetup: applySetupOverride, verifyInferenceConfig, ...deps } = options.deps ?? {};
+  if (applySetupOverride) {
+    vi.mocked(applySystemAgentSetup).mockImplementation(applySetupOverride);
+  }
+  if (verifyInferenceConfig) {
+    vi.mocked(verifySetupInferenceConfig).mockImplementation(verifyInferenceConfig);
+  }
+  return metadata.run(() =>
+    executeOperation(operation, runtime, { approved: true, ...options, deps }),
+  );
 }
 function setup(
   options: Options = {},
@@ -308,6 +332,8 @@ afterAll(() => {
   restoreBackend();
 });
 beforeEach(() => {
+  vi.mocked(applySystemAgentSetup).mockReset();
+  vi.mocked(verifySetupInferenceConfig).mockReset();
   applySetup = vi.fn<ApplySetup>(async () => setupResult());
   mockConfig.reset();
   mockConfig.set(withModel());
@@ -444,7 +470,7 @@ describe("setup inference", () => {
 });
 
 describe("model changes", () => {
-  it("live-verifies staged and final models, preserves concurrent edits, and publishes the binding", async () => {
+  it("live-verifies the selected model before commit, preserves unrelated settings, and publishes the binding", async () => {
     const original = {
       agents: {
         defaults: {
@@ -480,7 +506,7 @@ describe("model changes", () => {
     };
     const reboundBinding = { execution: { agentId: "main" } } as never;
     const onVerifiedInferenceChanged = vi.fn();
-    let calls = 0;
+    mockConfig.set(concurrent);
     const verifyInferenceConfig = vi.fn<Verify>(
       async ({ config, onVerifiedExecution, requireExecutionOwner }) => {
         expect(requireExecutionOwner).toBe(true);
@@ -495,18 +521,14 @@ describe("model changes", () => {
         expect(mockConfig.current().agents?.defaults?.model).toEqual(
           original.agents?.defaults?.model,
         );
-        if (++calls === 1) {
-          mockConfig.set(concurrent);
-        } else {
-          onVerifiedExecution?.(reboundBinding);
-        }
+        onVerifiedExecution?.(reboundBinding);
         return { ...verified(), latencyMs: 17 };
       },
     );
     expect(await setModel({ deps: { verifyInferenceConfig }, onVerifiedInferenceChanged })).toEqual(
       { applied: true },
     );
-    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
     expect(onVerifiedInferenceChanged).toHaveBeenCalledExactlyOnceWith(reboundBinding);
     expect(mockConfig.mutate).toHaveBeenCalledOnce();
     expect(mockConfig.current()).toEqual({
@@ -533,74 +555,35 @@ describe("model changes", () => {
     );
   });
 
-  it("rejects concurrent runtime metadata changes to the verified model route", async () => {
-    const routeConfig = (runtimeId: string): OpenClawConfig => ({
-      agents: {
-        ...withModel(previousModel).agents,
-        defaults: {
-          model: { primary: previousModel },
-          models: { [previousModel]: { agentRuntime: { id: runtimeId } } },
-        },
-      },
-    });
-    mockConfig.set(routeConfig("claude-cli"));
-    const verifyInferenceConfig = vi.fn(async () => {
-      mockConfig.set(routeConfig("openclaw"));
-      return verified();
-    });
-    await expect(setModel({ deps: { verifyInferenceConfig } })).rejects.toThrow(
-      "inference route changed during verification",
-    );
-    expect(mockConfig.mutate).toHaveBeenCalledOnce();
-    expectNoAudit("config.setDefaultModel");
-  });
-
-  it("keeps the working model when initial inference fails", async () => {
+  it("keeps the working model when inference fails at the commit boundary", async () => {
     await rejectsModel(
       async () => ({ ok: false, status: "auth", error: "Provider authentication failed." }),
-      "The requested model failed a live inference test",
+      "no longer passes live inference at the config commit boundary",
     );
-    expect(mockConfig.mutate).not.toHaveBeenCalled();
-  });
-  it("writes nothing when inference fails at the commit boundary", async () => {
-    const verify = vi
-      .fn<Verify>()
-      .mockResolvedValueOnce(verified())
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential changed" });
-    await rejectsModel(verify, "no longer passes live inference at the config commit boundary");
-    expect(verify).toHaveBeenCalledTimes(2);
-  });
-  it("rejects an initial result from a different model before opening the write boundary", async () => {
-    const verify = vi.fn<Verify>(async () => ({ ...verified(), modelRef: "openai/gpt-5.4" }));
-    await rejectsModel(verify, "did not verify the exact model route");
-    expect(verify).toHaveBeenCalledOnce();
-    expect(mockConfig.mutate).not.toHaveBeenCalled();
+    expect(mockConfig.mutate).toHaveBeenCalledOnce();
   });
   it("rejects a different model from the final commit-boundary probe", async () => {
-    const verify = vi
-      .fn<Verify>()
-      .mockResolvedValueOnce(verified())
-      .mockResolvedValueOnce({ ...verified(), modelRef: "openai/gpt-5.4" });
+    const verify = vi.fn<Verify>(async () => ({ ...verified(), modelRef: "openai/gpt-5.4" }));
     await rejectsModel(
       verify,
       "did not verify the exact model route at the config commit boundary",
     );
-    expect(verify).toHaveBeenCalledTimes(2);
+    expect(verify).toHaveBeenCalledOnce();
   });
-  it.each([1, 2])("rechecks inference authority after live probe %s", async (revokedAt) => {
+  it("rechecks inference authority after the live probe", async () => {
     let calls = 0;
     const verify = vi.fn<Verify>(async () => {
       calls++;
       return verified();
     });
     const beforePersistentApply = vi.fn(() => {
-      if (calls === revokedAt) {
+      if (calls > 0) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
     });
     await rejectsModel(verify, SystemAgentInferenceUnavailableError, { beforePersistentApply });
-    expect(verify).toHaveBeenCalledTimes(revokedAt);
-    expect(beforePersistentApply).toHaveBeenCalledTimes(revokedAt);
+    expect(verify).toHaveBeenCalledOnce();
+    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
   });
 
   it("stages and persists model changes at the effective default-agent owner", async () => {

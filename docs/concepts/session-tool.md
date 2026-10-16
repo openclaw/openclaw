@@ -269,6 +269,10 @@ whose current communication policies and visibility permit delivery. It reuses
 the original input identity, preserving per-target order and consumption
 deduplication; it does not rerun the sender's task. Cancellation, reset, archival,
 revoked access, or a policy requiring fresh approval prevents automatic recovery.
+If either exact endpoint is archived, recovery cancels the unconsumed input while
+retaining its saved receipt, without starting work or adding a failure notice.
+Reset or replacement still produces a blocked-delivery notice. Archive settlement
+uses the debug reason `endpoint-archived`; replacement warnings use `endpoint-replaced`.
 Inputs saved by older versions without delivery ownership remain available for
 inspection, not automatic retry. In history, `queued` means an input has current
 custody, not that the model is executing it; an input that remains `interrupted`

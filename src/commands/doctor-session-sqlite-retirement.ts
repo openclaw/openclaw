@@ -16,7 +16,6 @@ import {
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
-  readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
@@ -79,7 +78,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
 }) {
   const {
     claims,
-    inventory: { report, references },
+    inventory: { artifacts, references },
   } = collectHistoricalArchiveSources(params);
   const failures: Array<{
     target: SessionSqliteMigrationTargetInput;
@@ -122,9 +121,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       continue;
     }
     for (const refs of group.filter((candidate) => candidate !== survivor)) {
-      const item = report.artifacts.find(
-        (candidate) => candidate.path === refs[0]!.move.archivePath,
-      )!;
+      const item = artifacts.find((candidate) => candidate.path === refs[0]!.move.archivePath)!;
       survivors.set(item.path, survivor);
       try {
         assertSurvivor(refs);
@@ -252,7 +249,12 @@ export async function retireSessionSqliteRecovery(params: {
       }
       // Verified historical dependencies affect selection now, but stay provisional until consent.
       protectRecoveryDependencies(report.artifacts, references, adoptions);
-      const verified = summarizeRecoveryCleanup(report.stateDir, report.artifacts, "preview");
+      const verified = summarizeRecoveryCleanup(
+        report.stateDir,
+        report.artifacts,
+        "preview",
+        report.missingOriginals,
+      );
       const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
       const selected = candidates.filter((item) => item.kind !== "update-capture");
       const captures = candidates.filter((item) => item.kind === "update-capture");
@@ -271,24 +273,24 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed during confirmation; preview again.");
       }
-      for (const refs of references.values()) {
-        for (const ref of refs) {
-          if (
-            JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
-            JSON.stringify(ref.run.manifest)
-          ) {
-            throw new Error("Recovery manifest changed during confirmation; preview again.");
-          }
-          if (
-            !(rechecked.references.get(ref.move.archivePath) ?? []).some(
-              (current) =>
-                current.trusted === ref.trusted &&
-                current.target.storePath === ref.target.storePath &&
-                current.target.sqlitePath === ref.target.sqlitePath,
-            )
-          ) {
-            throw new Error("Recovery target changed during confirmation; preview again.");
-          }
+      const manifests = (refs: typeof references) =>
+        new Map([...refs.values()].flat().map(({ run }) => [run.manifestPath, run.manifest]));
+      const currentManifests = manifests(rechecked.references);
+      for (const [manifestPath, manifest] of manifests(references)) {
+        if (JSON.stringify(currentManifests.get(manifestPath)) !== JSON.stringify(manifest)) {
+          throw new Error("Recovery manifest changed during confirmation; preview again.");
+        }
+      }
+      for (const ref of [...references.values()].flat()) {
+        if (
+          !(rechecked.references.get(ref.move.archivePath) ?? []).some(
+            (current) =>
+              current.trusted === ref.trusted &&
+              current.target.storePath === ref.target.storePath &&
+              current.target.sqlitePath === ref.target.sqlitePath,
+          )
+        ) {
+          throw new Error("Recovery target changed during confirmation; preview again.");
         }
       }
       await assertStateWriteAllowed(report.stateDir);
@@ -331,6 +333,7 @@ export async function retireSessionSqliteRecovery(params: {
         report.artifacts.some((item) => item.outcome === "failed" || item.outcome === "blocked")
           ? "blocked"
           : "complete",
+        report.missingOriginals,
       );
     },
   });

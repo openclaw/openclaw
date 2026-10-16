@@ -339,18 +339,26 @@ function createMessageImagePresentation(props: MessageImageProps) {
   }
 
   function renderPreviewElement(image: ImageBlock, url: string, title: string) {
-    const element = (previewElement ??= document.createElement("img"));
+    if (!previewElement) {
+      previewElement = document.createElement("img");
+      previewElement.className = "chat-message-image";
+      previewElement.referrerPolicy = "no-referrer";
+      previewElement.decoding = "async";
+    }
+    const element = previewElement;
     // Rebind to this presentation when a detached image is adopted by a new row.
     element.addEventListener("load", onSettled);
     element.addEventListener("error", onSettled);
-    element.alt = title;
-    element.className = "chat-message-image";
-    element.referrerPolicy = "no-referrer";
-    element.decoding = "async";
+    if (element.alt !== title) {
+      element.alt = title;
+    }
     // Local bytes and a mounted handoff are already admitted. Deferring their
     // replacement decode can introduce blank frames during custody updates.
-    element.loading =
+    const loading =
       isInlineImageSource(url) || retainedImage?.status === "retaining" ? "eager" : "lazy";
+    if (element.loading !== loading) {
+      element.loading = loading;
+    }
     if (url.includes("&variant=thumbnail&width=")) {
       // Signed native requests let the browser choose density and apply its own
       // data-saving policy; authenticated blob requests select a bounded tier above.
@@ -368,7 +376,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     for (const name of ["width", "height"] as const) {
       if (image[name] === undefined) {
         element.removeAttribute(name);
-      } else {
+      } else if (element.getAttribute(name) !== String(image[name])) {
         element.setAttribute(name, String(image[name]));
       }
     }

@@ -15,7 +15,7 @@ import {
 } from "./session-catalog-events.js";
 import type { StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { projectCodexCatalogPage } from "./session-catalog-projection.js";
+import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,

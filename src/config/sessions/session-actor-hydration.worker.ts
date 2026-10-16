@@ -15,12 +15,16 @@ import {
   withProjectedParticipants,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { seedSessionActorContextMetadata } from "./session-actor-context-metadata.js";
+import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
   SessionActorHotState,
   SessionActorTarget,
   SessionActorVersion,
 } from "./session-actor-contract.js";
-import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import {
+  MAX_SESSION_ACTOR_COMPLETIONS,
+  type SessionActorStoredState,
+} from "./session-actor-hydration.types.js";
 import {
   retainSessionActorTranscriptWindow,
   SESSION_ACTOR_TRANSCRIPT_WINDOW,
@@ -172,8 +176,10 @@ export function hydrateSessionActorState(
                   "session_input_completions.session_id",
                   "=",
                   eb.ref("session_nodes.current_session_id"),
-                ),
-              [],
+                )
+                .orderBy("idempotency_key")
+                .limit(MAX_SESSION_ACTOR_COMPLETIONS + 1),
+              ["idempotency_key"],
             ).as("actor_completions")
           : eb.val("[]").as("actor_completions"),
         jsonObjectFrom(
@@ -350,11 +356,9 @@ export function hydrateSessionActorState(
       row,
     ]),
   );
+  const completionRows = selected ? decodeJsonProjection(selected.actor_completions) : [];
   const completions = new Map(
-    (selected ? decodeJsonProjection(selected.actor_completions) : []).map((row) => [
-      row.idempotency_key,
-      row,
-    ]),
+    completionRows.slice(0, MAX_SESSION_ACTOR_COMPLETIONS).map((row) => [row.idempotency_key, row]),
   );
   const window = selected ? (decodeJsonProjection(selected.actor_window) ?? undefined) : undefined;
   const rewrite = selected ? decodeJsonProjection(selected.actor_rewrite) : undefined;
@@ -419,6 +423,7 @@ export function hydrateSessionActorState(
     hasBoard: Boolean(selected?.actor_has_board),
     pendingInputs,
     completions,
+    completionsComplete: completionRows.length <= MAX_SESSION_ACTOR_COMPLETIONS,
     transcript: {
       complete: true,
       coldArchive,
@@ -440,6 +445,7 @@ export function hydrateSessionActorState(
   };
   retainSessionActorTranscriptWindow(state);
   seedSessionActorContextMetadata(state, storedNavigation);
+  initializeSessionActorContextStats(database, state);
   state.hot = projectSessionActorHotState(state);
   return state;
 }
@@ -472,6 +478,9 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.transcript.projection = state.transcript.complete
     ? projectSessionTranscriptFacts(state)
     : undefined;
+  hot.transcript.contextStats = state.transcript.contextStats && {
+    ...state.transcript.contextStats,
+  };
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),

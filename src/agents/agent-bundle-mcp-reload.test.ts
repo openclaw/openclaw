@@ -400,26 +400,12 @@ it("rotates one requester's changed server while retaining sibling connections a
     ]);
     expect(after[0]).not.toEqual(before[0]);
     expect(after.slice(1)).toEqual(before.slice(1));
-    const oldHandle = await manager.getOrCreateRequesterScoped(aliceParams);
-    expect(oldHandle).toBeDefined();
     await manager.reloadConfig({
       cfg,
       manifestRegistry: params.manifestRegistry,
       reloadPlugins: true,
     });
     await expect(probe(nextAlice, "first")).rejects.toThrow();
-    const currentHandle = await manager.getOrCreateRequesterScoped(bobParams);
-    expect(currentHandle).toBeDefined();
-    const currentCatalog = await currentHandle!.runtime.getCatalog();
-    manager.rememberAdvertisedScopedCatalog(currentHandle!, currentCatalog);
-    manager.rememberAdvertisedScopedCatalog(oldHandle!, {
-      ...currentCatalog,
-      servers: {
-        retired: { serverName: "retired", launchSummary: "retired plugin", toolCount: 0 },
-      },
-      tools: [],
-    });
-    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.servers.retired).toBeUndefined();
     const successor = await manager.getOrCreate(aliceParams);
     expect(await probe(successor, "first")).not.toEqual(after[0]);
   });

@@ -52,6 +52,7 @@ export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/webp"),
 ]);
 export const UserProfileGitHubIdentitySchema = closedObject({
+  host: Type.Optional(NonEmptyString),
   login: Type.String({ minLength: 1, maxLength: 39 }),
   profileUrl: NonEmptyString,
   avatarUrl: NonEmptyString,
@@ -65,6 +66,7 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),

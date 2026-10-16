@@ -8,7 +8,7 @@ import {
 import type { UsersBackgroundResult } from "../../packages/gateway-protocol/src/schema/users-background.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { FIRST_USE_STATE_TABLES, FIRST_USE_STATE_INDEXES } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";

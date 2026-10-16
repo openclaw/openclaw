@@ -1,6 +1,6 @@
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
+import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
@@ -9,7 +9,7 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 import * as catalog from "./catalog-target.ts";
@@ -96,9 +96,7 @@ export class NewSessionPageOwner {
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = new LazyCustomElementRequestController({
-    requestUpdate: this.changed,
-  });
+  readonly attachmentPanelLoader = createLazyCustomElementRequests();
   readonly closeAttachmentPanel = () => {
     if (this.attachmentPanel) {
       this.attachmentPanel = null;
@@ -131,6 +129,7 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
+    this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
@@ -194,8 +193,8 @@ export class NewSessionPageOwner {
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
-      onChange: this.changed,
     });
+    this.dictation.subscribe(this.changed);
   }
 
   focusComposer(): void {

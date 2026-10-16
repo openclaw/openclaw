@@ -656,6 +656,7 @@ export class ModelRegistry {
       contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
       ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
+      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,
       maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
@@ -709,10 +710,6 @@ export class ModelRegistry {
     return config;
   }
 
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
-  }
-
   private storeProviderRequestConfig(
     providerName: string,
     config: {
@@ -746,7 +743,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = JSON.stringify([providerName, modelId]);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -758,7 +755,7 @@ export class ModelRegistry {
     return resolveModelRegistryRequestAuth({
       model,
       providerConfig: this.getModelProviderRequestConfig(model),
-      modelHeaders: this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
+      modelHeaders: this.modelRequestHeaders.get(JSON.stringify([model.provider, model.id])),
       authStorage: this.authStorage,
     });
   }

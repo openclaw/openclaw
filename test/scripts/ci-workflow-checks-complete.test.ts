@@ -39,7 +39,9 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
       "$@"
     }
     node() {
-      if [ "$1" = '-e' ]; then
+      if [ "$1" = '--input-type=module' ]; then
+        return 1
+      elif [ "$1" = '-e' ]; then
         if [ "$FAIL_SCRIPT" != '' ] && [[ "$2" == *"$FAIL_SCRIPT"* ]]; then return 1; fi
       else
         printf 'CHECK node %s\n' "$*"

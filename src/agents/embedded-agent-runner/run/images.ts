@@ -12,11 +12,9 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import { redactSensitiveText } from "../../../logging/redact.js";
 import {
-  attachRuntimePromptMediaFacts,
   isImageMediaFact,
   isVideoMediaFact,
   normalizeMediaFacts,
-  readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
   readPersistedMediaFacts,
   type MediaFact,
@@ -561,7 +559,6 @@ async function materializePromptMediaMessages(
     const runtimeMedia = readRuntimePromptMediaFacts(message);
     const meta = Reflect.get(message, "__openclaw");
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
-    const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
     if (!resolvedMedia.length) {
       continue;
@@ -625,15 +622,12 @@ async function materializePromptMediaMessages(
     } else {
       Reflect.deleteProperty(hydratedMessage, "__openclaw");
     }
-    if (runtimeMedia) {
-      attachRuntimePromptMediaFacts(hydratedMessage, runtimeMedia, runtimeImageOrder);
-    }
     hydrated[index] = hydratedMessage;
   }
   return hydrated ?? messages;
 }
 
-/** Hydrates non-enumerable facts carried by queued user turns before canonical replay. */
+/** Hydrates runtime facts carried by queued user turns before canonical replay. */
 export async function hydratePromptMediaMessages(
   messages: AgentMessage[],
   options: Omit<PromptMediaOptions, "provider">,

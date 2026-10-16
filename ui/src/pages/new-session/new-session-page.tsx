@@ -11,14 +11,15 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
+import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
@@ -86,7 +87,7 @@ function DraftBlock(props: {
     </Show>
   );
   const dictationStatus = (
-    <NewSessionDictationStatus control={props.page().dictation} renderRevision={props.revision()} />
+    <ComposerDictationStatus readDictation={() => props.page().dictation.dictation} />
   );
   const voiceControl = (
     <NewSessionDictationView

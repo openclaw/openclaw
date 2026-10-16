@@ -72,6 +72,18 @@ describe("Control UI resource route contract", () => {
     ).toBeUndefined();
   });
 
+  it.each<[string, string, string | undefined]>([
+    ["/api/users/a%2fb/avatar", "/control", "/api/users/a%2fb/avatar"],
+    ["/control/api/users/a%2Fb/avatar", "control/", "/api/users/a%2Fb/avatar"],
+    ["/control/api/users/%2F/avatar", "/control", "/api/users/%2F/avatar"],
+    ["/api/users/%zz/avatar", "", undefined],
+    ["/api/users//avatar", "", undefined],
+    ["/api/users/a/b/avatar", "", undefined],
+    ["/api/users/api/users/a/avatar", "/api/users", undefined],
+  ])("canonicalizes avatar path %s without rewriting encoded IDs", (pathname, base, expected) => {
+    expect(canonicalizeControlUiUserAvatarPath(pathname, base)).toBe(expected);
+  });
+
   it("preserves malformed configured-base user avatar ownership", () => {
     expect(
       parseControlUiUserAvatarPath("/wilfred/api/users/profile-1/avatar/extra", "/wilfred"),

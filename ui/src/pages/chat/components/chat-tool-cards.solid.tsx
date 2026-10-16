@@ -23,7 +23,7 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";

@@ -43,13 +43,17 @@ export function deleteSessionCostUsagePartitionsInDatabase(
         .where("key", "<", `${params.rollupId}\u0001`),
     );
   }
-  for (const date of params.removedDates ?? []) {
+  for (const dates of chunkItems(params.removedDates ?? [], 100)) {
     executeSqliteQuerySync(
       db,
       kysely
         .deleteFrom("cache_entries")
         .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", "=", usageCostPartitionKey(params.rollupId, date)),
+        .where(
+          "key",
+          "in",
+          dates.map((date) => usageCostPartitionKey(params.rollupId, date)),
+        ),
     );
   }
 }
@@ -150,10 +154,9 @@ export function readSessionCostUsagePartitionsInDatabase(
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
   db: EngineConnection,
-  snapshot: { key: string; updatedAt: number; valueJson: string },
+  key: string,
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
-  // Refresh yields before this read; a replacement's partitions cannot join the old checkpoint.
   const rows = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<CacheDatabase>(db)
@@ -161,16 +164,11 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
       .select(["scope", "key", "value_json", "blob"])
       .where((eb) =>
         eb.or([
-          eb.and([
-            eb("scope", "=", USAGE_COST_ROLLUP_SCOPE),
-            eb("key", "=", snapshot.key),
-            eb("updated_at", "=", snapshot.updatedAt),
-            eb("value_json", "=", snapshot.valueJson),
-          ]),
+          eb.and([eb("scope", "=", USAGE_COST_ROLLUP_SCOPE), eb("key", "=", key)]),
           eb.and([
             eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
-            eb("key", ">=", `${snapshot.key}\0`),
-            eb("key", "<", `${snapshot.key}\u0001`),
+            eb("key", ">=", `${key}\0`),
+            eb("key", "<", `${key}\u0001`),
           ]),
         ]),
       )
@@ -186,7 +184,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
       row.scope === USAGE_COST_PARTITION_SCOPE && row.value_json !== null && row.blob !== null
         ? [
             {
-              date: row.key.slice(snapshot.key.length + 1),
+              date: row.key.slice(key.length + 1),
               valueJson: row.value_json,
               blob: row.blob,
             },

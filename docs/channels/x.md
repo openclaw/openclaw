@@ -15,8 +15,8 @@ pairing prompt.
 Each X conversation is a group thread identified by its `conversation_id`.
 The agent receives the triggering mention together with available ancestors,
 conversation posts, and quoted posts. The original mention remains the
-user-visible message. DMs, original posts, likes, follows, and media uploads are
-not supported.
+user-visible message. Replies can include native images, GIFs, and MP4 videos.
+DMs, original posts, likes, and follows are not supported.
 
 ## Setup
 
@@ -28,7 +28,8 @@ openclaw plugins install --link ./extensions/x
 ```
 
 Use an X confidential OAuth2 application and authorize the bot account with
-`tweet.read tweet.write users.read offline.access`. Keep its client ID, client
+`tweet.read tweet.write users.read offline.access media.write`. Existing text-only
+connections must be reauthorized with `media.write` before uploading attachments. Keep its client ID, client
 secret, and user-context refresh token. The plugin refreshes access tokens with
 HTTP Basic client authentication. An optional, separate app-only bearer token
 enables the Activity API.
@@ -133,7 +134,21 @@ or another bot mention in the same X conversation. The host does not yet expose
 user-turn provenance to this adapter, so the approval rule is enforced through
 the session's instructions rather than a user-turn check at send time.
 
-The X front-door agent continues to reply directly to incoming mentions.
+The X front-door agent continues to receive incoming mentions in the original
+conversation session. Maintainer turns include bounded references to recent
+visible work sessions previously started by that front door for the same X
+account and conversation. References contain only a native session key and the
+origin post URL, not work-session titles or transcripts. Deleted, archived,
+incognito, draft, and inaccessible sessions are omitted. Guest turns never
+receive these references.
+
+Before starting new work, the agent should distinguish a continuation from an
+unrelated task in the same thread. Continuations use available, authorized
+session tools; a reference is not a message delivery or an access grant. If the
+current tool policy does not provide a continuation tool, the agent must not
+claim it resumed work or start a duplicate as a workaround. Normal failure
+reporting applies. This context does not automatically route follow-ups, change
+session visibility, or waive manual approval for X replies.
 
 ## Reply outcomes and failures
 
@@ -164,6 +179,27 @@ logged with its result and never falls back to X.
 Set `failureRoute.accountId` to choose an account on the route channel. The
 route cannot target `x`. Message-tool posts from work sessions stay manual: a
 `[[x_success]]` tag is removed and a draft tagged `[[x_failure]]` is refused.
+
+## Native proof attachments
+
+Use the shared `message` tool with `action: "send"`, `channel: "x"`, the approved
+reply text, the target post URL, and `media` set to an inspected local file or HTTPS
+media URL. Native attachments are preferable to sign-in-only proof links when the
+image or video helps explain the result. Work-session approval and origin restrictions
+still apply; guest replies remain text-only.
+
+The connector accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+(15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
+The video cap bounds Gateway buffering; it is not X's account upload ceiling.
+Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
+limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
+
+Local files use the host's approved media roots and file-reader policy; remote
+URLs use the shared guarded downloader. The connector uploads in chunks and waits
+for X processing before creating the reply. Attachments go on the first post if a
+long caption is split into a thread. A failed upload never falls back to a text-only
+post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth
+account with `media.write`; an app-only bearer token is not sufficient.
 
 ## Manage the allowlist
 
@@ -504,7 +540,7 @@ openclaw message send --channel x --target x:1234567890123456789 --message "Repl
 ```
 
 The target must satisfy X's reply eligibility: its author mentioned or quoted
-the app account. Sending media or creating an original post is unsupported.
+the app account. Creating an original post is unsupported.
 
 <a id="costs" />
 

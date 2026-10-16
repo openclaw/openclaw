@@ -326,6 +326,9 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** Omission retains ordinary runtime activation. */
+  activation?: "settings-only";
+  settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
@@ -401,6 +404,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Shared-state databases retained under this state-scoped resource. */
+  databaseFamily?: "state";
 };
 
 /** Provider-authored limits and result semantics available before runtime activation. */

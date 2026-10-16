@@ -34,6 +34,7 @@ import {
   type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
@@ -403,6 +404,14 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   if (!id) {
     return undefined;
   }
+  const inference =
+    value.inference === undefined
+      ? undefined
+      : ModelInferenceCapabilitiesSchema.safeParse(value.inference);
+  // Dropping an invalid task declaration could turn a classifier into a legacy chat row.
+  if (inference && !inference.success) {
+    return undefined;
+  }
   const name = normalizeOptionalString(value.name) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
@@ -412,6 +421,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const contextWindow = normalizePositiveNumber(value.contextWindow);
   const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
+  const parameterCount = normalizePositiveInteger(value.parameterCount);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);
@@ -425,6 +435,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   return {
     id,
     ...(name ? { name } : {}),
+    ...(inference?.success ? { inference: inference.data } : {}),
     ...(api ? { api } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(headers ? { headers } : {}),
@@ -433,6 +444,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(cost ? { cost } : {}),
@@ -450,12 +462,20 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   if (!isRecord(value)) {
     return undefined;
   }
+  if (
+    value.authScope !== undefined &&
+    value.authScope !== "agent" &&
+    value.authScope !== "plugin"
+  ) {
+    throw new Error("Invalid model catalog credential ownership metadata");
+  }
+  const authScope = value.authScope;
   const models = Array.isArray(value.models)
     ? value.models
         .map((entry) => normalizeModelCatalogModel(entry))
         .filter((entry): entry is ModelCatalogModel => Boolean(entry))
     : [];
-  if (models.length === 0) {
+  if (models.length === 0 && authScope === undefined) {
     return undefined;
   }
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
@@ -464,6 +484,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
+    ...(authScope ? { authScope } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),

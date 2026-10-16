@@ -19,7 +19,6 @@ import type { BoardProvider } from "../../lib/board/provider.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -31,7 +30,6 @@ import {
   resolveUiConfiguredMainKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
-import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
@@ -127,26 +125,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     revision: number;
     outboxState?: string;
   };
-
-  constructor(element: HTMLElement, context: ApplicationContext) {
-    super(element, context);
-    void new SubscriptionsController(this)
-      .watchStore(() => this.context?.navigation)
-      .effect(
-        () => this.context?.gateway,
-        (gateway) =>
-          gateway.subscribeEvents((event) => {
-            const state = this.state;
-            if (!state || !modelAuthEventInvalidates(event)) {
-              return;
-            }
-            state.modelAuthStatusResult = null;
-            state.modelAuthStatusError = null;
-            this.requestUpdate();
-            void refreshChatModelAuthStatus(state).finally(() => this.requestUpdate());
-          }),
-      );
-  }
 
   protected placementComposerPresentation(
     row: GatewaySessionRow | undefined,
@@ -314,7 +292,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     }
     this.syncSessionSuggestionTarget(
-      stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
+      resolveChatAgentId(state) ?? stateValue.agentId ?? "main",
       selectedSession,
     );
     if (selectedSessionDeleted) {
@@ -712,7 +690,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
-      void this.refreshSessionSuggestions();
+      this.syncSessionSuggestionTarget(
+        resolveChatAgentId(state) ?? "main",
+        selectedChatSessionRow(state),
+      );
     }
     // Hello precedes recovery readiness. Wake parked outboxes on that publication;
     // the shared admission check still holds any recovered initial turn.

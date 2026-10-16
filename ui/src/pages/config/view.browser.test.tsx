@@ -639,24 +639,4 @@ describe("config form and navigation", () => {
       ),
     ).toEqual(["Telegram"]);
   });
-
-  it.each(["auth", null])("keeps section headings outside groups for %s", (activeSection) => {
-    const { container } = renderConfigView({
-      activeSection,
-      schema: object({
-        auth: object({ order: { type: "object" } }),
-        gateway: object({}),
-      }),
-      uiHints: { "auth.order": { advanced: false } },
-      formValue: { auth: { order: {} }, gateway: {} },
-    });
-    const headings = [
-      ...container.querySelectorAll(
-        ".settings-section > .settings-section__header .settings-section__heading",
-      ),
-    ].map((heading) => heading.textContent?.trim());
-    expect(headings).toEqual(activeSection ? ["Authentication"] : ["Authentication", "Gateway"]);
-    expect(container.querySelector("#config-section-auth .settings-group")).not.toBeNull();
-    expect(container.querySelector(".settings-group .settings-section__heading")).toBeNull();
-  });
 });

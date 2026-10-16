@@ -228,7 +228,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
         <For each={["light", "dark"]}>
           {(theme) => (
             <img
-              class={`apps-card__art-img apps-card__art-img--${theme}`}
+              class={["apps-card__art-img", `apps-card__art-img--${theme}`]}
               src={inferControlUiPublicAssetPath(
                 `app-art/${props.card.id}${theme === "dark" ? "-dark" : ""}.webp`,
               )}

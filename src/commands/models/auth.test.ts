@@ -271,7 +271,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
         null
       );
     }),
-    applyProviderAuthConfigPatch: vi.fn(
+    applyProviderAuthConfigPatchWithNormalization: vi.fn(
       (cfg: OpenClawConfig, patch: unknown, options?: { replaceDefaultModels?: boolean }) => {
         const merged = mergePatch(cfg, patch);
         if (!options?.replaceDefaultModels) {

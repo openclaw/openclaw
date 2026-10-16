@@ -10,7 +10,7 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 const PAGE_URL = "https://example.test/page";
@@ -21,7 +21,7 @@ const minted = {
   url: PAGE_URL,
 };
 const ready = JSON.stringify({ type: "ready", targetId: "raw-a", url: PAGE_URL, title: "Page" });
-const controllers: BrowserPanelController[] = [];
+const controllers: BrowserPanel[] = [];
 let sockets: StartupSocket[];
 
 class StartupSocket extends TestScreencastSocket {
@@ -52,7 +52,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
+    controller.suspendView();
   }
 });
 
@@ -80,7 +80,7 @@ function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
     },
     { screencast: true },
   );
-  const controller = new BrowserPanelController(new TestBrowserPanelHost(gateway.client));
+  const controller = new TestBrowserPanelHost(gateway.client).createPanel();
   controller.synchronizeClient();
   controllers.push(controller);
   const calls = (path: string) =>
@@ -147,7 +147,7 @@ describe("Browser panel stream startup lifetime", () => {
     const pending = controller.refreshAll();
     await flush();
     const signal = calls("/screencast")[0]?.[2]?.signal;
-    controller.hostDisconnected();
+    controller.suspendView();
     await pending;
     expect(signal?.aborted).toBe(true);
     mint.resolve(minted);

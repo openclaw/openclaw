@@ -30,6 +30,9 @@ export function matchesAgentDatabaseReadCandidatePath(
   candidate: AgentDatabaseReadCandidate,
   pathname: string,
 ): boolean {
+  if (candidate.path === pathname) {
+    return true;
+  }
   const capturedPath = path.resolve(candidate.path);
   const resolvedPath = path.resolve(pathname);
   if (capturedPath === resolvedPath) {

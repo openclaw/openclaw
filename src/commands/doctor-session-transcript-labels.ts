@@ -157,7 +157,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
     },
     ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
-      const readResult = reader.repairSnapshot(
+      const readResult = reader.labelRepairSnapshot(
         sessionId,
         normalizeLegacyInboundContextLabels,
         mayContainLegacyInboundContextLabels,

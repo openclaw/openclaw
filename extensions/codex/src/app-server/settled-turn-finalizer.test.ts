@@ -221,7 +221,7 @@ describe("runCodexSettledTurnFinalization", () => {
       modelProvider: "openai",
       authProfileId: "openai:captured",
     });
-    const options = {
+    const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
       pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
     };
 
@@ -246,7 +246,7 @@ describe("runCodexSettledTurnFinalization", () => {
     });
   });
 
-  it.each(["agent", "user"])(
+  it.each(["agent", "user"] as const)(
     "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
     async (homeScope) => {
       const attempt = createAttempt("subscription");
@@ -279,7 +279,9 @@ describe("runCodexSettledTurnFinalization", () => {
         model: "gpt-5.6-luna",
         authProfileId: ordinaryNativeHome ? undefined : "openai:captured",
       });
-      const options = { pluginConfig: { appServer: { homeScope } } };
+      const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
+        pluginConfig: { appServer: { homeScope } },
+      };
 
       await finalize(attempt, settledAttempt, options);
 

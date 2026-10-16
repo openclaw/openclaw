@@ -158,7 +158,7 @@ export function buildMSTeamsPollCard(params: {
 }): MSTeamsPollCard {
   const pollId = crypto.randomUUID();
   const maxSelections =
-    typeof params.maxSelections === "number" && params.maxSelections > 1
+    params.maxSelections !== undefined && params.maxSelections > 1
       ? Math.floor(params.maxSelections)
       : 1;
   const cappedMaxSelections = Math.min(Math.max(1, maxSelections), params.options.length);

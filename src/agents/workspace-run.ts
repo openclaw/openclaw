@@ -28,28 +28,6 @@ export type ResolveRunWorkspaceResult = {
   agentIdSource: AgentIdSource;
 };
 
-const RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE = "RUN_WORKSPACE_ROSTER_REQUIRED";
-
-class RunWorkspaceRosterRequiredError extends Error {
-  readonly code = RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE;
-
-  constructor() {
-    super("No agents configured; run workspace resolution requires an explicit roster.");
-    this.name = "RunWorkspaceRosterRequiredError";
-  }
-}
-
-class RunWorkspaceAgentNotConfiguredError extends Error {
-  readonly code = "RUN_WORKSPACE_AGENT_NOT_CONFIGURED";
-  readonly agentId: string;
-
-  constructor(agentId: string) {
-    super(`Agent ${agentId} is not present in the configured roster.`);
-    this.name = "RunWorkspaceAgentNotConfiguredError";
-    this.agentId = agentId;
-  }
-}
-
 /** Redacts a run/session identifier for logs and prompts. */
 export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
@@ -71,7 +49,10 @@ export function resolveRunWorkspaceDir(params: {
   // retain implicit-main routing compatibility, but must not invent an owner here.
   const config = params.config;
   if (!config || !hasAgentRosterProperty(config)) {
-    throw new RunWorkspaceRosterRequiredError();
+    throw Object.assign(
+      new Error("No agents configured; run workspace resolution requires an explicit roster."),
+      { name: "RunWorkspaceRosterRequiredError", code: "RUN_WORKSPACE_ROSTER_REQUIRED" },
+    );
   }
   const env = params.env ?? process.env;
   const requested = params.workspaceDir;
@@ -86,7 +67,11 @@ export function resolveRunWorkspaceDir(params: {
       ? "session_key"
       : "default";
   if (!resolveAgentConfig(config, agentId)) {
-    throw new RunWorkspaceAgentNotConfiguredError(agentId);
+    throw Object.assign(new Error(`Agent ${agentId} is not present in the configured roster.`), {
+      name: "RunWorkspaceAgentNotConfiguredError",
+      code: "RUN_WORKSPACE_AGENT_NOT_CONFIGURED",
+      agentId,
+    });
   }
   const trimmed = typeof requested === "string" ? requested.trim() : "";
   const usedFallback = !trimmed;

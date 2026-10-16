@@ -383,7 +383,7 @@ suite.define(() => {
           await progress
             .getByRole("button", { name: "Task progress options", exact: true })
             .isVisible(),
-        ).toBe(false);
+        ).toBe(true);
         expect(await session.isVisible()).toBe(true);
         await progressToggle.click();
         const checks = pullRequest.locator(".chat-pr__checks-pill");
@@ -419,9 +419,9 @@ suite.define(() => {
         expect(await menu.locator('[role^="menuitem"]:visible').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
-        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await page.keyboard.press("Escape");
-        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);

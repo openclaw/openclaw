@@ -67,7 +67,12 @@ function createHost(mode: "chip" | "roster" = "roster") {
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(props, context, props);
+  const host = new AppSidebarOwner(
+    { dashboards: null, loadMoreDashboards() {} },
+    props,
+    context,
+    props,
+  );
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   return { host, container, context };

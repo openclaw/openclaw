@@ -35,7 +35,10 @@ export function mockFirstRecordArg(
   return requireRecord(call[0], invalidArgumentMessage);
 }
 
-export function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+export function expectObjectFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("expected object fields");
   }
@@ -43,4 +46,5 @@ export function expectObjectFields(value: unknown, expected: Record<string, unkn
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
   }
+  return record;
 }

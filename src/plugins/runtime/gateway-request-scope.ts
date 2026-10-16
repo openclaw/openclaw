@@ -120,16 +120,11 @@ function copyGatewayScope(
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
   for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
-      Object.defineProperty(scoped, key, {
-        value: Reflect.get(current, key),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+      Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }
-  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+  if (inheritRegistry && Object.prototype.propertyIsEnumerable.call(current, "pluginRegistry")) {
     try {
       bindBorrowedRegistry(scoped, current.pluginRegistry);
     } catch (error) {

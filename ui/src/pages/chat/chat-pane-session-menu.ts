@@ -355,7 +355,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch = headerSessionMetadataPatch(action, currentSession);
-            await operations.patchSession(host, currentSession, patch, scope);
+            await operations.patchSession(host, currentSession, patch, scope, {
+              sessionScope: action.kind === "toggle-unread",
+            });
           }
           break;
         }

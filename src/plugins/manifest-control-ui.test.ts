@@ -54,6 +54,18 @@ describe("native Control UI manifest", () => {
     });
   });
 
+  it("preserves settings-only presentation metadata through manifest discovery", () => {
+    const controlUi = {
+      entry: "dist/control-ui/index.js",
+      activation: "settings-only",
+      settingsViews: [{ section: "memory", panel: "overview" }],
+    };
+    expect(loadPluginManifest(fixture(controlUi).dir)).toMatchObject({
+      ok: true,
+      manifest: { controlUi },
+    });
+  });
+
   it.each([
     { declaration: undefined, expected: undefined },
     { declaration: [], expected: [] },
@@ -111,6 +123,16 @@ describe("native Control UI manifest", () => {
   );
 
   it.each([
+    { entry: "dist/control-ui/index.js", activation: "settings-only" },
+    { entry: "dist/control-ui/index.js", activation: "on-startup" },
+    { entry: "dist/control-ui/index.js", settingsViews: [{ section: "memory", panel: "search" }] },
+    {
+      entry: "dist/control-ui/index.js",
+      settingsViews: [
+        { section: "memory", panel: "overview" },
+        { section: "memory", panel: "overview" },
+      ],
+    },
     { entry: "src/index.ts" },
     { entry: "dist/index.js" },
     { entry: "../dist/control-ui/index.js" },

@@ -241,9 +241,7 @@ describeSpawnTransports(
     });
 
     it.each(
-      process.platform === "linux" && !process.versions.bun
-        ? ["process-group", "linux-subreaper"]
-        : ["process-group"],
+      process.platform === "linux" ? ["process-group", "linux-subreaper"] : ["process-group"],
     )(
       "uses %s custody after KILL when an escaped descendant retains lineage",
       async (ownership) => {

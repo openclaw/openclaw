@@ -61,7 +61,9 @@ export type {
   OpenBlobStoreOptions,
   PluginBlobEntry,
   PluginBlobEntryInfo,
+  PluginBlobRegistrationReceipt,
   PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "../plugin-state/plugin-blob-store.js";
 
 /** Pin an owner-published read for a final effect guard; custom stores retain their own reader. */

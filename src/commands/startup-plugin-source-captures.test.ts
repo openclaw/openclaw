@@ -31,7 +31,8 @@ vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => unknown) => run(),
 }));
-vi.mock("../state/openclaw-state-db-readonly.js", () => ({
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>()),
   isArtifactPreservingStateRead: () => mocks.preserving,
 }));
 vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({

@@ -72,6 +72,23 @@ module.exports = {
 }
 
 describe("plugin CLI metadata registration", () => {
+  it("registers an unrelated command without the Gateway's PostgreSQL credentials", async () => {
+    const { config } = setupCountingCliPlugin();
+    config.database = {
+      engine: "postgres",
+      postgres: { connection: { source: "env", provider: "default", id: "UNAVAILABLE_CLI_DSN" } },
+    };
+    const session = createPluginCliLoadSession();
+    onTestFinished(() => session.close());
+    const entries = await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg: config,
+      env: {},
+      primaryCommand: "counting-cli",
+      session,
+    });
+    expect(entries.map((entry) => entry.pluginId)).toEqual(["counting-cli"]);
+  });
+
   it.each([
     { outcome: "success", failure: undefined },
     { outcome: "Error", failure: { reason: new Error("Metadata cleanup failed") } },

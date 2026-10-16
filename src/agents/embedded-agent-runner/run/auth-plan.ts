@@ -6,6 +6,7 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../model-auth-provider-config.js";
 import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
@@ -48,6 +49,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  requireConfiguredTransportAuth?: boolean;
   getAgentHarness: () => AgentHarness;
   setAgentHarness: (harness: AgentHarness) => void;
   getRuntimeModel: () => RuntimeModel;
@@ -191,6 +193,30 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           context,
         }),
     });
+    if (
+      params.requireConfiguredTransportAuth &&
+      prepared.attempts.some((attempt) => {
+        if (
+          attempt.kind === "implicit" &&
+          attempt.plan.credentialSource?.kind === "none" &&
+          attempt.plan.forwardedAuthProfileId === undefined &&
+          hasSyntheticLocalProviderAuthConfig({ cfg: runParams.config, provider: params.provider })
+        ) {
+          return false;
+        }
+        return (
+          attempt.kind !== "direct" ||
+          attempt.plan.forwardedAuthProfileId !== undefined ||
+          !isConfiguredKeyAuthSource(attempt.plan.credentialSource) ||
+          (attempt.plan.credentialSource?.kind === "direct" &&
+            attempt.plan.credentialSource.authorization !== "declared")
+        );
+      })
+    ) {
+      throw new Error(
+        "Connection recovery requires configured direct auth or a local no-auth transport.",
+      );
+    }
     // Legacy jobs have no trustworthy account history. Their env or provider-config key is
     // the only one they can use, so it keeps running; an eligible stored account needs adoption.
     if (

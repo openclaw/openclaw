@@ -352,7 +352,6 @@ export async function resolveMedia(params: {
     const emoji = sticker.emoji ?? cached?.emoji;
     const setName = sticker.set_name ?? cached?.setName;
     if (cached) {
-      logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
       if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
         // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
         await cacheSticker({ ...cached, fileId, emoji, setName });

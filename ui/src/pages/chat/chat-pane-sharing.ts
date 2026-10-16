@@ -136,7 +136,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     session: GatewaySessionRow | undefined,
   ): void {
     const signature = session
-      ? `${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
       : "";
     if (signature === this.sessionSuggestionTargetSignature) {
       return;

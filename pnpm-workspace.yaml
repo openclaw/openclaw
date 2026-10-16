@@ -62,7 +62,7 @@ overrides:
   "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.162.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
   "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.132.1
+  "@anthropic-ai/sdk": 0.133.0
   "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.2.0
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
@@ -78,7 +78,7 @@ overrides:
   fast-xml-parser: 5.11.2
   request: "npm:@cypress/request@4.0.1"
   request-promise: "npm:@cypress/request-promise@5.0.0"
-  basic-ftp: 6.2.2
+  basic-ftp: 6.2.3
   brace-expansion: 5.0.12
   # GHSA-68fv-2mgg-jv7q: source-map-js <1.2.2 event-loop DoS (via css-tree).
   source-map-js: 1.2.2
@@ -129,10 +129,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-  # lit-analyzer imports the classic compiler without declaring it; match its analyzer dependency.
-  "lit-analyzer@2.0.3":
-    dependencies:
-      typescript: 5.9.3
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch

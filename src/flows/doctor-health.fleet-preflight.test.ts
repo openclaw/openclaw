@@ -160,7 +160,7 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
       expect(repair).toHaveBeenCalledOnce();
       expect(fs.existsSync(expiredCapture)).toBe(false);
       expect(runtime.log).toHaveBeenCalledWith(
-        `Retired standalone Doctor capture older than 30 days: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+        `Retired superseded or expired standalone Doctor capture: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
       );
       expect(fs.existsSync(legacyRoot)).toBe(false);
       expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");

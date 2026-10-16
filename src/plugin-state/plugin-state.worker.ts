@@ -31,11 +31,11 @@ import {
   countLivePluginStateNamespaceEntries,
   type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
+import { movePluginStateEntries } from "./plugin-state-store.moves.worker.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
   deletePluginStateEntryIfEqual,
-  movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
 import {

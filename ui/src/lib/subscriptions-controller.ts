@@ -1,4 +1,4 @@
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type { SolidController, SolidControllerHost } from "./reactive/solid-controller-host.ts";
 
 type Cleanup = () => void;
 type Listener = () => void;

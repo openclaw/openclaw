@@ -52,7 +52,8 @@ import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
-import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
+import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import {
   captureSidebarSnapshotModel,
   isSidebarSnapshotSettled,
@@ -71,7 +72,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
-  readonly people = new SidebarPeopleController(this);
+  readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
+  peopleView?: ReturnType<typeof createSidebarPeople>;
   private readonly sidebarSnapshotController = new SidebarSnapshotController(this);
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
@@ -107,7 +109,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.children.restore([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
-    this.people.setPresenceFilter("online");
+    this.people.set("presenceFilter", "online");
   }
 
   sidebarSnapshotSettled(): boolean {
@@ -176,7 +178,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
-  constructor(...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>) {
+  constructor(
+    public override navigationCatalog: SidebarNavigationCatalog,
+    ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
+  ) {
     super(...args);
     new SubscriptionsController(this)
       .watch(
@@ -269,11 +274,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   override dismissTransientMenus(): boolean {
-    const hadPersonCard = this.people.dismiss();
+    const hadPersonCard = this.peopleView?.dismiss() ?? false;
     return super.dismissTransientMenus() || hadPersonCard;
   }
 
   override disconnectedCallback() {
+    this.peopleView?.dismiss();
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
@@ -308,23 +314,31 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   override updated() {
     super.updated();
     this.sidebarSnapshotController.capture();
+    const input = this.narrationSyncInput();
     if (!this.narration) {
-      if (this.sidebarLiveActivity) {
+      if (input.enabled) {
         this.ensureNarrationController();
       }
     } else {
-      this.narration.sync(this.narrationSyncInput());
+      this.narration.sync(input);
     }
   }
 
   private narrationSyncInput(): SidebarNarrationSyncInput {
     const gateway = this.context?.gateway.snapshot;
+    const enabled =
+      this.sidebarLiveActivity &&
+      this.sidebarAgentsMode === "chip" &&
+      this.navigationVisible &&
+      !this.navigationCollapsed &&
+      this.navigationView === "sessions" &&
+      !this.contextualSidebar;
     return {
-      enabled: this.sidebarLiveActivity,
+      enabled,
       connected: this.connected && gateway?.phase === "connected",
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
-      rows: this.visibleSessionTreeInOrder(),
+      rows: enabled ? this.visibleSessionTreeInOrder() : [],
       openSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
       agentId: this.selectedAgentIdForSessions(),
     };

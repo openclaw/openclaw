@@ -326,6 +326,7 @@ describe("installed plugin index mutation receipts", () => {
         );
         expect(successor.mutation.before).toEqual(foreign);
         expect(successor.previous?.policyHash).toBe("foreign");
+        expect(successor.mutation.after).toEqual(readRow(lease.databasePath));
         expect(readRow(lease.databasePath)).not.toEqual(after);
         expect(JSON.stringify(receipt.mutation)).toBe(captured);
         await expect(

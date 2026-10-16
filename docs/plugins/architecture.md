@@ -172,6 +172,8 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
+Asynchronous host loading prepares selected non-bundled plugin sources in a worker before evaluating or registering their code. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each live external artifact retains its own worker, so later capture and publication cannot block a loaded sibling's synchronous source resolution. Existing registry and plugin-instance caching provide reuse; recovery retains the original artifact's worker. This isolation uses more worker memory when many external artifacts are active. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
+
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
 
 Provider-reference ownership is indexed once per immutable manifest registry, including runtime auth/catalog aliases and CLI backend fallbacks. Lookups share frozen owner lists; a refreshed or narrowed registry gets its own index while retained generations keep their original ownership facts.
@@ -325,6 +327,9 @@ capture retains or releases. Legacy reload receipts keep their framed raw-byte v
 so a changed receipt still requires streaming its native payloads.
 Read-only inspection never publishes its native admissions during later settlement.
 Deferred publication retains the original database authority and state directory.
+Gateway startup uses the admitted in-memory receipts without waiting for their
+advisory persistence. Model workers receive those same admitted facts, and cache
+retirement joins pending receipt writes before releasing native captures.
 Doctor's private checks keep captured code in profile-qualified temporary storage,
 so removing their database snapshots cannot remove an image still loaded in the process.
 An entirely missing retired capture can be rebuilt from its installed source;
