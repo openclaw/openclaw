@@ -20,7 +20,7 @@ vi.mock("./nostr-state-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./nostr-state-store.js")>()),
   readNostrBusState: vi.fn(async () => null),
   writeNostrBusState: vi.fn(async () => {}),
-  computeSinceTimestamp: vi.fn(() => Math.floor(Date.now() / 1000) - 60),
+  computeSinceTimestamp: vi.fn(() => Math.floor(Date.now() / 1000) - 3_600),
   readNostrProfileState: vi.fn(async () => null),
   writeNostrProfileState: vi.fn(async () => {}),
 }));
@@ -33,10 +33,14 @@ async function startLoopbackRelay() {
   await new Promise<void>((resolve) => {
     server.once("listening", () => resolve());
   });
-  const dmSubscriptions: Array<{ socket: WebSocket; id: string }> = [];
+  const dmSubscriptions: Array<{ socket: WebSocket; id: string; since?: number }> = [];
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
-      const text = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
+      const text = Buffer.isBuffer(raw)
+        ? raw
+        : Array.isArray(raw)
+          ? Buffer.concat(raw)
+          : Buffer.from(raw);
       const [type, id, ...filters] = JSON.parse(text.toString("utf8")) as [
         string,
         string,
@@ -45,8 +49,11 @@ async function startLoopbackRelay() {
       if (type !== "REQ") {
         return;
       }
-      if (filters.some((filter) => (filter as { kinds?: number[] }).kinds?.includes(4))) {
-        dmSubscriptions.push({ socket, id });
+      const dmFilter = (filters as Array<{ kinds?: number[]; since?: number }>).find((filter) =>
+        filter.kinds?.includes(4),
+      );
+      if (dmFilter) {
+        dmSubscriptions.push({ socket, id, since: dmFilter.since });
       }
       socket.send(JSON.stringify(["EOSE", id]));
     });
@@ -120,7 +127,8 @@ describe("startNostrBus relay reconnect", () => {
     });
     try {
       await vi.waitFor(() => expect(relay.dmSubscriptions).toHaveLength(1), { timeout: 30_000 });
-      relay.publishToLatest(createDm("before the drop"));
+      const beforeDrop = createDm("before the drop");
+      relay.publishToLatest(beforeDrop);
       await vi.waitFor(() => expect(received).toEqual(["before the drop"]), { timeout: 30_000 });
 
       // Fake only the reconnect backoff; the socket I/O stays real.
@@ -131,6 +139,11 @@ describe("startNostrBus relay reconnect", () => {
       vi.useRealTimers();
 
       await vi.waitFor(() => expect(relay.dmSubscriptions).toHaveLength(2), { timeout: 5_000 });
+      // The resubscription replays a bounded window (newest event minus the 120 s lookback),
+      // not the hour of history since startup.
+      const [first, second] = relay.dmSubscriptions;
+      expect(second?.since).toBe(beforeDrop.created_at - 120);
+      expect(second?.since).toBeGreaterThan(first?.since ?? Infinity);
       relay.publishToLatest(createDm("after the drop"));
       await vi.waitFor(() => expect(received).toEqual(["before the drop", "after the drop"]), {
         timeout: 30_000,

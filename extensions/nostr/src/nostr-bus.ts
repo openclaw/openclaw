@@ -501,6 +501,7 @@ export async function startNostrBus(options: NostrBusOptions) {
       pool,
       relays,
       filter: dmFilter,
+      replayLookbackSec: STARTUP_LOOKBACK_SEC,
       abort: relayAbort.signal,
       onEvent: (event) => {
         const task = handleRelayEvent(event);

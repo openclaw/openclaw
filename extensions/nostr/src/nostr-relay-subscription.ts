@@ -11,6 +11,8 @@ export function createNostrRelaySubscriptionGroup(options: {
   pool: SimplePool;
   relays: string[];
   filter: Parameters<SimplePool["subscribeMany"]>[1];
+  /** How far before the newest live event a resubscription replays (relay lag / clock skew). */
+  replayLookbackSec: number;
   abort: AbortSignal;
   onEvent: (event: Event) => void;
   onBackfillComplete: (relays: string[]) => void;
@@ -20,6 +22,7 @@ export function createNostrRelaySubscriptionGroup(options: {
   const subscriptions = new Map<string, ReturnType<SimplePool["subscribeMany"]>>();
   const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
   const failures = new Map<string, number>();
+  const newestLive = new Map<string, number>();
   let locallyClosing = false;
   const backfillStatus = new Map<string, BackfillStatus>(
     relays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
@@ -48,6 +51,8 @@ export function createNostrRelaySubscriptionGroup(options: {
   const subscribeRelay = (relay: string): void => {
     let relayClosed = false;
     let deadlineReached = false;
+    // Stored events may arrive in any order; only events after a real EOSE move the replay point.
+    let live = false;
     const deadlineTimer = setTimeout(() => {
       deadlineTimers.delete(deadlineTimer);
       deadlineReached = true;
@@ -56,15 +61,31 @@ export function createNostrRelaySubscriptionGroup(options: {
     deadlineTimer.unref?.();
     deadlineTimers.add(deadlineTimer);
 
-    // A resubscription replays from the original baseline; durable ingress dedupes the overlap.
+    // Replay a bounded window, like startup does, so already-processed history cannot flood
+    // admission; durable ingress dedupes the overlap.
+    const newest = newestLive.get(relay);
+    const filter =
+      newest === undefined
+        ? options.filter
+        : {
+            ...options.filter,
+            since: Math.max(options.filter.since ?? 0, newest - options.replayLookbackSec),
+          };
     subscriptions.set(
       relay,
-      options.pool.subscribeMany([relay], options.filter, {
-        onevent: options.onEvent,
+      options.pool.subscribeMany([relay], filter, {
+        onevent: (event) => {
+          if (live) {
+            const createdAt = Math.min(event.created_at, Math.floor(Date.now() / 1000));
+            newestLive.set(relay, Math.max(newestLive.get(relay) ?? 0, createdAt));
+          }
+          options.onEvent(event);
+        },
         oneose: () => {
           // Pool close is reported as EOSE first. Its onclose runs in this same turn.
           queueMicrotask(() => {
             if (!relayClosed && !deadlineReached) {
+              live = true;
               clearTimeout(deadlineTimer);
               deadlineTimers.delete(deadlineTimer);
               failures.delete(relay);
