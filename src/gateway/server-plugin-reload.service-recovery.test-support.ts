@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createReloadChannel } from "./server-plugin-reload.active-call.test-support.js";
 import {
   verifyFailedRecoveryServiceOwnership,
   verifyCandidateCleanupRefusal,
@@ -63,20 +64,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             // The fixture's main service is registered last and stops first.
             api.registerService({ id: "later-cleanup", start() {}, stop: laterStop });
             api.registerChannel({
-              plugin: {
-                ...createChannelTestPluginBase({
-                  id: "cleanup-recovery",
-                  config: { listAccountIds: () => ["default", "parked"] },
-                }),
-                gateway: {
-                  startAccount: async ({ accountId, abortSignal }) => {
-                    starts.push(accountId);
-                    await new Promise<void>((resolve) => {
-                      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                    });
-                  },
+              plugin: createReloadChannel(
+                "cleanup-recovery",
+                (account) => {
+                  starts.push(account);
                 },
-              },
+                ["default", "parked"],
+              ),
             });
           },
         });
@@ -259,20 +253,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             });
           }
           api.registerChannel({
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: owner,
-                config: { listAccountIds: () => ["default", "parked"] },
-              }),
-              gateway: {
-                startAccount: async ({ accountId, abortSignal }) => {
-                  starts[owner](accountId);
-                  await new Promise<void>((resolve) => {
-                    abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                  });
-                },
+            plugin: createReloadChannel(
+              owner,
+              (account) => {
+                starts[owner](account);
               },
-            },
+              ["default", "parked"],
+            ),
           });
         },
       });

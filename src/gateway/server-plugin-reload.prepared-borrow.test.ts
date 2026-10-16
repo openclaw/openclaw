@@ -64,6 +64,161 @@ import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
 
+function modelConfig(workspace: string): Pick<OpenClawConfig, "agents" | "models"> {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: { main: { workspace, model: "fixture/probe" } },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        fixture: {
+          baseUrl: "https://fixture.invalid/v1",
+          api: "openai-completions",
+          agentRuntime: { id: "openclaw" },
+          models: [
+            {
+              id: "probe",
+              name: "Probe",
+              contextWindow: 32000,
+              maxTokens: 1024,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+async function createPublishedPluginFixture(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  logs: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn" | "error" | "debug">,
+  services: Parameters<typeof createGatewayPluginRuntimeGeneration>[0] = {
+    getServices: () => null,
+    setServices() {},
+  },
+) {
+  const env = process.env;
+  const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
+  const metadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+    config,
+    env,
+  });
+  const initial = await bootstrap.prepareGatewayPluginLoad({
+    pluginMetadataSnapshot: metadataSnapshot,
+    pluginLookUpTable: loadPluginLookUpTable({
+      config,
+      workspaceDir,
+      env,
+      metadataSnapshot,
+      ambientEnvTriggers: "suppress",
+    }),
+    cfg: config,
+    workspaceDir,
+    env,
+    log,
+    baseMethods: [],
+    ambientEnvTriggers: "suppress",
+    loadIntent: "startup",
+  });
+  activatePluginRegistry(initial.pluginRegistry, null, "gateway-bindable", workspaceDir);
+  const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, workspaceDir);
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  metadata.publish(metadataSnapshot);
+  const loaded = [initial];
+  const lifetime = createGatewaySidecarStopOwner();
+  const runtime = {
+    scheduler,
+    requestEntryLifetime: new GatewayRequestEntryLifetime(),
+    pluginMetadataSnapshot: metadataSnapshot,
+    pluginRuntime: registryOwner,
+    pluginWorkspaceDir: workspaceDir,
+    kernel: {
+      pluginRuntimeGeneration: createGatewayPluginRuntimeGeneration(services),
+      pluginMetadata: metadata,
+      getCronService: () => undefined,
+    },
+    runtimeState: { cronState: {}, gatewayLifetimeSidecars: lifetime },
+    ambientEnvTriggers: "suppress",
+    coreGatewayMethodNames: [],
+    baseMethods: [],
+    channelManager: {
+      pauseChannelStarts: () => () => {},
+      setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    },
+    clients: new Set(),
+    broadcast: vi.fn(),
+  } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
+
+  const reloadOptions: Parameters<typeof reloadGatewayPlugins>[0] = {
+    runtime,
+    port: 0,
+    log,
+    loadGatewayPluginBootstrapModule: async () => bootstrap,
+    prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
+      loaded.push(candidate);
+      return {
+        publish() {
+          activatePluginRegistry(
+            candidate.pluginRegistry,
+            null,
+            "gateway-bindable",
+            workspaceDir,
+            registryOwner.registry,
+            trackActivationCleanup,
+          );
+          registryOwner.publish(candidate.pluginRegistry);
+        },
+        afterCommit() {},
+      };
+    },
+  };
+  return {
+    initial,
+    metadataSnapshot,
+    registryOwner,
+    scheduler,
+    runtime,
+    log,
+    reloadOptions,
+    async close() {
+      await lifetime.stop();
+      loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
+      await registryOwner.close();
+      await metadata.close();
+      await scheduler.stop();
+    },
+  };
+}
+
+async function acquireTurn(
+  registryOwner: ReturnType<typeof createPluginRegistryOwner>,
+  snapshot?: Awaited<ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>>,
+): Promise<PreparedModelRuntimeLease> {
+  const published =
+    snapshot ?? (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }));
+  assert(published);
+  return await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
+    acquireAgentRunPreparedModelRuntime(
+      {
+        config: published.config,
+        agentId: published.agentId,
+        agentDir: published.agentDir,
+        workspaceDir: published.workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [{ provider: "fixture", modelId: "probe", runtime: "openclaw" }],
+      },
+      { catalogMode: "static", pluginGeneration: published.pluginGeneration },
+    ),
+  );
+}
+
 describe("prepared Gateway plugin borrowing", () => {
   beforeEach(async () => {
     await resetPreparedModelRuntimeSnapshotsForTest();
@@ -139,31 +294,7 @@ describe("prepared Gateway plugin borrowing", () => {
         vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
         const env = process.env;
         const config: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { main: { workspace: state.workspaceDir, model: "fixture/probe" } },
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              fixture: {
-                baseUrl: "https://fixture.invalid/v1",
-                api: "openai-completions",
-                agentRuntime: { id: "openclaw" },
-                models: [
-                  {
-                    id: "probe",
-                    name: "Probe",
-                    contextWindow: 32000,
-                    maxTokens: 1024,
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                ],
-              },
-            },
-          },
+          ...modelConfig(state.workspaceDir),
           plugins: {
             allow: [toolPluginId, providerPluginId],
             load: { paths: [toolFile, providerFile] },
@@ -184,88 +315,12 @@ describe("prepared Gateway plugin borrowing", () => {
           error: vi.fn(),
           debug: vi.fn(),
         };
-        const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
-        const metadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
-          config,
-          env,
-        });
-        const initial = await bootstrap.prepareGatewayPluginLoad({
-          pluginMetadataSnapshot: metadataSnapshot,
-          pluginLookUpTable: loadPluginLookUpTable({
-            config,
-            workspaceDir: state.workspaceDir,
-            env,
-            metadataSnapshot,
-            ambientEnvTriggers: "suppress",
-          }),
-          cfg: config,
-          workspaceDir: state.workspaceDir,
-          env,
-          log,
-          baseMethods: [],
-          ambientEnvTriggers: "suppress",
-          loadIntent: "startup",
-        });
-        activatePluginRegistry(
-          initial.pluginRegistry,
-          null,
-          "gateway-bindable",
-          state.workspaceDir,
-        );
-        const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, state.workspaceDir);
-        const scheduler = createTestGatewayScheduler();
-        const metadata = retainGatewayPluginMetadata(scheduler);
-        metadata.publish(metadataSnapshot);
-        const loaded = [initial];
-        const lifetime = createGatewaySidecarStopOwner();
-        const runtime = {
-          scheduler,
-          requestEntryLifetime: new GatewayRequestEntryLifetime(),
-          pluginMetadataSnapshot: metadataSnapshot,
-          pluginRuntime: registryOwner,
-          pluginWorkspaceDir: state.workspaceDir,
-          kernel: {
-            pluginRuntimeGeneration: createGatewayPluginRuntimeGeneration({
-              getServices: () => null,
-              setServices: () => {},
-            }),
-            pluginMetadata: metadata,
-            getCronService: () => undefined,
-          },
-          runtimeState: { cronState: {}, gatewayLifetimeSidecars: lifetime },
-          ambientEnvTriggers: "suppress",
-          coreGatewayMethodNames: [],
-          baseMethods: [],
-          channelManager: {
-            pauseChannelStarts: () => () => {},
-            setAmbientAutostartSuppressedChannelIds: vi.fn(),
-          },
-          clients: new Set(),
-          broadcast: vi.fn(),
-        } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
+        const fixture = await createPublishedPluginFixture(config, state.workspaceDir, logs);
+        const { initial, metadataSnapshot, registryOwner, runtime, reloadOptions } = fixture;
         const gatewayRecord = (registry: PluginRegistry) => {
           const record = registry.plugins.find((entry) => entry.id === toolPluginId);
           assert(record);
           return record;
-        };
-        const acquireTurn = async (): Promise<PreparedModelRuntimeLease> => {
-          const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
-          assert(published);
-          return await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
-            acquireAgentRunPreparedModelRuntime(
-              {
-                config: published.config,
-                agentId: published.agentId,
-                agentDir: published.agentDir,
-                workspaceDir: published.workspaceDir,
-                allowGatewaySubagentBinding: true,
-                runtimePluginSelections: [
-                  { provider: "fixture", modelId: "probe", runtime: "openclaw" },
-                ],
-              },
-              { catalogMode: "static", pluginGeneration: published.pluginGeneration },
-            ),
-          );
         };
         const executeProbe = async (lease: PreparedModelRuntimeLease) => {
           const tool = withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -294,7 +349,7 @@ describe("prepared Gateway plugin borrowing", () => {
               workspaceDir: state.workspaceDir,
             }),
           );
-          lease = await acquireTurn();
+          lease = await acquireTurn(registryOwner);
           const prepared = lease.snapshot.pluginRegistry;
           assert(prepared);
           const oldRecord = gatewayRecord(initial.pluginRegistry);
@@ -321,7 +376,7 @@ describe("prepared Gateway plugin borrowing", () => {
               credential: { type: "api_key", provider: "fixture", key: "synthetic-borrow-key" },
               agentDir: before.agentDir,
             });
-            const next = await acquireTurn();
+            const next = await acquireTurn(registryOwner);
             expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" })).not.toBe(
               before,
             );
@@ -344,54 +399,29 @@ describe("prepared Gateway plugin borrowing", () => {
 
           // plugins.reload queues behind the admitted turn instead of disposing its instance.
           const startReload = () =>
-            reloadGatewayPlugins(
-              {
-                runtime,
-                port: 0,
-                log,
-                loadGatewayPluginBootstrapModule: async () => bootstrap,
-                prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
-                  loaded.push(candidate);
-                  return {
-                    publish() {
-                      activatePluginRegistry(
-                        candidate.pluginRegistry,
-                        null,
-                        "gateway-bindable",
-                        state.workspaceDir,
-                        registryOwner.registry,
-                        trackActivationCleanup,
-                      );
-                      registryOwner.publish(candidate.pluginRegistry);
-                    },
-                    afterCommit() {},
-                  };
-                },
+            reloadGatewayPlugins(reloadOptions, {
+              nextConfig: config,
+              sourceConfig: config,
+              changedPaths: [],
+              pluginLifecycle: {
+                pluginIds: [toolPluginId],
+                reason: "reload",
+                operationId: "borrow-reload",
               },
-              {
-                nextConfig: config,
-                sourceConfig: config,
-                changedPaths: [],
-                pluginLifecycle: {
-                  pluginIds: [toolPluginId],
-                  reason: "reload",
-                  operationId: "borrow-reload",
+              prepareConfigEffects: () => ({
+                retire: () => {
+                  markPreparedModelRuntimeSnapshotsStale("plugin reload", {
+                    waitForReplacement: true,
+                  });
                 },
-                prepareConfigEffects: () => ({
-                  retire: () => {
-                    markPreparedModelRuntimeSnapshotsStale("plugin reload", {
-                      waitForReplacement: true,
-                    });
-                  },
-                  rollback: async () => {},
-                }),
-                env,
-                commitRuntime: async (publication) => {
-                  publication?.publish();
-                  publication?.afterCommit?.();
-                },
+                rollback: async () => {},
+              }),
+              env,
+              commitRuntime: async (publication) => {
+                publication?.publish();
+                publication?.afterCommit?.();
               },
-            );
+            });
           if (change === "tool handoff") {
             const sessionKey = "agent:main:reload-handoff";
             const sessionId = "reload-handoff-session";
@@ -513,7 +543,7 @@ describe("prepared Gateway plugin borrowing", () => {
               pluginMetadataSnapshot: runtime.pluginMetadataSnapshot,
             }),
           );
-          lease = await acquireTurn();
+          lease = await acquireTurn(registryOwner);
           const refreshed = lease.snapshot.pluginRegistry;
           assert(refreshed);
           expect(gatewayRecord(refreshed)).toBe(nextRecord);
@@ -523,11 +553,7 @@ describe("prepared Gateway plugin borrowing", () => {
         } finally {
           await lease?.[Symbol.asyncDispose]();
           await closePreparedModelRuntimeSnapshots();
-          await lifetime.stop();
-          loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
-          await registryOwner.close();
-          await metadata.close();
-          await scheduler.stop();
+          await fixture.close();
           vi.unstubAllEnvs();
         }
       });
@@ -567,31 +593,7 @@ describe("published Gateway plugin services", () => {
         vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
         const env = process.env;
         const configFor = (enabled: boolean): OpenClawConfig => ({
-          agents: {
-            ownership: "explicit",
-            entries: { main: { workspace: state.workspaceDir, model: "fixture/probe" } },
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              fixture: {
-                baseUrl: "https://fixture.invalid/v1",
-                api: "openai-completions",
-                agentRuntime: { id: "openclaw" },
-                models: [
-                  {
-                    id: "probe",
-                    name: "Probe",
-                    contextWindow: 32000,
-                    maxTokens: 1024,
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                ],
-              },
-            },
-          },
+          ...modelConfig(state.workspaceDir),
           plugins: {
             allow: [pluginId],
             slots: { memory: "none" },
@@ -612,65 +614,22 @@ describe("published Gateway plugin services", () => {
         await state.writeConfig(config);
         setRuntimeConfigSnapshot(config);
         const logs = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-        const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
-        const initialMetadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config, env });
-        const initial = await bootstrap.prepareGatewayPluginLoad({
-          pluginMetadataSnapshot: initialMetadata,
-          pluginLookUpTable: loadPluginLookUpTable({
-            config,
-            workspaceDir: state.workspaceDir,
-            env,
-            metadataSnapshot: initialMetadata,
-            ambientEnvTriggers: "suppress",
-          }),
-          cfg: config,
-          workspaceDir: state.workspaceDir,
-          env,
-          log,
-          baseMethods: [],
-          ambientEnvTriggers: "suppress",
-          loadIntent: "startup",
-        });
-        activatePluginRegistry(
-          initial.pluginRegistry,
-          null,
-          "gateway-bindable",
-          state.workspaceDir,
-        );
         let services: PluginServicesHandle | null = null;
-        const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, state.workspaceDir);
-        const scheduler = createTestGatewayScheduler();
-        const metadata = retainGatewayPluginMetadata(scheduler);
-        metadata.publish(initialMetadata);
-        const loaded = [initial];
-        const lifetime = createGatewaySidecarStopOwner();
-        const runtime = {
+        const fixture = await createPublishedPluginFixture(config, state.workspaceDir, logs, {
+          getServices: () => services,
+          setServices: (handle) => {
+            services = handle;
+          },
+        });
+        const {
+          initial,
+          metadataSnapshot: initialMetadata,
+          registryOwner,
           scheduler,
-          requestEntryLifetime: new GatewayRequestEntryLifetime(),
-          pluginMetadataSnapshot: initialMetadata,
-          pluginRuntime: registryOwner,
-          pluginWorkspaceDir: state.workspaceDir,
-          kernel: {
-            pluginRuntimeGeneration: createGatewayPluginRuntimeGeneration({
-              getServices: () => services,
-              setServices: (handle) => {
-                services = handle;
-              },
-            }),
-            pluginMetadata: metadata,
-            getCronService: () => undefined,
-          },
-          runtimeState: { cronState: {}, gatewayLifetimeSidecars: lifetime },
-          ambientEnvTriggers: "suppress",
-          coreGatewayMethodNames: [],
-          baseMethods: [],
-          channelManager: {
-            pauseChannelStarts: () => () => {},
-            setAmbientAutostartSuppressedChannelIds: vi.fn(),
-          },
-          clients: new Set(),
-          broadcast: vi.fn(),
-        } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
+          runtime,
+          log,
+          reloadOptions,
+        } = fixture;
         let runLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
         const resolveTools = () => {
           return withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -733,56 +692,31 @@ describe("published Gateway plugin services", () => {
             expect(plan.reloadPlugins).toBe(true);
             expect(plan.restartGateway).toBe(false);
             await state.writeConfig(nextConfig);
-            await reloadGatewayPlugins(
-              {
-                runtime,
-                port: 0,
-                log,
-                loadGatewayPluginBootstrapModule: async () => bootstrap,
-                prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
-                  loaded.push(candidate);
-                  return {
-                    publish() {
-                      activatePluginRegistry(
-                        candidate.pluginRegistry,
-                        null,
-                        "gateway-bindable",
-                        state.workspaceDir,
-                        registryOwner.registry,
-                        trackActivationCleanup,
-                      );
-                      registryOwner.publish(candidate.pluginRegistry);
-                    },
-                    afterCommit() {},
-                  };
-                },
-              },
-              {
-                nextConfig,
-                sourceConfig: nextConfig,
-                changedPaths,
-                prepareConfigEffects: () => ({
-                  retire: () => {
-                    markPreparedModelRuntimeSnapshotsStale(
-                      "prepared model runtime owner is stale before plugin replacement",
-                      { waitForReplacement: true },
-                    );
-                  },
-                  rollback: async () => {},
-                }),
-                env,
-                commitRuntime: async (publication) => {
-                  publication?.publish();
+            await reloadGatewayPlugins(reloadOptions, {
+              nextConfig,
+              sourceConfig: nextConfig,
+              changedPaths,
+              prepareConfigEffects: () => ({
+                retire: () => {
                   markPreparedModelRuntimeSnapshotsStale(
-                    "prepared model runtime owner is stale before config publication",
+                    "prepared model runtime owner is stale before plugin replacement",
                     { waitForReplacement: true },
                   );
-                  config = nextConfig;
-                  setRuntimeConfigSnapshot(config);
-                  publication?.afterCommit?.();
                 },
+                rollback: async () => {},
+              }),
+              env,
+              commitRuntime: async (publication) => {
+                publication?.publish();
+                markPreparedModelRuntimeSnapshotsStale(
+                  "prepared model runtime owner is stale before config publication",
+                  { waitForReplacement: true },
+                );
+                config = nextConfig;
+                setRuntimeConfigSnapshot(config);
+                publication?.afterCommit?.();
               },
-            );
+            });
             expect(logs.info).toHaveBeenCalledWith(`Plugin replacement applied: ${pluginId}`);
             await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
               refreshModelRuntimeAfterHotReload({
@@ -802,21 +736,7 @@ describe("published Gateway plugin services", () => {
           // Settle startup/catalog work before measuring the independent agent-run lease.
           await gatewayInstance.waitForRetainedWork(signal);
           const retainedBeforeRun = gatewayInstance.retainedWorkCount;
-          runLease = await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
-            acquireAgentRunPreparedModelRuntime(
-              {
-                config: published.config,
-                agentId: published.agentId,
-                agentDir: published.agentDir,
-                workspaceDir: published.workspaceDir,
-                allowGatewaySubagentBinding: true,
-                runtimePluginSelections: [
-                  { provider: "fixture", modelId: "probe", runtime: "openclaw" },
-                ],
-              },
-              { catalogMode: "static", pluginGeneration: published.pluginGeneration },
-            ),
-          );
+          runLease = await acquireTurn(registryOwner, published);
           const tool = resolveTools().find(({ name }) => name === toolName);
           assert(tool, "enabled tool must resolve for the owner agent");
           const result = await tool.execute("visitor-revoke-call", {
@@ -840,11 +760,7 @@ describe("published Gateway plugin services", () => {
           await runLease?.[Symbol.asyncDispose]();
           await closePreparedModelRuntimeSnapshots();
           await services?.stop({ strict: true });
-          await lifetime.stop();
-          loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
-          await registryOwner.close();
-          await metadata.close();
-          await scheduler.stop();
+          await fixture.close();
           vi.unstubAllEnvs();
           vi.unstubAllGlobals();
         }

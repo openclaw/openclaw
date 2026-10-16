@@ -16,7 +16,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createReloadChannel } from "./server-plugin-reload.active-call.test-support.js";
 import {
   createRecoveryChannelManager,
   type RecoveryFixtureFactory,
@@ -45,17 +45,9 @@ export async function verifyReversibleFenceRecovery(
     },
     register: (api, owner) => {
       api.registerChannel({
-        plugin: {
-          ...createChannelTestPluginBase({ id: channelIds[owner] }),
-          gateway: {
-            startAccount: async ({ abortSignal }) => {
-              signals[owner].push(abortSignal);
-              await new Promise<void>((resolve) => {
-                abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          },
-        },
+        plugin: createReloadChannel(channelIds[owner], (_account, signal) => {
+          signals[owner].push(signal);
+        }),
       });
     },
   });
@@ -184,10 +176,12 @@ export async function verifyOneWayDrainRecovery(createRecoveryFixture: RecoveryF
     const failure = await reloading;
     await shuttingDown;
     expect(failure).toMatchObject({ details: { phase: "activate", committed: false } });
-    expect(fixture.firstStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).toHaveBeenCalledOnce();
-    expect(fixture.candidateStop).toHaveBeenCalledOnce();
+    expectServiceCalls(fixture, {
+      firstStart: 1,
+      siblingStart: 1,
+      siblingStop: 1,
+      candidateStop: 1,
+    });
   } finally {
     cleanupReleased.resolve();
     await reloading;

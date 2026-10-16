@@ -31,93 +31,50 @@ import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.p
 
 describe("synthetic operator scope attenuation", () => {
   it.each([
-    { method: "sessions.create", params: { incognito: true }, scope: "dynamic", missing: "admin" },
-    {
-      method: "sessions.create",
-      params: { execNode: "remote" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.patch",
-      params: { permissionMode: "full" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.patchMany",
-      params: { patch: { sandboxMode: "off" } },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    {
-      method: "sessions.delete",
-      params: { key: "agent:main:own" },
-      scope: "dynamic",
-      missing: "admin",
-    },
-    { method: "sessions.create", params: {}, scope: "operator.admin", missing: "admin" },
-    { method: "sessions.create", params: {}, scope: "operator.approvals", missing: "approvals" },
-  ] as const)(
-    "keeps $method $params behind its $scope requirement",
-    async ({ method, params, scope, missing }) => {
-      const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, {}));
-      const context = createContext();
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          { name: method, scope, owner: { kind: "core", area: "scope-proof" }, handler },
-        ]);
-      await expect(
-        withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: {
-              profileId: ensureProfileForEmail("scope-owner@example.test").id,
-              displayName: null,
-              hasAvatar: false,
-              updatedAt: 1,
-            },
-            scopes: ["operator.sessions.write"],
+    ["sessions.create", { incognito: true }, "dynamic", "admin"],
+    ["sessions.create", { execNode: "remote" }, "dynamic", "admin"],
+    ["sessions.patch", { permissionMode: "full" }, "dynamic", "admin"],
+    ["sessions.patchMany", { patch: { sandboxMode: "off" } }, "dynamic", "admin"],
+    ["sessions.delete", { key: "agent:main:own" }, "dynamic", "admin"],
+    ["sessions.create", {}, "operator.admin", "admin"],
+    ["sessions.create", {}, "operator.approvals", "approvals"],
+  ] as const)("keeps %s %j behind its %s requirement", async (method, params, scope, missing) => {
+    const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, {}));
+    const context = createContext();
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        { name: method, scope, owner: { kind: "core", area: "scope-proof" }, handler },
+      ]);
+    await expect(
+      withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: {
+            profileId: ensureProfileForEmail("scope-owner@example.test").id,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
           },
-          () =>
-            dispatchGatewayMethodInProcess(method, params, {
-              forceSyntheticClient: true,
-              syntheticScopes: ["operator.write"],
-              resolveGatewayContext: () => context,
-            }),
-        ),
-      ).rejects.toThrow(`missing scope: operator.${missing}`);
-      expect(handler).not.toHaveBeenCalled();
-    },
-  );
+          scopes: ["operator.sessions.write"],
+        },
+        () =>
+          dispatchGatewayMethodInProcess(method, params, {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.write"],
+            resolveGatewayContext: () => context,
+          }),
+      ),
+    ).rejects.toThrow(`missing scope: operator.${missing}`);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it.each([
-    {
-      method: "sessions.list",
-      requiredScope: "operator.read",
-      allowedScope: "operator.write",
-      allowed: true,
-    },
-    {
-      method: "talk.session.list",
-      requiredScope: "operator.talk",
-      allowedScope: "operator.write",
-      allowed: true,
-    },
-    {
-      method: "talk.config",
-      requiredScope: "operator.talk.secrets",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "tools.invoke",
-      requiredScope: "operator.write",
-      allowedScope: "operator.read",
-      allowed: false,
-    },
+    ["sessions.list", "operator.read", "operator.write", true],
+    ["talk.session.list", "operator.talk", "operator.write", true],
+    ["talk.config", "operator.talk.secrets", "operator.write", false],
+    ["tools.invoke", "operator.write", "operator.read", false],
   ] as const)(
-    "projects $allowedScope for $method without granting unrelated permissions",
-    async ({ method, requiredScope, allowedScope, allowed }) => {
+    "projects the %s %s requirement within %s without granting unrelated permissions",
+    async (method, requiredScope, allowedScope, allowed) => {
       const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
         expect(client?.connect.scopes).toEqual([requiredScope]);
         respond(true, { ok: true });

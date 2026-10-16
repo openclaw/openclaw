@@ -18,6 +18,30 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import { createReadinessChecker } from "./server/readiness.js";
 
+export function createReloadChannel(
+  id: string,
+  onStart: (accountId: string, signal: AbortSignal) => void,
+  accounts = ["default"],
+) {
+  return {
+    ...createChannelTestPluginBase({ id, config: { listAccountIds: () => accounts } }),
+    gateway: {
+      startAccount: async ({
+        accountId,
+        abortSignal,
+      }: {
+        accountId: string;
+        abortSignal: AbortSignal;
+      }) => {
+        onStart(accountId, abortSignal);
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    },
+  };
+}
+
 export async function verifyLateActiveCallDrainObservation(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
@@ -118,18 +142,10 @@ export async function verifyActiveCallDrainLease(
         return;
       }
       api.registerChannel({
-        plugin: {
-          ...createChannelTestPluginBase({ id: "drain-channel" }),
-          gateway: {
-            startAccount: async ({ abortSignal }) => {
-              signals.push(abortSignal);
-              channelStarted.resolve();
-              await new Promise<void>((resolve) => {
-                abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          },
-        },
+        plugin: createReloadChannel("drain-channel", (_account, signal) => {
+          signals.push(signal);
+          channelStarted.resolve();
+        }),
       });
       const generation = ++registrations;
       assert(api.lifecycle.onDispose);
