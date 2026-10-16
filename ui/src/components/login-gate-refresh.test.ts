@@ -1,42 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { ConnectErrorDetailCodes as Codes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import * as recovery from "../app/stale-chunk-reload.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import "./login-gate.ts";
+import { mountFailure } from "./login-gate.test-support.ts";
 
-type LoginGateElement = HTMLElement & {
-  props: Record<string, unknown>;
-  updateComplete: Promise<boolean>;
-};
 const retry = recovery.retryStaleChunkReloadWhenReachable;
 let reload: ReturnType<typeof vi.fn<() => void>>;
 let probe: ReturnType<typeof vi.fn<() => Promise<{ ok: boolean }>>>;
 let storage: Storage;
 
-async function mountFailure() {
-  const element = document.createElement("openclaw-login-gate") as LoginGateElement;
-  element.props = {
-    resourceBasePath: "",
-    connected: false,
-    lastError: "protocol mismatch",
-    lastErrorCode: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-    hasToken: false,
-    hasPassword: false,
-    gatewayUrl: "ws://127.0.0.1:18789",
-    secret: "",
-    showGatewaySecret: false,
-    onGatewayUrlChange: vi.fn(),
-    onSecretChange: vi.fn(),
-    onToggleGatewaySecret: vi.fn(),
-    onConnect: vi.fn(),
-  };
-  mountSolid(() => element);
-  await element.updateComplete;
-  return element;
-}
 function refresh(element: HTMLElement) {
   return element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")!;
 }
@@ -50,6 +24,19 @@ function deferredProbe() {
   );
   return () => resolve({ ok: true });
 }
+async function pendingRefresh() {
+  const finish = deferredProbe();
+  const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+  refresh(element).click();
+  return { element, finish };
+}
+async function expectCancelled() {
+  await vi.waitFor(() =>
+    expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
+  );
+  expect(reload).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   const values = new Map<string, string>();
   storage = {
@@ -81,7 +68,7 @@ describe("login refresh ownership", () => {
   it("waits through a failed HEAD handoff probe and admits only one click", async () => {
     vi.useFakeTimers();
     probe.mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true });
-    const element = await mountFailure();
+    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     refresh(element).click();
     refresh(element).click();
     await element.updateComplete;
@@ -103,7 +90,7 @@ describe("login refresh ownership", () => {
   });
   it("returns to Retry after the bounded wait, then allows a successful attempt", async () => {
     vi.useFakeTimers();
-    const element = await mountFailure();
+    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     refresh(element).click();
     await vi.advanceTimersByTimeAsync(30_000);
     await element.updateComplete;
@@ -119,7 +106,7 @@ describe("login refresh ownership", () => {
     vi.mocked(recovery.retryStaleChunkReloadWhenReachable).mockRejectedValueOnce(
       new Error("probe failed"),
     );
-    const element = await mountFailure();
+    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     refresh(element).click();
     await vi.waitFor(() => expect(refresh(element).textContent?.trim()).toBe("Retry"));
     expect(refresh(element).disabled).toBe(false);
@@ -129,28 +116,21 @@ describe("login refresh ownership", () => {
     ["connected", { connected: true }],
     ["dismissed failure", { lastError: null, lastErrorCode: null }],
     ["replacement failure", { lastError: "replacement protocol mismatch" }],
-    ["replacement code", { lastErrorCode: ConnectErrorDetailCodes.AUTH_REQUIRED }],
+    ["replacement code", { lastErrorCode: Codes.AUTH_REQUIRED }],
     ["reconnect", { reconnectPending: true }],
     ["target", { gatewayUrl: "ws://another.example" }],
     ["credential", { secret: "replacement-secret" }],
   ])("cancels a pending probe on %s", async (_name, props) => {
-    const finish = deferredProbe();
-    const element = await mountFailure();
-    refresh(element).click();
+    const { element, finish } = await pendingRefresh();
     element.props = { ...element.props, ...props };
     // Final navigation must see changed properties before Solid renders them.
     finish();
-    await vi.waitFor(() =>
-      expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
-    );
-    expect(reload).not.toHaveBeenCalled();
+    await expectCancelled();
   });
   it.each(["Connect", "Enter", "target input", "credential input", "remove and reinsert"])(
     "retires the attempt synchronously on %s",
     async (action) => {
-      const finish = deferredProbe();
-      const element = await mountFailure();
-      refresh(element).click();
+      const { element, finish } = await pendingRefresh();
       if (action === "Connect") {
         element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
         expect(element.props.onConnect).toHaveBeenCalledOnce();
@@ -170,16 +150,11 @@ describe("login refresh ownership", () => {
         }
       }
       finish();
-      await vi.waitFor(() =>
-        expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
-      );
-      expect(reload).not.toHaveBeenCalled();
+      await expectCancelled();
     },
   );
   it("keeps the same attempt through unrelated rendering", async () => {
-    const finish = deferredProbe();
-    const element = await mountFailure();
-    refresh(element).click();
+    const { element, finish } = await pendingRefresh();
     element.props = { ...element.props, showGatewaySecret: true, onConnect: vi.fn() };
     await element.updateComplete;
     finish();
@@ -188,7 +163,7 @@ describe("login refresh ownership", () => {
   it.each(["automatic first", "manual first"])("navigates once with %s", async (order) => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const finish = deferredProbe();
-    const element = await mountFailure();
+    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     let automatic: Promise<boolean>;
     if (order === "automatic first") {
       automatic = recovery.scheduleStaleChunkReload({ storage, buildId: "new-build", reload });
@@ -205,7 +180,7 @@ describe("login refresh ownership", () => {
   });
   it("rechecks unsaved-input guards after the probe without discarding data", async () => {
     const finish = deferredProbe();
-    const element = await mountFailure();
+    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     let unsaved = false;
     const explain = vi.fn();
     const release = registerControlUiReloadGuard(() => !unsaved, explain);

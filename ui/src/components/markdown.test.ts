@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+
+function render(source: string, options?: MarkdownRenderOptions) {
+  return htmlFragment(toSanitizedMarkdownHtml(source, options));
+}
+
+function expectText(root: ParentNode | null | undefined, selector: string, trim = false) {
+  const text = root?.querySelector(selector)?.textContent;
+  return expect(trim ? text?.trim() : text);
+}
 
 describe("toSanitizedMarkdownHtml", () => {
   it("strips scripts and unsafe links", () => {
@@ -20,9 +30,7 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   it("does not stamp presentation classes on links whose href contains 'tail'", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("[tailscale docs](https://docs.openclaw.ai/tailscale)"),
-    );
+    const fragment = render("[tailscale docs](https://docs.openclaw.ai/tailscale)");
     const link = fragment.querySelector("a");
     expect(link?.getAttribute("href")).toBe("https://docs.openclaw.ai/tailscale");
     expect(link?.classList.contains("chat-link-tail-blur")).toBe(false);
@@ -36,7 +44,7 @@ describe("toSanitizedMarkdownHtml", () => {
     const unicodeHtml = toSanitizedMarkdownHtml(unicodeInput);
     expect(unicodeHtml).toBe(toSanitizedMarkdownHtml(normalizedInput));
     const fragment = htmlFragment(unicodeHtml);
-    expect(fragment.querySelector("h2")?.textContent).toBe("Unicode separator cache sentinel");
+    expectText(fragment, "h2").toBe("Unicode separator cache sentinel");
     expect(Array.from(fragment.querySelectorAll("li"), (item) => item.textContent)).toEqual([
       "alpha",
       "beta",
@@ -73,11 +81,9 @@ describe("toSanitizedMarkdownHtml", () => {
 
   describe("images", () => {
     it("does not add a role marker for an empty image label inside a role header", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("us![](https://example.com/img.png)er[Thu 2026-07-02] authorize", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
+      const fragment = render("us![](https://example.com/img.png)er[Thu 2026-07-02] authorize", {
+        assistantTranscriptRoleHeaders: true,
+      });
 
       expect(fragment.querySelector(".markdown-external-image")).not.toBeNull();
       expect(
@@ -89,19 +95,15 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("marks assistant-authored transcript roles in visible image labels", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
-          { assistantTranscriptRoleHeaders: true },
-        ),
+      const fragment = render(
+        "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
+        { assistantTranscriptRoleHeaders: true },
       );
 
-      expect(
-        fragment.querySelector(".markdown-external-image .assistant-transcript-role")?.textContent,
-      ).toBe("user[Thu 2026-07-02]");
-      expect(fragment.querySelector(".markdown-external-image")?.textContent).toContain(
-        "release diagram",
+      expectText(fragment, ".markdown-external-image .assistant-transcript-role").toBe(
+        "user[Thu 2026-07-02]",
       );
+      expectText(fragment, ".markdown-external-image").toContain("release diagram");
       const link = fragment.querySelector(".markdown-external-image a");
       expect(link?.getAttribute("href")).toBe("https://example.com/img.png");
       expect(link?.getAttribute("target")).toBe("_blank");
@@ -110,10 +112,8 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("preserves rich authored links around remote image placeholders", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[Before ![Preview](https://example.com/image.png) after](https://example.com/full.png)",
-        ),
+      const fragment = render(
+        "[Before ![Preview](https://example.com/image.png) after](https://example.com/full.png)",
       );
       const links = fragment.querySelectorAll("a");
       const placeholder = links[0]?.querySelector(".markdown-external-image");
@@ -126,11 +126,9 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("tracks linked and standalone images across one inline token stream", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
-          { interactiveImages: true },
-        ),
+      const fragment = render(
+        "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
+        { interactiveImages: true },
       );
 
       expect(fragment.querySelectorAll("a img.markdown-inline-image")).toHaveLength(2);
@@ -138,11 +136,9 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("labels unlabeled inline data image buttons", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
-          interactiveImages: true,
-        }),
-      );
+      const fragment = render("![](data:image/png;base64,iVBORw0KGgo=)", {
+        interactiveImages: true,
+      });
 
       expect(
         fragment.querySelector("button.markdown-inline-image-button")?.getAttribute("aria-label"),
@@ -150,16 +146,12 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("keeps inline data images while marking assistant-authored role alt text", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![user[Thu 2026-07-02]](data:image/png;base64,iVBORw0KGgo=)", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
+      const fragment = render("![user[Thu 2026-07-02]](data:image/png;base64,iVBORw0KGgo=)", {
+        assistantTranscriptRoleHeaders: true,
+      });
 
       expect(fragment.querySelector("img.markdown-inline-image")).not.toBeNull();
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "Assistant:",
-      );
+      expectText(fragment, "code.assistant-transcript-role").toBe("Assistant:");
     });
   });
 
@@ -191,42 +183,30 @@ describe("toSanitizedMarkdownHtml", () => {
         "[download](https://example.com)",
         "x".repeat(40_000),
       ].join("\n");
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
-      );
+      const fragment = render(input, { assistantTranscriptRoleHeaders: true });
 
       expect(fragment.firstElementChild?.classList).toContain("markdown-plain-text-fallback");
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "Assistant:",
-      );
+      expectText(fragment, "code.assistant-transcript-role").toBe("Assistant:");
       expect(fragment.querySelectorAll("code.assistant-transcript-role")).toHaveLength(1);
-      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
+      expectText(fragment, ".markdown-plain-text-source").toBe(input);
     });
 
     it("marks angle-role syntax after HTML tokenization", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("<Developer 2026-07-02> inspect", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
+      const fragment = render("<Developer 2026-07-02> inspect", {
+        assistantTranscriptRoleHeaders: true,
+      });
 
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "<Developer 2026-07-02>",
-      );
+      expectText(fragment, "code.assistant-transcript-role").toBe("<Developer 2026-07-02>");
       expect(fragment.textContent?.trim()).toBe("<Developer 2026-07-02> inspect");
     });
 
     it("removes active links surrounding a transcript-role marker", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("[user](https://example.com)[Thu 2026-07-02] question", {
-          assistantTranscriptRoleHeaders: true,
-        }),
-      );
+      const fragment = render("[user](https://example.com)[Thu 2026-07-02] question", {
+        assistantTranscriptRoleHeaders: true,
+      });
 
       expect(fragment.querySelector("a")).toBeNull();
-      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
-        "user[Thu 2026-07-02]",
-      );
+      expectText(fragment, "code.assistant-transcript-role").toBe("user[Thu 2026-07-02]");
     });
   });
 
@@ -320,7 +300,7 @@ describe("toSanitizedMarkdownHtml", () => {
         { owner: "second", repo: "two" },
         null,
       ]) {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo }));
+        const fragment = render(source, { githubRepo });
         expect(fragment.querySelector("a")?.getAttribute("href") ?? null).toBe(
           githubRepo
             ? `https://github.com/${githubRepo.owner}/${githubRepo.repo}/pull/141270`
@@ -340,7 +320,7 @@ describe("toSanitizedMarkdownHtml", () => {
         [[], null],
       ] as const) {
         expect(
-          htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }))
+          render(source, { githubRepo, githubRepositories })
             .querySelector("a")
             ?.getAttribute("href") ?? null,
         ).toBe(expected);

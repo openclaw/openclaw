@@ -2,8 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+
+function render(source: string, options?: MarkdownRenderOptions) {
+  return htmlFragment(toSanitizedMarkdownHtml(source, options));
+}
 
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 
@@ -28,6 +33,25 @@ function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
   return button;
 }
 
+function mountBlocks() {
+  const container = document.body.appendChild(document.createElement("div"));
+  const section = document.createElement("section");
+  section.className = "chat-text";
+  section.innerHTML = toSanitizedMarkdownHtml(
+    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
+    { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
+  );
+  container.append(section);
+  return { container, section, blocks: new MarkdownBlocks(section) };
+}
+function denyExecCommand() {
+  Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
+}
+function expectCopyFailed(button: HTMLButtonElement) {
+  expect(button.classList.contains("copy-failed")).toBe(true);
+  expect(button.getAttribute("aria-label")).toBe("Copy failed");
+}
+
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
@@ -44,19 +68,8 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
       }
     },
   );
-  const container = document.body.appendChild(document.createElement("div"));
-  const content = toSanitizedMarkdownHtml(
-    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
-    {
-      codeBlockInteraction: "interactive",
-      tableInteractions: "enabled",
-    },
-  );
-  const section = document.createElement("section");
-  section.className = "chat-text";
-  section.innerHTML = content;
-  container.append(section);
-  let blocks = new MarkdownBlocks(container.querySelector("section")!);
+  const { container, blocks: initialBlocks } = mountBlocks();
+  let blocks = initialBlocks;
   blocks.update(true);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
@@ -108,19 +121,10 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
 
 it("does not remeasure settled Markdown while neighboring prose streams", async () => {
   vi.stubGlobal("ResizeObserver", undefined);
-  const container = document.body.appendChild(document.createElement("div"));
-  const content = toSanitizedMarkdownHtml(
-    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
-    { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
-  );
-  const section = document.createElement("section");
-  section.className = "chat-text";
-  section.innerHTML = content;
+  const { container, section, blocks } = mountBlocks();
   const paragraph = document.createElement("p");
   paragraph.textContent = "First";
   section.append(paragraph);
-  container.append(section);
-  const blocks = new MarkdownBlocks(container.querySelector("section")!);
   blocks.update(true);
   await Promise.resolve();
   await Promise.resolve();
@@ -136,7 +140,7 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
       await Promise.resolve();
       await Promise.resolve();
     }
-    expect(container.querySelector("p:last-child")?.textContent).toBe("First paragraph grows");
+    expectText(container, "p:last-child").toBe("First paragraph grows");
     expect(widths).not.toHaveBeenCalled();
 
     const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
@@ -154,13 +158,14 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   }
 });
 
+function expectText(root: ParentNode | null | undefined, selector: string, trim = false) {
+  const text = root?.querySelector(selector)?.textContent;
+  return expect(trim ? text?.trim() : text);
+}
+
 describe("Markdown code-block clipboard feedback", () => {
-  it.each([
-    {
-      name: "closing HTML tags",
-      source: '<script>console.log("ok")</script>\n</style></textarea>',
-    },
-  ])("preserves $name when copying ordinary code", async ({ source }) => {
+  it("preserves closing HTML tags when copying ordinary code", async () => {
+    const source = '<script>console.log("ok")</script>\n</style></textarea>';
     vi.useFakeTimers();
     const writeText = vi.fn(async () => undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -183,10 +188,7 @@ describe("Markdown code-block clipboard feedback", () => {
       .mockReturnValueOnce(firstWrite)
       .mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: () => false,
-    });
+    denyExecCommand();
     const button = renderCodeCopyButton();
 
     button.click();
@@ -198,8 +200,7 @@ describe("Markdown code-block clipboard feedback", () => {
     resolveFirstWrite();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(button.classList.contains("copy-failed")).toBe(true);
-    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expectCopyFailed(button);
     expect(button.classList.contains("copied")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(2_000);
@@ -219,10 +220,7 @@ describe("Markdown code-block clipboard feedback", () => {
       writeText.mockResolvedValueOnce(undefined);
     }
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: () => false,
-    });
+    denyExecCommand();
     const button = renderCodeCopyButton();
 
     button.click();
@@ -230,8 +228,7 @@ describe("Markdown code-block clipboard feedback", () => {
     button.click();
     await vi.advanceTimersByTimeAsync(scenario.firstResetAtMs - 1_000);
 
-    expect(button.classList.contains("copy-failed")).toBe(true);
-    expect(button.getAttribute("aria-label")).toBe("Copy failed");
+    expectCopyFailed(button);
 
     await vi.advanceTimersByTimeAsync(3_000 - scenario.firstResetAtMs);
 
@@ -246,10 +243,7 @@ describe("Markdown code-block clipboard feedback", () => {
         writeText: vi.fn().mockRejectedValue(new DOMException("Clipboard access denied")),
       },
     });
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: () => false,
-    });
+    denyExecCommand();
     const first = renderCodeCopyButton();
     const second = first.cloneNode(true) as HTMLButtonElement;
     second.addEventListener("click", handleMarkdownCodeBlockClick);
@@ -324,38 +318,32 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     const rendered = toSanitizedMarkdownHtml("text\n\n    indented code");
     const fragment = htmlFragment(rendered);
 
-    expect(fragment.querySelector("p")?.textContent).toBe("text");
-    expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
-    expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
+    expectText(fragment, "p").toBe("text");
+    expectText(fragment, ".code-block-lang").toBe("Code");
+    expectText(fragment, "pre code").toBe("indented code\n");
     await expectCodeCopy(fragment, "indented code");
   });
 
   it("uses the singular hidden-line label for a single hidden line", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(jsonBlock(8), { codeBlockInteraction: "interactive" }),
-    );
+    const fragment = render(jsonBlock(8), { codeBlockInteraction: "interactive" });
     const expand = fragment.querySelector(".code-block-expand");
 
     expect(expand?.textContent).toBe("1 hidden line");
     expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
   });
 
-  it.each(["TEXT"])("keeps long %s fences fully visible", (info) => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
-        codeBlockInteraction: "interactive",
-      }),
-    );
+  it("keeps long TEXT fences fully visible", () => {
+    const fragment = render(`\`\`\`TEXT\n${"prose line\n".repeat(20)}\`\`\``, {
+      codeBlockInteraction: "interactive",
+    });
 
     expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
     expect(fragment.querySelector(".code-block-expand")).toBeNull();
-    expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
+    expectText(fragment, "pre code").toContain("prose line");
   });
 
   it("reveals a collapsed block through the shared click owner", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
-    );
+    const fragment = render(jsonBlock(41), { codeBlockInteraction: "interactive" });
     const wrapper = fragment.querySelector(".code-block-wrapper");
     const expand = fragment.querySelector<HTMLButtonElement>(".code-block-expand");
     fragment.addEventListener("click", handleMarkdownCodeBlockClick);
@@ -367,9 +355,7 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
   });
 
   it("toggles wrapping through the shared click owner", () => {
-    const fragment = htmlFragment(
-      toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
-    );
+    const fragment = render(jsonBlock(41), { codeBlockInteraction: "interactive" });
     const wrapper = fragment.querySelector(".code-block-wrapper");
     const wrap = fragment.querySelector<HTMLButtonElement>(".code-block-wrap");
     fragment.addEventListener("click", handleMarkdownCodeBlockClick);
@@ -394,14 +380,10 @@ describe("toSanitizedMarkdownHtml code blocks", () => {
     });
     await i18n.setLocale("pt-BR");
     try {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(jsonBlock(41), { codeBlockInteraction: "interactive" }),
-      );
-      expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
-        "34 linhas ocultas",
-      );
-      const unlabeled = htmlFragment(toSanitizedMarkdownHtml("```\nconteúdo\n```"));
-      expect(unlabeled.querySelector(".code-block-lang")?.textContent).toBe("Código");
+      const fragment = render(jsonBlock(41), { codeBlockInteraction: "interactive" });
+      expectText(fragment, ".code-block-expand").toContain("34 linhas ocultas");
+      const unlabeled = render("```\nconteúdo\n```");
+      expectText(unlabeled, ".code-block-lang").toBe("Código");
     } finally {
       await i18n.setLocale("en");
     }
