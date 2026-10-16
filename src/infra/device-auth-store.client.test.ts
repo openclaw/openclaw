@@ -33,12 +33,6 @@ class FixtureSocket extends EventEmitter {
       payload: { nonce: "synthetic-nonce", ts: 1_800_000_000_000 },
     });
   }
-  async waitForConnectFrame() {
-    if (this.send.mock.calls.length === 0) {
-      await once(this, "sent");
-    }
-    return this.connectFrame();
-  }
   connectFrame() {
     const sent = this.send.mock.calls[0];
     assert(sent);
@@ -54,9 +48,7 @@ class FixtureSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", code, Buffer.from(reason));
   }
-  terminate() {
-    this.close();
-  }
+  terminate = this.close;
 }
 vi.mock("../../packages/gateway-client/src/websocket.js", () => ({ WebSocket: FixtureSocket }));
 beforeEach(() => {
@@ -87,7 +79,9 @@ function openSocket(index = 0) {
   return socket;
 }
 async function expectTokenFrame(socket: FixtureSocket, token: string) {
-  await socket.waitForConnectFrame();
+  if (socket.send.mock.calls.length === 0) {
+    await once(socket, "sent");
+  }
   expect(socket.send).toHaveBeenCalledOnce();
   expect(socket.connectFrame().params.auth.deviceToken).toBe(token);
 }
@@ -131,12 +125,10 @@ it.each([
         await vi.waitFor(() => expect(storeSpy).toHaveBeenCalledOnce());
         expect(onHelloOk).not.toHaveBeenCalled();
         if (completion === "stop") {
-          let stopped = false;
-          const stopping = client.stopAndWait().then(() => {
-            stopped = true;
-          });
+          const stopped = vi.fn<() => void>();
+          const stopping = client.stopAndWait().then(stopped);
           await Promise.resolve();
-          expect(stopped).toBe(false);
+          expect(stopped).not.toHaveBeenCalled();
           await release();
           await stopping;
         } else {

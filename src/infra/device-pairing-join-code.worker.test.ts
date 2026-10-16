@@ -9,15 +9,15 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   redeemDevicePairingJoinCode as redeem,
   registerDevicePairingJoinCode as register,
 } from "./device-pairing-join-code.js";
-import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
+import { setupPairedNode } from "./device-pairing-node.test-support.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
-import { listDevicePairing, requestDevicePairing } from "./device-pairing.js";
+import { listDevicePairing } from "./device-pairing.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -25,12 +25,9 @@ import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.tes
 const payload = { url: "wss://join.example.invalid", bootstrapToken: "synthetic-join-bootstrap" };
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
-const databasePaths = new Set<string>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
-    for (const databasePath of databasePaths) {
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    }
+    await closeStateDatabaseForTest();
     cleanup();
   }),
 );
@@ -50,6 +47,21 @@ function mint(context = captureContext(), assertCurrent?: () => void) {
   });
 }
 
+function afterCommand(
+  effect: (command: Parameters<Parameters<typeof probe.command>[1]>[0]) => void | Promise<void>,
+  once = false,
+) {
+  return probe.command(
+    stateWorker,
+    async (command, options, scope) => {
+      const result = await scope.execute(command, options);
+      await effect(command);
+      return result;
+    },
+    { once },
+  );
+}
+
 function storedCodes() {
   const { db } = database;
   return db
@@ -64,7 +76,6 @@ function storedCodes() {
 beforeAll(() => {
   baseDir = tempDirs.make("join-code-worker-");
   database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
-  databasePaths.add(database.path);
 });
 
 afterEach(() => {
@@ -108,16 +119,11 @@ test.each([
 );
 
 test("keeps the captured store and paired-node authority while a join waits", async () => {
-  const { request } = await requestDevicePairing(
-    { deviceId: "node", publicKey: "synthetic-node-key", role: "node", scopes: [] },
-    baseDir,
-  );
-  await approveDevicePairing(request.requestId, baseDir);
-  const node = await requestNodePairing({ nodeId: "node" }, baseDir);
-  await approveNodePairing(node.request.requestId, { callerScopes: ["operator.admin"] }, baseDir);
+  const generation = await setupPairedNode(baseDir);
   await listDevicePairing(baseDir);
-  const binding = getPublishedPairedDeviceBinding("node", baseDir);
-  expect(binding).toMatchObject({ identity: expect.any(String), generation: expect.any(String) });
+  const published = () => getPublishedPairedDeviceBinding("node-1", baseDir);
+  const binding = published();
+  expect(binding).toMatchObject({ identity: expect.any(String), generation: generation.key });
   const context = captureContext();
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -134,13 +140,13 @@ test("keeps the captured store and paired-node authority while a join waits", as
   await withEnvAsync({ OPENCLAW_STATE_DIR: otherRoot }, async () => {
     try {
       await awaitGate(entered.promise, registration, "Join registration did not enter");
-      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      expect(published()).toEqual(binding);
       release.resolve();
       const shortcode = await registration;
       expect(storedCodes()).toContainEqual({ shortcode });
       await expect(redeem({ shortcode, context })).resolves.toEqual(payload);
       expect(existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
-      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      expect(published()).toEqual(binding);
     } finally {
       release.resolve();
       await Promise.allSettled([registration]);
@@ -153,13 +159,11 @@ test("never replays a burned code or recovers its payload after an unknown resul
   const shortcode = await mint(context);
   const unknown = new SqliteWorkerError("Synthetic lost burn result", "outcome-unknown");
   let burns = 0;
-  probe.command(stateWorker, async (command, executeOptions, scope) => {
-    const result = await scope.execute(command, executeOptions);
+  afterCommand((command) => {
     if (command.type === "devicePairing.redeemJoinCode") {
       burns++;
       throw unknown;
     }
-    return result;
   });
   await expect(redeem({ shortcode, context })).rejects.toBe(unknown);
   expect(burns).toBe(1);
@@ -173,15 +177,9 @@ test.each(["register", "redeem"] as const)(
     const expiresAtMs = Date.now() + 60_000;
     const shortcode =
       operation === "redeem" ? await register({ payload, expiresAtMs, context }) : undefined;
-    probe.command(
-      stateWorker,
-      async (command, executeOptions, scope) => {
-        const result = await scope.execute(command, executeOptions);
-        vi.spyOn(Date, "now").mockReturnValue(expiresAtMs);
-        return result;
-      },
-      { once: true },
-    );
+    afterCommand(() => {
+      vi.spyOn(Date, "now").mockReturnValue(expiresAtMs);
+    }, true);
     if (shortcode) {
       await expect(redeem({ shortcode, context })).resolves.toBeNull();
       expect(storedCodes()).not.toContainEqual({ shortcode });
@@ -198,23 +196,16 @@ test("database close joins accepted burn delivery and refuses its retired contex
   const closingDatabase = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: closeRoot },
   });
-  databasePaths.add(closingDatabase.path);
   const context = captureContext(closeRoot);
   const shortcode = await mint(context);
   const committed = createDeferredCore();
   const release = createDeferredCore();
   const order: string[] = [];
-  probe.command(
-    stateWorker,
-    async (command, executeOptions, scope) => {
-      const result = await scope.execute(command, executeOptions);
-      committed.resolve();
-      await release.promise;
-      order.push("delivered");
-      return result;
-    },
-    { once: true },
-  );
+  afterCommand(async () => {
+    committed.resolve();
+    await release.promise;
+    order.push("delivered");
+  }, true);
   const redemption = redeem({ shortcode, context });
   let closing: Promise<boolean> | undefined;
   try {

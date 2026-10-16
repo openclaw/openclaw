@@ -7,6 +7,7 @@ import { getPairedDevice, listDevicePairing, requestDevicePairing } from "./devi
 
 const DEVICE_ID = "device-cli";
 const PUBLIC_KEY = "public-key-cli";
+const broadScopes = ["operator.admin", "operator.pairing", "operator.read", "operator.write"];
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-device-pairing-churn-" });
 let baseDir: string;
 
@@ -75,13 +76,8 @@ describe("device pairing requestId churn", () => {
   test.each([
     {
       label: "explicit subset",
-      scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
-      expected: expect.arrayContaining([
-        "operator.admin",
-        "operator.pairing",
-        "operator.read",
-        "operator.write",
-      ]),
+      scopes: broadScopes,
+      expected: expect.arrayContaining(broadScopes),
     },
     { label: "admin implication", scopes: ["operator.admin"], expected: ["operator.admin"] },
   ])(
