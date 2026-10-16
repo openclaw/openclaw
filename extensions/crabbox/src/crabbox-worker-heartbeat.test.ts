@@ -21,6 +21,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    vi.restoreAllMocks();
     cleanup();
   }),
 );

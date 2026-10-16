@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -34,47 +35,47 @@ function fixture(
   const calls: string[][] = [];
   let captures = 0;
   const warn = vi.fn();
+  vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv) => {
+    calls.push(argv);
+    const override = onCommand?.(argv);
+    if (override) {
+      return override;
+    }
+    if (failCreate && argv[2] === "create") {
+      return commandResult({ code: null, killed: true, termination: "timeout" });
+    }
+    if (argv[2] === "create") {
+      captures += 1;
+      return checkpointResult(
+        captures === 1 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_${captures}`,
+        argv[argv.indexOf("--id") + 1]!,
+        "available",
+      );
+    }
+    if (argv[2] === "inspect") {
+      return jsonResult({
+        localState: "metadata_available",
+        providerState: "available",
+        nextAction: "fork_or_delete",
+      });
+    }
+    if (argv[2] === "fork") {
+      return jsonResult({
+        checkpointId: argv[3],
+        leaseId: argv[argv.indexOf("--lease-id") + 1],
+        slug: argv[argv.indexOf("--slug") + 1],
+        provider: "aws",
+        workdir: "/workspace",
+      });
+    }
+    return commandResult();
+  });
   const manager = () =>
     createCrabboxWarmImageManager({
       state: crabboxState,
       warn,
       policy,
       prepareCapture,
-      runCommand: async (argv) => {
-        calls.push(argv);
-        const override = onCommand?.(argv);
-        if (override) {
-          return override;
-        }
-        if (failCreate && argv[2] === "create") {
-          return commandResult({ code: null, killed: true, termination: "timeout" });
-        }
-        if (argv[2] === "create") {
-          captures += 1;
-          return checkpointResult(
-            captures === 1 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_${captures}`,
-            argv[argv.indexOf("--id") + 1]!,
-            "available",
-          );
-        }
-        if (argv[2] === "inspect") {
-          return jsonResult({
-            localState: "metadata_available",
-            providerState: "available",
-            nextAction: "fork_or_delete",
-          });
-        }
-        if (argv[2] === "fork") {
-          return jsonResult({
-            checkpointId: argv[3],
-            leaseId: argv[argv.indexOf("--lease-id") + 1],
-            slug: argv[argv.indexOf("--slug") + 1],
-            provider: "aws",
-            workdir: "/workspace",
-          });
-        }
-        return commandResult();
-      },
     });
   const context = (id: string, projectKey?: string) => ({
     binary: "crabbox",

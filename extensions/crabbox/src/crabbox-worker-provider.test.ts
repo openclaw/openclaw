@@ -75,6 +75,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       vi.unstubAllEnvs();
+      vi.restoreAllMocks();
       cleanup();
     }
   }),

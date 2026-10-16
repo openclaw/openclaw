@@ -5,17 +5,18 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
 import * as managedBinary from "./crabbox-managed-binary.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
-import type { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
   destroyAndWait,
   commandResult,
   createProviderFixtures,
   nodeEnrollmentFixture,
+  type ProviderFixtureDependencies,
 } from "./crabbox-worker-provider.test-support.js";
 
 export { managedBinary };
@@ -55,7 +56,7 @@ afterEach(async () => {
   resetPluginStateStoreForTests();
 });
 
-type CommandRunner = NonNullable<Parameters<typeof createCrabboxWorkerProvider>[0]["runCommand"]>;
+type CommandRunner = CrabboxCommandRunner;
 export type CommandCall = { argv: string[]; options: Parameters<CommandRunner>[1] };
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
@@ -79,10 +80,7 @@ export function checkpointResult(
 export function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
   stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
-  dependencies: Pick<
-    Parameters<typeof createCrabboxWorkerProvider>[0],
-    "sleep" | "warmImagePolicy"
-  > = {},
+  dependencies: Pick<ProviderFixtureDependencies, "sleep" | "warmImagePolicy"> = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({

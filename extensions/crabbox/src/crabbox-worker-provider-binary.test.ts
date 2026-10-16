@@ -35,6 +35,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
+  vi.restoreAllMocks();
 });
 
 describe("Crabbox provider binary resolution", () => {
