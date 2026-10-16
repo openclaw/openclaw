@@ -66,7 +66,7 @@ export function registerDiagnosticTracePropagationBridge(
 
 /** Whether an exporter-owned tracing consumer is active in this process. */
 export function hasActiveDiagnosticTracePropagation(): boolean {
-  return activeDiagnosticTracePropagationBridge() !== undefined;
+  return tracePropagationState.activeBridge !== undefined;
 }
 
 export function shouldPrepareDiagnosticTracePropagation(event: unknown): boolean {

@@ -9,10 +9,7 @@ import {
   loadSkillLibrarySelection,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
-import {
-  getSkillsSourceVersion,
-  type SkillsSourceScope,
-} from "../runtime/refresh-state.js";
+import { getSkillsSourceVersion, type SkillsSourceScope } from "../runtime/refresh-state.js";
 import { prepareLocalSkillSources, prepareSkillSourcePlan } from "../runtime/refresh.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { stampDiscoveredSkillBundleIdentities } from "../runtime/resources.js";

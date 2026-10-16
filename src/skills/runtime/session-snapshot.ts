@@ -15,7 +15,6 @@ import { isWorkspaceSkillReadPath, resolveSkillReadPath } from "../workspace-ski
 import {
   getSkillsResourceVersion,
   getSkillsSnapshotVersion,
-  getSkillsSourceVersion,
   shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";

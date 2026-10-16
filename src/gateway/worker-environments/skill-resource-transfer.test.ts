@@ -947,8 +947,12 @@ describe("remote-exec skill resources", () => {
         snapshot: transferred,
         workspaceDir: carrier.workspace,
       });
-      expect(await readInstalledSkill(catalog, workspaceSkill.name)).toBe(workspaceInstructions);
-      expect(await readInstalledSkill(catalog, gatewaySkill.name)).toBe(gatewayInstructions);
+      expect((await readInstalledSkill(catalog, workspaceSkill.name)).content).toBe(
+        workspaceInstructions,
+      );
+      expect((await readInstalledSkill(catalog, gatewaySkill.name)).content).toBe(
+        gatewayInstructions,
+      );
       // Real serving route with the active tracing consumer present (the
       // matcher's fingerprint field is gated on active tracing): each
       // invocation's skills_read tool captures the receipt for the bytes it

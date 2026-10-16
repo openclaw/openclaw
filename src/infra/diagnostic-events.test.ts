@@ -422,6 +422,9 @@ describe("diagnostic-events", () => {
   it("drops a queued skill fingerprint from pending-queue inspection after its tracing bridge retires", async () => {
     const inspected: DiagnosticEventPayload[] = [];
     setDiagnosticsEnabledForProcess(true);
+    // Upstream gates queueing on an interested consumer: register one so the
+    // skill.used payload actually enters the async queue for inspection.
+    const stopListener = onTrustedInternalDiagnosticEvent(() => {});
     // Emit-time admission under an active exporter-owned tracing consumer:
     // the async queue accepts the fingerprint while tracing is live.
     const unregisterBridge = registerDiagnosticTracePropagationBridge({
@@ -456,6 +459,7 @@ describe("diagnostic-events", () => {
       skillSource: "workspace",
       activation: "read",
     });
+    stopListener();
     await waitForDiagnosticEventsDrained();
   });
 

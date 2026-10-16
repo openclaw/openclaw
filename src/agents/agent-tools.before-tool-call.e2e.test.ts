@@ -2484,7 +2484,10 @@ describe("before_tool_call loop detection behavior", () => {
         undefined,
         undefined,
       );
-      expect(extractSkillReadText(result)).toBe(pondInstructions);
+      // The installed route serves the instruction body under the upstream
+      // location header; the receipt tests pin the served body, not the
+      // whole formatted envelope.
+      expect(extractSkillReadText(result)).toContain(pondInstructions);
       // The cleared serving read captures no receipt for the fresh
       // generation to consume.
       await flush();
@@ -2634,9 +2637,9 @@ describe("before_tool_call loop detection behavior", () => {
         undefined,
       );
       await flush();
-      expect(extractSkillReadText(live)).toBe(pondInstructions);
-      expect(extractSkillReadText(retained)).toBe("Retained instructions");
-      expect(extractSkillReadText(unarmed)).toBe("Unarmed instructions");
+      expect(extractSkillReadText(live)).toContain(pondInstructions);
+      expect(extractSkillReadText(retained)).toContain("Retained instructions");
+      expect(extractSkillReadText(unarmed)).toContain("Unarmed instructions");
       const used = emitted.filter((evt) => evt.type === "skill.used");
       expect(used).toHaveLength(3);
       expectEventFields(used[0], {
