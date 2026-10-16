@@ -6,8 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
+import { describe, expect, it } from "vitest";
 import "./backup-worker.test-support.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,19 +31,9 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "../client-credential-schema.js";
 import { resolveClientCredentialStorePath } from "../client-credential-store.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { createUpdateStateInspectionDiagnostics } from "../update-candidate-state.diagnostics.js";
-import * as inspection from "../update-candidate-state.inspection.js";
-import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  UpdateStateSchemaInspectionPlanSchema,
-} from "../update-candidate-state.js";
-import * as databaseSizes from "../update-candidate-state.sizes.js";
-import {
-  createUpdateDatabaseBackup,
-  createUpdateDatabaseBackupInProcess,
-} from "../update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { createUpdateRun } from "../update-run-ledger.js";
+import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
@@ -469,46 +458,7 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
             env: state.env,
             stopped: true,
           };
-          // Keep public discovery/wiring; only replace its two subprocess launches.
-          const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
-          const sizes = vi
-            .spyOn(databaseSizes, "readUpdateStateDatabaseSizes")
-            .mockImplementation((files, options) =>
-              databaseSizes.readUpdateStateDatabaseSizesInProcess(files, options.signal),
-            );
-          worker.mockImplementation(async (params) => {
-            const captured = {
-              ...input,
-              stagingRoot: params.stagingRoot,
-              additionalPaths: z.array(z.string()).parse(params.input.additionalPaths),
-            };
-            const result =
-              params.input.mode === "discover"
-                ? await discoverUpdateStateSchemaInspectionInProcess(captured)
-                : await createUpdateDatabaseBackupInProcess({
-                    ...captured,
-                    inspectionPlan: UpdateStateSchemaInspectionPlanSchema.parse(
-                      params.input.inspectionPlan,
-                    ),
-                  });
-            return {
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-              stdout: JSON.stringify(result),
-              stderr: "",
-              inspection: createUpdateStateInspectionDiagnostics({
-                operation: "State schema inspection",
-                phase: String(params.input.mode),
-                paths: captured.additionalPaths,
-              }),
-            };
-          });
-          const backup = await createUpdateDatabaseBackup(input).finally(() => {
-            worker.mockRestore();
-            sizes.mockRestore();
-          });
+          const backup = await createUpdateDatabaseBackupWithFixtureTransport(input);
           const entry = backup.databases.find((item) => item.path === anchorPath);
           expect(entry).toMatchObject({ engine: "postgres", namespace, storeId });
           const credentialsBackup = backup.databases.find((item) => item.path === credentialsPath);

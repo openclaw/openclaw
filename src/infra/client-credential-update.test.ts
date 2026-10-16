@@ -13,6 +13,7 @@ import {
 import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-database-receipts.js";
 import type { MutableUpdateExecutionParams } from "../cli/update-cli/update-command-execution.types.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
+import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { readBackupEngine, verifyMatchedPostgresBackup } from "../snapshot/database-backup.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -84,7 +85,7 @@ afterAll(async () => {
   }
 });
 
-function seedCredentials(db: EngineConnection, native: boolean) {
+function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 25 | 26) {
   db.prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)").run(
     "primary",
     identity.deviceId,
@@ -125,14 +126,14 @@ function seedCredentials(db: EngineConnection, native: boolean) {
     104,
   );
   db.prepare(
-    "INSERT INTO schema_meta VALUES ('primary', 'global', 25, NULL, 'fixture', 123, 123)",
-  ).run();
-  db.prepare(
-    "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '25', 1)",
-  ).run();
+    "INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, 'fixture', 123, 123)",
+  ).run(sourceVersion);
+  db.prepare("INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)").run(
+    String(sourceVersion),
+  );
 }
 
-async function fixture(engine: "sqlite" | "postgres", native = false) {
+async function fixture(engine: "sqlite" | "postgres", native = false, sourceVersion: 25 | 26 = 25) {
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
@@ -171,9 +172,11 @@ async function fixture(engine: "sqlite" | "postgres", native = false) {
         anchor,
         schema: {
           id: "state",
-          version: 25,
+          version: sourceVersion,
           sqlite: "",
-          ...stateEngineSchema.postgresMigrations!.find((step) => step.version === 26)!.fromSchema,
+          ...stateEngineSchema.postgresMigrations!.find(
+            (step) => step.version === sourceVersion + 1,
+          )!.fromSchema,
         },
         input: { connection: connection!, schemaPrefix: "client_update" },
         inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
@@ -187,7 +190,7 @@ async function fixture(engine: "sqlite" | "postgres", native = false) {
           throw new Error("Expected PostgreSQL predecessor");
         }
         namespaces.add(getPostgresPhysicalFacts(source)!.namespace);
-        source.runTransaction(() => seedCredentials(source, false));
+        source.runTransaction(() => seedCredentials(source, false, sourceVersion));
       } finally {
         source.close();
       }
@@ -202,16 +205,20 @@ async function fixture(engine: "sqlite" | "postgres", native = false) {
         ),
       );
     } else {
-      db.exec(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
+      db.exec(
+        sourceVersion === 25
+          ? withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)
+          : OPENCLAW_STATE_SCHEMA_SQL,
+      );
       db.exec(
         CLIENT_CREDENTIAL_SCHEMA_SQL.slice(
           0,
           CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE native_exec_socket_credentials"),
         ),
       );
-      db.exec("PRAGMA user_version=25");
+      db.exec(`PRAGMA user_version=${sourceVersion}`);
     }
-    seedCredentials(db, native);
+    seedCredentials(db, native, sourceVersion);
   }
   const readShared = async () => {
     const anchor = readBackupEngine(pathname);
@@ -249,7 +256,7 @@ async function fixture(engine: "sqlite" | "postgres", native = false) {
           ),
     };
   };
-  return { root, pathname, env, engine, native, readShared };
+  return { root, pathname, env, engine, native, sourceVersion, readShared };
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -258,7 +265,7 @@ async function capture(f: Fixture, orphan = false) {
   const run = createUpdateRun({ trigger: "cli" }, { env: f.env });
   expect(run.phase).toBe("requested");
   // An installed driver's ledger admission must not run the candidate migration.
-  expect((await f.readShared()).version).toBe(f.native ? 0 : 25);
+  expect((await f.readShared()).version).toBe(f.native ? 0 : f.sourceVersion);
   expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(orphan);
   await closeOpenClawStateDatabaseAsync();
   const unexpected = () => {
@@ -329,7 +336,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
               {
                 kind: "state",
                 path: f.pathname,
-                foundVersion: f.native ? 0 : 25,
+                foundVersion: f.native ? 0 : f.sourceVersion,
                 supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
               },
             ],
@@ -404,7 +411,7 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
     JSON.stringify(result),
   ).toBe(true);
   expect(await f.readShared()).toEqual({
-    version: f.native ? 0 : 25,
+    version: f.native ? 0 : f.sourceVersion,
     token: "synthetic-original-token",
     policy: f.native ? undefined : policy,
   });
@@ -451,6 +458,79 @@ describe("client credential public update custody", () => {
         key: { device_id: identity.deviceId, role: "operator" },
       }),
     ).toMatchObject({ kind: "token", token: { token: "synthetic-original-token" } });
+  });
+
+  it("captures and restores only the canonical v26 credential migration scope", async () => {
+    const f = await fixture("sqlite", false, 26);
+    const sourceTables = [...credentialTables, "exec_approvals_config"];
+    let original;
+    {
+      using shared = openNodeSqliteDatabase(f.pathname);
+      expect(
+        shared.prepare("SELECT wr FROM pragma_table_list WHERE name='session_state_heads'").get(),
+      ).toEqual({ wr: 1 });
+      shared.exec(`INSERT INTO session_state_heads VALUES ('scope-proof','main',73,7,1); ANALYZE;`);
+      original = Object.fromEntries(
+        sourceTables.map((table) => [table, shared.prepare(`SELECT * FROM ${table}`).all()]),
+      );
+    }
+    await migrate(f);
+    const archives = fs
+      .readdirSync(path.dirname(f.pathname))
+      .filter((name) => name.endsWith(".scoped.bak"))
+      .map((name) => {
+        const pathname = path.join(path.dirname(f.pathname), name);
+        return { pathname, inspection: inspectScopedMigrationSnapshot(pathname) };
+      });
+    expect(archives).toHaveLength(2);
+    const versionBackup = archives.find(({ inspection }) =>
+      inspection.tables.some((table) => table.name === "schema_meta"),
+    )!;
+    expect(versionBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 26 });
+    expect(versionBackup.inspection.tables.map((table) => table.name)).toEqual(
+      [
+        ...sourceTables,
+        "config_machine_state",
+        "schema_meta",
+        "sqlite_stat1",
+        "sqlite_stat4",
+      ].toSorted(),
+    );
+    const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
+    expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 26 });
+    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual(sourceTables);
+    {
+      using shared = openNodeSqliteDatabase(f.pathname);
+      shared.exec(
+        "UPDATE session_state_heads SET last_sequence=74 WHERE session_key='scope-proof'",
+      );
+    }
+    await restoreDoctorMigrationBackup({
+      sourcePath: f.pathname,
+      backupPath: versionBackup.pathname,
+      env: f.env,
+    });
+    expect(await f.readShared()).toEqual({
+      version: 26,
+      token: "synthetic-original-token",
+      policy,
+    });
+    using restored = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+    for (const table of sourceTables) {
+      expect(restored.prepare(`SELECT * FROM ${table}`).all()).toEqual(original[table]);
+    }
+    expect(restored.prepare("SELECT * FROM session_state_heads").all()).toEqual([
+      {
+        session_key: "scope-proof",
+        agent_id: "main",
+        last_sequence: 74,
+        pruned_max_sequence: 7,
+        updated_at: 1,
+      },
+    ]);
+    expect(
+      restored.prepare("SELECT wr FROM pragma_table_list WHERE name='session_state_heads'").get(),
+    ).toEqual({ wr: 1 });
   });
 
   it("preserves native bootstrap on updater refusal and migrates it through standalone Doctor", async () => {

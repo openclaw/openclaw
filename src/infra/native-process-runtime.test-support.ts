@@ -1,5 +1,10 @@
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
+  updatePostgresState: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "update-candidate-state.postgres",
+    distWorkerPath: "infra/update-candidate-state.postgres.js",
+  },
   tailscale: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "tailscale",
