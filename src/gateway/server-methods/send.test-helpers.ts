@@ -8,11 +8,29 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
 import type { GatewayRequestContext } from "./types.js";
+
+export function messageActionClientForTests(
+  sessionKey: string,
+  overrides: Partial<Pick<AgentRuntimeIdentity, "agentId" | "messageActionContext">> = {},
+) {
+  return {
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime" as const,
+        agentId: "main",
+        sessionKey,
+        messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
+        ...overrides,
+      },
+    },
+  };
+}
 
 export function resolveAgentIdFromSessionKeyForTests(params: {
   sessionKey?: string;
@@ -34,19 +52,12 @@ export function resolveAgentIdFromSessionKeyForTests(params: {
   return explicitAgentId ?? "main";
 }
 
-export function messageActionContextFromSessionKeyForTests(sessionKey: string): {
-  expiresAtMs: number;
-  toolContext?: {
-    currentChannelProvider?: string;
-    currentChannelId?: string;
-    currentChatType?: "direct" | "group" | "channel";
-  };
-} {
+function messageActionContextFromSessionKeyForTests(sessionKey: string) {
   const parts = sessionKey.split(":");
   const provider = parts[2];
   const peerKind = parts[3];
   const peerId = parts.slice(4).join(":");
-  const currentChatType =
+  const currentChatType: "direct" | "group" | "channel" | undefined =
     peerKind === "direct" || peerKind === "dm"
       ? "direct"
       : peerKind === "group" || peerKind === "channel"
@@ -79,29 +90,21 @@ export function createMessageActionClientForTests(
   if (client !== undefined || !sessionKey || !agentId) {
     return client;
   }
-  return {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime" as const,
-        agentId,
-        sessionKey,
-        messageActionContext: {
-          expiresAtMs: Date.now() + 60_000,
-          sessionId: typeof params.sessionId === "string" ? params.sessionId : undefined,
-          requesterAccountId:
-            typeof params.requesterAccountId === "string" ? params.requesterAccountId : undefined,
-          requesterSenderId:
-            typeof params.requesterSenderId === "string" ? params.requesterSenderId : undefined,
-          toolContext: {
-            ...messageActionContextFromSessionKeyForTests(sessionKey).toolContext,
-            ...(params.toolContext && typeof params.toolContext === "object"
-              ? params.toolContext
-              : {}),
-          },
-        },
+  return messageActionClientForTests(sessionKey, {
+    agentId,
+    messageActionContext: {
+      expiresAtMs: Date.now() + 60_000,
+      sessionId: typeof params.sessionId === "string" ? params.sessionId : undefined,
+      requesterAccountId:
+        typeof params.requesterAccountId === "string" ? params.requesterAccountId : undefined,
+      requesterSenderId:
+        typeof params.requesterSenderId === "string" ? params.requesterSenderId : undefined,
+      toolContext: {
+        ...messageActionContextFromSessionKeyForTests(sessionKey).toolContext,
+        ...(params.toolContext && typeof params.toolContext === "object" ? params.toolContext : {}),
       },
     },
-  };
+  });
 }
 
 export function directCliClientForTests() {
@@ -116,16 +119,7 @@ export function directCliClientForTests() {
 }
 
 export function agentRuntimeClientForTests(sessionKey: string, agentId = "main") {
-  return {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime" as const,
-        agentId,
-        sessionKey,
-        messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
-      },
-    },
-  } as never;
+  return messageActionClientForTests(sessionKey, { agentId }) as never;
 }
 
 export function firstRespondCall(respond: {
@@ -140,12 +134,7 @@ export function firstRespondCall(respond: {
   if (!call) {
     throw new Error("Expected respond call");
   }
-  return call as [
-    boolean,
-    Record<string, any> | undefined,
-    Record<string, any> | undefined,
-    Record<string, any> | undefined,
-  ];
+  return call as ReturnType<typeof firstRespondCall>;
 }
 
 export function createTelegramSourceSendRequest(

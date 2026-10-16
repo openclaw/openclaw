@@ -35,6 +35,12 @@ type UploadPolicyTestHarness = Pick<
     mockDeliverySuccess: (messageId: string) => void;
   };
 
+type AdapterHandoff = {
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
+  params?: Record<string, unknown>;
+};
+
 // Register in the existing send suite so all shared setup and test ordering stay intact.
 export function registerSendUploadPolicyTests({
   mocks,
@@ -46,10 +52,19 @@ export function registerSendUploadPolicyTests({
   describe.each(["send", "message.action"] as const)("%s client upload commit policy", (method) => {
     const tempDirs = useAutoCleanupTempDirTracker(afterEach);
     const bytes = "client upload commit fixture";
+    let env: ReturnType<typeof captureEnv> | undefined;
+    afterEach(() => env?.restore());
+
+    function expectUploadsDisabled(respond: ReturnType<typeof vi.fn>) {
+      expect(firstRespondCall(respond)[2]).toMatchObject({
+        code: ErrorCodes.FORBIDDEN,
+        details: { code: "UPLOADS_DISABLED" },
+      });
+    }
 
     function uploadFixture() {
       const stateDir = tempDirs.make("gateway-send-upload-policy-");
-      const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+      env = captureEnv(["OPENCLAW_STATE_DIR"]);
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       let enabled = true;
       const context = {
@@ -87,11 +102,11 @@ export function registerSendUploadPolicyTests({
           ...(options.trusted ? { sessionKey } : {}),
           idempotencyKey: options.idempotencyKey ?? "client-upload-policy",
         };
+        const params =
+          method === "send"
+            ? { ...common, to: "channel:C1", ...content }
+            : { ...common, action: "send", params: { to: "channel:C1", ...content } };
         if (options.viaRouter) {
-          const params =
-            method === "send"
-              ? { ...common, to: "channel:C1", ...content }
-              : { ...common, action: "send", params: { to: "channel:C1", ...content } };
           const respond = vi.fn<RespondFn>();
           await handleGatewayRequest({
             req: { type: "req", id: "same-wire-id", method, params },
@@ -111,17 +126,35 @@ export function registerSendUploadPolicyTests({
           return { respond };
         }
         return method === "send"
-          ? runSendWithClient({ ...common, to: "channel:C1", ...content }, client, context)
-          : runMessageActionRequest(
-              { ...common, action: "send", params: { to: "channel:C1", ...content } },
-              client,
-              context,
-            );
+          ? runSendWithClient(params, client, context)
+          : runMessageActionRequest(params, client, context);
       };
       return {
         plugin,
         context,
         invoke,
+        mockAdapter: async (
+          send: (params: AdapterHandoff) => Promise<void>,
+          messageId: string,
+          once = true,
+        ) => {
+          const install = once ? "mockImplementationOnce" : "mockImplementation";
+          if (method === "send") {
+            mocks.deliverOutboundPayloads[install](async (params) => {
+              await send(params);
+              return [{ channel: "slack", messageId }];
+            });
+          } else {
+            const { dispatchChannelMessageAction } = await vi.importActual<
+              typeof import("../../channels/plugins/message-action-dispatch.js")
+            >("../../channels/plugins/message-action-dispatch.js");
+            mocks.dispatchChannelMessageAction[install](dispatchChannelMessageAction);
+            expectDefined(plugin.actions, "upload action adapter").handleAction = async (ctx) => {
+              await send(ctx);
+              return jsonResult({ ok: true, messageId });
+            };
+          }
+        },
         enable: () => {
           enabled = true;
         },
@@ -129,7 +162,6 @@ export function registerSendUploadPolicyTests({
         disable: () => {
           enabled = false;
         },
-        restore: () => env.restore(),
       };
     }
 
@@ -150,25 +182,7 @@ export function registerSendUploadPolicyTests({
           entered.resolve();
           await release.promise;
         };
-        if (method === "send") {
-          mocks.deliverOutboundPayloads.mockImplementation(async (params) => {
-            await accepted(params);
-            return [{ channel: "slack", messageId: "accepted-upload" }];
-          });
-        } else {
-          const actual = await vi.importActual<
-            typeof import("../../channels/plugins/message-action-dispatch.js")
-          >("../../channels/plugins/message-action-dispatch.js");
-          mocks.dispatchChannelMessageAction.mockImplementation(
-            actual.dispatchChannelMessageAction,
-          );
-          expectDefined(fixture.plugin.actions, "upload action adapter").handleAction = async (
-            ctx,
-          ) => {
-            await accepted(ctx);
-            return jsonResult({ ok: true, messageId: "accepted-upload" });
-          };
-        }
+        await fixture.mockAdapter(accepted, "accepted-upload", false);
         const first = fixture.invoke({ viaRouter: true });
         let restoreReplay: (() => void) | undefined;
         try {
@@ -211,10 +225,7 @@ export function registerSendUploadPolicyTests({
           restoreReplay = undefined;
           const fresh = { viaRouter: true, idempotencyKey: "fresh-upload-key" };
           const denied = await fixture.invoke(fresh);
-          expect(firstRespondCall(denied.respond)[2]).toMatchObject({
-            code: ErrorCodes.FORBIDDEN,
-            details: { code: "UPLOADS_DISABLED" },
-          });
+          expectUploadsDisabled(denied.respond);
           expect(
             [...fixture.context.dedupe.keys()].some((key) => key.endsWith(":fresh-upload-key")),
           ).toBe(false);
@@ -231,7 +242,6 @@ export function registerSendUploadPolicyTests({
           restoreReplay?.();
           release.resolve();
           await first;
-          fixture.restore();
         }
       },
     );
@@ -262,10 +272,7 @@ export function registerSendUploadPolicyTests({
         release.resolve();
         const { respond } = await request;
         expect(firstRespondCall(respond)[0]).toBe(false);
-        expect(firstRespondCall(respond)[2]).toMatchObject({
-          code: ErrorCodes.FORBIDDEN,
-          details: { code: "UPLOADS_DISABLED" },
-        });
+        expectUploadsDisabled(respond);
         expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
         expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
         expect(await fs.readdir(fixture.outboundDir)).toEqual([]);
@@ -275,7 +282,6 @@ export function registerSendUploadPolicyTests({
           await request;
         } finally {
           mkdirSpy.mockRestore();
-          fixture.restore();
         }
       }
     });
@@ -293,10 +299,10 @@ export function registerSendUploadPolicyTests({
         const release = createDeferred();
         const platformSend = vi.fn();
         let prepared = false;
-        const send = async (params: {
-          onPlatformSendDispatch?: () => Promise<void>;
-          assertDirectAdapterHandoff?: () => void;
-        }) => {
+        const send = async (params: AdapterHandoff) => {
+          if (method === "message.action") {
+            expect(params.params).not.toHaveProperty("buffer");
+          }
           if (boundary === "handoff") {
             await params.onPlatformSendDispatch?.();
           }
@@ -309,23 +315,7 @@ export function registerSendUploadPolicyTests({
           assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
           platformSend();
         };
-        if (method === "message.action") {
-          const { dispatchChannelMessageAction } = await vi.importActual<
-            typeof import("../../channels/plugins/message-action-dispatch.js")
-          >("../../channels/plugins/message-action-dispatch.js");
-          mocks.dispatchChannelMessageAction.mockImplementationOnce(dispatchChannelMessageAction);
-          const actions = expectDefined(fixture.plugin.actions, "upload action adapter");
-          actions.handleAction = async (ctx) => {
-            expect(ctx.params).not.toHaveProperty("buffer");
-            await send(ctx);
-            return jsonResult({ ok: true, messageId: "upload-accepted" });
-          };
-        } else {
-          mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
-            await send(params);
-            return [{ channel: "slack", messageId: "upload-accepted" }];
-          });
-        }
+        await fixture.mockAdapter(send, "upload-accepted");
         const request = fixture.invoke({
           trusted,
           ...(reference ? { mediaUrl: "https://example.com/already-hosted.png" } : {}),
@@ -347,18 +337,11 @@ export function registerSendUploadPolicyTests({
           expect(firstRespondCall(respond)[0]).toBe(allowed);
           expect(platformSend).toHaveBeenCalledTimes(allowed ? 1 : 0);
           if (!allowed) {
-            expect(firstRespondCall(respond)[2]).toMatchObject({
-              code: ErrorCodes.FORBIDDEN,
-              details: { code: "UPLOADS_DISABLED" },
-            });
+            expectUploadsDisabled(respond);
           }
         } finally {
           release.resolve();
-          try {
-            await request;
-          } finally {
-            fixture.restore();
-          }
+          await request;
         }
       },
     );

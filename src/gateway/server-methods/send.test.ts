@@ -44,7 +44,7 @@ import {
   createMessageActionTurnClientForTests,
   directCliClientForTests as directCliClient,
   firstRespondCall,
-  messageActionContextFromSessionKeyForTests,
+  messageActionClientForTests,
   resolveAgentIdFromSessionKeyForTests,
 } from "./send.test-helpers.js";
 import {
@@ -201,12 +201,19 @@ vi.mock("../session-utils-store-worker.js", () => ({
 
 const {
   invokeGatewayMessageMethod,
-  runSend,
-  runSendWithClient,
+  runSendWithClient: sendWithClient,
   runPoll,
   runMessageActionRequest,
   runTelegramTerminalAction,
 } = createMessageMethodTestDriver(() => sendHandlers);
+
+function runSendWithClient(...[params, ...args]: Parameters<typeof sendWithClient>) {
+  return sendWithClient(
+    { to: "channel:C1", message: "hello", channel: "slack", ...params },
+    ...args,
+  );
+}
+const runSend = runSendWithClient;
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -254,12 +261,7 @@ const { registerMessageThreadAddressingPlugin, registerMessageActionPlugin } =
   createMessageMethodPluginFixtures(mocks);
 
 async function expectRejectedSend(params: Record<string, unknown>, message: string) {
-  const { respond } = await runSend({
-    to: "channel:C1",
-    message: "hi",
-    idempotencyKey: "rejected-send",
-    ...params,
-  });
+  const { respond } = await runSend({ message: "hi", idempotencyKey: "rejected-send", ...params });
   const response = firstRespondCall(respond);
   expect(response[0]).toBe(false);
   expect(response[1]).toBeUndefined();
@@ -269,17 +271,14 @@ async function expectRejectedSend(params: Record<string, unknown>, message: stri
 }
 
 function fixedStoreContext(): GatewayRequestContext {
-  return {
-    ...makeContext(),
-    getRuntimeConfig: () => ({
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    }),
-  };
+  return makeContext(() => ({
+    session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+    agents: {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+      defaults: { sessionStore: { agentId: "ops" } },
+    },
+  }));
 }
 
 function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: string) => string) {
@@ -293,6 +292,21 @@ function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: stri
       resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
     },
   }));
+}
+
+function startDedupeMaintenance(context: GatewayRequestContext) {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
+  return startGatewayMaintenanceTimers({
+    ...createGatewayMaintenanceStateForTest(),
+    dedupe: context.dedupe,
+    runWorktreeGc: vi.fn(async () => undefined),
+  });
+}
+
+function expectAuthorityDenied(respond: ReturnType<typeof vi.fn>) {
+  expect(firstRespondCall(respond)[0]).toBe(false);
+  expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
 }
 
 describe("gateway send mirroring", () => {
@@ -408,7 +422,7 @@ describe("gateway send mirroring", () => {
         idempotencyKey: "runtime-config",
       },
       null,
-      { ...makeContext(), getRuntimeConfig: () => sourceConfig },
+      makeContext(() => sourceConfig),
     );
     expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
@@ -521,16 +535,10 @@ describe("gateway send mirroring", () => {
   });
 
   it("keeps a pending message.action route bound through maintenance and default changes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
     let defaultAccountId = "primary";
     mockMutableMessageRouteAccounts(() => defaultAccountId);
     const context = makeContext();
-    const maintenance = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
-      dedupe: context.dedupe,
-      runWorktreeGc: vi.fn(async () => undefined),
-    });
+    const maintenance = startDedupeMaintenance(context);
     const actionDeferred = createDeferred<{ details: { action: string } }>();
     mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
     const invoke = (respond: ReturnType<typeof vi.fn>) =>
@@ -577,16 +585,10 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not let settled route aliases evict canonical results before ttl", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-26T00:00:00Z"));
     let defaultAccountId = "primary";
     mockMutableMessageRouteAccounts(() => defaultAccountId);
     const context = makeContext();
-    const maintenance = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
-      dedupe: context.dedupe,
-      runWorktreeGc: vi.fn(async () => undefined),
-    });
+    const maintenance = startDedupeMaintenance(context);
     const operationCount = Math.floor(DEDUPE_MAX / 2) + 1;
     const invoke = (idempotencyKey: string, respond: ReturnType<typeof vi.fn>) =>
       invokeGatewayMessageMethod({
@@ -643,14 +645,7 @@ describe("gateway send mirroring", () => {
       },
       {
         ...directCliClient(),
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey,
-            messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
-          },
-        },
+        ...messageActionClientForTests(sessionKey),
       },
     );
 
@@ -713,8 +708,7 @@ describe("gateway send mirroring", () => {
       preparation.resolve(null);
 
       const { respond } = await request;
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expectAuthorityDenied(respond);
       expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
       expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
     },
@@ -780,8 +774,7 @@ describe("gateway send mirroring", () => {
 
     expect(physicalSends).toEqual(["album"]);
     expect(deliveryCall()?.skipQueue).toBe(true);
-    expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expectAuthorityDenied(respond);
   });
 
   it.each(["dispatch", "handoff"])(
@@ -829,8 +822,7 @@ describe("gateway send mirroring", () => {
       resumeDelivery.resolve(null);
 
       const { respond } = await request;
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expectAuthorityDenied(respond);
       expect(deliveryCall()?.skipQueue).toBe(true);
       expect(platformSend).not.toHaveBeenCalled();
     },
@@ -870,8 +862,7 @@ describe("gateway send mirroring", () => {
       revokeMessageActionTurnCapability(turnCapability);
       resume.resolve(null);
       const { respond } = await request;
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expectAuthorityDenied(respond);
       expect(providerRequest).not.toHaveBeenCalled();
     } finally {
       resume.resolve(null);
@@ -922,8 +913,7 @@ describe("gateway send mirroring", () => {
       resumeDelivery.resolve(null);
 
       const { respond } = await request;
-      expect(firstRespondCall(respond)[0]).toBe(false);
-      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expectAuthorityDenied(respond);
       expect(platformSend).not.toHaveBeenCalled();
     } finally {
       close();
@@ -953,8 +943,7 @@ describe("gateway send mirroring", () => {
     receipt.resolve("started");
 
     const { respond } = await request;
-    expect(firstRespondCall(respond)[0]).toBe(false);
-    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expectAuthorityDenied(respond);
     expect(mocks.cancelRestartRecoveryTerminalDelivery).toHaveBeenCalledOnce();
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
@@ -1021,6 +1010,9 @@ describe("gateway send mirroring", () => {
 
     expect(deliveryCall()?.channel).toBe("whatsapp");
     expect(deliveryCall()?.replyToId).toBe("media-parent");
+    expect(deliveryCall()?.mirror?.text).toBe(" \tcaption");
+    expect(deliveryCall()?.session?.agentId).toBe("work");
+    expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
     expect(deliveryCall()?.payloads).toEqual([
       {
         text: " \tcaption  \n\n",
@@ -1028,9 +1020,6 @@ describe("gateway send mirroring", () => {
         mediaUrls: undefined,
       },
     ]);
-    expect(deliveryCall()?.mirror?.text).toBe(" \tcaption");
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
   });
 
   it("hands each internally bound session result to the durable queue with its original generation", async () => {
@@ -1075,11 +1064,9 @@ describe("gateway send mirroring", () => {
     mockDeliverySuccess("m-voice");
 
     const { respond } = await runSend({
-      to: "channel:C1",
       message: "voice note",
       mediaUrl: "file:///tmp/openclaw-voice.ogg",
       asVoice: true,
-      channel: "slack",
       idempotencyKey: "idem-voice",
     });
 
@@ -1087,10 +1074,10 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.payloads?.[0]?.mediaUrl).toBe("file:///tmp/openclaw-voice.ogg");
     expect(deliveryCall()?.payloads?.[0]?.audioAsVoice).toBe(true);
     const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]?.messageId).toBe("m-voice");
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]?.channel).toBe("slack");
+    expect(response[0]).toBe(true);
+    expect(response[1]?.messageId).toBe("m-voice");
+    expect(response[2]).toBeUndefined();
+    expect(response[3]?.channel).toBe("slack");
   });
 
   it.each([
@@ -1172,9 +1159,7 @@ describe("gateway send mirroring", () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
 
     const { respond } = await runSend({
-      to: "channel:C1",
       message: "hi",
-      channel: "slack",
       idempotencyKey: "idem-1",
       sessionKey: "agent:main:main",
     });
@@ -1204,10 +1189,7 @@ describe("gateway send mirroring", () => {
         },
       } satisfies OpenClawConfig;
       setRuntimeConfigSnapshot(cfg);
-      const context = {
-        ...makeContext(),
-        getRuntimeConfig: () => cfg,
-      } as unknown as GatewayRequestContext;
+      const context = makeContext(() => cfg);
       const client = {
         authenticatedUserProfile: {
           profileId: profile.id,
@@ -1222,8 +1204,6 @@ describe("gateway send mirroring", () => {
       const { respond } = await runSendWithClient(
         {
           to: "channel:first-contact",
-          message: "hello",
-          channel: "slack",
           idempotencyKey: "required-outbound-creation",
         },
         client,
@@ -1244,13 +1224,7 @@ describe("gateway send mirroring", () => {
     const context = fixedStoreContext();
 
     const { respond } = await runSendWithClient(
-      {
-        to: "channel:C1",
-        message: "hello",
-        channel: "slack",
-        sessionKey: "global",
-        idempotencyKey: "idem-persisted-owner",
-      },
+      { sessionKey: "global", idempotencyKey: "idem-persisted-owner" },
       null,
       context,
     );
@@ -1263,9 +1237,6 @@ describe("gateway send mirroring", () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing";
 
     const { respond } = await runSend({
-      to: "channel:C1",
-      message: "hello",
-      channel: "slack",
       sessionKey,
       idempotencyKey: "idem-missing-agent-harness-session",
     });
@@ -1282,18 +1253,15 @@ describe("gateway send mirroring", () => {
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
 
     await runSend({
-      to: "channel:C1",
-      message: "hello",
-      channel: "slack",
       sessionKey: "agent:work:slack:channel:c1",
       idempotencyKey: "idem-session-fallback",
     });
 
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:work:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expect(deliveryCall()).toMatchObject({
+      session: { agentId: "work", key: "agent:work:slack:channel:c1" },
+      mirror: { agentId: "work", sessionKey: "agent:work:slack:channel:c1" },
+    });
   });
 
   it("rejects an explicit agentId that conflicts with the session key owner", async () => {
@@ -1301,18 +1269,12 @@ describe("gateway send mirroring", () => {
 
     const { respond } = await runSendWithClient(
       {
-        to: "channel:C1",
-        message: "hello",
-        channel: "slack",
         agentId: "work",
         sessionKey: "agent:main:slack:channel:c1",
         idempotencyKey: "idem-agent-precedence",
       },
       null,
-      {
-        ...makeContext(),
-        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
-      } as GatewayRequestContext,
+      makeContext(() => ({ agents: { entries: { main: {}, work: {} } } })),
     );
 
     expect(firstRespondCall(respond)[0]).toBe(false);
@@ -1358,15 +1320,7 @@ describe("gateway send mirroring", () => {
         },
         idempotencyKey: "idem-forged-agent-message-action",
       },
-      {
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey,
-          },
-        },
-      },
+      messageActionClientForTests(sessionKey, { messageActionContext: undefined }),
     );
 
     expect(firstRespondCall(respond)[0]).toBe(true);
@@ -1424,23 +1378,16 @@ describe("gateway send mirroring", () => {
           toolContext: { currentChannelProvider: "whatsapp", currentChannelId: "user:bob" },
           idempotencyKey: `invalid-context-${failure}`,
         },
-        {
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey,
-              messageActionContext: {
-                expiresAtMs: Date.now() + (failure === "expired context" ? -1 : 60_000),
-                sessionId: "session-1",
-                ...(failure === "foreign source-reply agent"
-                  ? { sourceReplySessionKey: "agent:other:main" }
-                  : {}),
-                toolContext: { currentChannelProvider: "whatsapp", currentChannelId: "user:alice" },
-              },
-            },
+        messageActionClientForTests(sessionKey, {
+          messageActionContext: {
+            expiresAtMs: Date.now() + (failure === "expired context" ? -1 : 60_000),
+            sessionId: "session-1",
+            ...(failure === "foreign source-reply agent"
+              ? { sourceReplySessionKey: "agent:other:main" }
+              : {}),
+            toolContext: { currentChannelProvider: "whatsapp", currentChannelId: "user:alice" },
           },
-        },
+        }),
       );
       expect(firstRespondCall(respond)[0]).toBe(false);
       expect(firstRespondCall(respond)[2]?.message).toContain(
@@ -1540,9 +1487,9 @@ describe("gateway send mirroring", () => {
     expect(appendTranscriptCall(1)?.idempotencyKey).toBe(
       "idem-shared-source-message-action:terminal-receipt:channel-user:v1:shared-key",
     );
-    expect(firstRespondCall(progress.respond)[0]).toBe(true);
-    expect(firstRespondCall(terminal.respond)[0]).toBe(true);
-    expect(firstRespondCall(repeatedTerminal.respond)[0]).toBe(true);
+    for (const { respond } of [progress, terminal, repeatedTerminal]) {
+      expect(firstRespondCall(respond)[0]).toBe(true);
+    }
     expect(firstRespondCall(repeatedTerminal.respond)[1]).toMatchObject({
       status: "already_delivered",
       delivered: false,
@@ -1755,10 +1702,6 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns the caption receipt through message.action when dispatch fails with partial delivery", async () => {
-    // A caption sent before the media upload failed carries a partial-delivery
-    // receipt. The Gateway boundary must surface that receipt on the structured
-    // error and mark the result non-retryable, so the agent does not resend an
-    // already-visible caption.
     mocks.dispatchChannelMessageAction.mockRejectedValueOnce(
       createChannelPartialDeliveryError(new Error("upload failed"), {
         messageIds: ["caption_msg"],
@@ -1960,8 +1903,7 @@ describe("gateway send mirroring", () => {
           } as GatewayRequestContext,
         );
 
-        expect(firstRespondCall(respond)[0]).toBe(false);
-        expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+        expectAuthorityDenied(respond);
         expect(deliveryCall()?.skipQueue).toBe(true);
         expect(platformSend).not.toHaveBeenCalled();
         expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
@@ -1990,26 +1932,17 @@ describe("gateway send mirroring", () => {
         agentId: "work",
         idempotencyKey: "idem-message-action-signed-sender-media-policy",
       },
-      {
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "work",
-            sessionKey,
-            messageActionContext: {
-              expiresAtMs: Date.now() + 60_000,
-              requesterSenderId: "blocked-sender",
-            },
-          },
+      messageActionClientForTests(sessionKey, {
+        agentId: "work",
+        messageActionContext: {
+          expiresAtMs: Date.now() + 60_000,
+          requesterSenderId: "blocked-sender",
         },
-      },
-      {
-        ...makeContext(),
-        getRuntimeConfig: () => ({
-          agents: { entries: { main: {}, work: {} } },
-          tools: { allow: ["read"] },
-        }),
-      } as GatewayRequestContext,
+      }),
+      makeContext(() => ({
+        agents: { entries: { main: {}, work: {} } },
+        tools: { allow: ["read"] },
+      })),
     );
 
     expect(firstRespondCall(respond)[0]).toBe(true);
@@ -2054,32 +1987,23 @@ describe("gateway send mirroring", () => {
             agentId: "work",
             idempotencyKey: `idem-message-action-signed-sender-alias-policy-${action}`,
           },
-          {
-            internal: {
-              agentRuntimeIdentity: {
-                kind: "agentRuntime",
-                agentId: "work",
-                sessionKey,
-                messageActionContext: {
-                  expiresAtMs: Date.now() + 60_000,
-                  requesterSenderId: "allowed-id",
-                  requesterSenderName: "Blocked Sender",
-                  requesterSenderUsername: "blocked-user",
-                  requesterSenderE164: "+15551234567",
-                },
-              },
+          messageActionClientForTests(sessionKey, {
+            agentId: "work",
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              requesterSenderId: "allowed-id",
+              requesterSenderName: "Blocked Sender",
+              requesterSenderUsername: "blocked-user",
+              requesterSenderE164: "+15551234567",
             },
-          },
-          {
-            ...makeContext(),
-            getRuntimeConfig: () => ({
-              agents: { entries: { main: {}, work: {} } },
-              tools: {
-                allow: ["read"],
-                toolsBySender: { "username:blocked-user": { deny: ["read"] } },
-              },
-            }),
-          } as GatewayRequestContext,
+          }),
+          makeContext(() => ({
+            agents: { entries: { main: {}, work: {} } },
+            tools: {
+              allow: ["read"],
+              toolsBySender: { "username:blocked-user": { deny: ["read"] } },
+            },
+          })),
         );
 
         expect(firstRespondCall(respond)[0]).toBe(true);
