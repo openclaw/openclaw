@@ -7,6 +7,7 @@ import {
   createGatewayMetadataObserver,
   notifyGatewayObservers,
 } from "../../app/gateway-observers.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -119,6 +120,7 @@ export function createContext(
   return {
     basePath: "",
     gateway,
+    agentIdentity: createAgentIdentityCapability(gateway),
     agents: {
       state: {
         agentsList: { defaultId: "main", agents: [{ id: "main" }] },

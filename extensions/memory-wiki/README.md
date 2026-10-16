@@ -145,6 +145,10 @@ The plugin initializes a vault like this:
 
 Generated content stays inside managed blocks. Human note blocks are preserved.
 
+If lint cannot read an existing report, it reports the filesystem error without
+replacing the report. Resolve the access or I/O error and run lint again. Missing
+reports still receive their normal template.
+
 Key beliefs can live in structured `claims` frontmatter with per-claim evidence, confidence, and status. Compile also persists a machine-readable snapshot in OpenClaw plugin state so agent/runtime consumers do not have to scrape markdown pages.
 
 When `render.createBacklinks` is enabled, compile adds repeatable `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
