@@ -77,6 +77,7 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
   const destination = path.join(parent, "derived");
   const at = (...parts: string[]) => path.join(source, ...parts);
   const put = (name: string, bytes: string | Buffer, mode?: number) => write(at(name), bytes, mode);
+  const tool = (command: string, args: string[]) => runMacFixtureTool(command, args, root, mac);
   await mkdir(source);
   await mkdir(parent);
   const binaries = await compiledMacNativeFixtures(root, mac);
@@ -131,6 +132,9 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
     binaries,
     at,
     put,
+    tool,
+    archs: async (file: string) =>
+      (await tool("/usr/bin/lipo", ["-archs", file])).split(" ").toSorted(),
     merge: (incoming: string, prelude = "") => python(["--merge", incoming, destination], prelude),
     async run(
       arch = "arm64",
@@ -144,7 +148,10 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
   };
 }
 
-async function stagingFixture(mac: MacScriptFixture, architectures = ["arm64", "x86_64"]) {
+async function stagingFixture(
+  mac: MacScriptFixture,
+  architectures: readonly string[] = ["arm64", "x86_64"],
+) {
   const root = realpathSync(mac.createTempDir("openclaw-runtime-materialization-"));
   const binaries = await compiledMacNativeFixtures(root, mac);
   const scripts = path.join(root, "scripts");
@@ -152,24 +159,26 @@ async function stagingFixture(mac: MacScriptFixture, architectures = ["arm64", "
   const calls = path.join(root, "verification-calls");
   const scratchLog = path.join(root, "scratch-observations");
   const tmp = path.join(root, "tmp");
+  const script = (name: string, contents: string | Buffer) =>
+    write(path.join(scripts, name), contents);
   await mkdir(scripts);
   await mkdir(tmp);
   await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
   await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-runtime.sh", path.join(scripts, "stage-mac-runtime.sh"));
-  await write(
-    path.join(scripts, "lib/desktop-runtime-prune.mjs"),
+  await script(
+    "lib/desktop-runtime-prune.mjs",
     readFileSync("scripts/lib/desktop-runtime-prune.mjs"),
   );
-  await write(
-    path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
+  await script(
+    "lib/desktop-runtime-plugins.mjs",
     'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
   );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
-  await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
+  await script("lib/mac-native-inventory.py", readFileSync(inventory));
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
-  await write(
-    path.join(scripts, "record-scratch.cjs"),
+  await script(
+    "record-scratch.cjs",
     `
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -203,8 +212,8 @@ module.exports = (phase, product) => {
 if (require.main === module) module.exports(process.argv[2], process.argv[3]);
 `,
   );
-  await write(
-    path.join(scripts, "package-openclaw-for-docker.mjs"),
+  await script(
+    "package-openclaw-for-docker.mjs",
     `
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -218,8 +227,8 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-pack"))})) process.ex
 console.log(target);
 `,
   );
-  await write(
-    path.join(scripts, "verify-mac-runtime.mjs"),
+  await script(
+    "verify-mac-runtime.mjs",
     `
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -236,6 +245,8 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) pr
   );
   const canonical = path.join(root, "canonical");
   const packageRoot = path.join(canonical, "lib/node_modules/openclaw");
+  const packageFile = (name: string, contents: string | Buffer, mode?: number) =>
+    write(path.join(packageRoot, name), contents, mode);
   for (const [name, os, cpu, bytes] of [
     ["native-darwin-arm64", "darwin", "arm64", binaries.arm64],
     ["native-darwin-x64", "darwin", "x64", binaries.x86_64],
@@ -251,37 +262,36 @@ if (fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) pr
     );
     await write(path.join(nativeRoot, "binding.node"), bytes);
   }
-  const npmRoot = path.join(packageRoot, "node_modules/npm");
-  await write(
-    path.join(npmRoot, "package.json"),
+  await packageFile(
+    "node_modules/npm/package.json",
     JSON.stringify({ name: "npm", version: "1.0.0" }),
   );
   for (const command of ["npm", "npx"]) {
     for (const suffix of ["", ".cmd", ".ps1"]) {
-      await write(
-        path.join(npmRoot, "bin", command + suffix),
+      await packageFile(
+        `node_modules/npm/bin/${command}${suffix}`,
         "# inert Node launcher fixture\n",
         0o755,
       );
     }
-    await write(
-      path.join(npmRoot, "bin", `${command}-cli.js`),
+    await packageFile(
+      `node_modules/npm/bin/${command}-cli.js`,
       "// CLI module must remain available to Bun\n",
     );
   }
-  await write(
-    path.join(packageRoot, "nested/win32/package.json"),
+  await packageFile(
+    "nested/win32/package.json",
     JSON.stringify({ name: "fixture-resource", os: ["win32"], cpu: ["x64"] }),
   );
-  await write(path.join(packageRoot, "universal.node"), binaries.universal);
-  await write(path.join(packageRoot, "foreign.node"), binaries.elf);
-  await write(
-    path.join(packageRoot, "nested/win32/build.mjs"),
-    "// preserve Windows source\n",
-    0o755,
-  );
-  await write(path.join(packageRoot, "dist/control-ui/index.html"), "<!doctype html>\n");
-  await write(path.join(packageRoot, "dist/control-ui/assets/app.js"), "// bundled Control UI\n");
+  for (const [name, bytes, mode] of [
+    ["universal.node", binaries.universal, 0o644],
+    ["foreign.node", binaries.elf, 0o644],
+    ["nested/win32/build.mjs", "// preserve Windows source\n", 0o755],
+    ["dist/control-ui/index.html", "<!doctype html>\n", 0o644],
+    ["dist/control-ui/assets/app.js", "// bundled Control UI\n", 0o644],
+  ] as const) {
+    await packageFile(name, bytes, mode);
+  }
   await cp(path.join(root, "dist/build-info.json"), path.join(packageRoot, "dist/build-info.json"));
   await mkdir(path.join(packageRoot, "node_modules/.bin"));
   await symlink(
@@ -300,8 +310,8 @@ exec ${quote(testNodeExecPath)} "$@"
 `,
     0o755,
   );
-  await write(
-    path.join(scripts, "install-cli.sh"),
+  await script(
+    "install-cli.sh",
     `
 [[ -d "$HOME" ]] || { echo "fixture installer HOME must exist before source" >&2; exit 96; }
 node_dir() { printf '%s' "$PREFIX/node"; }
@@ -332,8 +342,8 @@ install_openclaw() {
 }
 `,
   );
-  await write(
-    path.join(scripts, "stage-openclaw-bun.sh"),
+  await script(
+    "stage-openclaw-bun.sh",
     `#!/bin/bash
 set -euo pipefail
 destination="$1"
@@ -344,8 +354,8 @@ mkdir -p "$destination/bin"
 cp -p ${quote(path.join(canonical, "bin/bun"))} "$destination/bin/bun"
 `,
   );
-  await write(
-    path.join(scripts, "build-mac-sqlite.sh"),
+  await script(
+    "build-mac-sqlite.sh",
     `#!/bin/bash
 set -euo pipefail
 [[ "$1" == ${quote(architectures.length === 1 ? architectures[0]! : "universal")} ]]
@@ -408,19 +418,14 @@ function expectRuntimeScratchCleaned(fixture: Awaited<ReturnType<typeof stagingF
 export function registerMacRuntimeMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", () => {
     const it = createMacScriptTest();
-    it.for(
-      ["standard", "elevation-host"].flatMap((variant) =>
-        [false, true].map((overrideBudgets) => ({
-          variant,
-          overrideBudgets,
-          architectures: overrideBudgets
-            ? ["arm64", "x86_64"]
-            : [variant === "standard" ? "arm64" : "x86_64"],
-        })),
-      ),
-    )(
-      "isolates $variant $architectures staging and preserves package budgets ($overrideBudgets)",
-      ({ variant, overrideBudgets, architectures }, { mac }) =>
+    it.for([
+      ["standard", false, ["arm64"]],
+      ["standard", true, ["arm64", "x86_64"]],
+      ["elevation-host", false, ["x86_64"]],
+      ["elevation-host", true, ["arm64", "x86_64"]],
+    ] as const)(
+      "isolates %s staging and preserves package budgets (override=%s, architectures=%s)",
+      ([variant, overrideBudgets, architectures], { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await stagingFixture(mac, architectures);
           const before = snapshot(path.join(fixture.root, "canonical"));
@@ -675,20 +680,11 @@ subprocess.run = run
           }
           expect(result.status, result.stderr).toBe(0);
           const merged = path.join(fixture.destination, relative);
-          expect(
-            (await runMacFixtureTool("/usr/bin/lipo", ["-archs", merged], fixture.root, mac))
-              .split(" ")
-              .toSorted(),
-          ).toEqual(["arm64", "x86_64"]);
+          expect(await fixture.archs(merged)).toEqual(["arm64", "x86_64"]);
           expect(statSync(merged).mode & 0o777).toBe(0o755);
           for (const arch of ["arm64", "x86_64"] as const) {
             const thin = path.join(fixture.root, `merged-${arch}`);
-            await runMacFixtureTool(
-              "/usr/bin/lipo",
-              [merged, "-thin", arch, "-output", thin],
-              fixture.root,
-              mac,
-            );
+            await fixture.tool("/usr/bin/lipo", [merged, "-thin", arch, "-output", thin]);
             expect(readFileSync(thin)).toEqual(fixture.binaries[arch]);
           }
           expect(
@@ -754,18 +750,10 @@ shutil.copyfileobj = copy
               fat64,
               mac,
             );
-            expect(
-              (
-                await runMacFixtureTool(
-                  "/usr/bin/lipo",
-                  ["-archs", path.join(fixture.root, "fat-container")],
-                  fixture.root,
-                  mac,
-                )
-              )
-                .split(" ")
-                .toSorted(),
-            ).toEqual(["arm64", "x86_64"]);
+            expect(await fixture.archs(path.join(fixture.root, "fat-container"))).toEqual([
+              "arm64",
+              "x86_64",
+            ]);
             expect(bytes.readUInt32BE(0)).toBe(fat64 ? 0xcafebabf : 0xcafebabe);
             expect(bytes.readUInt32BE(4)).toBe(2);
             // Synthetic classification controls, never memory dumps or executed.
@@ -851,14 +839,9 @@ shutil.copyfileobj = copy
           for (const name of omitted) {
             expect(result.stderr).toContain(JSON.stringify(name));
           }
-          expect(
-            await runMacFixtureTool(
-              "/usr/bin/lipo",
-              ["-archs", path.join(fixture.destination, "images/fat64")],
-              fixture.root,
-              mac,
-            ),
-          ).toContain(arch.split(",")[0]);
+          expect(await fixture.archs(path.join(fixture.destination, "images/fat64"))).toContain(
+            arch.split(",")[0],
+          );
         }),
     );
 
@@ -1152,6 +1135,8 @@ def verify_closed():
             await fixture.put("b.txt", "substituted resource");
             await symlink("a.txt", fixture.at("alias"));
           }
+          const aliasInode =
+            schedule === "symlink-aba" ? lstatSync(fixture.at("alias")).ino : undefined;
           const before = snapshot(fixture.source);
           const result = await fixture.run("arm64", {
             prelude: `
@@ -1223,21 +1208,23 @@ def evidence():
             initialFds: number;
             finalFds: number;
           };
-          expect(evidence.changed).toBe(true);
-          expect(evidence.finalFds).toBe(evidence.initialFds);
-          expect(evidence.outsideOpened).toEqual([]);
+          expect(evidence).toMatchObject({
+            changed: true,
+            finalFds: evidence.initialFds,
+            outsideOpened: [],
+            copied:
+              schedule === "before-open" || schedule === "symlink-aba"
+                ? []
+                : [fixture.binaries.arm64.toString("hex")],
+          });
           expect(result.status, result.stderr).not.toBe(0);
           expect(result.stderr).toMatch(/Inventory|directory|symbolic link/i);
           expect(existsSync(fixture.destination)).toBe(false);
-          expect(evidence.copied).toEqual(
-            schedule === "before-open" || schedule === "symlink-aba"
-              ? []
-              : [fixture.binaries.arm64.toString("hex")],
-          );
           expect(readFileSync(path.join(outside, "arm64"))).toEqual(outsideBytes);
           if (schedule === "symlink-aba") {
             expect(snapshot(fixture.source)).toEqual(before);
             expect(readlinkSync(fixture.at("alias"))).toBe("a.txt");
+            expect(lstatSync(fixture.at("alias")).ino).toBe(aliasInode);
           }
         }),
     );
@@ -1293,15 +1280,17 @@ def evidence():
           initialFds: number;
           finalFds: number;
         };
-        expect(evidence.schedule).toEqual([
-          "replaced after file classification",
-          "lipo observed x86_64",
-          "restored before omission",
-        ]);
-        expect(evidence.sameInode).toBe(true);
-        expect(evidence.changedCtime).toBe(true);
-        expect(evidence.sameMtime).toBe(true);
-        expect(evidence.finalFds).toBe(evidence.initialFds);
+        expect(evidence).toMatchObject({
+          schedule: [
+            "replaced after file classification",
+            "lipo observed x86_64",
+            "restored before omission",
+          ],
+          sameInode: true,
+          changedCtime: true,
+          sameMtime: true,
+          finalFds: evidence.initialFds,
+        });
         expect(snapshot(fixture.source)).toEqual(before);
         expect(result.status, result.stderr).not.toBe(0);
         expect(existsSync(fixture.destination)).toBe(false);
@@ -1353,7 +1342,7 @@ def evidence():
     it("rejects special input files without blocking or publishing", ({ mac }) =>
       mac.lifetime.run(async () => {
         const fixture = await materializationFixture(mac);
-        await runMacFixtureTool("/usr/bin/mkfifo", [fixture.at("fifo")], fixture.root, mac);
+        await fixture.tool("/usr/bin/mkfifo", [fixture.at("fifo")]);
         const result = await fixture.run();
         expect(result.status, result.stderr).not.toBe(0);
         expect(result.stderr).toContain("Unsupported runtime filesystem entry");

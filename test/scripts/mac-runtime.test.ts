@@ -22,6 +22,35 @@ const temps = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+function scriptFixture(prefix: string) {
+  const root = temps.make(`openclaw-runtime-${prefix}-`);
+  const at = (name: string) => path.join(root, name);
+  const put = (name: string, contents: string | Buffer, mode?: number) => {
+    mkdirSync(path.dirname(at(name)), { recursive: true });
+    writeFileSync(at(name), contents);
+    if (mode !== undefined) {
+      chmodSync(at(name), mode);
+    }
+  };
+  const link = (target: string, name: string) => {
+    mkdirSync(path.dirname(at(name)), { recursive: true });
+    symlinkSync(target, at(name));
+  };
+  const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+    spawnSync("/bin/bash", args, {
+      encoding: "utf8",
+      env: { HOME: root, PATH: "/usr/bin:/bin", ...env },
+    });
+  return {
+    root,
+    at,
+    put,
+    link,
+    run,
+    bash: (program: string, env?: NodeJS.ProcessEnv) => run(["-c", program], env),
+  };
+}
+
 function pythonInventory(root: string, marker: string, program: string, ...args: string[]) {
   const prelude = `import os, pathlib, runpy, shutil, sys, unicodedata
 api = runpy.run_path('scripts/lib/mac-native-inventory.py')
@@ -44,100 +73,74 @@ async function portabilityFixture(root: string) {
 }
 
 describe("Mac app runtime publication", () => {
-  baseIt.each([undefined])(
-    "preserves the requested build-time installer Node version (%s)",
-    (version) => {
-      const root = temps.make("openclaw-runtime-version-");
-      const scripts = path.join(root, "scripts");
-      const bin = path.join(root, "bin");
-      mkdirSync(scripts);
-      mkdirSync(path.join(scripts, "lib"));
-      writeFileSync(
-        path.join(scripts, "lib/desktop-runtime-plugins.mjs"),
-        'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
-      );
-      mkdirSync(bin);
-      symlinkSync(process.execPath, path.join(bin, "node"));
-      writeFileSync(
-        path.join(scripts, "stage-mac-runtime.sh"),
-        readFileSync("scripts/stage-mac-runtime.sh"),
-      );
-      writeFileSync(
-        path.join(scripts, "package-openclaw-for-docker.mjs"),
-        `import fs from "node:fs";
+  baseIt("preserves the default build-time installer Node version", () => {
+    const { root, at, put, link, run } = scriptFixture("version");
+    put(
+      "scripts/lib/desktop-runtime-plugins.mjs",
+      'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+    );
+    link(process.execPath, "bin/node");
+    put("scripts/stage-mac-runtime.sh", readFileSync("scripts/stage-mac-runtime.sh"));
+    put(
+      "scripts/package-openclaw-for-docker.mjs",
+      `import fs from "node:fs";
 const file = process.argv[process.argv.indexOf("--output-dir") + 1] + "/openclaw.tgz";
 fs.writeFileSync(file, "fixture");
 console.log(file);
 `,
-      );
-      // Stop at the download boundary after the real installer resolves its
-      // version. No downloads, app signing, service control, or native build.
-      writeFileSync(
-        path.join(scripts, "install-cli.sh"),
-        `${readStandaloneInstaller(process.cwd(), "install-cli.sh")}
+    );
+    // Stop at the download boundary after the real installer resolves its
+    // version. No downloads, app signing, service control, or native build.
+    put(
+      "scripts/install-cli.sh",
+      `${readStandaloneInstaller(process.cwd(), "install-cli.sh")}
 install_node() {
   printf '%s\\n' "$NODE_VERSION" "$DEFAULT_NODE_VERSION" "$NODE_VERSION_REQUESTED" "\${OPENCLAW_CONFIG_PATH:-}" "\${OPENCLAW_GATEWAY_TOKEN:-}"
   exit 77
 }
 `,
-      );
-      const result = spawnSync(
-        "/bin/bash",
-        [path.join(scripts, "stage-mac-runtime.sh"), path.join(root, "runtime"), "arm64"],
-        {
-          encoding: "utf8",
-          env: {
-            HOME: root,
-            TMPDIR: root,
-            PATH: `${bin}:/usr/bin:/bin`,
-            ...(version === undefined ? {} : { OPENCLAW_NODE_VERSION: version }),
-            OPENCLAW_CONFIG_PATH: "/fixture/operator-config",
-            OPENCLAW_GATEWAY_TOKEN: "synthetic-isolation-sentinel",
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(77);
-      const [selected, defaultVersion, requested, config, token] = result.stdout.split("\n");
-      expect(selected).toBe(version || defaultVersion);
-      expect(requested).toBe(version ? "1" : "0");
-      expect(config).toBe("");
-      expect(token).toBe("");
-      expect(existsSync(path.join(root, "runtime"))).toBe(false);
-    },
-  );
+    );
+    const result = run([at("scripts/stage-mac-runtime.sh"), at("runtime"), "arm64"], {
+      TMPDIR: root,
+      PATH: `${at("bin")}:/usr/bin:/bin`,
+      OPENCLAW_CONFIG_PATH: "/fixture/operator-config",
+      OPENCLAW_GATEWAY_TOKEN: "synthetic-isolation-sentinel",
+    });
+    expect(result.status, result.stderr).toBe(77);
+    const [selected, defaultVersion, requested, config, token] = result.stdout.split("\n");
+    expect(selected).toBe(defaultVersion);
+    expect(requested).toBe("0");
+    expect(config).toBe("");
+    expect(token).toBe("");
+    expect(existsSync(path.join(root, "runtime"))).toBe(false);
+  });
 
   baseIt
     .skipIf(process.platform !== "darwin")
     .each(["sign", "runtime", "seal", "stage", "success"])(
     "publishes only a verified replacement (%s)",
     (failure) => {
-      const root = temps.make("openclaw-runtime-publication-");
-      const target = path.join(root, "OpenClaw.app");
-      const staged = path.join(root, "candidate.app");
-      mkdirSync(target);
-      mkdirSync(staged);
-      writeFileSync(path.join(target, "runtime"), "old signed runtime");
-      writeFileSync(path.join(staged, "runtime"), "new signed runtime");
+      const { root, at, put, bash } = scriptFixture("publication");
+      const target = at("OpenClaw.app");
+      const staged = at("candidate.app");
+      put("OpenClaw.app/runtime", "old signed runtime");
+      put("candidate.app/runtime", "new signed runtime");
       const packageScript = readFileSync("scripts/package-mac-app.sh", "utf8");
       const publication = packageScript.slice(
         packageScript.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]'),
       );
-      const bun = path.join(staged, "Contents/Resources/runtime/bin/bun");
-      mkdirSync(path.dirname(bun), { recursive: true });
-      writeFileSync(bun, `#!/bin/bash\nexit ${failure === "runtime" ? 6 : 0}\n`);
-      chmodSync(bun, 0o755);
-      const scripts = path.join(root, "scripts");
-      mkdirSync(scripts);
-      writeFileSync(
-        path.join(scripts, "codesign-mac-app.sh"),
-        `#!/bin/bash\nexit ${failure === "sign" ? 9 : 0}\n`,
+      put(
+        "candidate.app/Contents/Resources/runtime/bin/bun",
+        `#!/bin/bash\nexit ${failure === "runtime" ? 6 : 0}\n`,
+        0o755,
       );
-      chmodSync(path.join(scripts, "codesign-mac-app.sh"), 0o755);
-      const result = spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          `
+      put(
+        "scripts/codesign-mac-app.sh",
+        `#!/bin/bash\nexit ${failure === "sign" ? 9 : 0}\n`,
+        0o755,
+      );
+      const result = bash(
+        `
       set -euo pipefail
       source scripts/lib/mac-app-bundle.sh
       ROOT_DIR=${quote(root)}
@@ -158,8 +161,6 @@ install_node() {
       }
       ${publication}
     `,
-        ],
-        { encoding: "utf8", env: { HOME: root, PATH: "/usr/bin:/bin" } },
       );
       expect(result.status, result.stderr).toBe(
         failure === "success" ? 0 : failure === "runtime" ? 6 : failure === "sign" ? 9 : 1,
@@ -173,21 +174,18 @@ install_node() {
   baseIt(
     "provisions packages without invoking the service owner or changing operator state",
     () => {
-      const root = temps.make("openclaw-runtime-provision-");
-      const home = path.join(root, "home");
-      const prefix = path.join(root, "private");
-      const sentinel = path.join(root, "operator", ".openclaw", "state", "sentinel");
-      mkdirSync(path.dirname(sentinel), { recursive: true });
+      const { at, put, link, bash } = scriptFixture("provision");
+      const home = at("home");
+      const prefix = at("private");
+      const sentinel = "operator/.openclaw/state/sentinel";
       mkdirSync(home);
-      writeFileSync(sentinel, "operator-owned");
+      put(sentinel, "operator-owned");
       const nodeDir = path.join(prefix, "tools", "node-v24.21.0");
-      mkdirSync(path.join(nodeDir, "bin"), { recursive: true });
       // Only npm/network is replaced. The real install_openclaw implementation
       // must remain a provision-only seam even when a loaded Gateway is reported.
-      symlinkSync(testNodeExecPath, path.join(nodeDir, "bin", "node"));
-      const npm = path.join(nodeDir, "bin", "npm");
-      writeFileSync(
-        npm,
+      link(testNodeExecPath, "private/tools/node-v24.21.0/bin/node");
+      put(
+        "private/tools/node-v24.21.0/bin/npm",
         `#!/bin/bash
 case "$1" in
   --version) echo 11.15.0 ;;
@@ -199,14 +197,11 @@ case "$1" in
   *) exit 4 ;;
 esac
 `,
+        0o755,
       );
-      chmodSync(npm, 0o755);
-      const calls = path.join(root, "service-calls");
-      const result = spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          `
+      const calls = at("service-calls");
+      const result = bash(
+        `
       set -euo pipefail
       source scripts/install-cli.sh
       PREFIX=${quote(prefix)}
@@ -216,19 +211,15 @@ esac
       install_openclaw
       test -f "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
     `,
-        ],
         {
-          encoding: "utf8",
-          env: {
-            HOME: home,
-            PATH: `${path.join(nodeDir, "bin")}:/usr/bin:/bin`,
-            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
-          },
+          HOME: home,
+          PATH: `${path.join(nodeDir, "bin")}:/usr/bin:/bin`,
+          OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
         },
       );
       expect(result.status, result.stderr).toBe(0);
       expect(existsSync(calls)).toBe(false);
-      expect(readFileSync(sentinel, "utf8")).toBe("operator-owned");
+      expect(readFileSync(at(sentinel), "utf8")).toBe("operator-owned");
     },
   );
 });
@@ -280,63 +271,6 @@ describe.runIf(process.platform === "darwin")("Mac runtime portability inventory
         expect(audit()).toBe(1);
         expect(readFileSync(filename)).toEqual(bytes);
       }),
-  );
-
-  it.each([false, true])(
-    "binds captured symlink targets before publication (replacement: %s)",
-    (replace) => {
-      const root = temps.make("openclaw-native-link-binding-");
-      pythonInventory(
-        root,
-        "symlink-binding-ok",
-        `
-source, output = root / 'source', root / 'output'
-source.mkdir(); output.mkdir()
-(source / 'a.txt').write_text('alpha')
-(source / 'b.txt').write_text('bravo')
-(source / 'alias').symlink_to('a.txt')
-before = os.lstat(source / 'alias')
-readlink = os.readlink
-swapped = False
-def replace_link(name, *, dir_fd=None):
-    global swapped
-    if sys.argv[2] == 'true' and name == 'alias' and dir_fd is not None and not swapped:
-        swapped = True
-        os.rename('alias', 'held', src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        os.symlink('b.txt', 'alias', dir_fd=dir_fd)
-        target = readlink(name, dir_fd=dir_fd)
-        os.unlink('alias', dir_fd=dir_fd)
-        os.rename('held', 'alias', src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        return target
-    return readlink(name, dir_fd=dir_fd)
-os.readlink = replace_link
-accepted = False
-try:
-    with api['open_native_inventory_tree'](source) as tree:
-        for entry in tree.entries():
-            destination = output.joinpath(*entry.parts)
-            if isinstance(entry, api['NativeInventoryFile']):
-                with destination.open('wb') as target: shutil.copyfileobj(entry.stream, target)
-            elif isinstance(entry, api['NativeInventorySymlink']):
-                destination.symlink_to(entry.target)
-        tree.validate()
-        accepted = True
-except ValueError as error:
-    assert 'changed' in str(error), str(error)
-assert readlink(source / 'alias') == 'a.txt'
-assert os.lstat(source / 'alias').st_ino == before.st_ino
-if sys.argv[2] == 'true':
-    assert swapped
-    assert not accepted, 'Captured replacement target passed binding validation'
-else:
-    assert accepted
-    assert readlink(output / 'alias') == 'a.txt'
-    assert (output / 'alias').read_text() == 'alpha'
-print('symlink-binding-ok')
-`,
-        String(replace),
-      );
-    },
   );
 
   it("looks up actual filesystem child names without following links or leaking handles", () => {
