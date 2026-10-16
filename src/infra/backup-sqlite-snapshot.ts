@@ -20,6 +20,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { normalizeAgentId } from "../routing/session-key.js";
 import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
+import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
@@ -203,6 +204,7 @@ export async function discoverBackupDatabasePaths(params: {
   stateDir: string;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  agentRegistry?: readonly OpenClawRegisteredAgentDatabase[];
 }): Promise<string[]> {
   if (isMainThread && params.config.database?.engine === "postgres") {
     const { preparePostgresBackupDiscovery } = await import("./backup-database-discovery.js");
@@ -210,7 +212,12 @@ export async function discoverBackupDatabasePaths(params: {
   }
   const discovered = await collectStateDatabasePaths(params);
   const paths = [...discovered.values()].flatMap((database) => database.spellings);
-  paths.push(...(await resolveAgentPortRoots({ ...params, env: params.env ?? process.env })));
+  paths.push(
+    ...(await resolveAgentPortRoots(
+      { ...params, env: params.env ?? process.env },
+      params.agentRegistry,
+    )),
+  );
   const plugins = resolvePluginMetadataSnapshot(params);
   const capable = new Set<string>(
     listDatabaseEngineStores()

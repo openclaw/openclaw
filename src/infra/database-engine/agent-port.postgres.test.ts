@@ -17,10 +17,13 @@ import {
 } from "../../snapshot/database-backup.js";
 import { createLocalSnapshotProvider } from "../../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { createUpdateDatabaseBackup } from "../update-database-backup.js";
 import { agentPortProvider } from "./agent-port.js";
 import { materializeDatabasePort } from "./port.worker.js";
+import { statePortProvider } from "./state-port.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -228,6 +231,66 @@ describe.skipIf(!connection)("agent database port", () => {
     await descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" });
     const config = { database: { engine: "postgres" as const, postgres: { connection } } };
     const anchorBytes = fs.readFileSync(anchorPath);
+    for (const registryEngine of ["sqlite", "postgres"]) {
+      const stateDir = path.join(directory, `update-state-${registryEngine}`);
+      fs.mkdirSync(path.join(stateDir, "state"), { recursive: true });
+      const registryPath = path.join(stateDir, "state", "openclaw.sqlite");
+      if (registryEngine === "sqlite") {
+        using registry = openNodeSqliteDatabase(registryPath);
+        registry.exec("PRAGMA user_version=17; CREATE TABLE agent_databases(path TEXT)");
+        registry.prepare("INSERT INTO agent_databases VALUES (?)").run(anchorPath);
+      } else {
+        const stateDescriptor = await statePortProvider.loadDescriptor();
+        const stateStoreId = randomUUID();
+        const stateNamespace = `agent_registry_${stateStoreId.replaceAll("-", "")}`;
+        namespaces.add(stateNamespace);
+        using registry = openNodeSqliteDatabase(":memory:");
+        registry.exec(stateDescriptor.sqlite);
+        for (const fragment of stateDescriptor.fragments ?? []) {
+          registry.exec(fragment.sqlite);
+        }
+        registry.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+          INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
+          INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);`);
+        registry
+          .prepare(
+            "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('main', ?, ?, 1)",
+          )
+          .run(anchorPath, OPENCLAW_AGENT_SCHEMA_VERSION);
+        await materializeDatabasePort({
+          source: { engine: "sqlite", db: registry },
+          destination: { engine: "postgres", db: client, namespace: stateNamespace },
+          descriptor: stateDescriptor,
+          storeId: stateStoreId,
+          assertCurrent() {},
+        });
+        using anchor = openNodeSqliteDatabase(registryPath);
+        anchor.exec(
+          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+        );
+        anchor
+          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+          .run(stateStoreId, stateNamespace);
+      }
+      const update = await createUpdateDatabaseBackup({
+        backupRoot: path.join(directory, `update-backup-${registryEngine}`),
+        stateDir,
+        config,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        stopped: true,
+      });
+      const retained = update.databases.find((entry) => entry.path === anchorPath);
+      expect(retained).toMatchObject({ engine: "postgres", storeId, namespace });
+      using updateExport = openNodeSqliteDatabase(
+        path.join(retained!.exportDirectory!, "database.sqlite"),
+        {
+          readOnly: true,
+        },
+      );
+      expect(updateExport.prepare("SELECT event_json FROM transcript_events").get()).toEqual({
+        event_json: event,
+      });
+    }
     for (const profile of ["exact", "user-backup"] as const) {
       const backupDirectory = path.join(directory, profile);
       const manifest = await capturePostgresBackup({

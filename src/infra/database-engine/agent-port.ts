@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { getDatabaseEngineSelection, withDatabaseEngineSelection } from "./context.js";
 import type { DatabasePortProvider } from "./port-descriptor.js";
 
@@ -17,6 +18,7 @@ export const agentPortProvider: DatabasePortProvider = {
 /** Include retained registrations even when their agent is no longer configured. */
 export async function resolveAgentPortRoots(
   context: Pick<Parameters<DatabasePortProvider["resolveRoots"]>[0], "config" | "stateDir" | "env">,
+  registeredDatabases?: readonly OpenClawRegisteredAgentDatabase[],
 ): Promise<string[]> {
   const [
     { resolveSharedMainAuthAgentDir },
@@ -32,12 +34,15 @@ export async function resolveAgentPortRoots(
     import("./config.js"),
   ]);
   const env = { ...context.env, OPENCLAW_STATE_DIR: context.stateDir };
-  const selection = getDatabaseEngineSelection() ?? {
-    input: await resolveDatabaseEngineInput(context.config, env),
-  };
-  const registered = await withDatabaseEngineSelection(selection, () =>
-    inspectOpenClawRegisteredAgentDatabases({ env, includeIncompatibleSchemaVersions: true }),
-  );
+  const registered =
+    registeredDatabases ??
+    (await withDatabaseEngineSelection(
+      getDatabaseEngineSelection() ?? {
+        input: await resolveDatabaseEngineInput(context.config, env),
+      },
+      () =>
+        inspectOpenClawRegisteredAgentDatabases({ env, includeIncompatibleSchemaVersions: true }),
+    ));
   return [
     ...new Set([
       path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),

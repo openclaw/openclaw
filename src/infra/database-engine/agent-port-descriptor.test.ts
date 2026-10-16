@@ -6,8 +6,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
-import { migrateDatabasePortSource } from "./port.worker.js";
-import { inspectDatabasePort } from "./port.worker.js";
+import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
 import { ensureMemoryChunkFtsSchema, ensureMemoryPathFtsSchema } from "./sqlite-search-schema.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
