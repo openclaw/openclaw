@@ -43,12 +43,28 @@ import { IdentitySection } from "./identity-section.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import type { ProfileChannelIdentityBusyState } from "./profile-channel-identities-controller.ts";
+import { ProfileChannelIdentities } from "./profile-channel-identities.tsx";
 import { ProfileHero } from "./profile-hero.tsx";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 registerEnglishCatalog(registerProfileEnglish);
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
+
+function sameConnectionScopes(
+  left: readonly string[] | null,
+  right: readonly string[] | null,
+): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  const leftScopes = new Set(left);
+  const rightScopes = new Set(right);
+  return (
+    leftScopes.size === rightScopes.size && [...leftScopes].every((scope) => rightScopes.has(scope))
+  );
+}
 
 type IdentityChange =
   | { kind: "display-name" }
@@ -70,15 +86,30 @@ class ProfileState {
   canWrite = false;
   connectionScopes: readonly string[] | null = null;
   identityRequestId = 0;
+  identityProfileReady = false;
+  channelIdentityProfileId: string | null = null;
+  channelIdentityBusy: ProfileChannelIdentityBusyState = { loading: false, mutation: false };
+  channelIdentityGenerations = { request: 0, target: 0 };
 
   constructor(
     readonly context: ApplicationContext,
     readonly publish: () => void,
   ) {}
   dispose() {
-    this.identityRequestId += 1;
+    this.advanceIdentityRequest(true);
     this.client = null;
     this.connected = false;
+    this.channelIdentityProfileId = null;
+    this.identityProfileReady = false;
+    this.channelIdentityBusy = { loading: false, mutation: false };
+  }
+  advanceIdentityRequest(targetChanged = false) {
+    const request = ++this.identityRequestId;
+    this.channelIdentityGenerations.request = request;
+    if (targetChanged) {
+      this.channelIdentityGenerations.target += 1;
+    }
+    return request;
   }
   applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
@@ -86,29 +117,46 @@ class ProfileState {
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     const writeAccessChanged = nextCanWrite !== this.canWrite;
     const connectionChanged = nextConnected !== this.connected;
+    const grantedScopes = snapshot.hello?.auth?.scopes ?? null;
+    const nextConnectionScopes = nextConnected ? (grantedScopes ? [...grantedScopes] : null) : null;
+    const connectionScopesChanged = !sameConnectionScopes(
+      this.connectionScopes,
+      nextConnectionScopes,
+    );
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const identityTargetChanged = clientChanged || connectionChanged || selfProfileChanged;
     const identitySourceChanged =
-      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
+      identityTargetChanged || writeAccessChanged || connectionScopesChanged;
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.connecting = snapshot.phase === "connecting" || snapshot.phase === "reconnecting";
     this.canWrite = nextCanWrite;
     // Hello records this connection's negotiated grants, not the profile's role ceiling.
-    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
+    this.connectionScopes = nextConnectionScopes;
     this.selfUser = nextSelfUser;
     if (identitySourceChanged) {
-      this.identityRequestId += 1;
-      this.ownProfile = null;
-      this.displayName = "";
-      this.gitCoauthorEnabled = true;
+      this.advanceIdentityRequest(identityTargetChanged);
+      if (identityTargetChanged || writeAccessChanged) {
+        this.ownProfile = null;
+        this.displayName = "";
+        this.gitCoauthorEnabled = true;
+      }
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+      this.identityProfileReady = false;
+      this.channelIdentityBusy = {
+        loading: false,
+        mutation: identityTargetChanged ? false : this.channelIdentityBusy.mutation,
+      };
+      if (identityTargetChanged) {
+        this.channelIdentityProfileId = null;
+      }
     }
     this.publish();
     if (!nextConnected || !snapshot.client) {
@@ -129,13 +177,14 @@ class ProfileState {
     if (!client || !this.connected || this.identityLoading) {
       return;
     }
-    const requestId = ++this.identityRequestId;
+    const requestId = this.advanceIdentityRequest();
     const currentProfile = this.ownProfile;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName =
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.identityProfileReady = false;
     this.publish();
     try {
       const profile = await this.context.gateway.loadSelfProfile();
@@ -143,6 +192,8 @@ class ProfileState {
         return;
       }
       this.ownProfile = profile;
+      this.channelIdentityProfileId = profile?.id ?? null;
+      this.identityProfileReady = true;
       if (!profile) {
         return;
       }
@@ -286,7 +337,13 @@ class ProfileState {
   }
 
   refreshManually() {
-    if (this.connected && !this.identityBusy && !this.identityLoading) {
+    if (
+      this.connected &&
+      !this.identityBusy &&
+      !this.identityLoading &&
+      !this.channelIdentityBusy.loading &&
+      !this.channelIdentityBusy.mutation
+    ) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -323,6 +380,10 @@ export function ProfilePage() {
     revision();
     return state;
   };
+  const handleChannelIdentityBusyChange = (busyState: ProfileChannelIdentityBusyState) => {
+    state.channelIdentityBusy = busyState;
+    state.publish();
+  };
   const stops = [
     context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
     context.agents.subscribe(state.publish),
@@ -330,10 +391,11 @@ export function ProfilePage() {
     context.gateway.subscribeEvents((event) => {
       if (
         !state.identityBusy &&
+        !state.channelIdentityBusy.mutation &&
         event.event === "sessions.changed" &&
         asOptionalRecord(event.payload)?.reason === "profile-identity"
       ) {
-        state.identityRequestId += 1;
+        state.advanceIdentityRequest();
         state.identityLoading = false;
         void state.loadIdentity();
       }
@@ -379,7 +441,12 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
-              disabled={view().identityLoading || view().identityBusy !== null}
+              disabled={
+                view().identityLoading ||
+                view().identityBusy !== null ||
+                view().channelIdentityBusy.loading ||
+                view().channelIdentityBusy.mutation
+              }
               onClick={() => state.refreshManually()}
             >
               {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
@@ -422,7 +489,7 @@ export function ProfilePage() {
                     <button
                       type="button"
                       class="btn"
-                      disabled={view().identityBusy !== null}
+                      disabled={view().identityBusy !== null || view().channelIdentityBusy.mutation}
                       onClick={() => context.gateway.connect()}
                     >
                       {t("profilePage.access.reconnect")}
@@ -496,6 +563,19 @@ export function ProfilePage() {
                 }
               />
             </Show>
+            <ProfileChannelIdentities
+              profileId={view().channelIdentityProfileId}
+              visible={
+                view().ownProfile !== null &&
+                view().ownProfile!.id === view().channelIdentityProfileId
+              }
+              profileReady={view().identityProfileReady}
+              identityBusy={view().identityLoading || view().identityBusy !== null}
+              identityGeneration={view().identityRequestId}
+              targetGeneration={view().channelIdentityGenerations.target}
+              generations={view().channelIdentityGenerations}
+              onBusyStateChange={handleChannelIdentityBusyChange}
+            />
           </Show>
           <PersonalInstructions
             hidden={

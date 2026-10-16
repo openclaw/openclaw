@@ -65,6 +65,28 @@ const enProfile = {
         tooLarge: "The processed avatar is larger than 512 KB.",
       },
     },
+    channelIdentities: {
+      title: "Linked channel accounts",
+      description:
+        "Add an exact channel ID, configured account ID, and native sender ID to your own profile. This records an administrator attestation; it does not prove account ownership or infer a match from names. Links do not rename people or rewrite transcripts.",
+      loading: "Loading linked channel accounts…",
+      loadFailed: "Linked channel accounts could not be loaded.",
+      empty: "No channel accounts are linked to your profile.",
+      channelId: "Channel ID",
+      accountId: "Configured account ID",
+      senderId: "Native sender ID",
+      addTitle: "Add a channel account link",
+      add: "Add link",
+      linking: "Adding…",
+      linked: "Channel account link added.",
+      remove: "Remove link",
+      removing: "Removing…",
+      unlinked: "Channel account link removed.",
+      errorTitle: "Channel account link action failed",
+      linkFailed: "Channel account link could not be added.",
+      unlinkFailed: "Channel account link could not be removed.",
+      retry: "Retry",
+    },
   },
 } satisfies TranslationMap;
 
@@ -73,6 +95,7 @@ export const registerProfileEnglish = Object.assign(
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
+    en.profilePage.channelIdentities = enProfile.profilePage.channelIdentities;
   },
   { catalog: enProfile },
 );

@@ -2,16 +2,22 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalInstructions } from "./personal-instructions.tsx";
-import { createConnectedContext, mountProfilePage } from "./profile-page.test-support.tsx";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+} from "./profile-page.test-support.tsx";
 
 const file = {
   agentId: "main",
@@ -36,11 +42,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createContext(
-  request: GatewayBrowserClient["request"],
-  signedIn = true,
-  multipleProfiles = true,
-) {
+function createContext(request: GatewayRequestHandler, signedIn = true, multipleProfiles = true) {
   const base = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
@@ -96,7 +98,7 @@ function createContext(
     },
   };
 }
-function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
+function mount(request: GatewayRequestHandler, signedIn = true, multipleProfiles = true) {
   const harness = createContext(request, signedIn, multipleProfiles);
   const provider = createSolidApplicationContextProvider(harness.context);
   const { container: element } = mountSolid(() => <PersonalInstructions />, {
@@ -413,7 +415,10 @@ it("retains drafts privately while offline and restores them only for the same p
 });
 
 it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const { context, emit } = createContext(vi.fn().mockResolvedValue(file));
+  const request = vi.fn(async (method: string) =>
+    method === "users.self" ? { profile: modelAccountProfile } : file,
+  );
+  const { context, emit } = createContext(request);
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;

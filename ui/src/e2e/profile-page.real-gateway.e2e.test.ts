@@ -8,6 +8,7 @@ import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -131,6 +132,9 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
+          await page.addInitScript((key) => {
+            window.localStorage.setItem(key, JSON.stringify({ dismissedAtMs: 1770000000000 }));
+          }, COMMUNITY_INVITE_KEY);
           const url = new URL("settings/profile", suite.server.baseUrl);
           url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
           const response = await page.goto(url.href);
@@ -177,6 +181,109 @@ suite.define(() => {
             await page.screenshot({
               animations: "disabled",
               path: path.join(proofDir, "02-real-gateway-cleared-profile.png"),
+            });
+          }
+
+          const channelIdentity = {
+            channelId: "synthetic-e2e-channel",
+            accountId: "synthetic-e2e-account",
+            senderId: "synthetic-e2e-sender",
+          };
+          const identitySection = page.locator("#settings-profile-channel-identities");
+          const identityRow = identitySection
+            .locator(".settings-row")
+            .filter({ hasText: channelIdentity.senderId });
+          const expectIdentitySectionInFrame = async (
+            contentSelector: string,
+            contentText: string,
+          ) => {
+            const heading = identitySection.locator(".settings-section__heading");
+            const content = identitySection
+              .locator(contentSelector)
+              .filter({ hasText: contentText });
+            await expect.poll(() => heading.textContent()).toContain("Linked channel accounts");
+            await expect.poll(() => content.count()).toBe(1);
+            await content.evaluate((element) => element.scrollIntoView({ block: "center" }));
+            const [headingBox, contentBox] = await Promise.all([
+              heading.boundingBox(),
+              content.boundingBox(),
+            ]);
+            const viewport = page.viewportSize();
+            expect(viewport).not.toBeNull();
+            expect(headingBox).not.toBeNull();
+            expect(contentBox).not.toBeNull();
+            expect(headingBox!.y).toBeGreaterThanOrEqual(0);
+            expect(headingBox!.y + headingBox!.height).toBeLessThanOrEqual(viewport!.height);
+            expect(contentBox!.y).toBeGreaterThanOrEqual(0);
+            expect(contentBox!.y + contentBox!.height).toBeLessThanOrEqual(viewport!.height);
+          };
+
+          for (const [label, value] of [
+            ["Channel ID", channelIdentity.channelId],
+            ["Configured account ID", channelIdentity.accountId],
+            ["Native sender ID", channelIdentity.senderId],
+          ] as const) {
+            await identitySection.getByRole("textbox", { name: label, exact: true }).fill(value);
+          }
+          await identitySection.getByRole("button", { name: "Add link", exact: true }).click();
+          await expect
+            .poll(() => identitySection.locator('[role="status"]').textContent())
+            .toContain("Channel account link added.");
+          await expect.poll(() => identityRow.count()).toBe(1);
+          await expect.poll(() => identityRow.textContent()).toContain(channelIdentity.senderId);
+          await expectIdentitySectionInFrame(".settings-row", channelIdentity.senderId);
+          if (proofDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "03-real-gateway-channel-link-added.png"),
+            });
+          }
+
+          const reloadWithLink = await page.reload();
+          expect(reloadWithLink?.status()).toBe(200);
+          await expect
+            .poll(() => page.locator(".profile-hero__handle").textContent())
+            .toContain(authenticatedUser);
+          await expect.poll(() => identityRow.count()).toBe(1);
+          await expect.poll(() => identityRow.textContent()).toContain(channelIdentity.senderId);
+          await expectIdentitySectionInFrame(".settings-row", channelIdentity.senderId);
+          if (proofDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "04-real-gateway-channel-link-reloaded.png"),
+            });
+          }
+
+          await identitySection
+            .getByRole("button", {
+              name: `Remove link ${channelIdentity.channelId}, ${channelIdentity.accountId}, ${channelIdentity.senderId}`,
+              exact: true,
+            })
+            .click();
+          await expect
+            .poll(() => identitySection.locator('[role="status"]').textContent())
+            .toContain("Channel account link removed.");
+          await expect
+            .poll(() => identitySection.locator(".settings-empty").textContent())
+            .toContain("No channel accounts are linked to your profile.");
+
+          const reloadWithoutLink = await page.reload();
+          expect(reloadWithoutLink?.status()).toBe(200);
+          await expect
+            .poll(() => page.locator(".profile-hero__handle").textContent())
+            .toContain(authenticatedUser);
+          await expect.poll(() => identityRow.count()).toBe(0);
+          await expect
+            .poll(() => identitySection.locator(".settings-empty").textContent())
+            .toContain("No channel accounts are linked to your profile.");
+          await expectIdentitySectionInFrame(
+            ".settings-empty",
+            "No channel accounts are linked to your profile.",
+          );
+          if (proofDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, "05-real-gateway-channel-link-removed-reloaded.png"),
             });
           }
         },
