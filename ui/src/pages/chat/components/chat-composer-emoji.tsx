@@ -59,13 +59,14 @@ export function createComposerEmojiMenu() {
     draft.index = 0;
     draft.dismissed = null;
     resolver.reset();
+    // Overlay retirement notifies synchronously; it must see the closed draft.
+    anchor.close();
+    textarea = null;
   }
 
   function close() {
     acceptedEnter = false;
     setState(reset);
-    anchor.close();
-    textarea = null;
   }
 
   function dismiss(target: HTMLTextAreaElement | null) {
@@ -202,7 +203,6 @@ export function createComposerEmojiMenu() {
     }
     let handled = false;
     const chosen: { value: ReturnType<typeof selection> } = { value: null };
-    let accepted = false;
     setState((draft) => {
       if (!draft.items.length) {
         return;
@@ -215,16 +215,13 @@ export function createComposerEmojiMenu() {
           reset(draft);
           draft.dismissed = { value: target.value, caret: target.selectionStart };
           acceptedEnter = false;
-          anchor.close();
-          textarea = null;
         },
         move: (index) => {
           draft.index = index;
           return paneDomId(paneId, `emoji-option-${index}`);
         },
-        select: (key) => {
+        select: () => {
           chosen.value = selection(target, draft);
-          accepted = key === "Enter";
         },
       });
     });
@@ -233,7 +230,7 @@ export function createComposerEmojiMenu() {
     }
     // Keep the accepting press consumed after insertion closes the menu.
     if (handled) {
-      acceptedEnter = accepted;
+      acceptedEnter = event.key === "Enter";
     }
     return handled;
   }

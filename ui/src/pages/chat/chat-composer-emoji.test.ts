@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { Overlay } from "../../components/overlay-lifecycle.ts";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
@@ -195,6 +196,22 @@ describe("chat emoji acceptance", () => {
 });
 
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
+  it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
+    let overlay: Overlay | undefined;
+    vi.mocked(TextareaTokenAnchor.prototype.updateNative).mockImplementation((next) => {
+      overlay = next;
+    });
+    vi.spyOn(TextareaTokenAnchor.prototype, "close").mockImplementation(() => overlay?.retire());
+    const f = fixture(kind);
+    f.input("Nice :smi");
+    expect(overlay).toBeDefined();
+    f.key("ArrowDown");
+    f.key("ArrowUp");
+    expect(f.key("Tab").defaultPrevented).toBe(true);
+    expect(f.draft()).toBe("Nice 😄");
+    expect(f.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
+  });
+
   it("ignores a queued selection event after focus leaves the composer", () => {
     const f = fixture(kind);
     f.input(":smi");

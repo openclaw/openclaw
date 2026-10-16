@@ -288,12 +288,6 @@ export function createHumanMentionMenu() {
     }, 150);
   }
 
-  function activeId(paneId: string): string | null {
-    return state.search?.kind === "ready" && state.search.result.users[state.index]
-      ? paneDomId(paneId, `mention-option-${state.index}`)
-      : null;
-  }
-
   function handleKeydown(event: KeyboardEvent, host: HumanMentionMenuHost) {
     let handled = false;
     setState((draft) => {
@@ -379,7 +373,10 @@ export function createHumanMentionMenu() {
     close: () => setState(close),
     dispose,
     handleKeydown,
-    activeId,
+    activeId: (paneId: string) =>
+      state.search?.kind === "ready" && state.search.result.users[state.index]
+        ? paneDomId(paneId, `mention-option-${state.index}`)
+        : null,
     activeLabel: () =>
       state.search?.kind === "ready"
         ? (state.search.result.users[state.index]?.displayName ?? "")

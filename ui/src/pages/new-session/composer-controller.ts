@@ -117,6 +117,7 @@ export function createNewSessionComposerTextarea() {
       client: GatewayBrowserClient | null,
       agentId: string,
       draftOwnerKey: string,
+      onMenuClosed: () => void,
     ) {
       const normalizedAgentId = agentId.trim();
       if (control.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
@@ -127,7 +128,11 @@ export function createNewSessionComposerTextarea() {
       skillCommandAgentId = normalizedAgentId;
       skillCommandDraftOwnerKey = draftOwnerKey;
       control.emojiMenu.close();
+      const menuWasOpen = control.skillMenuState.skillMenuOpen;
       resetSkillMenuState(control.skillMenuState);
+      if (menuWasOpen) {
+        onMenuClosed();
+      }
     },
     ownsSkillCommands(
       client: GatewayBrowserClient | null,

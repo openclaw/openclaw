@@ -99,6 +99,7 @@ export class CommandPaletteState {
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
   private readonly mentionMenu = createHumanMentionMenu();
+  private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
   private composing = false;
   private readonly mentionHost: HumanMentionMenuHost = {
@@ -231,8 +232,12 @@ export class CommandPaletteState {
   openPalette(input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) {
     const returnFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A fresh menu is closed; first open can run while Solid mounts the bridge.
+    if (this.hasOpened) {
+      this.mentionMenu.close();
+    }
+    this.hasOpened = true;
     this.open = true;
-    this.mentionMenu.close();
     this.draft.open();
     this.onDraftInitialized();
     this.composing = false;

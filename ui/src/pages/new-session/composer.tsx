@@ -120,10 +120,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
-  const skillMenuState = options.textareaController.skillMenuState;
-  const slashMenuState = options.textareaController.slashMenuState;
-  const mentionMenu = options.textareaController.mentionMenu;
-  const emojiMenu = options.textareaController.emojiMenu;
+  const { skillMenuState, slashMenuState, mentionMenu, emojiMenu } = textareaController;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
   const skillMenuHost: SkillMenuHost = {
@@ -449,9 +446,10 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         props.options.draftOwnerKey,
         frame().mentionDirectory,
         frame().composerLocked || props.options.nativeTerminal || textarea.composing,
+        props.options.onChange,
       ] as const,
-    ([client, agentId, draftOwnerKey, directory, locked]) => {
-      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey);
+    ([client, agentId, draftOwnerKey, directory, locked, onChange]) => {
+      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey, onChange);
       textarea.mentionMenu.syncDirectory(directory);
       if (locked) {
         textarea.emojiMenu.close();
