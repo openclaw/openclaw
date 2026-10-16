@@ -1050,6 +1050,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-read.existing-schema.test.ts",
   "src/state/openclaw-state-db-readonly.warm-source.test.ts",
   "src/infra/session-cost-usage-metadata.test.ts",
+  "src/infra/session-cost-usage-partitions.worker.test.ts",
   "src/plugins/installed-plugin-index-records.managed-npm.test.ts",
   "src/plugins/installed-plugin-index-records.test.ts",
   "src/acp/runtime/session-meta-doctor.test.ts",
