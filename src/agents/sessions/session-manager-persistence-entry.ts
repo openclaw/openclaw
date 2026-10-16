@@ -5,11 +5,6 @@ import type {
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
-import {
-  copyCodeModeSourceAppend,
-  getCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
   AppendPersistenceOptions,
@@ -17,6 +12,7 @@ import type {
   SessionMessageEntry,
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 export type PersistRecordResult =
   | undefined
@@ -78,39 +74,13 @@ export function adoptCommittedMessagePayload(
   return receipt.effectiveParentId;
 }
 
-export function canonicalizeSessionEntry<T extends SessionEntry>(
-  entry: T,
-  options?: AppendPersistenceOptions,
-): T {
-  const sourceAppend = getCodeModeSourceAppend(options);
-  const canonicalEntry = normalizeTranscriptJsonValue(entry, "", Boolean(sourceAppend));
+export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
+  const canonicalEntry = normalizeTranscriptJsonValue(entry, "");
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
-  if (entry !== canonicalEntry && entry.type === "message" && canonicalEntry.type === "message") {
-    if (
-      entry.message.role === "toolResult" &&
-      canonicalEntry.message.role === "toolResult" &&
-      Array.isArray(entry.message.content) &&
-      Array.isArray(canonicalEntry.message.content)
-    ) {
-      const canonicalContent = canonicalEntry.message.content;
-      entry.message.content.forEach((block, index) => {
-        const canonicalBlock = canonicalContent[index];
-        if (block?.type === "text" && canonicalBlock?.type === "text") {
-          copyPreparedModelVisibleToolText(block, canonicalBlock);
-        }
-      });
-    }
-    copyCodeModeSourceAppend(
-      entry.message,
-      canonicalEntry.message,
-      sourceAppend,
-      (source) => source,
-    );
-  }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
-  return canonicalEntry as T;
+  return shareSessionSystemPrompt(canonicalEntry) as T;
 }
 
 export function adoptPersistedMessage(

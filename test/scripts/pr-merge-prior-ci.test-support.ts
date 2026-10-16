@@ -127,7 +127,9 @@ const securityResponse=()=>{
   const source=config.sourceSha||main();
   const publisher={id:901,run_attempt:config.fault==="new-publisher-attempt"?2:1,status:"completed",conclusion:"success",
     head_sha:source,head_branch:"main",head_repository:{id:s.repoAuthority.id},repository:{id:s.repoAuthority.id,full_name:s.repo.nameWithOwner},
-    event:"workflow_run",path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
+    event:config.fault==="automation-dispatch"?"workflow_dispatch":"workflow_run",
+    actor:{id:41898282,login:"github-actions[bot]",type:"Bot"},
+    path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
     config.statusReads++;save();
@@ -164,8 +166,22 @@ const securityResponse=()=>{
 
 export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: string) {
   const blob = f.git(["hash-object", "-w", "--stdin"], workflow);
-  const workflows = f.git(["mktree"], `100644 blob ${blob}\tci.yml\n`);
-  const github = f.git(["mktree"], `040000 tree ${workflows}\tworkflows\n`);
+  const workflowEntries = f
+    .git(["ls-tree", `${treeish}:.github/workflows`])
+    .split("\n")
+    .filter((entry) => !entry.endsWith("\tci.yml"));
+  const workflows = f.git(
+    ["mktree"],
+    [...workflowEntries, `100644 blob ${blob}\tci.yml`, ""].join("\n"),
+  );
+  const githubEntries = f
+    .git(["ls-tree", `${treeish}:.github`])
+    .split("\n")
+    .filter((entry) => !entry.endsWith("\tworkflows"));
+  const github = f.git(
+    ["mktree"],
+    [...githubEntries, `040000 tree ${workflows}\tworkflows`, ""].join("\n"),
+  );
   const entries = f
     .git(["ls-tree", treeish])
     .split("\n")
@@ -261,6 +277,7 @@ export function createPriorCiCandidateFactory(
         check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/1",
       },
       {
+        // This fixture decodes retained receipts from before workflow cancellation was removed.
         ...job(603, "pr-fail-fast", "success"),
         steps: [
           {

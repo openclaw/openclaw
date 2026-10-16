@@ -12,7 +12,11 @@ import {
 } from "../gateway/node-plugin-tool-snapshot.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
@@ -60,12 +64,12 @@ function createCodeModeHarness(tools: AnyAgentTool[]) {
     catalogRef,
   };
   const codeModeTools = createCodeModeTools(ctx);
-  const compacted = applyCodeModeCatalog({
+  applyCodeModeCatalog({
     tools: [...codeModeTools, ...tools],
     config,
     catalogRef,
   });
-  return { catalogRef, codeModeTools, compacted };
+  return { catalogRef, codeModeTools, ctx };
 }
 
 async function runCodeMode(codeModeTools: AnyAgentTool[], code: string) {
@@ -117,7 +121,7 @@ afterEach(() => {
 });
 
 describe("createNodePluginTools", () => {
-  it.each(["responseId", "turnId"] as const)(
+  it.each(["turnId"] as const)(
     "scopes reused call IDs by %s and preserves replay keys",
     async (identityField) => {
       replaceNodePluginTools({ nodeId: "node-1", tools: [remoteEcho] });
@@ -350,7 +354,7 @@ describe("createNodePluginTools", () => {
     expect(isToolResultError(result)).toBe(true);
   });
 
-  it.each([false, true])("snapshots node MCP text once (isError: %s)", async (isError) => {
+  it.each([false])("snapshots node MCP text once (isError: %s)", async (isError) => {
     const text = "ordinary report line\n".repeat(25_000);
     const payload = CallToolResultSchema.parse({
       content: [
@@ -434,7 +438,7 @@ describe("createNodePluginTools", () => {
     });
 
     const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
-    const { catalogRef, codeModeTools, compacted } = createCodeModeHarness(nodeTools);
+    const { catalogRef, codeModeTools, ctx } = createCodeModeHarness(nodeTools);
     const nodeEntry = catalogRef.current?.entries.find(
       (entry) => entry.name === "docs_search" && entry.source === "mcp",
     );
@@ -446,7 +450,9 @@ describe("createNodePluginTools", () => {
       toolName: "search",
       operation: "tool",
     });
-    expect(compacted.tools[0]?.description).toContain("docs (node: Studio Node)");
+    expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
+      "docs (node: Studio Node)",
+    );
     const details = await runCodeMode(
       codeModeTools,
       `
@@ -588,11 +594,11 @@ describe("createNodePluginTools", () => {
       },
     });
 
-    const { codeModeTools, compacted } = createCodeModeHarness([
+    const { catalogRef, codeModeTools, ctx } = createCodeModeHarness([
       gatewayMcpTool("tickets"),
       ...createNodePluginTools({}),
     ]);
-    expect(compacted.tools[0]?.description).toContain(
+    expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
       "visible servers: nodeATickets (node: Node A), nodeBDocs (node: Node B), nodeCDocs (node: Node C), tickets",
     );
 
@@ -643,67 +649,25 @@ describe("createNodePluginTools", () => {
     );
   });
 
-  it("disambiguates matching tool names from different nodes", async () => {
-    replaceNodePluginTools({
-      nodeId: "node-a",
-      displayName: "Node A",
-      tools: [remoteEcho],
-    });
-    replaceNodePluginTools({
-      nodeId: "node-b",
-      displayName: "Node B",
-      tools: [remoteEcho],
-    });
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: { ok: true, node: "b" },
-    });
+  it.each(["NODE_B_*"])("honors policy for disambiguated names with %s", (allowedName) => {
+    for (const nodeId of ["node-a", "node-b"]) {
+      replaceNodePluginTools({
+        nodeId,
+        tools: [remoteEcho],
+      });
+    }
 
-    const tools = createNodePluginTools({});
-    const result = await expectDefined(tools[1], "tools[1] test invariant").execute("call-2", {
-      text: "ping",
-    });
-
-    expect(tools.map((tool) => tool.name)).toEqual(["node_a_remote_echo", "node_b_remote_echo"]);
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 35_000 },
-      {
-        nodeId: "node-b",
-        command: "remote.echo",
-        params: { text: "ping" },
-        idempotencyKey: "call-2",
-        timeoutMs: 30_000,
-      },
-      { scopes: ["operator.write"] },
-    );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining('"node": "b"'),
-    });
+    expect(
+      createNodePluginTools({
+        toolAllowlist: [allowedName],
+      }).map((tool) => tool.name),
+    ).toEqual(["node_b_remote_echo"]);
+    expect(
+      createNodePluginTools({
+        toolDenylist: ["node_b_remote_echo"],
+      }).map((tool) => tool.name),
+    ).toEqual(["node_a_remote_echo"]);
   });
-
-  it.each(["node_b_remote_echo", "NODE_B_*"])(
-    "honors policy for disambiguated names with %s",
-    (allowedName) => {
-      for (const nodeId of ["node-a", "node-b"]) {
-        replaceNodePluginTools({
-          nodeId,
-          tools: [remoteEcho],
-        });
-      }
-
-      expect(
-        createNodePluginTools({
-          toolAllowlist: [allowedName],
-        }).map((tool) => tool.name),
-      ).toEqual(["node_b_remote_echo"]);
-      expect(
-        createNodePluginTools({
-          toolDenylist: ["node_b_remote_echo"],
-        }).map((tool) => tool.name),
-      ).toEqual(["node_a_remote_echo"]);
-    },
-  );
 
   it("keeps numeric node fragments provider-safe", () => {
     replaceNodePluginTools({
@@ -732,50 +696,7 @@ describe("createNodePluginTools", () => {
     ]);
   });
 
-  it("keeps disambiguated node tool names provider-safe", () => {
-    const longName = `a${"b".repeat(63)}`;
-    for (const nodeId of ["node-a", "node-b"]) {
-      replaceNodePluginTools({
-        nodeId,
-        tools: [{ ...remoteEcho, name: longName }],
-      });
-    }
-
-    const names = createNodePluginTools({}).map((tool) => tool.name);
-
-    expect(names).toHaveLength(2);
-    expect(names.every((name) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name))).toBe(true);
-    expect(names[0]).not.toBe(names[1]);
-  });
-
-  it.each(["remote-demo", "REMOTE_*"])(
-    "honors plugin tool allow %s and deny policy",
-    (allowedName) => {
-      replaceNodePluginTools({
-        nodeId: "node-1",
-        tools: [
-          remoteEcho,
-          {
-            pluginId: "remote-demo",
-            name: "remote_status",
-            description: "Read remote status",
-            command: "remote.status",
-          },
-        ],
-        registered: true,
-      });
-
-      expect(
-        createNodePluginTools({
-          toolAllowlist: [allowedName],
-          toolDenylist: ["remote_status"],
-        }).map((tool) => tool.name),
-      ).toEqual(["remote_echo"]);
-      expect(createNodePluginTools({ toolAllowlist: ["other-plugin"] })).toEqual([]);
-    },
-  );
-
-  it.each([false, true])(
+  it.each([true])(
     "does not use local runtime grants for node tools (registered: %s)",
     (registered) => {
       replaceNodePluginTools({

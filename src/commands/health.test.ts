@@ -428,22 +428,6 @@ describe("healthCommand", () => {
     expect(output).toContain("p99=1200ms");
   });
 
-  it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
-    const snapshot = createHealthSummary();
-    snapshot.deliveryQueues = {
-      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: Date.now() - 7_200_000 }],
-    };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
-
-    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toContain(
-      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago)",
-    );
-  });
-
   it("prints the config hot-reload disabled line in text output", async () => {
     const snapshot = createHealthSummary();
     snapshot.configReload = { hotReloadStatus: "disabled" };

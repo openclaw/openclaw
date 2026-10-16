@@ -1,4 +1,3 @@
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
@@ -7,6 +6,7 @@ import {
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
 import { findOpenClawStateDatabaseFailure } from "./openclaw-state-db-failure.js";
+import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerOperations,
@@ -26,19 +26,15 @@ import type { DomainScope } from "./openclaw-state-worker-store.types.js";
 
 export type { OpenClawStateWorkerLease } from "./openclaw-state-worker-lease.js";
 
-/** Prepare only code for a shared-state operation after the next database drain. */
-export function prepareOpenClawStateWorkerRuntime() {
-  return owner().prepareRuntime();
-}
-
 /** Retired cleanup uses the retained owner's backend without renewing read admission. */
 export function openOpenClawStateWorkerCleanupStore(
   databasePath: string,
   context: SqliteWorkerStateContext,
   assertOwned: () => void,
   identity: DatabasePathIdentity,
+  maintenanceScope?: OpenClawDatabaseMaintenanceScope,
 ) {
-  return owner().openCleanup(databasePath, context, assertOwned, identity);
+  return owner().openCleanup(databasePath, context, assertOwned, identity, maintenanceScope);
 }
 
 export async function executeOpenClawStateWorker<Key extends keyof OpenClawStateWorkerOperations>(
@@ -136,39 +132,6 @@ export async function runOpenClawStateWorkerOperation<T>(
         recordOpenClawStateDatabaseOpenFailure(context.admission.databasePath, failure);
       }
       throw hydrated;
-    }
-  });
-}
-
-/** Inspect the existing file without recursively admitting a domain operation. */
-export async function inspectOpenClawStateDatabaseGeneration(
-  context: OpenClawStateWorkerContext,
-  generation: SqliteFileGeneration,
-  signal?: AbortSignal,
-): Promise<boolean | undefined> {
-  return runWithCapturedWorkerContext(context, async () => {
-    try {
-      const store = await owner().open(context, { existingOnly: true, signal });
-      context.admission.assertCurrent();
-      if (!store) {
-        return undefined;
-      }
-      const releaseOperation = owner().retainOperation(store);
-      try {
-        context.admission.assertCurrent();
-        return await runWithOpenClawStateWorkerStore(
-          store,
-          context,
-          (scope) => scope.execute({ type: "database.generationMatches", input: { generation } }),
-          undefined,
-          undefined,
-          signal,
-        );
-      } finally {
-        void releaseOperation();
-      }
-    } catch (error) {
-      throw hydrateOpenClawStateWorkerError(error);
     }
   });
 }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,13 +15,19 @@ import {
 } from "../../daemon/service.test-helpers.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../../daemon/systemd-unit.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 
-const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } = await vi.hoisted(
+  async () => {
+    const { createCliRuntimeCapture } = await import("../test-runtime-capture.js");
+    return createCliRuntimeCapture();
+  },
+);
 const busctl = vi.hoisted(() =>
   vi.fn<typeof import("../../daemon/systemd-exec.js").execBusctlUser>(),
 );
@@ -61,12 +68,12 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime,
 }));
 
 const runtimePinState = await import("../../daemon/runtime-pin-state.js");
-const configMachineState = await import("../../state/config-machine-state.js");
 const runtimePaths = await import("../../daemon/runtime-paths.js");
 
 const daemonExec = await import("../../daemon/exec-file.js");
@@ -75,7 +82,19 @@ const { clearConfigCache, clearRuntimeConfigSnapshot, readConfigFileSnapshot } =
   await import("../../config/config.js");
 const { readSystemdDefinitionMutationCapability } =
   await import("../../daemon/systemd-definition-mutation.js");
-const { readSystemdServiceExecStart } = await import("../../daemon/systemd-service-files.js");
+const { readSystemdServiceExecStart, resolveSystemdServiceName, resolveSystemdUnitPath } =
+  await import("../../daemon/systemd-service-files.js");
+
+// These fixtures author a user unit; do not discover real system units on the test host.
+const readUserSystemdServiceExecStart: typeof readSystemdServiceExecStart = (env, options) =>
+  readSystemdServiceExecStart(env, {
+    ...options,
+    systemdReadTarget: {
+      scope: "user",
+      unitName: `${resolveSystemdServiceName(env)}.service`,
+      unitPath: resolveSystemdUnitPath(env),
+    },
+  });
 const { assertServiceDefinitionWritable } = await import("../../daemon/service-types.js");
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
@@ -164,6 +183,55 @@ describe("runDaemonInstall integration", () => {
     serviceMock.readCommand.mockReset();
     serviceMock.readCommand.mockResolvedValue(null);
     await writeConfig({}, 2);
+  });
+
+  it("migrates legacy runtime intent before planning and preserves a malformed pin", async () => {
+    const isolatedHome = await makeTempWorkspace("openclaw-install-pin-migration-");
+    const stateDir = path.join(isolatedHome, ".openclaw");
+    const isolatedConfig = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(stateDir);
+    await fs.writeFile(isolatedConfig, JSON.stringify({ gateway: { mode: "local" } }));
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await withEnvAsync(
+        { HOME: isolatedHome, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: isolatedConfig },
+        async () => {
+          mockSystemAccountHome();
+          const key = `daemon-runtime-pin:${createHash("sha256")
+            .update(
+              JSON.stringify([
+                "gateway",
+                "linux",
+                resolveSystemdServiceName(process.env),
+                isolatedConfig,
+              ]),
+            )
+            .digest("hex")}`;
+          writeConfigMachineState(key, { version: 99 });
+          serviceMock.readCommand.mockResolvedValue({
+            programArguments: [process.execPath, "/fixture/openclaw.mjs", "gateway"],
+          });
+
+          await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
+
+          expect(readConfigMachineState(key)).toBeUndefined();
+          expect(() =>
+            runtimePinState.readDaemonRuntimePin(
+              { kind: "gateway", env: process.env },
+              {
+                programArguments: [process.execPath, "/fixture/openclaw.mjs", "gateway"],
+              },
+            ),
+          ).toThrow();
+          expect(runtimeLogs.join("\n")).toContain("Runtime pin inspection failed");
+          expect(serviceMock.install).not.toHaveBeenCalled();
+        },
+      );
+    } finally {
+      clearConfigCache();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(isolatedHome, { recursive: true, force: true });
+    }
   });
 
   it("repairs a non-executable Node in the Linux service definition", async () => {
@@ -295,10 +363,16 @@ describe("runDaemonInstall integration", () => {
       });
       const env = { ...process.env, HOME: fixture, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway" };
       serviceMock.readCommand.mockImplementation((_env, options) =>
-        readSystemdServiceExecStart(env, options),
+        readUserSystemdServiceExecStart(env, options),
       );
       serviceMock.readDefinitionMutationCapability.mockImplementation(() =>
-        readSystemdDefinitionMutationCapability(env),
+        readSystemdDefinitionMutationCapability(env, {
+          systemdReadTarget: {
+            scope: "user",
+            unitName: "openclaw-gateway.service",
+            unitPath: resolveSystemdUnitPath(env),
+          },
+        }),
       );
       const before = await snapshotConfig();
       try {
@@ -340,7 +414,7 @@ describe("runDaemonInstall integration", () => {
       }
       return readFile(...args);
     });
-    serviceMock.readCommand.mockImplementation(readSystemdServiceExecStart);
+    serviceMock.readCommand.mockImplementation(readUserSystemdServiceExecStart);
     serviceMock.isLoaded.mockRejectedValue(new Error("Failed to get unit file state"));
     const before = await snapshotConfig();
     await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
@@ -407,7 +481,7 @@ describe("runDaemonInstall integration", () => {
               environmentFiles: [[effectiveFile, false]],
             }),
     }));
-    serviceMock.readCommand.mockImplementation(readSystemdServiceExecStart);
+    serviceMock.readCommand.mockImplementation(readUserSystemdServiceExecStart);
     serviceMock.readDefinitionMutationCapability.mockImplementation((args) =>
       readSystemdDefinitionMutationCapability(args?.env ?? process.env, {
         environment: args?.environment,
@@ -427,7 +501,12 @@ describe("runDaemonInstall integration", () => {
       expect(await snapshotConfig()).toEqual(before);
       expect(serviceMock.install).not.toHaveBeenCalled();
       expect(runtimeLogs.join("\n")).toContain("SERVICE_DEFINITION_SEALED");
-      expect(await fs.readdir(plannedState)).toEqual(["gateway.systemd.env"]);
+      expect((await fs.readdir(plannedState)).toSorted()).toEqual([
+        "control",
+        "gateway.systemd.env",
+        "tmp",
+      ]);
+      expect(await fs.readdir(path.join(plannedState, "control"))).toEqual(["services.sqlite"]);
       expect(await fs.readdir(effectiveState)).toEqual(["gateway.systemd.env"]);
     } finally {
       owner.mockRestore();
@@ -509,7 +588,7 @@ describe("runDaemonInstall integration", () => {
   });
 
   it.each([{ name: "rejected definition inspection", kind: "rejected", force: false }])(
-    "leaves absent config and state untouched for $name",
+    "preserves absent config and shared state while admitting local intent for $name",
     async ({ kind, force }) => {
       const isolatedHome = await fs.mkdtemp(path.join(tempHome, "sealed-install-"));
       const stateDir = path.join(isolatedHome, ".openclaw");
@@ -536,7 +615,8 @@ describe("runDaemonInstall integration", () => {
       try {
         await expect(runDaemonInstall({ json: true, force })).rejects.toThrow("__exit__:1");
 
-        expect(await fs.readdir(stateDir)).toEqual([]);
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(["control", "tmp"]);
+        expect(await fs.readdir(path.join(stateDir, "control"))).toEqual(["services.sqlite"]);
         await expect(fs.access(missingConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(serviceMock.readCommand).toHaveBeenCalledOnce();
         expect(serviceMock.install).not.toHaveBeenCalled();
@@ -607,23 +687,23 @@ describe("runDaemonInstall integration", () => {
         serviceMock.readCommand.mockResolvedValue({
           programArguments: [runtimePath, "/opt/openclaw/openclaw.mjs", "gateway"],
         });
+        const readRuntimePin = runtimePinState.readDaemonRuntimePinForInstall;
+        const pinRead = vi.spyOn(runtimePinState, "readDaemonRuntimePinForInstall");
         if (failure === "transient-read") {
-          vi.spyOn(configMachineState, "readConfigMachineState").mockImplementation(() => {
+          pinRead.mockImplementation(() => {
             throw Object.assign(new Error("EIO: pin state read failed"), { code: "EIO" });
           });
         } else {
-          const readRuntimePin = runtimePinState.readDaemonRuntimePinForInstall;
-          vi.spyOn(runtimePinState, "readDaemonRuntimePinForInstall").mockImplementation(
-            (...args) => ({
-              ...readRuntimePin(...args),
-              stored: true,
-              pin: { runtime: "node", path: runtimePath },
-            }),
-          );
+          pinRead.mockImplementation((...args) => ({
+            ...readRuntimePin(...args),
+            stored: true,
+            pin: { runtime: "node", path: runtimePath },
+          }));
         }
 
         await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
 
+        expect(pinRead).toHaveBeenCalledOnce();
         expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(runtimeLogs).toEqual([
           JSON.stringify(

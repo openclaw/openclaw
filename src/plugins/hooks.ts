@@ -50,7 +50,6 @@ import type {
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -336,16 +335,9 @@ export function createHookRunner(
 
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
-  const mergeBeforeModelResolve = (
-    acc: PluginHookBeforeModelResolveResult | undefined,
-    next: PluginHookBeforeModelResolveResult,
-  ): PluginHookBeforeModelResolveResult => ({
-    // Keep the first defined override so higher-priority hooks win.
-    modelOverride: acc?.modelOverride ?? next.modelOverride,
-    providerOverride: acc?.providerOverride ?? next.providerOverride,
-  });
 
-  const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
+  // Hook list overrides restrict what the run may use, so a malformed list closes it.
+  const normalizeHookList = (value: unknown): string[] | undefined => {
     if (value === undefined) {
       return undefined;
     }
@@ -353,13 +345,13 @@ export function createHookRunner(
   };
 
   const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
-    const normalized = normalizeHookToolsAllow(value);
+    const normalized = normalizeHookList(value);
     if (normalized === undefined) {
       return [];
     }
     const attached = Array.isArray(value) ? readToolAllowlistIntersection(value) : undefined;
     return attached
-      ? attached.map((restriction) => normalizeHookToolsAllow(restriction) ?? [])
+      ? attached.map((restriction) => normalizeHookList(restriction) ?? [])
       : [normalized];
   };
 
@@ -564,7 +556,14 @@ export function createHookRunner(
         return { block: true };
       }
       const nextMessage = result.message;
-      return nextMessage ? { message: nextMessage } : undefined;
+      if (!nextMessage) {
+        return undefined;
+      }
+      // Reject non-messages without traversing payloads; the transcript owner validates content.
+      if (typeof nextMessage !== "object" || typeof nextMessage.role !== "string") {
+        throw new Error("the replacement is not a session message; the original message was kept");
+      }
+      return { message: nextMessage };
     } catch (err) {
       const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
       if (shouldCatchHookErrors(hookName)) {
@@ -1108,7 +1107,12 @@ export function createHookRunner(
 
   return {
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: mergeBeforeModelResolve,
+      mergeResults: (acc, next) => ({
+        // Keep the first defined override so higher-priority hooks win, including [].
+        modelOverride: acc?.modelOverride ?? next.modelOverride,
+        providerOverride: acc?.providerOverride ?? next.providerOverride,
+        fallbacksOverride: acc?.fallbacksOverride ?? normalizeHookList(next.fallbacksOverride),
+      }),
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,

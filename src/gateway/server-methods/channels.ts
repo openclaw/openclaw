@@ -21,7 +21,7 @@ import {
   getChannelPlugin,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -192,9 +192,6 @@ function channelStatusFailureMessage(value: unknown): string | null {
 }
 
 async function changeChannelAccount(params: ChannelAccountParams, action: "start" | "stop") {
-  if (action === "start" && !params.plugin.gateway?.startAccount) {
-    throw new Error(`Channel ${params.channelId} does not support runtime start`);
-  }
   const accountId = resolveChannelGatewayAccountId(params, () =>
     params.context.getRuntimeSnapshot({ channelId: params.channelId, inspectAccounts: false }),
   );
@@ -242,7 +239,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     );
     const rawChannel = params.channel;
     const cfg = context.getRuntimeConfig();
-    const plugins = listReadOnlyChannelPluginsForConfig(cfg);
+    const plugins = await listReadOnlyChannelPluginsForConfigAsync(cfg);
     const requestedChannel =
       rawChannel !== undefined
         ? (normalizeChannelId(rawChannel) ??

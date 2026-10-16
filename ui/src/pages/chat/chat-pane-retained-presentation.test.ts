@@ -8,6 +8,7 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -20,8 +21,8 @@ import {
   preparePaneStagedAttachments,
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
@@ -31,11 +32,13 @@ import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  createPaneTestHost,
+  connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { resetChatComposerState } from "./components/chat-composer.ts";
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
@@ -108,7 +111,9 @@ describe("chat pane retained presentation lifecycle", () => {
     };
     dock.pane.context = page.pane.context;
     const panes = [page, dock].map(({ pane, state }, index) => {
-      const mounted = pane as TestChatPane & { inputRegion: "page" | "dock"; render(): null };
+      const mounted = pane as TestChatPane & {
+        inputRegion: "page" | "dock";
+      };
       mounted.inputRegion = index === 0 ? "page" : "dock";
       mounted.sessionKey = index === 0 ? "agent:work:task" : "agent:main:main";
       state.sessionKey = mounted.sessionKey;
@@ -118,14 +123,17 @@ describe("chat pane retained presentation lifecycle", () => {
       } as ChatPageHost["settings"];
       state.handleChatDraftChange = vi.fn();
       state.loadAssistantIdentity = vi.fn(async () => undefined);
-      mounted.render = () => null;
+      mounted.render = () => ({
+        layout: emptyLegacyContent,
+        capabilityDialogs: undefined,
+      });
       mounted.active = true;
       const composer = document.createElement("div");
       composer.className = "agent-chat__composer-combobox";
       const textarea = composer.appendChild(document.createElement("textarea"));
       mounted.append(composer);
       const focus = vi.spyOn(textarea, "focus");
-      ChatPaneBase.prototype.connectedCallback.call(mounted);
+      connectPaneTestView(mounted);
       return { mounted, focus, state };
     });
     try {
@@ -153,7 +161,7 @@ describe("chat pane retained presentation lifecycle", () => {
       for (const { mounted } of panes) {
         mounted.active = false;
         Object.defineProperty(mounted, "isConnected", { configurable: true, value: false });
-        ChatPaneBase.prototype.disconnectedCallback.call(mounted);
+        mounted.disconnectedCallback();
       }
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -387,7 +395,7 @@ describe("chat pane retained presentation lifecycle", () => {
     ]);
   });
 
-  it("ignores an open dropdown in an inactive retained pane", () => {
+  it("ignores an open shortcut menu in an inactive retained pane", () => {
     const app = document.body.appendChild(document.createElement("openclaw-app"));
     const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
@@ -401,14 +409,16 @@ describe("chat pane retained presentation lifecycle", () => {
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
-    const retainedDropdown = retainedPane.appendChild(
-      document.createElement("wa-dropdown"),
-    ) as HTMLElement & { open: boolean };
-    retainedDropdown.open = true;
+    const retainedMenu = retainedPane.appendChild(document.createElement("div"));
+    retainedMenu.setAttribute("role", "menu");
+    retainedMenu.setAttribute("popover", "manual");
+    const shortcut = retainedMenu.appendChild(document.createElement("button"));
+    shortcut.dataset.shortcut = "4";
+    retainedMenu.showPopover();
 
     try {
       target.dispatchEvent(
-        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+        new KeyboardEvent("keydown", { key: "4", bubbles: true, composed: true }),
       );
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
@@ -425,14 +435,18 @@ describe("chat pane retained presentation lifecycle", () => {
       const restoreDialog = installDialogPolyfill();
       const key = "agent:main:retained-modal";
       const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
-      const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane & {
+      // SAFETY: The test host forwards the controller properties consumed by this fixture.
+      const pane = createPaneTestHost(
+        "openclaw-chat-runtime-test",
+        ChatPaneRuntime,
+      ) as unknown as TestChatPane & {
         boardProvider: ReturnType<typeof createMockBoardProvider>;
         confirmConversationReset: () => Promise<boolean>;
       };
       pane.context = fixture.context;
       pane.sessionKey = key;
       const provider = createApplicationContextProvider(fixture.context);
-      provider.append(pane);
+      provider.append(pane.element);
       document.body.append(provider);
       try {
         await pane.updateComplete;
@@ -460,7 +474,7 @@ describe("chat pane retained presentation lifecycle", () => {
         expect(modal).not.toBeNull();
         await modal!.updateComplete;
         expect(document.openClawModalLayers?.has(modal!)).toBe(true);
-        const updates = vi.spyOn(pane, "performUpdate");
+        const updates = vi.spyOn(pane, "render");
         const announcement = pane.querySelector(".chat-transcript-announcement");
         expect(announcement).not.toBeNull();
         announcement!.setAttribute("aria-live", "polite");

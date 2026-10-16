@@ -1,26 +1,45 @@
 import fs from "node:fs/promises";
-import { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as avatarFile from "../agents/identity-avatar-file.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  stageSessionPendingInput,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  handleControlUiAssistantMediaRequest,
+  handleControlUiAvatarRequest,
+  handleControlUiHttpRequest,
+} from "./control-ui.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -42,6 +61,28 @@ function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
 }
 
 describe("Control UI response authority", () => {
+  it("briefly caches an authenticated missing agent avatar", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = createAvatarConfig(state.workspaceDir, "missing.png");
+      setRuntimeConfigSnapshot(config);
+      const req = new IncomingMessage(new Socket());
+      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+      req.method = "GET";
+      req.url = "/avatar/main";
+      req.headers = { authorization: "Bearer admitted-token" };
+      const res = new ServerResponse(req);
+      const handled = await handleControlUiAvatarRequest(req, res, {
+        config,
+        cfg: config,
+        auth: { mode: "token", token: "admitted-token", allowTailscale: false },
+      });
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(404);
+      expect(res.getHeader("Cache-Control")).toBe("private, max-age=60");
+      expect(res.getHeader("Vary")).toBe("Authorization, Cookie");
+    });
+  });
+
   it("withholds prepared bootstrap bytes when visitor authority expires before its abort signal", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const trustedProxy = { userHeader: "x-visitor-email", allowLoopback: true };
@@ -236,4 +277,414 @@ describe("Control UI response authority", () => {
       expect(res.getHeader("Set-Cookie")).toBeUndefined();
     },
   );
+});
+
+describe("saved message attachment response authority", () => {
+  const email = "attachment-reader@example.test";
+  const adminEmail = "attachment-admin@example.test";
+  const viewerEmail = "attachment-viewer@example.test";
+  const scope = {
+    agentId: "main",
+    sessionKey: "agent:main:dashboard:attachments",
+    sessionId: "attachments",
+  };
+  const source = "media://inbound/selection-comment.txt";
+  const text = "Saved selection comment";
+  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+  let listener: Awaited<
+    ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
+  >;
+  let origin: string;
+  let profileId: string;
+  let adminId: string;
+  let ordinary: string;
+  let config: OpenClawConfig;
+
+  async function seed(commentSource = source) {
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "comment",
+        parentId: null,
+        message: {
+          role: "user",
+          content: "Please check the selected text.",
+          __openclaw: {
+            media: [
+              { url: commentSource, fileName: "selection-comment.txt", contentType: "text/plain" },
+            ],
+          },
+        },
+      },
+      {
+        type: "message",
+        id: "ordinary",
+        parentId: "comment",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                label: "notes.txt",
+                url: ordinary,
+                mimeType: "text/plain",
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "legacy-media",
+        parentId: "ordinary",
+        message: {
+          role: "assistant",
+          content: `Saved report\nMEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+        },
+      },
+      {
+        type: "message",
+        id: "user-directive",
+        parentId: "legacy-media",
+        message: {
+          role: "user",
+          content: `MEDIA:${path.join(state.workspaceDir, "report.txt")}`,
+        },
+      },
+      {
+        type: "message",
+        id: "text-only",
+        parentId: "user-directive",
+        message: {
+          role: "user",
+          content: source,
+        },
+      },
+      {
+        type: "message",
+        id: "hidden",
+        parentId: "text-only",
+        message: {
+          role: "user",
+          content: "Internal coordination",
+          idempotencyKey: "coordination:user",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+          __openclaw: { media: [{ url: source }] },
+        },
+      },
+    ]);
+  }
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal", label: "message-attachments" });
+    const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
+    config = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      tools: { fs: { workspaceOnly: true } },
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy },
+        trustedProxies: ["127.0.0.1"],
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              agents: ["main"],
+              sessions: { others: "none" },
+              scopes: ["operator.sessions.read"],
+            },
+            viewer: {
+              agents: ["main"],
+              sessions: { others: "view" },
+              scopes: ["operator.sessions.read"],
+            },
+            admin: { agents: "*", sessions: { others: "write" }, scopes: ["operator.admin"] },
+          },
+        },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    profileId = (await ensureCanonicalUserProfileForEmail(email)).id;
+    adminId = (await ensureCanonicalUserProfileForEmail(adminEmail)).id;
+    const viewerId = (await ensureCanonicalUserProfileForEmail(viewerEmail)).id;
+    await setCanonicalUserProfileRole(viewerId, "viewer", {
+      onCommitted: invalidateOperatorRolePolicy,
+    });
+    await setCanonicalUserProfileRole(adminId, "admin", {
+      onCommitted: invalidateOperatorRolePolicy,
+    });
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: profileId },
+      visibility: "shared",
+    });
+    ordinary = "media://inbound/notes.txt";
+    await seed();
+    await fs.mkdir(state.statePath("media", "inbound"), { recursive: true });
+    await fs.writeFile(state.statePath("media", "inbound", "selection-comment.txt"), text);
+    await fs.writeFile(state.statePath("media", "inbound", "notes.txt"), "Ordinary attachment");
+    await fs.writeFile(path.join(state.workspaceDir, "report.txt"), "Saved assistant report");
+    listener = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((req, res) => {
+          void handleControlUiAssistantMediaRequest(req, res, {
+            config,
+            cfg: config,
+            getRuntimeConfig: () => config,
+            auth: { mode: "trusted-proxy", trustedProxy, allowTailscale: false },
+            trustedProxies: ["127.0.0.1"],
+          }).catch((error: unknown) => {
+            res.statusCode = 500;
+            res.end(String(error));
+          });
+        }),
+    });
+    origin = `http://127.0.0.1:${listener.claim.port}`;
+  });
+
+  afterAll(async () => {
+    await listener?.releaseListener();
+    await listener?.claim.release();
+    await state?.cleanup();
+  });
+
+  function request(
+    query: Record<string, string>,
+    options: {
+      ticketOnly?: boolean;
+      admin?: boolean;
+      viewer?: boolean;
+      method?: string;
+      range?: string;
+    } = {},
+  ) {
+    const params = new URLSearchParams({
+      source,
+      sessionKey: scope.sessionKey,
+      agentId: "main",
+      messageId: "comment",
+      ...query,
+    });
+    return fetch(`${origin}/__openclaw__/assistant-media?${params}`, {
+      method: options.method,
+      headers: {
+        ...(options.ticketOnly
+          ? {}
+          : {
+              "x-forwarded-user": options.admin ? adminEmail : options.viewer ? viewerEmail : email,
+              "x-forwarded-for": "203.0.113.42",
+              "x-openclaw-scopes": options.admin ? "operator.admin" : "operator.sessions.read",
+            }),
+        ...(options.range ? { Range: options.range } : {}),
+      },
+    });
+  }
+
+  async function metadata(
+    query: Record<string, string> = {},
+    options: Parameters<typeof request>[1] = {},
+  ) {
+    const response = await request({ ...query, meta: "1" }, options);
+    expect(
+      response.status,
+      `${query.messageId ?? "comment"}: ${await response.clone().text()}`,
+    ).toBe(200);
+    const result = await response.json();
+    expect(result).toMatchObject({ available: true });
+    expect(result.mediaTicket).toEqual(expect.any(String));
+    return String(result.mediaTicket);
+  }
+
+  it("reads saved comments and ordinary attachments through metadata, preview, download and renewal", async () => {
+    for (const [messageId, file, expected] of [
+      ["comment", source, text],
+      ["ordinary", ordinary, "Ordinary attachment"],
+    ]) {
+      const query = { source: file!, messageId: messageId! };
+      const mediaTicket = await metadata(query);
+      const direct = await request(query);
+      expect(direct.status).toBe(200);
+      expect(await direct.text()).toBe(expected);
+      const ticketed = { ...query, mediaTicket };
+      const preview = await request(ticketed, { ticketOnly: true });
+      expect(preview.status).toBe(200);
+      expect(await preview.text()).toBe(expected);
+      expect(preview.headers.get("content-disposition")).toContain("attachment;");
+      const head = await request(ticketed, { ticketOnly: true, method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe(String(expected!.length));
+      const range = await request(ticketed, { ticketOnly: true, range: "bytes=0-4" });
+      expect(range.status).toBe(206);
+      expect(await range.text()).toBe(expected!.slice(0, 5));
+      await metadata(ticketed);
+    }
+  });
+
+  it("rejects unrelated sources, inaccessible messages and ticket substitutions without changing standalone admin reads", async () => {
+    const mediaTicket = await metadata();
+    const substitutions: [Record<string, string>, number][] = [
+      [{ source: ordinary }, 401],
+      [{ messageId: "missing" }, 404],
+      [{ messageId: "text-only" }, 404],
+      [{ messageId: "hidden" }, 404],
+      [{ sessionKey: "agent:main:dashboard:missing" }, 404],
+    ];
+    for (const [query, ticketStatus] of substitutions) {
+      expect((await request({ ...query, meta: "1" })).status).toBe(404);
+      expect((await request({ ...query, mediaTicket }, { ticketOnly: true })).status).toBe(
+        ticketStatus,
+      );
+    }
+    expect((await request({ messageId: "", meta: "1" })).status).toBe(403);
+    const standalone = await request(
+      { sessionKey: "", messageId: "", source, meta: "1" },
+      { admin: true },
+    );
+    expect(standalone.status).toBe(200);
+    expect(await standalone.json()).toMatchObject({ available: true });
+    const outside = path.join(state.root, "outside.txt");
+    await fs.writeFile(outside, "Not in an allowed directory");
+    const escapingSource = "media://inbound/escaping.txt";
+    await fs.symlink(outside, state.statePath("media", "inbound", "escaping.txt"));
+    await seed(escapingSource);
+    try {
+      const denied = await request({ source: escapingSource, meta: "1" });
+      expect(denied.status).toBe(200);
+      expect(await denied.json()).toMatchObject({ available: false });
+      expect((await request({ source: escapingSource })).status).toBe(404);
+    } finally {
+      await seed();
+    }
+  });
+
+  it("reads saved assistant media directives without treating user text as an attachment", async () => {
+    const query = {
+      source: path.join(state.workspaceDir, "report.txt"),
+      messageId: "legacy-media",
+    };
+    const mediaTicket = await metadata(query);
+    const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("Saved assistant report");
+    expect((await request({ ...query, messageId: "user-directive", meta: "1" })).status).toBe(404);
+  });
+
+  it("reads queued and stopped inputs and withholds bytes after their attachment is withdrawn", async () => {
+    for (const stopped of [false, true]) {
+      const runId = `attachment-pending-${stopped}`;
+      const receipt = await stageSessionPendingInput(scope, {
+        runId,
+        assertCurrent: () => {},
+        message: {
+          role: "user",
+          content: "Saved pending comment",
+          timestamp: 1,
+          idempotencyKey: `${runId}:user`,
+          __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
+        },
+      });
+      expect(receipt).toBeDefined();
+      try {
+        if (stopped) {
+          receipt!.finish("cancelled");
+          await receipt!.settled?.();
+        }
+        const query = { messageId: `pending:${receipt!.inputId}` };
+        const mediaTicket = await metadata(query);
+        const preview = await request({ ...query, mediaTicket }, { ticketOnly: true });
+        expect(preview.status).toBe(200);
+        expect(await preview.text()).toBe(text);
+        const file = state.statePath("media", "inbound", "selection-comment.txt");
+        const open = fs.open;
+        let withdrawn = false;
+        const spy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+          const handle = await open(filePath, flags, mode);
+          if (filePath === file && !withdrawn) {
+            withdrawn = await discardSessionPendingInput(scope, runId, () => {});
+          }
+          return handle;
+        });
+        try {
+          const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
+          expect(withdrawn).toBe(true);
+          expect(response.status).toBe(404);
+          expect(await response.text()).not.toContain(text);
+          expect((await request({ ...query, meta: "1" })).status).toBe(404);
+        } finally {
+          spy.mockRestore();
+        }
+      } finally {
+        receipt!.finish("cancelled");
+        await receipt!.settled?.();
+      }
+    }
+  });
+
+  it("rechecks session and role access for issued tickets and metadata refresh", async () => {
+    const mediaTicket = await metadata({}, { viewer: true });
+    await upsertSessionEntryCore(scope, { visibility: "draft" });
+    try {
+      expect((await request({ mediaTicket }, { ticketOnly: true })).status).toBe(404);
+      expect((await request({ mediaTicket, meta: "1" }, { viewer: true })).status).toBe(404);
+    } finally {
+      await upsertSessionEntryCore(scope, { visibility: "shared" });
+    }
+    const ownTicket = await metadata();
+    const before = config;
+    config = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        roles: {
+          ...config.gateway!.roles,
+          definitions: {
+            ...config.gateway!.roles!.definitions,
+            guest: { agents: ["main"], sessions: { others: "none" }, scopes: [] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config, config);
+    try {
+      expect((await request({ mediaTicket: ownTicket }, { ticketOnly: true })).status).toBe(404);
+      expect((await request({ mediaTicket: ownTicket, meta: "1" })).status).toBe(403);
+    } finally {
+      config = before;
+      setRuntimeConfigSnapshot(config, config);
+    }
+  });
+
+  it("withholds prepared bytes and old tickets when a saved attachment association is replaced", async () => {
+    const mediaTicket = await metadata();
+    const file = state.statePath("media", "inbound", "selection-comment.txt");
+    const open = fs.open;
+    let changed = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await open(filePath, flags, mode);
+      if (filePath === file && !changed) {
+        changed = true;
+        await seed(ordinary);
+      }
+      return handle;
+    });
+    try {
+      const response = await request({ mediaTicket }, { ticketOnly: true });
+      expect(changed).toBe(true);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain(text);
+      expect((await request({ mediaTicket }, { ticketOnly: true })).status).toBe(404);
+    } finally {
+      spy.mockRestore();
+      await seed();
+    }
+  });
 });

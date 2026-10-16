@@ -62,7 +62,11 @@ const enDebug = {
       pingDescription: "Round-trip time for the Gateway diagnostics request",
       disk: "Disk",
       memoryMb: "{value} MB",
-      gatewayCpuScope: "Gateway",
+      gatewayCpu: "Gateway CPU",
+      cpuCores: "{value} cores",
+      gatewayCpuScope: "Process only",
+      cpuScopeDescription:
+        "Build and tool subprocesses are excluded. Process and thread percentages use one core as 100%; host CPU uses all logical CPUs.",
       gatewayCpuProcess: "Gateway process",
       cpuBreakdown: "Show Gateway CPU breakdown",
       cpuBreakdownCurrent: "CPU usage",

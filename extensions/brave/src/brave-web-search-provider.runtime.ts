@@ -382,7 +382,7 @@ export async function executeBraveSearch(
       apiKey,
       diagnosticsEnabled,
       signal,
-      country: country ?? undefined,
+      country,
       search_lang: normalizedLanguage.search_lang,
       freshness,
       dateAfter,

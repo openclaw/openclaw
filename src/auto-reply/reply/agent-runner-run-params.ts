@@ -14,6 +14,7 @@ import {
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
@@ -101,13 +102,18 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   const { turn } = params;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
+    heartbeatEventQueueSessionKey: getReplySystemEventContext(turn.opts)
+      ?.heartbeatEventQueueSessionKey,
     lane: params.runLane,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    resolvedModelSelection: params.resolvedModelSelection,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
     transcriptPrompt: turn.transcriptCommandBody,
     media: turn.followupRun.media,
@@ -118,8 +124,9 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     currentInboundContext: turn.followupRun.currentInboundContext,
     extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
     sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-    // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.
-    ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true as const } : {}),
+    ...(turn.isHeartbeat
+      ? { requireExplicitMessageTarget: turn.opts?.requireExplicitMessageTarget ?? true }
+      : {}),
     cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
     silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
     suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -127,6 +134,8 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
     toolsAllow: turn.opts?.toolsAllow,
     disableTools: turn.opts?.disableTools,
+    forceRestartSafeTools: turn.opts?.forceRestartSafeTools,
+    forceCodeModeTools: turn.opts?.forceCodeModeTools,
     continuesConversation: turn.opts?.continuesConversation,
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,

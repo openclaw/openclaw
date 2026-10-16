@@ -120,9 +120,11 @@ export function createSourceRuntime(root: string): string {
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
     "node-runtime-env.mjs",
+    "cli-invocation.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
+    "worker-heap-flag.mjs",
     "package.json",
     "tsconfig.json",
   ]) {

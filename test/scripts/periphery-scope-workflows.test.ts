@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
@@ -50,6 +50,7 @@ type ScopeWorkflow = {
 
 type ScopeOptions = {
   diffExitCode?: number;
+  repoRoot?: string;
   draft?: boolean;
   eventName?: string;
   files?: Array<string | { filename: string; previous_filename?: string }>;
@@ -103,16 +104,27 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
       if (options.diffExitCode !== undefined) {
         return { exitCode: options.diffExitCode };
       }
+      if (options.repoRoot) {
+        const result = spawnSync(command, args, { cwd: options.repoRoot });
+        return { exitCode: result.status ?? 128 };
+      }
       const pathspecs = args.slice(5);
       const filenames = (options.files ?? []).flatMap((file) =>
         typeof file === "string"
           ? [file]
           : [file.filename, file.previous_filename].filter((name): name is string => Boolean(name)),
       );
-      const changed = filenames.some((filename) =>
-        pathspecs.some((pathspec) =>
-          pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec,
-        ),
+      const matches = (filename: string, pathspec: string) =>
+        pathspec.endsWith("/") ? filename.startsWith(pathspec) : filename === pathspec;
+      const changed = filenames.some(
+        (filename) =>
+          pathspecs.some(
+            (pathspec) => !pathspec.startsWith(":(exclude)") && matches(filename, pathspec),
+          ) &&
+          !pathspecs.some(
+            (pathspec) =>
+              pathspec.startsWith(":(exclude)") && matches(filename, pathspec.slice(10)),
+          ),
       );
       return { exitCode: changed ? 1 : 0 };
     },
@@ -184,6 +196,52 @@ describe("Periphery scope workflows", () => {
       await expect(runScope(workflowPath, { diffExitCode: 128 })).rejects.toThrow(
         "git diff failed with exit code 128",
       );
+    },
+  );
+
+  it.each(WORKFLOW_CASES)(
+    "excludes prose but keeps source, mixed changes, resources and renames for $name",
+    async ({ path: workflowPath, scopedPath }) => {
+      const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-prose-");
+      git(repoRoot, ["init", "--initial-branch=main"]);
+      git(repoRoot, ["config", "user.name", "OpenClaw Test"]);
+      git(repoRoot, ["config", "user.email", "openclaw-test@example.com"]);
+      writeFixture(repoRoot, "seed", "base\n");
+      const commit = () => {
+        git(repoRoot, ["add", "."]);
+        git(repoRoot, ["commit", "-m", "fixture"]);
+      };
+      commit();
+      const { script } = scopeWorkflows.get(workflowPath)!;
+      const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
+        match[1] ? [match[1]] : [],
+      );
+      const firstProsePath = prosePaths[0];
+      if (!firstProsePath) {
+        throw new Error(`missing prose exclusions in ${workflowPath}`);
+      }
+      for (const prosePath of prosePaths) {
+        writeFixture(repoRoot, prosePath, "documentation\n");
+      }
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("false");
+
+      writeFixture(repoRoot, firstProsePath, "updated documentation\n");
+      writeFixture(repoRoot, scopedPath, "struct Example {}\n");
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
+
+      writeFixture(
+        repoRoot,
+        path.join(path.dirname(scopedPath), "Resources/README.md"),
+        "runtime resource\n",
+      );
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
+
+      renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
+      commit();
+      await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
     },
   );
 

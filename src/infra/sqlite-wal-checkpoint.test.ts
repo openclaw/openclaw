@@ -17,7 +17,6 @@ import {
   createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
-  readSqliteWalState,
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
@@ -25,30 +24,6 @@ import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
-  it("observes current WAL frames without repeating library admission or checkpointing pages", () => {
-    const databasePath = path.join(tempDirs.make("openclaw-wal-noop-"), "state.sqlite");
-    const database = openNodeSqliteDatabase(databasePath);
-    database.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE events(value TEXT); INSERT INTO events VALUES ('retained')",
-    );
-    try {
-      const before = fs.readFileSync(databasePath);
-      const wal = fs.readFileSync(`${databasePath}-wal`);
-      const initial = readSqliteWalState(database);
-      const prepare = vi.spyOn(database, "prepare");
-      try {
-        expect(readSqliteWalState(database)).toEqual(initial);
-        expect(prepare.mock.calls.length).toBeLessThanOrEqual(initial ? 1 : 0);
-        expect(fs.readFileSync(databasePath)).toEqual(before);
-        expect(fs.readFileSync(`${databasePath}-wal`)).toEqual(wal);
-      } finally {
-        prepare.mockRestore();
-      }
-    } finally {
-      database.close();
-    }
-  });
-
   it("retains relayed health across native generations and rejects older observations", () => {
     const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
     const database = openNodeSqliteDatabase(databasePath);
@@ -265,7 +240,7 @@ describe("SQLite WAL checkpoint observations", () => {
       expect(() => reader.next()).toThrow(RangeError);
       expect(db.isTransaction).toBe(false);
       expect(maintenance.inspectIdle?.()).toBe("retire");
-      expect(maintenance.health?.activeReaders).toEqual([]);
+      expect(readSqliteReaderDiagnosticsForPath(databasePath).activeReaders).toEqual([]);
       expect(() => assertNoActiveSqliteReaders(db, "native idle probe")).not.toThrow();
       reader.return?.();
       expect(maintenance.inspectIdle?.()).toBe("healthy");

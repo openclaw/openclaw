@@ -55,6 +55,7 @@ export async function fixture(
     secretRef?: boolean;
     signal?: AbortSignal;
     codex?: boolean;
+    nativeCatalogEnabled?: boolean;
     subscription?: boolean;
     homeScope?: "agent" | "user";
     modelTarget?: "utility";
@@ -136,7 +137,12 @@ export async function fixture(
   if (options.codex) {
     (config.plugins!.entries ??= {}).codex = {
       enabled: true,
-      config: { appServer: { homeScope: options.homeScope } },
+      config: {
+        appServer: { homeScope: options.homeScope },
+        ...(options.nativeCatalogEnabled !== undefined
+          ? { sessionCatalog: { enabled: options.nativeCatalogEnabled } }
+          : {}),
+      },
     };
   }
   const providerModels = config.models;
@@ -180,6 +186,52 @@ export async function fixture(
   };
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.providers.push({ pluginId: "openai", provider, source: "test" });
+  if (options.codex) {
+    pluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        conversationToolPolicySupport: "exact",
+        authBinding: {
+          fingerprint: async (params) => {
+            const profile = params.authProfileStore.profiles[params.authProfileId];
+            if (!profile) {
+              return undefined;
+            }
+            if (profile.type === "oauth") {
+              return fingerprintAuthProfileCredential({
+                profileId: params.authProfileId,
+                credential: profile,
+              });
+            }
+            const resolvedAuth = await resolveAuth({
+              provider: "openai",
+              cfg: params.config,
+              agentDir: params.agentDir,
+              workspaceDir: workspace,
+              profileId: params.authProfileId,
+              lockedProfile: true,
+              modelId: "gpt-5.4-mini",
+              modelApi: "openai-responses",
+              secretSentinels: true,
+            });
+            return fingerprintResolvedAuthProfileCredential({
+              profileId: params.authProfileId,
+              credential: profile,
+              resolvedAuth,
+            });
+          },
+        },
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("Fixture setup uses the injected inference runner");
+        },
+      },
+    });
+  }
   // Credential checks must use the same prepared provider as setup authentication.
   // Otherwise the real resolver cold-loads unrelated bundled setup plugins.
   const resolveAuth = (input: Parameters<typeof resolveApiKeyForProviderCore>[0]) =>
@@ -256,7 +308,7 @@ export async function fixture(
   const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
     reply(params),
   );
-  // Revalidation must reload the same prepared provider used by login and the probe.
+  // Every setup generation resolves the same provider used by login and the probe.
   vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
@@ -300,7 +352,13 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "agentId" | "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
+      | "agentId"
+      | "apiKey"
+      | "signal"
+      | "onActivationCompletion"
+      | "modelTarget"
+      | "modelRef"
+      | "automaticSetup"
     > = {},
   ) =>
     metadata.run(() =>
@@ -330,6 +388,7 @@ export async function fixture(
   return {
     activate,
     detect,
+    runWithMetadata: metadata.run,
     agentDir,
     before,
     config,
@@ -342,5 +401,6 @@ export async function fixture(
     login,
     prompter,
     deps,
+    pluginRegistry,
   };
 }

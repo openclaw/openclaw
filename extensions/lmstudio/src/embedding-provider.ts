@@ -2,9 +2,9 @@ import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
-  buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingProviderSsrFPolicy,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
@@ -24,7 +25,7 @@ import {
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
 import {
-  normalizeLmstudioConfiguredCatalogEntries,
+  normalizeLmstudioProviderConfig,
   resolveLmstudioCanonicalModelKey,
   resolveLmstudioInferenceBase,
   resolveLmstudioServerBase,
@@ -33,9 +34,7 @@ import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
 import {
   buildLmstudioAuthHeaders,
   resolveLmstudioConfiguredApiKeyForProvider,
-  resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
-  sanitizeLmstudioStringHeaders,
 } from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
@@ -94,9 +93,9 @@ async function resolveLmstudioApiKey(
 
 function resolveEmbeddingPreloadContextLength(params: {
   model: string;
-  models: unknown;
+  models: readonly ModelDefinitionConfig[] | undefined;
 }): number | undefined {
-  const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
+  const configuredModel = params.models?.find(
     (entry) => normalizeLmstudioModel(entry.id) === params.model,
   );
   return configuredModel?.contextTokens ?? configuredModel?.contextWindow;
@@ -170,19 +169,24 @@ export async function createLmstudioEmbeddingProvider(
     !remoteBaseUrl ||
     embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
-  const providerHeaders = providerOwnsDestination
-    ? await resolveLmstudioProviderHeaders({
-        config: options.config,
-        env: process.env,
-        headers: providerConfig?.headers,
-      })
-    : undefined;
-  // Memory remote headers are resolved snapshot values, never fresh SecretRefs.
-  const headerOverrides = Object.assign(
-    {},
-    providerHeaders,
-    sanitizeLmstudioStringHeaders(options.remote?.headers),
-  );
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      `models.providers.${resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID}.headers`,
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", options.remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      const header = resolveMemorySecretInputString({
+        value: value ?? null,
+        path: `${path}.${name}`,
+      });
+      if (header) {
+        headerOverrides[name] = header;
+      }
+    }
+  }
   const apiKey = hasLmstudioAuthorizationHeader(headerOverrides)
     ? undefined
     : remoteApiKey?.trim() ||
@@ -195,7 +199,19 @@ export async function createLmstudioEmbeddingProvider(
       json: true,
       headers: headerOverrides,
     }) ?? {};
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
+  const request = normalizeLmstudioProviderConfig({
+    baseUrl,
+    models: [],
+    request: providerConfig?.request,
+  }).request;
+  // An absent policy opts catalog requests out of LM Studio's guarded transport.
+  const ssrfPolicy =
+    resolveEmbeddingProviderSsrFPolicy({
+      provider: resolvedProvider?.providerId ?? LMSTUDIO_PROVIDER_ID,
+      api: providerConfig?.api ?? "openai-completions",
+      baseUrl,
+      allowPrivateNetwork: request?.allowPrivateNetwork,
+    }) ?? {};
   const client: LmstudioEmbeddingClient = {
     baseUrl,
     model,

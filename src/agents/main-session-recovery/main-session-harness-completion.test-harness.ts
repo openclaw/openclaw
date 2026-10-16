@@ -11,7 +11,7 @@ import { readSessionMessagesAsync } from "../../gateway/session-transcript-reade
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
-import { readAdmittedHarnessCompletionInput } from "../agent-harness-completion-recovery.js";
+import { readAdmittedHarnessCompletionInputAsync } from "../agent-harness-completion-recovery.js";
 import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
 import type { SessionEntryFixture } from "../subagent-test-fixtures.test-helpers.js";
 
@@ -115,6 +115,9 @@ export function registerHarnessCompletionRecoveryCases(
     "transcript-read-failure",
     "reserved-successor",
     "human-before-recovery",
+    "failed",
+    "timeout",
+    "killed",
   ])(
     "recovers the admitted harness completion after %s execution is interrupted",
     async (phase) => {
@@ -142,7 +145,12 @@ export function registerHarnessCompletionRecoveryCases(
           sourceChannel: "internal",
           sourceSessionKey: taskRunId,
         } as const;
-        const entry = mainSessionEntry({ lifecycleRevision: "revision-1" });
+        const entry = mainSessionEntry({
+          lifecycleRevision: "revision-1",
+          ...(phase === "failed" || phase === "timeout" || phase === "killed"
+            ? { status: phase }
+            : {}),
+        });
         const binding = await captureAdmittedHarnessCompletionForTest({
           agentId: "main",
           sessionKey,
@@ -244,12 +252,12 @@ export function registerHarnessCompletionRecoveryCases(
           expect(
             binding &&
               current &&
-              readAdmittedHarnessCompletionInput({
+              (await readAdmittedHarnessCompletionInputAsync({
                 claim: binding,
                 entry: current,
                 storePath,
                 operationalRunId,
-              }),
+              })),
           ).toBe(true);
           await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
           expect(callGateway).not.toHaveBeenCalled();
@@ -315,19 +323,67 @@ export function registerHarnessCompletionRecoveryCases(
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
-  it.each(["delegated", "unverified internal", "internal system"] as const)(
+  it.each(["control-ui", "channel"] as const)(
+    "resumes a human %s turn after inter-session steering was committed",
+    async (sourceIngress) => {
+      const { expectRecovery, loadSessionEntry, gatewayParams } = getFixture();
+      const sourceRunId = "human-run-with-steering";
+      const { storePath, sessionKey } = await writeMainSession(
+        {
+          restartRecoveryDeliveryRunId: sourceRunId,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+          restartRecoverySourceIngress: sourceIngress,
+          restartRecoveryRuns: [{ runId: sourceRunId, lifecycleGeneration: "before-restart" }],
+        },
+        [
+          {
+            role: "user",
+            content: "Finish the requested repair",
+            provenance: { kind: "external_user" },
+          },
+          {
+            role: "user",
+            content: "The independent review found one more regression",
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "inspect-regression", name: "read" }],
+          },
+        ],
+      );
+
+      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({
+        sessionKey,
+        expectedExistingSessionId: "main-session",
+        deliver: false,
+      });
+      const recovered = loadSessionEntry({ sessionKey, storePath });
+      expect(recovered).toMatchObject({
+        restartRecoveryDeliverySourceRunId: sourceRunId,
+        restartRecoverySourceIngress: sourceIngress,
+      });
+      expect(recovered?.mainRestartRecovery?.tombstone).toBeUndefined();
+    },
+  );
+
+  it.each(["delegated", "unscoped control-ui", "unverified internal", "internal system"] as const)(
     "refuses %s recovery without surviving sender authority",
     async (source) => {
       const { expectRecovery, loadSessionEntry } = getFixture();
       const { storePath, sessionKey } = await writeMainSession(
-        source !== "delegated"
-          ? {
-              restartRecoverySourceIngress: "internal",
-              pendingFinalDelivery: preparedFinal("unverified"),
-            }
-          : {},
+        source === "unscoped control-ui"
+          ? { restartRecoverySourceIngress: "control-ui" }
+          : source !== "delegated"
+            ? {
+                restartRecoverySourceIngress: "internal",
+                pendingFinalDelivery: preparedFinal("unverified"),
+              }
+            : {},
         [
-          ...(source === "delegated"
+          ...(source === "delegated" || source === "unscoped control-ui"
             ? [
                 {
                   role: "user",

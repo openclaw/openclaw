@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   buildSessionCreationStamp,
@@ -13,7 +17,6 @@ import {
   type SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import * as userProfileList from "../../state/user-profile-list.js";
-import * as userProfiles from "../../state/user-profiles.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
@@ -81,18 +84,20 @@ function provider(id: string, sessionKey: string): SessionCatalogProvider {
 describe("session catalog entry snapshots", () => {
   afterEach(() => {
     projection.dispose();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    vi.spyOn(userProfileList, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(false);
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
+    setRuntimeConfigSnapshot({});
     projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
 
   it("resolves catalog senders against current profiles without attributing unknown turns", async () => {
-    vi.spyOn(userProfiles, "hasMultipleSessionSharingIdentities").mockReturnValue(false);
-    vi.spyOn(userProfileList, "getUserProfileDisplay").mockImplementation((id) => {
+    vi.spyOn(userProfileList, "getResidentUserProfileDisplay").mockImplementation((id) => {
       if (id !== "merged-profile") {
         throw new Error("unknown profile");
       }
@@ -210,13 +215,14 @@ describe("session catalog entry snapshots", () => {
     await poll();
     expect(revisions[3]).toBe(revisions[2]);
     cfg = {};
+    setRuntimeConfigSnapshot(cfg);
     await poll();
     expect(revisions[4]).not.toBe(revisions[3]);
     expect(labels).toEqual(["Before", "Before", "After", "After", "After"]);
   });
 
   it("projects inherited profile creators from stored provenance, not provider metadata", () => {
-    const display = vi.spyOn(userProfileList, "getUserProfileDisplay").mockReturnValue({
+    const display = vi.spyOn(userProfileList, "getResidentUserProfileDisplay").mockReturnValue({
       id: "current",
       displayName: "Current",
       avatarRevision: "1",

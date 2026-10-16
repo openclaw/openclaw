@@ -1,6 +1,6 @@
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runInSqliteMaintenanceContext } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import type {
   OpenClawStateDatabase,
@@ -36,7 +36,7 @@ export function createStateDatabaseIdleRetirement(
       previous.refresh();
       return;
     }
-    const timer = runInSqliteMaintenanceContext(() =>
+    const timer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         idleTimers.delete(database.db);
         try {

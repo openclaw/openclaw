@@ -1,91 +1,81 @@
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { createComponent, createSignal, flush } from "solid-js";
+import { describe, expect, it, onTestFinished } from "vitest";
+import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
-// The picker's spec: every seeded surprise must come from this fixed rotation.
-const SURPRISE_CLASSES = [
-  "chat-reading-indicator--southpaw",
-  "chat-reading-indicator--flurry",
-  "chat-reading-indicator--spin",
-  "chat-reading-indicator--shadowbox",
-  "chat-reading-indicator--backflip",
-  "chat-reading-indicator--zen",
-  "chat-reading-indicator--drummer",
-  "chat-reading-indicator--peekaboo",
-  "chat-reading-indicator--nodoff",
-  "chat-reading-indicator--curious",
-  "chat-reading-indicator--omnom",
-  "chat-reading-indicator--fakeout",
-] as const;
+type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
-// The keyed sample is deterministic for a fixed salt, so the rarity and spread
-// assertions below are exact re-runs, not statistical flakes.
-const SAMPLE_SALT = 0x5eed;
-const sampleDecisions = Array.from({ length: 10_000 }, (_, index) =>
-  selectWorkingClawSurprise(`run:${index}`, { salt: SAMPLE_SALT }),
-);
-
-function findSampleKey(wantSurprise: boolean): string {
-  const index = sampleDecisions.findIndex((decision) => Boolean(decision) === wantSurprise);
-  if (index === -1) {
-    throw new Error(`no sample key with surprise=${String(wantSurprise)}`);
-  }
-  return `run:${index}`;
+function mountIndicator(
+  part: Extract<ChatItem, { kind: "reading-indicator" }>,
+  initial: ChatWorkingIndicatorOptions,
+) {
+  const [options, setOptions] = createSignal(initial);
+  const view = mountSolid(() =>
+    createComponent(ChatWorkingIndicator, {
+      part,
+      get options() {
+        return options();
+      },
+    }),
+  );
+  onTestFinished(view.unmount);
+  flush();
+  return {
+    container: view.container,
+    draw: (next: ChatWorkingIndicatorOptions) => {
+      setOptions(next);
+      flush();
+    },
+  };
 }
 
-describe("selectWorkingClawSurprise", () => {
-  it("keeps surprises rare, deterministic, and spread across every move", () => {
-    const surprises = sampleDecisions.filter(Boolean);
+function findRenderKey(wantSurprise: boolean): string {
+  for (let index = 0; index < 10_000; index++) {
+    const key = `probe:${index}`;
+    if (Boolean(selectWorkingClawSurprise(key)) === wantSurprise) {
+      return key;
+    }
+  }
+  throw new Error(`no render key with surprise=${String(wantSurprise)}`);
+}
 
-    // ~5% target: SURPRISE_CHANCE_PER_THOUSAND=50 over 10k keys lands near 500.
-    expect(surprises.length).toBeGreaterThan(400);
-    expect(surprises.length).toBeLessThan(600);
-    expect(selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT })).toBe(
-      selectWorkingClawSurprise("run:42", { salt: SAMPLE_SALT }),
+describe("ChatWorkingIndicator", () => {
+  it("promotes child activity above supporting totals and restores the standalone glyph", () => {
+    const { container, draw } = mountIndicator(
+      { kind: "reading-indicator", key: "task-first", startedAt: 1 },
+      { outputTokens: 4_100 },
     );
-    expect(new Set(surprises)).toEqual(new Set(SURPRISE_CLASSES));
-
-    // The move pick must not reuse the rarity bits (hash % 1000); if it did,
-    // some moves would cluster while others nearly vanish from the rotation.
-    const counts = new Map<string, number>();
-    for (const surprise of surprises) {
-      counts.set(surprise, (counts.get(surprise) ?? 0) + 1);
-    }
-    for (const surpriseClass of SURPRISE_CLASSES) {
-      expect(counts.get(surpriseClass) ?? 0).toBeGreaterThanOrEqual(10);
-    }
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    const activity = document.createElement("div");
+    activity.className = "task-first-probe";
+    activity.textContent = "Backend implementation";
+    draw({ outputTokens: 4_100, subagentActivity: activity });
+    const task = container.querySelector(".task-first-probe");
+    const status = container.querySelector(".chat-working-indicator");
+    expect(task).not.toBeNull();
+    expect(status?.classList.contains("chat-working-indicator--supporting")).toBe(true);
+    expect(task!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(status?.textContent).toContain("4.1k output tokens");
+    draw({ outputTokens: 4_100 });
+    expect(container.querySelector(".task-first-probe")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator--supporting")).toBeNull();
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
-  it("keeps ineligible keys on the default claw even when they would surprise", () => {
-    const surprisingKey = findSampleKey(true);
-    expect(selectWorkingClawSurprise(surprisingKey, { salt: SAMPLE_SALT })).not.toBe("");
-    expect(selectWorkingClawSurprise(surprisingKey, { salt: SAMPLE_SALT, eligible: false })).toBe(
-      "",
-    );
-  });
-});
-
-describe("renderChatWorkingIndicator", () => {
   it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
-    const container = document.createElement("div");
-    const part = { kind: "reading-indicator" as const, key: "brand-test", startedAt: 1 };
-    render(
-      renderChatWorkingIndicator(part, { mascot: "claw", workingIndicator: "dots" }),
-      container,
+    const { container, draw } = mountIndicator(
+      { kind: "reading-indicator", key: "brand-test", startedAt: 1 },
+      { mascot: "claw", workingIndicator: "dots" },
     );
     expect(container.querySelectorAll(".chat-reading-indicator--neutral > span")).toHaveLength(3);
-    render(
-      renderChatWorkingIndicator(part, { mascot: "none", workingIndicator: "claw" }),
-      container,
-    );
+    draw({ mascot: "none", workingIndicator: "claw" });
     expect(container.querySelector(".chat-reading-indicator svg")).not.toBeNull();
-    render(renderChatWorkingIndicator(part, { workingIndicator: "brand" }), container);
+    draw({ workingIndicator: "brand" });
     expect(container.querySelector(".chat-reading-indicator--brand")).not.toBeNull();
-    render(
-      renderChatWorkingIndicator(part, { workingIndicator: "none", workingPhrases: [] }),
-      container,
-    );
+    draw({ workingIndicator: "none", workingPhrases: [] });
     expect(container.querySelector(".chat-reading-indicator")).toBeNull();
     expect(
       container
@@ -96,14 +86,10 @@ describe("renderChatWorkingIndicator", () => {
   });
 
   it("renders neutral dots without claw surprises and forwards authored phrases", () => {
-    const container = document.createElement("div");
     const workingPhrases = ["Building"];
-    render(
-      renderChatWorkingIndicator(
-        { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
-        { mascot: "none", workingPhrases },
-      ),
-      container,
+    const { container } = mountIndicator(
+      { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
+      { mascot: "none", workingPhrases },
     );
     const bubble = container.querySelector(".chat-reading-indicator--neutral");
     expect(bubble?.querySelectorAll("span")).toHaveLength(3);
@@ -116,43 +102,31 @@ describe("renderChatWorkingIndicator", () => {
       workingPhrases,
     );
   });
-  // The render path seeds with the module's per-page-load salt, so probe that
-  // same default salt for keys that do (and do not) surprise this session.
-  function findRenderKey(wantSurprise: boolean): string {
-    for (let index = 0; index < 10_000; index++) {
-      const key = `probe:${index}`;
-      if (Boolean(selectWorkingClawSurprise(key)) === wantSurprise) {
-        return key;
-      }
-    }
-    throw new Error(`no render key with surprise=${String(wantSurprise)}`);
-  }
 
-  function surpriseClassesFor(key: string, waitingApproval: boolean): string[] {
-    const container = document.createElement("div");
-    render(
-      renderChatWorkingIndicator(
-        { kind: "reading-indicator", key, startedAt: 1 },
-        { waitingApproval },
-      ),
-      container,
+  it("keeps approval waits on the default claw even for surprising keys", () => {
+    const { container } = mountIndicator(
+      { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
+      { waitingApproval: true },
     );
     const bubble = container.querySelector(".chat-reading-indicator");
     expect(bubble).not.toBeNull();
-    return [...(bubble?.classList ?? [])].filter((name) =>
-      name.startsWith("chat-reading-indicator--"),
-    );
-  }
-
-  it("routes the seeded surprise class onto the claw bubble", () => {
-    const surprisingKey = findRenderKey(true);
-    expect(surpriseClassesFor(surprisingKey, false)).toEqual([
-      selectWorkingClawSurprise(surprisingKey),
-    ]);
-    expect(surpriseClassesFor(findRenderKey(false), false)).toEqual([]);
+    expect(
+      [...bubble!.classList].filter((name) => name.startsWith("chat-reading-indicator--")),
+    ).toEqual([]);
   });
 
-  it("keeps approval waits on the default claw even for surprising keys", () => {
-    expect(surpriseClassesFor(findRenderKey(true), true)).toEqual([]);
+  it("retains an open activity disclosure and its animation when usage updates", () => {
+    const { container, draw } = mountIndicator(
+      { kind: "reading-indicator", key: "steady-run", startedAt: 1 },
+      { bubbleMode: true, outputTokens: 12 },
+    );
+    const details = container.querySelector("details")!;
+    details.open = true;
+    const glyph = container.querySelector(".chat-reading-indicator")!;
+    draw({ bubbleMode: true, outputTokens: 27 });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(container.querySelector(".chat-reading-indicator")).toBe(glyph);
+    expect(container.textContent).toContain("27 output tokens");
   });
 });

@@ -143,7 +143,12 @@ it.each([
     if (kind === "repair") {
       const result = await migrate();
       expect(result.warnings).toEqual([]);
-      expect(result.changes).toContain("Rebuilt canonical shared-state SQLite indexes (1)");
+      using repaired = nodeSqlite.openNodeSqliteDatabase(database.path, { readOnly: true });
+      expect(
+        repaired
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_audit_events_time'")
+          .get(),
+      ).toEqual({ name: "idx_audit_events_time" });
       expect(() => store.list()).toThrow("inventory has closed");
       const reopened = await createWorkerEnvironmentStore({ database });
       expect(reopened.list()).toEqual([]);
@@ -395,7 +400,7 @@ it("serves committed inventory and performs guarded mutations without host SQLit
 });
 
 it.each(["create", "close"] as const)(
-  "queues attachment %s behind an environment commit awaiting publication",
+  "publishes committed facts while attachment %s waits for the prior operation to settle",
   async (method) => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-attachment-fifo-") },
@@ -426,7 +431,7 @@ it.each(["create", "close"] as const)(
     let classification: Promise<boolean> | undefined;
     try {
       await committed.promise;
-      expect(() => store.get(intent.environmentId)).toThrow("unsettled mutation");
+      expect(store.get(intent.environmentId)?.state).toBe("failed");
       queued =
         method === "create"
           ? store.createSessionAttachmentIntent(
@@ -609,9 +614,7 @@ it("rechecks idle-cleanup activity after a pending attachment touch publishes", 
   let cleanup: Promise<unknown> | undefined;
   try {
     await committed.promise;
-    expect(() => store.getSessionAttachmentRecord(attachment.sessionId)).toThrow(
-      "unsettled mutation",
-    );
+    expect(store.getSessionAttachmentRecord(attachment.sessionId)?.lastUsedAtMs).toBe(2_000);
     cleanup = store.closeSessionAttachment(attachment.sessionId, () => {
       if (
         store.getSessionAttachmentRecord(attachment.sessionId)?.lastUsedAtMs !==

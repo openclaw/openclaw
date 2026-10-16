@@ -5,6 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
@@ -12,6 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 async function call(
@@ -26,6 +31,7 @@ async function call(
 
 describe("worktrees.remove/restore padded ids on live registry", () => {
   it("removes and restores through real Git + registry when ids are padded", async () => {
+    setRuntimeConfigSnapshot({});
     const root = tempDirs.make("openclaw-worktrees-gateway-trim-");
     const repoRoot = await initializeManagedWorktreeTestRepository(root);
     const stateDir = path.join(root, "state");

@@ -16,7 +16,8 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar agent chip", () => {
   it("keeps a configured avatar blank while waiting for authentication", async () => {
@@ -72,6 +73,22 @@ describe("AppSidebar agent chip", () => {
       );
     });
     expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
+    await settleRoster(sidebar);
+    request.mockResolvedValue({
+      agentId: "main",
+      name: "Updated workspace",
+      emoji: "⚓",
+      avatar: "data:image/png;base64,dXBkYXRlZA==",
+    });
+    gatewayHarness.publishEvent("agent.identity.changed", { agentId: "main" });
+    await agentIdentity.ensure(["main"]);
+    await settleRoster(sidebar);
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain(
+      "Updated workspace",
+    );
+    expect(sidebar.querySelector<HTMLImageElement>(".sidebar-agent-card__avatar img")?.src).toBe(
+      "data:image/png;base64,dXBkYXRlZA==",
+    );
   });
 
   it.each(["loading", "excluded"] as const)(
@@ -124,16 +141,14 @@ describe("AppSidebar agent chip", () => {
       expect(sidebar.querySelector(".sidebar-agent-menu")?.textContent).not.toContain(
         "Private agent",
       );
-      const capabilities = sidebar.querySelector('wa-dropdown-item[value="command:capabilities"]');
+      const capabilities = sidebar.querySelector('[data-value="command:capabilities"]');
       if (discovery === "loading") {
         expect(capabilities).toBeNull();
       } else {
         expect(capabilities?.textContent).toMatch(/shared/i);
       }
       expect(
-        sidebar
-          .querySelector('wa-dropdown-item[value="command:agent-settings"]')
-          ?.hasAttribute("disabled"),
+        sidebar.querySelector('[data-value="command:agent-settings"]')?.hasAttribute("disabled"),
       ).toBe(discovery === "loading");
     },
   );
@@ -265,8 +280,8 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
-      [...(menu?.querySelectorAll("wa-dropdown-item") ?? [])].map((element) =>
-        element.getAttribute("value"),
+      [...(menu?.querySelectorAll('[role^="menuitem"]') ?? [])].map((element) =>
+        element.getAttribute("data-value"),
       ),
     ).toEqual([
       "scope:all",
@@ -278,7 +293,7 @@ describe("AppSidebar agent chip", () => {
       "command:agent-settings",
     ]);
 
-    const commands = [...(menu?.querySelectorAll('wa-dropdown-item[value^="command:"]') ?? [])];
+    const commands = [...(menu?.querySelectorAll('[data-value^="command:"]') ?? [])];
     expect(commands.map((item) => item.textContent?.trim())).toEqual([
       "New agent",
       "See all agents",
@@ -286,13 +301,13 @@ describe("AppSidebar agent chip", () => {
       "Molty settings",
     ]);
     for (const command of commands) {
-      expect(command.querySelector('[slot="icon"] svg')).not.toBeNull();
+      expect(command.querySelector(".oc-menu-item__icon svg")).not.toBeNull();
     }
 
     expect(menu?.querySelector("[aria-checked], .session-menu__check")).toBeNull();
-    expect(menu?.querySelector('[value="scope:all"]')).not.toBeNull();
+    expect(menu?.querySelector('[data-value="scope:all"]')).not.toBeNull();
 
-    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[value^="agent:"]') ?? [])];
+    const agentRows = [...(menu?.querySelectorAll('[data-value^="agent:"]') ?? [])];
     expect(agentRows).toHaveLength(2);
     expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
     expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-row")).not.toBeNull();
@@ -305,9 +320,7 @@ describe("AppSidebar agent chip", () => {
       ...(switchMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
     ].find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();
-    switchMenu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: researchRow }, bubbles: true }),
-    );
+    researchRow?.click();
     await sidebar.updateComplete;
 
     expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
@@ -349,15 +362,12 @@ describe("AppSidebar agent chip", () => {
         )
         ?.click();
       await sidebar.updateComplete;
-      const item = sidebar.querySelector<HTMLElement>(
-        'wa-dropdown-item[value="command:capabilities"]',
-      );
+      const item = sidebar.querySelector<HTMLElement>('[data-value="command:capabilities"]');
       expect(item?.textContent).toContain("What can research do?");
-      sidebar
-        .querySelector(".sidebar-agent-menu")
-        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+      item?.click();
+      await sidebar.updateComplete;
 
-      expect(onNavigate).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledOnce());
       const options = onNavigate.mock.calls[0]?.[1] as { pathname: string; search: string };
       expect(options.pathname).toBe("/chat/research");
       const search = new URLSearchParams(options.search);
@@ -389,8 +399,8 @@ describe("AppSidebar agent chip", () => {
       .sidebarMenus;
     expect(menus.agentMenuPosition).toEqual({ x: 12, top: 92 });
     const menu = sidebar.querySelector(".sidebar-agent-menu");
-    expect(menu?.getAttribute("placement")).toBe("bottom-start");
-    expect(menu?.querySelector('[slot="trigger"]')?.getAttribute("style")).toContain("top: 92px");
+    expect(menu?.getAttribute("role")).toBe("menu");
+    expect(menu?.previousElementSibling?.getAttribute("style")).toContain("top: 92px");
   });
 
   it("keeps the widened agent menu inside a narrow viewport", async () => {
@@ -479,7 +489,7 @@ describe("AppSidebar agent chip", () => {
       expect(
         [
           ...sidebar.querySelectorAll(
-            '.sidebar-agent-menu wa-dropdown-item[value^="agent:"] .agent-select__option-label',
+            '.sidebar-agent-menu [data-value^="agent:"] .agent-select__option-label',
           ),
         ].map((item) => item.textContent?.trim()),
       ).toEqual(order.map((id) => "agent-" + id));
@@ -524,7 +534,7 @@ describe("AppSidebar agent chip", () => {
         ...(menu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch") ?? []),
       ].find((row) => row.textContent?.includes("research"));
       expect(researchRow).toBeDefined();
-      const avatar = researchRow?.querySelector(".agent-select__avatar");
+      let avatar = researchRow?.querySelector(".agent-select__avatar");
       expect(avatar?.classList).toContain("is-pending");
       expect(avatar?.classList).not.toContain("is-fallback");
 
@@ -538,6 +548,7 @@ describe("AppSidebar agent chip", () => {
             ?.getAttribute("src"),
         ).toBe("blob:agent-avatar");
       });
+      avatar = researchRow?.querySelector(".agent-select__avatar");
       expect(avatar?.classList).toContain("is-pending");
       avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
       expect(avatar?.classList).not.toContain("is-pending");

@@ -1,3 +1,4 @@
+import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   assembleHarnessContextEngine,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
@@ -5,7 +6,7 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
@@ -21,6 +22,7 @@ import {
   CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
+  resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -81,6 +83,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  // An authored exact-model cap is operator policy, not native capacity discovery.
+  // Supervised native sessions keep their existing independent ownership.
+  const configuredContextBudget =
+    activeContextEngine &&
+    !usesSupervisionConnection &&
+    params.authoredContextTokenCap &&
+    effectiveContextTokenBudget
+      ? effectiveContextTokenBudget
+      : undefined;
   const availableToolNames = () =>
     flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
       .map((tool) => tool.name)
@@ -89,13 +100,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined;
   const forkedSession =
     !mutable.startupBinding?.threadId && params.sessionTarget
-      ? getSessionEntry({
+      ? await getSessionEntryAsync({
           ...params.sessionTarget,
           sessionKey: contextSessionKey,
           hydrateSkillPromptRefs: false,
           readConsistency: "latest",
         })
       : undefined;
+  connection.assertCurrent();
   // A copied spawn transcript promises completed tool evidence to this child.
   const preserveForkedToolResults = Boolean(
     forkedSession?.sessionId === params.sessionId &&
@@ -174,6 +186,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
+      currentUserMessage: admittedMessage,
     });
     assertProjectionCurrent();
     contextImageGroups = projection.imageGroups ?? [];
@@ -194,6 +207,31 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         sessionKey: contextSessionKey,
         messages: historyState.messages,
         tokenBudget: effectiveContextTokenBudget,
+        ...(configuredContextBudget
+          ? {
+              promptBudget: {
+                contextTokens: configuredContextBudget,
+                reserveTokens:
+                  configuredContextBudget -
+                  resolveProjectionPromptBudgetTokens({
+                    contextTokenBudget: configuredContextBudget,
+                  }),
+                inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
+                systemPrompt: joinPresentSections(
+                  baseDeveloperInstructions,
+                  refreshableInstructions,
+                  buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+                  JSON.stringify(toolBridge.specs),
+                ),
+                prompt: joinPresentSections(
+                  params.prompt,
+                  params.currentInboundContext?.text,
+                  buildOpenClawPromptContext(true),
+                  inputAttachmentNote,
+                ),
+              },
+            }
+          : {}),
         availableTools: new Set(availableToolNames()),
         citationsMode: params.config?.memory?.citations,
         sandboxed: sandbox?.enabled === true,
@@ -221,7 +259,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
                 { ...runtimeParams },
                 contextEngineProjection,
               ),
-              projection: contextEngineProjection,
               dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
               legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
             })
@@ -240,6 +277,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : "elide",
         ...(projectionDecision.project ? { prepareFileContext } : {}),
         currentUserTurnIdempotencyKey,
+        currentUserMessage: admittedMessage,
       });
       assertProjectionCurrent();
       contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];

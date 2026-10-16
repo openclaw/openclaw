@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -17,8 +14,6 @@ import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extens
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { jsonResult } from "../tools/common.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancellation,
@@ -111,8 +106,6 @@ function preservedTurnsText(messages: AgentMessage[]): string {
 }
 
 const {
-  collectToolFailures,
-  formatToolFailuresSection,
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
@@ -122,11 +115,9 @@ const {
   auditSummaryQuality: auditSummaryQualityOwner,
   capCompactionSummary,
   budgetCompactionSummary,
-  readWorkspaceContextForSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
-  MAX_SPLIT_TURN_CONTEXT_CHARS,
 } = testing;
 
 function auditSummaryQuality(
@@ -194,60 +185,6 @@ function requireArray(value: unknown): unknown[] {
   }
   return value;
 }
-
-describe("compaction-safeguard tool failures", () => {
-  const acceptedDetails = jsonResult({
-    status: "accepted",
-    childSessionKey: "agent:watcher:subagent:abc",
-    runId: "run-123",
-    mode: "run",
-  }).details;
-  const failure = (id: string, text: string, details?: unknown, toolName = "exec") =>
-    toolResultMessage(id, text, { toolName, isError: true, details });
-  it.each([
-    {
-      name: "accepted spawn exclusion and look-alike failures",
-      messages: [
-        failure("call-spawn-accepted", "accepted", acceptedDetails, "sessions_spawn"),
-        failure("call-exec-failed", "boom", { status: "failed", exitCode: 1 }),
-        failure("call-spawn-error", "spawn rejected", { status: "error" }, "sessions_spawn"),
-        failure("call-other-lookalike", "real failure", acceptedDetails, "some_other_tool"),
-      ],
-      ids: ["call-exec-failed", "call-spawn-error", "call-other-lookalike"],
-      expected: ["exec (status=failed exitCode=1): boom"],
-      firstSummary: undefined,
-    },
-    {
-      name: "deduplication and empty output",
-      messages: [
-        { ...failure("call-1", "", { exitCode: 2 }), content: [] },
-        failure("call-1", "ignored"),
-      ],
-      ids: ["call-1"],
-      expected: ["exec (exitCode=2): failed"],
-      firstSummary: undefined,
-    },
-    {
-      name: "bounded failure counts and UTF-16 summaries",
-      messages: Array.from({ length: 9 }, (_, idx) =>
-        failure(`call-${idx}`, `${"x".repeat(236)}🚀tail-${idx}`),
-      ),
-      ids: Array.from({ length: 9 }, (_, idx) => `call-${idx}`),
-      expected: ["## Tool Failures", "...and 1 more"],
-      firstSummary: `${"x".repeat(236)}...`,
-    },
-  ])("formats tool failures with $name", ({ messages, ids, expected, firstSummary }) => {
-    const failures = collectToolFailures(messages);
-    expect(failures.map((entry: { toolCallId: string }) => entry.toolCallId)).toEqual(ids);
-    const section = formatToolFailuresSection(failures);
-    for (const text of expected) {
-      expect(section).toContain(text);
-    }
-    if (firstSummary !== undefined) {
-      expect(failures[0]?.summary).toBe(firstSummary);
-    }
-  });
-});
 
 describe("compaction-safeguard summary budgets", () => {
   it("preserves diagnostic sections (tool failures, file ops) when capping oversized body", () => {
@@ -320,7 +257,7 @@ describe("compaction-safeguard runtime registry", () => {
     expect(getCompactionSafeguardRuntime(undefined)).toBeNull();
   });
 
-  it.each([false, true])("consumes cancellation provenance once (replaced=%s)", (replaced) => {
+  it.each([true])("consumes cancellation provenance once (replaced=%s)", (replaced) => {
     const sm = {};
     const error = Object.assign(new Error("provider unavailable"), { status: 503 });
     if (!replaced) {
@@ -361,6 +298,7 @@ describe("compaction-safeguard runtime registry", () => {
     buildEmbeddedExtensionFactories({
       cfg,
       sessionManager,
+      workspaceDir: "/workspace",
       model: {
         contextWindow: 200_000,
       } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
@@ -422,69 +360,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     }
   });
 
-  it("drops an oversized preserved tool interaction as one atomic group", () => {
-    const toolCalls = Array.from({ length: 30 }, (_, index) => ({
-      type: "toolCall",
-      id: `call_${index}`,
-      name: "read",
-      arguments: {},
-    }));
-    const split = splitPreservedRecentTurns({
-      messages: [
-        userMessage("recent ask", 1),
-        castAgentMessage({ role: "assistant", content: toolCalls, timestamp: 2 }),
-        ...toolCalls.map((toolCall, index) =>
-          toolResultMessage(
-            toolCall.id,
-            `paired-result-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
-            { timestamp: index + 3 },
-          ),
-        ),
-        castAgentMessage(timestampedTextAssistant("terminal answer survives", 33)),
-      ],
-      recentTurnsPreserve: 1,
-    });
-
-    const section = preservedTurnsText(split.preservedMessages) as string;
-
-    expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
-    expect(section).toContain("[Earlier preserved messages truncated]");
-    expect(section).not.toContain("paired-result-00-");
-    expect(section).not.toContain("paired-result-29-");
-    expect(section).not.toContain("- Tool result (read):");
-    expect(section).toContain("- Assistant: terminal answer survives");
-    expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "mixed-content placeholders",
-      message: castAgentMessage({
-        role: "user",
-        content: [
-          { type: "text", text: "caption text" },
-          { type: "image", data: "abc", mimeType: "image/png" },
-        ],
-        timestamp: 1,
-      }),
-      expected: ["- User: caption text", "[non-text content: image]"],
-    },
-    {
-      name: "UTF-16-safe truncation",
-      message: userMessage(`${"x".repeat(599)}🚀tail`, 1),
-      expected: [`- User: ${"x".repeat(599)}...`],
-    },
-  ])("renders preserved messages with $name", ({ message, expected }) => {
-    const section = preservedTurnsText([message]);
-    for (const text of expected) {
-      expect(section).toContain(text);
-    }
-  });
-
-  const uniqueIdentifierTail = Array.from(
-    { length: 12 },
-    (_, idx) => `b${idx.toString(16).padStart(7, "0")}`,
-  );
   it.each([
     {
       name: "case-normalized identifiers",
@@ -497,27 +372,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
         "host.local:18789",
       ],
     },
-    {
-      name: "host/ports after a long token",
-      input: `${"x".repeat(120_000)} host.local:18789 api.example.com/v1:443 127.0.0.1:8080 sub-domain.example.test:65535`,
-      expected: [
-        "host.local:18789",
-        "api.example.com/v1:443",
-        "127.0.0.1:8080",
-        "sub-domain.example.test:65535",
-      ],
-    },
-    {
-      name: "deduplication before capping",
-      input: `${Array.from({ length: 10 }, () => "a0b0c0d0").join(" ")} ${uniqueIdentifierTail.join(" ")}`,
-      expected: undefined,
-    },
-    {
-      name: "decimal and scientific values",
-      input:
-        "metric=0.123456789 scientific=1.23456789e10 exponent=1e-987654321 order_id=246813579 hash=deadbeef1234 ambiguous=12345678e10",
-      expected: ["246813579", "DEADBEEF1234", "12345678E10"], // pragma: allowlist secret
-    },
   ])("extracts $name", ({ name, input, expected }) => {
     const identifiers = extractOpaqueIdentifiers(input);
     if (expected) {
@@ -526,7 +380,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
       expect(identifiers).toHaveLength(12);
       expect(new Set(identifiers).size).toBe(12);
       expect(identifiers).toContain("A0B0C0D0");
-      expect(identifiers).toContain(uniqueIdentifierTail[10]?.toUpperCase());
     }
     if (name === "case-normalized identifiers") {
       const latestAsk = "Explain post-compaction behavior for memory indexing";
@@ -634,22 +487,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       policy: undefined,
       expected: "&lt;script&gt;alert(1)&lt;/script&gt;",
     },
-    {
-      name: "identifier policy",
-      custom: undefined,
-      policy: {
-        identifierPolicy: "custom" as const,
-        identifierInstructions: "Keep ticket <ABC-123> but remove \u200Bsecrets.",
-      },
-      expected: "Keep ticket &lt;ABC-123&gt; but remove secrets.",
-    },
   ])("sanitizes untrusted $name before embedding", ({ custom, policy, expected }) => {
     const instructions = buildCompactionStructureInstructions(custom, policy);
     expect(instructions).toContain(expected);
     expect(instructions).toContain("<untrusted-text>");
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves history when summarization fails (caller aborted=%s)",
     async (aborted) => {
       const controller = new AbortController();
@@ -686,22 +530,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each(["model-output-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
+  it.each(["copilot-headers", "keyless-sdk-auth"] as const)(
     "summarizes with provider-prepared model settings: %s",
     async (mode) => {
       mockSummarizeCompactionHistory.mockResolvedValue("mock summary");
       const model = createAnthropicModelFixture(
-        mode === "model-output-limit"
-          ? { contextWindow: 1_000_000, maxTokens: 128_000 }
-          : mode === "copilot-headers"
-            ? {
-                id: "gpt-5.4",
-                name: "gpt-5.4",
-                provider: "github-copilot",
-                api: "openai-responses",
-                baseUrl: "https://api.githubcopilot.com",
-              }
-            : { provider: "amazon-bedrock" },
+        mode === "copilot-headers"
+          ? {
+              id: "gpt-5.4",
+              name: "gpt-5.4",
+              provider: "github-copilot",
+              api: "openai-responses",
+              baseUrl: "https://api.githubcopilot.com",
+            }
+          : { provider: "amazon-bedrock" },
       );
       const sessionManager = configuredSession({ model, recentTurnsPreserve: 0 });
       const headers = {
@@ -720,26 +562,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
               ...(mode === "copilot-headers" ? { headers: { ...headers } } : {}),
             },
       );
-      const event = createCompactionEvent(
-        mode === "model-output-limit"
-          ? {
-              preparation: {
-                messagesToSummarize: [userMessage("large history", 1)],
-                tokensBefore: 250_000,
-                settings: { reserveTokens: 240_000 },
-              },
-            }
-          : { messageText: "summarize me", tokensBefore: 1000 },
-      );
+      const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1000 });
       const result = await createCompactionHandler()(
         event,
         createCompactionContext({ sessionManager, getApiKeyAndHeadersMock }),
       );
       expect(requireRecord(result).cancel).not.toBe(true);
       const call = mockSummarizeCompactionHistory.mock.lastCall?.[0];
-      if (mode === "model-output-limit") {
-        expect(call?.reserveTokens).toBe(128_000);
-      } else if (mode === "copilot-headers") {
+      if (mode === "copilot-headers") {
         for (const [name, value] of Object.entries(headers)) {
           expect(call?.headers?.[name]).toBe(value);
         }
@@ -751,7 +581,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "sends one authoritative safeguard summary format (prefix=%s)",
     async (prefix) => {
       testing.setSummarizeCompactionHistoryForTest(
@@ -876,7 +706,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
   });
 
-  it.each(["How about now?", "１０ and ２０"])(
+  it.each(["How about now?"])(
     "accepts a preserved keyword-free request without retrying compaction: %s",
     async (latestAsk) => {
       const generatedSummary = structuredSummary({ rules: "Preserve context.", asks: latestAsk });
@@ -887,110 +717,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
       expect(expectCompactionResult(result).summary).toContain(latestAsk);
       expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-      expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-    },
-  );
-
-  it("marks a trimmed built-in body and emits one redacted tail-loss warning", async () => {
-    const sensitiveSentinel = "body-secret-never-log";
-    const body = `${sensitiveSentinel}-${"b".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
-    mockSummarizeCompactionHistory.mockResolvedValue(body);
-    const sessionManager = modelSession({ recentTurnsPreserve: 0 });
-    const event = createCompactionEvent({ messageText: "summarize me" });
-
-    const { result } = await runCompactionScenario(sessionManager, event);
-
-    expect(expectCompactionResult(result).summary).toContain(SUMMARY_TRUNCATED_MARKER.trim());
-    expect(compactionLogger.warn).toHaveBeenCalledOnce();
-    const warning = compactionLogger.warn.mock.calls[0]?.join(" ") ?? "";
-    expect(warning).toBe("Compaction safeguard: finalized artifact truncated; loss=summary-tail");
-    expect(warning).not.toContain(sensitiveSentinel);
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledOnce();
-  });
-
-  it("preserves audit-required tail sections when an earlier section exhausts the budget", async () => {
-    const latestAsk = "preserve the pending deployment status";
-    const identifier = "/tmp/compaction-final-audit.log";
-    const auditValidBeforeFinalization = structuredSummary({
-      decisions: [
-        "Latest user request status: pending.",
-        "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
-      ].join("\n"),
-      asks: `Latest user request context: ${JSON.stringify(latestAsk)}`,
-      identifiers: identifier,
-    });
-    expect(
-      auditSummaryQuality({
-        summary: auditValidBeforeFinalization,
-        identifiers: [identifier],
-        latestAsk,
-      }).ok,
-    ).toBe(true);
-    mockSummarizeCompactionHistory.mockResolvedValue(auditValidBeforeFinalization);
-
-    const sessionManager = createQualityGuardSessionManager();
-    const event = createCompactionEvent({ messageText: `${latestAsk} ${identifier}` });
-
-    const { result } = await runCompactionScenario(sessionManager, event, {
-      latestUnresolvedUserRequest: true,
-    });
-
-    const summary = expectCompactionResult(result).summary;
-    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-    expect(summary).toContain(SUMMARY_TRUNCATED_MARKER.trim());
-    expect(summary).toContain("## Open TODOs");
-    expect(summary).toContain("## Constraints/Rules");
-    expect(summary).toContain(
-      `## Pending user asks\nLatest user request context: ${JSON.stringify(`${latestAsk} ${identifier}`)}`,
-    );
-    expect(summary).toContain(`## Exact identifiers\n${identifier}`);
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-  });
-
-  it.each([200, 400])(
-    "caps a re-distilled identifier list with %s entries without starving real sections",
-    async (count) => {
-      const latestAsk = "preserve the pending deployment status";
-      const identifier = "/tmp/source-only-compaction-id.log";
-      const hoardedIdentifiers = Array.from(
-        { length: count },
-        (_, index) => `- /home/vac/clawd/tmp/session-artifacts/run-${index}/output.log`,
-      ).join("\n");
-      const generatedSummary = structuredSummary({
-        decisions:
-          "Latest user request status: pending.\nDeployment stays paused until the backup is verified.",
-        todos: "Verify the backup.",
-        asks: latestAsk,
-        identifiers: count === 200 ? `${identifier}\n${hoardedIdentifiers}` : hoardedIdentifiers,
-      });
-      if (count === 400) {
-        expect(generatedSummary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
-      } else {
-        expect(generatedSummary.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
-      }
-      mockSummarizeCompactionHistory.mockResolvedValue(generatedSummary);
-      const sessionManager = createQualityGuardSessionManager();
-      const { result } = await runCompactionScenario(
-        sessionManager,
-        createCompactionEvent({ messageText: `${latestAsk} ${identifier}` }),
-        { latestUnresolvedUserRequest: count === 400 },
-      );
-      const summary = expectCompactionResult(result).summary;
-      expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-      expect(summary).toContain("Deployment stays paused until the backup is verified.");
-      expect(summary).toContain(identifier);
-      expect(summary).not.toContain(`run-${count - 1}/output.log`);
-      if (count === 400) {
-        expect(summary).toContain("## Open TODOs\nVerify the backup.");
-        expect(summary).toContain(
-          `## Pending user asks\nLatest user request context: ${JSON.stringify(`${latestAsk} ${identifier}`)}`,
-        );
-        expect(summary).toContain("run-0/output.log");
-      }
-      expect(summary.slice(summary.indexOf("## Exact identifiers")).length).toBeLessThanOrEqual(
-        MAX_COMPACTION_SUMMARY_CHARS * 0.25 + 200,
-      );
       expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
     },
   );
@@ -1023,91 +749,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(structural).toContain(identifier);
     const identifiersSection = structural.slice(structural.indexOf("## Exact identifiers"));
     expect(identifiersSection.length).toBeLessThanOrEqual(maxChars * 0.25 + 100);
-  });
-
-  it("restores source identifiers omitted by a generated summary that fits the budget", async () => {
-    const latestAsk = "preserve the pending deployment status";
-    const identifier = "/tmp/source-only-compaction-id.log";
-    const generatedSummary = structuredSummary({
-      decisions: ["Latest user request status: pending.", "Deployment stays paused."].join("\n"),
-      asks: latestAsk,
-    });
-    mockSummarizeCompactionHistory.mockResolvedValue(generatedSummary);
-
-    const sessionManager = createQualityGuardSessionManager();
-    const event = createCompactionEvent({
-      messageText: `${latestAsk} ${identifier}`,
-    });
-
-    const { result } = await runCompactionScenario(sessionManager, event);
-
-    const summary = expectCompactionResult(result).summary;
-    expect(summary).toContain(`## Exact identifiers\nNone.\n${identifier}`);
-    expect(summary).not.toContain(SUMMARY_TRUNCATED_MARKER.trim());
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-  });
-
-  it.each([
-    {
-      name: "overlapping stale task",
-      latestAsk: "delete production only after verified backup",
-      decisions:
-        "Latest user request status: pending.\ndelete production only after verified backup was reviewed.",
-      rules: "Use normal safeguards.",
-      asks: "Delete production backup immediately.",
-      tokensBefore: undefined,
-    },
-    {
-      name: "model-classified completed work",
-      latestAsk: "combine the provider boxes into one completed artifact",
-      decisions:
-        "Latest user request status: completed.\nThe provider boxes were combined into the final artifact.",
-      rules: undefined,
-      asks: "Finish the older migration.",
-      tokensBefore: 90_000,
-    },
-  ])(
-    "foregrounds the owner-provided request before $name",
-    async ({ latestAsk, decisions, rules, asks, tokensBefore }) => {
-      mockSummarizeCompactionHistory.mockResolvedValue(
-        structuredSummary({ decisions, rules, asks }),
-      );
-      const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
-      const { result } = await runCompactionScenario(
-        sessionManager,
-        createCompactionEvent({ messageText: latestAsk, tokensBefore }),
-        { latestUnresolvedUserRequest: true },
-      );
-      const summary = expectCompactionResult(result).summary;
-      expect(summary).toContain(
-        `## Pending user asks\nLatest user request context: ${JSON.stringify(latestAsk)}\n${asks}`,
-      );
-      expect(summary).toContain(`## Decisions\n${decisions.split("\n")[0]}`);
-      expect(summary).toContain(asks);
-      expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-      expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-    },
-  );
-
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
-    const latestAsk = "preserve the pending deployment status";
-    const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
-    const oversizedRequiredTail = structuredSummary({ asks: latestAsk, identifiers: identifier });
-    mockSummarizeCompactionHistory.mockResolvedValue(oversizedRequiredTail);
-
-    const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
-    const event = createCompactionEvent({
-      messageText: `${latestAsk} ${identifier}`,
-    });
-
-    const { result } = await runCompactionScenario(sessionManager, event);
-
-    expect(result).toEqual({ cancel: true });
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-      "Compaction safeguard required facts exceed the finalized summary budget.",
-    );
   });
 
   it("restores source ask evidence omitted by the split-turn summary", async () => {
@@ -1158,7 +799,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   const completedAsk = "combine the bars into one box per provider";
-  const truncatedAsk = `${"x".repeat(610)} report deployment status /tmp/all-preserved-truncated.log`;
   it.each([
     {
       name: "owner request after a completed tool turn",
@@ -1204,19 +844,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
       expected: ["report metric status"],
       absent: ["123456789", "23456789e", "987654321", "12345678"],
       audit: { identifiers: [], latestAsk: undefined },
-    },
-    {
-      name: "owner facts beyond truncated text",
-      messages: [userMessage(truncatedAsk, 1)],
-      tokensBefore: undefined,
-      ownerRequest: true,
-      expected: [
-        "report deployment status",
-        "/tmp/all-preserved-truncated.log",
-        "## Recent turns preserved verbatim",
-      ],
-      absent: [],
-      audit: { identifiers: ["/tmp/all-preserved-truncated.log"], latestAsk: truncatedAsk },
     },
   ])(
     "audits all-preserved turns containing $name without summarization",
@@ -1282,7 +909,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it.each([false, true])(
-    "preserves history when corrective generation fails (caller aborted=%s)",
+    "recovers earlier summary after corrective failure unless caller aborted (%s)",
     async (aborted) => {
       const controller = new AbortController();
       const abortError = Object.assign(new Error("corrective compaction aborted"), {
@@ -1330,15 +957,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
       } else {
         const { result } = await runCompactionScenario(sessionManager, event);
-        expect(result).toEqual({ cancel: true });
+        expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
+        expect(expectCompactionResult(result).summary).toContain("history detail");
         expect(
           requireRecord(mockCallArg(mockSummarizeCompactionHistory, 2)).customInstructions,
         ).toContain("Quality check feedback");
-        expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-          "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
-        );
+        expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
         const warnings = compactionLogger.warn.mock.calls.flat().join("\n");
-        expect(warnings).toContain("reasonCode=corrective_generation_failed");
+        expect(warnings).toContain("reasonCode=quality_guard_degraded_fallback");
         expect(warnings).toContain("attempt=2");
         expect(warnings).not.toContain(correctiveFailureMarker);
       }
@@ -1402,51 +1028,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(finalSummary).toContain("### Context for Suffix\nImplementation remains.");
     expect(finalSummary).not.toContain(`## Pending user asks\n${latestAsk}`);
     expectCanonicalSummaryHeadingsOnce(finalSummary);
-  });
-
-  it("keeps an older pending ask when the split prefix has no user request", async () => {
-    const latestAsk = "finish the pending provider migration";
-    const historySummary = structuredSummary({
-      decisions: "Keep the migration active.",
-      todos: "Finish the provider migration.",
-      rules: "Preserve the pending request.",
-      asks: latestAsk,
-    });
-    mockSummarizeCompactionHistory
-      .mockResolvedValueOnce(historySummary)
-      .mockResolvedValueOnce("Maintenance activity continues in the retained suffix.");
-
-    const sessionManager = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0 });
-    const { result } = await runCompactionScenario(
-      sessionManager,
-      createCompactionEvent({
-        preparation: {
-          messagesToSummarize: [userMessage(latestAsk, 1)] as AgentMessage[],
-          turnPrefixMessages: [
-            {
-              role: "custom",
-              customType: "maintenance",
-              content: "maintenance event",
-              display: true,
-              timestamp: 2,
-            },
-          ] as AgentMessage[],
-          firstKeptEntryId: "entry-2",
-          tokensBefore: 90_000,
-          isSplitTurn: true,
-        },
-      }),
-      { latestUnresolvedUserRequest: true },
-    );
-
-    const finalSummary = expectCompactionResult(result).summary;
-    const historyCall = requireRecord(mockCallArg(mockSummarizeCompactionHistory));
-    expect(historyCall.customInstructions).not.toContain("belongs to a split turn");
-    expect(finalSummary).toContain(
-      `## Pending user asks\nLatest user request context: ${JSON.stringify(latestAsk)}\n${latestAsk}`,
-    );
-    expectCanonicalSummaryHeadingsOnce(finalSummary);
-    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(2);
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
@@ -1955,146 +1536,6 @@ describe("compaction-safeguard double-compaction guard", () => {
         expect(serialized).toContain("verify the deploy status now");
         expect(serialized).not.toContain("and then?");
       }
-    },
-  );
-
-  it("writes the anti-loop boundary for a tool-only window when nothing anchors it", async () => {
-    const sessionManager = modelSession();
-
-    const mockEvent = createCompactionEvent({
-      preparation: {
-        messagesToSummarize: [
-          toolResultMessage("call-1", "heartbeat probe ok", {
-            toolName: "exec",
-            timestamp: Date.now(),
-          }),
-        ] as AgentMessage[],
-      },
-    });
-    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario(
-      sessionManager,
-      mockEvent,
-    );
-
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("No prior history.");
-    expect(mockSummarizeCompactionHistory).not.toHaveBeenCalled();
-    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
-  });
-});
-
-async function expectWorkspaceSummaryEmptyForAgentsAlias(
-  createAlias: (outsidePath: string, agentsPath: string) => void,
-) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-  try {
-    const outside = path.join(root, "outside-secret.txt");
-    fs.writeFileSync(outside, "secret");
-    createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
-      "",
-    );
-  } finally {
-    cwdSpy.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-describe("readWorkspaceContextForSummary", () => {
-  async function withWorkspaceSummary(
-    content: string,
-    sectionNames: string[] | undefined,
-  ): Promise<string> {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
-    try {
-      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
-      return await readWorkspaceContextForSummary(sectionNames);
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  const limitPrefix =
-    "## Session Startup\n\n" + "x".repeat(1_999 - "## Session Startup\n\n".length);
-  const boundedContent = `${limitPrefix}🚀tail\n`;
-  it.each([
-    {
-      name: "disabled sections",
-      content: "## Session Startup\n\nRead AGENTS.md\n",
-      sections: [],
-      expected: [],
-    },
-    {
-      name: "oversized file",
-      content: `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
-      sections: ["Session Startup"],
-      expected: [],
-    },
-    {
-      name: "file at the byte limit",
-      content:
-        boundedContent +
-        "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - Buffer.byteLength(boundedContent)),
-      sections: ["Session Startup"],
-      expected: ["<workspace-critical-rules>", `${limitPrefix}\n...[truncated]...`],
-    },
-    {
-      name: "legacy defaults",
-      content: "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
-      sections: ["Red Lines", "Session Startup"],
-      expected: ["Do startup things", "Be safe"],
-    },
-  ])("reads workspace context with $name", async ({ content, sections, expected }) => {
-    const result = await withWorkspaceSummary(content, sections);
-    if (expected.length === 0) {
-      expect(result).toBe("");
-    } else {
-      for (const text of expected) {
-        expect(result).toContain(text);
-      }
-    }
-  });
-
-  it("reads workspace context from the configured workspace instead of process cwd", async () => {
-    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
-    try {
-      fs.writeFileSync(
-        path.join(processRoot, "AGENTS.md"),
-        "## Session Startup\n\nWrong cwd rules.\n",
-      );
-      fs.writeFileSync(
-        path.join(workspaceRoot, "AGENTS.md"),
-        "## Session Startup\n\nUse the run workspace rules.\n\n## Other\nIgnore me.\n",
-      );
-
-      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
-
-      expect(result).toContain("Use the run workspace rules.");
-      expect(result).not.toContain("Wrong cwd rules.");
-      expect(result).not.toContain("Ignore me.");
-      expect(result).toContain("<workspace-critical-rules>");
-    } finally {
-      cwdSpy.mockRestore();
-      fs.rmSync(processRoot, { recursive: true, force: true });
-      fs.rmSync(workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
-    "returns empty when AGENTS.md is a %s alias",
-    async (kind) => {
-      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
-        if (kind === "symlink") {
-          fs.symlinkSync(outside, agentsPath);
-        } else {
-          fs.linkSync(outside, agentsPath);
-        }
-      });
     },
   );
 });

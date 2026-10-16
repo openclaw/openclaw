@@ -9,7 +9,7 @@ import {
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   type CapturedAgentRunTerminalWriteContext,
 } from "../../infra/agent-run-terminal-writes.js";
 import {
@@ -47,7 +47,7 @@ it.each([false, true])(
       const admitted = await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
       // The Gateway captures and tracks the terminal session write while the
       // run's terminal lifecycle event is dispatched inside the runner.
-      const writeContext = captureAgentRunTerminalWriteContext(params.runId);
+      const writeContext = captureAgentRunTerminalPersistence(params.runId).writeContext;
       assert(writeContext);
       const persistence = commit.promise.then(() =>
         writeContext.run(() => writeContext.assertCurrent()),
@@ -96,17 +96,10 @@ it.each([false, true])(
       if (abort) {
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
-          "Terminal write owner changed before commit",
-        );
-        commit.resolve();
-        await expect(persistence).rejects.toThrow("Terminal write owner changed before commit");
-      } else {
-        const settledBeforeCommit = settled;
-        commit.resolve();
-        await persistence;
-        expect(settledBeforeCommit).toBe(false);
       }
+      expect(settled).toBe(false);
+      commit.resolve();
+      await persistence;
       await expect(run).resolves.toBe(result);
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
       expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(

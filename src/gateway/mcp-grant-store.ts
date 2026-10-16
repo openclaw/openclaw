@@ -17,6 +17,7 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
@@ -29,6 +30,9 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
+
+/** Set by MCP authentication; caller-token conversation headers cannot select a binding. */
+export type McpCurrentConversationOrigin = "run-bound-grant" | "server-session" | "caller-token";
 
 export type McpLoopbackRequestContext = {
   /** Recorded requester boundary captured by the host; never read from request headers. */
@@ -61,6 +65,7 @@ export type McpLoopbackRequestContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   accountId?: string;
@@ -139,6 +144,8 @@ type McpLoopbackToolAuth = {
 
 type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
+  /** Originating turn policy, independent of the bridge-only executable catalog. */
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
   /** Live reply participants remain host-owned across CLI fallback and HTTP callbacks. */
@@ -278,6 +285,7 @@ export function mintMcpLoopbackClientGrant(
     token: crypto.randomBytes(32).toString("hex"),
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
+    sessionEventSourcePolicy: params.sessionEventSourcePolicy,
     admittedRunContext: params.admittedRunContext,
     personalToolParticipants: params.personalToolParticipants,
     requestScope: getPluginRuntimeGatewayRequestScope(),
@@ -476,6 +484,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
+      sessionEventSourcePolicy?: SessionEventSourcePolicy;
       admittedRunContext: AdmittedRunContext;
       personalToolParticipants?: ReplyTurnParticipants;
       requestScope?: PluginRuntimeGatewayRequestScope;
@@ -519,6 +528,7 @@ export function resolveMcpLoopbackClientGrant(params: {
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
+    sessionEventSourcePolicy: grant.sessionEventSourcePolicy,
     admittedRunContext,
     personalToolParticipants: grant.personalToolParticipants,
     requestScope: grant.requestScope,

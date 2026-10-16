@@ -1,8 +1,9 @@
 import "../../test/dom.setup.ts";
-import { render } from "lit";
+import { render } from "@solidjs/web";
+import { createComponent, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
-import { renderCardMeta } from "./view-card-content.ts";
+import { CardMeta } from "./view-card-content.tsx";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -27,9 +28,14 @@ it("leaves settled labels untouched until their available width changes", () => 
   const container = document.createElement("div");
   document.body.append(container);
   const root = render(
-    renderCardMeta(createWorkboardCard({ labels: ["alpha", "beta"] }), false),
+    () =>
+      createComponent(CardMeta, {
+        card: createWorkboardCard({ labels: ["alpha", "beta"] }),
+        archived: false,
+      }),
     container,
   );
+  flush();
   const labels = container.querySelector<HTMLElement>(".workboard-card__labels")!;
   const chips = [...labels.querySelectorAll<HTMLElement>(".workboard-card__label")];
   const overflow = labels.querySelector<HTMLElement>(".workboard-card__label-overflow")!;
@@ -73,6 +79,6 @@ it("leaves settled labels untouched until their available width changes", () => 
     expect(overflow.title).toBe("beta");
   } finally {
     mutations.disconnect();
-    root.setConnected(false);
+    root();
   }
 });

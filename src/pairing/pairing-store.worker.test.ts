@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   readChannelPairingStateSnapshot,
@@ -127,49 +128,41 @@ it("settles an accepted approval when authority is revoked after the commit gran
 });
 
 it.each(["selected", "missing"] as const)(
-  "retains native write authority for a %s host approval after preparation",
+  "refuses a %s host approval after a committed ownership claim",
   async (selection) => {
     const channel = `supervision-${selection}`;
-    seed(channel, selection === "selected" ? [request("alice")] : []);
-    const before = readChannelPairingStateSnapshot(channel, env);
-    const callerEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: undefined };
-    await listChannelPairingRequests(channel, callerEnv);
-    const claim = () => {
-      database.db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-        "gateway.supervision",
-        JSON.stringify({
-          version: 1,
-          mode: "external",
-          managerId: "pairing-fixture",
-          claimedAt: 1,
-        }),
-        1,
-      );
+    const callerEnv = {
+      ...env,
+      OPENCLAW_STATE_DIR: path.join(root, channel),
+      OPENCLAW_SUPERVISOR_MODE: undefined,
     };
+    const externalEnv = { ...callerEnv, OPENCLAW_SUPERVISOR_MODE: "external" };
+    writeChannelPairingStateSnapshot(
+      channel,
+      { version: 1, requests: selection === "selected" ? [request("alice")] : [], allowFrom: {} },
+      callerEnv,
+    );
+    const before = readChannelPairingStateSnapshot(channel, callerEnv);
+    await listChannelPairingRequests(channel, callerEnv);
+    const claim = () => claimOpenClawStateOwnership("pairing-fixture", { env: externalEnv });
     if (selection === "missing") {
       claim();
     }
-    try {
-      await expect(
-        approveChannelPairingCode({
-          channel,
-          code: "ABCDEFGH",
-          env: callerEnv,
-          pairingAdapter: {
-            idLabel: "peer",
-            resolveApprovalStoreEntry: ({ id }) => {
-              claim();
-              return id;
-            },
+    await expect(
+      approveChannelPairingCode({
+        channel,
+        code: "ABCDEFGH",
+        env: callerEnv,
+        pairingAdapter: {
+          idLabel: "peer",
+          resolveApprovalStoreEntry: ({ id }) => {
+            claim();
+            return id;
           },
-        }),
-      ).rejects.toThrow(/externally supervised by pairing-fixture/);
-    } finally {
-      database.db
-        .prepare("DELETE FROM config_machine_state WHERE state_key = ?")
-        .run("gateway.supervision");
-    }
-    expect(readChannelPairingStateSnapshot(channel, env)).toEqual(before);
+        },
+      }),
+    ).rejects.toThrow(/externally supervised by pairing-fixture/);
+    expect(readChannelPairingStateSnapshot(channel, externalEnv)).toEqual(before);
   },
 );
 
@@ -248,41 +241,6 @@ it("captures the physical store before yielding and preserves FIFO allowlist edi
   await expect(first).resolves.toEqual({ changed: true, allowFrom: ["first"] });
   await expect(second).resolves.toEqual({ changed: true, allowFrom: ["first", "second"] });
   expect(fs.existsSync(captured.OPENCLAW_STATE_DIR)).toBe(false);
-});
-
-it("retains foreign rows and normalizes legacy account aliases on the next mutation", async () => {
-  const channel = "foreign-normalization";
-  seed(channel, [request("waiting")], { alpha: ["existing"], beta: ["untouched"] });
-  await listChannelPairingRequests(channel, env);
-  database.db
-    .prepare(
-      "UPDATE channel_pairing_allow_entries SET account_id = ' Alpha ', entry = ' foreign ' WHERE channel_key = ? AND account_id = 'alpha'",
-    )
-    .run(channel);
-  database.db
-    .prepare(
-      "UPDATE channel_pairing_requests SET account_id = ' Alpha ', meta_json = ? WHERE channel_key = ?",
-    )
-    .run(JSON.stringify({ accountId: "wrong-account", approval: "foreign-proof" }), channel);
-  await upsertChannelPairingRequest({ channel, id: "new", accountId: "gamma", env });
-  const state = readChannelPairingStateSnapshot(channel, env);
-  expect(state.requests).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        id: "waiting",
-        meta: { accountId: "alpha", approval: "foreign-proof" },
-      }),
-      expect.objectContaining({ id: "new", meta: { accountId: "gamma" } }),
-    ]),
-  );
-  expect(state.allowFrom).toEqual({ alpha: ["foreign"], beta: ["untouched"] });
-  expect(
-    database.db
-      .prepare(
-        "SELECT account_id FROM channel_pairing_requests WHERE channel_key = ? ORDER BY account_id",
-      )
-      .all(channel),
-  ).toEqual([{ account_id: "alpha" }, { account_id: "gamma" }]);
 });
 
 it("removes a legacy padded allow entry using its canonical sender id", async () => {

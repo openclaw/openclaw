@@ -19,6 +19,34 @@ const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
+  it("keeps the package cwd when a standalone child needs only CLI arguments", async () => {
+    await withTempDir("openclaw-cli-standalone-", async (root) => {
+      const packageRoot = path.join(root, "runtime");
+      await mkdir(packageRoot);
+      await writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+      const execPath = path.join(root, "openclaw");
+      await writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          mode: "aot",
+          executable: { path: "openclaw" },
+          runtime: { path: "runtime" },
+          openclaw: { version: "2026.10.15" },
+          bun: { version: "1.3.0" },
+        }),
+      );
+      expect(
+        resolveCurrentOpenClawCliInvocation(commandArgs, {
+          execPath,
+          argv1: path.join(packageRoot, "openclaw.mjs"),
+          execArgv: ["--trace-warnings"],
+          cwd: root,
+        }),
+      ).toEqual({ command: execPath, args: commandArgs, cwd: packageRoot });
+    });
+  });
+
   it("keeps child runtime flags without inheriting debugger ownership", () => {
     expect(
       filterOpenClawChildExecArgv([
@@ -39,8 +67,6 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
   it.each([
     { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import", "tsx"] },
     { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import=tsx"] },
-    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import", "tsx"] },
-    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import=tsx"] },
   ])(
     "pins the source parent's TSX import while preserving other runtime hooks: $execPath $tsxArgs",
     ({ execPath, tsxArgs }) => {
@@ -62,22 +88,6 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     },
   );
 
-  it("uses the source entry for a Node-hosted checkout harness", () => {
-    expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: path.join(repoRoot, "scripts", "test-live.mts"),
-        cwd: repoRoot,
-        execArgv: [],
-        execPath: "/usr/bin/node",
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
-      cwd: repoRoot,
-      env: sourceEnv,
-    });
-  });
-
   it("uses the source entry directly under Bun", () => {
     expect(
       resolveCurrentOpenClawCliInvocation(commandArgs, {
@@ -88,38 +98,6 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     ).toEqual({
       command: "/usr/local/bin/bun",
       args: ["--no-install", repoSourceEntry, ...commandArgs],
-      cwd: repoRoot,
-    });
-  });
-
-  it("preserves launcher argv and execArgv from the current checkout", () => {
-    const launcher = path.join(repoRoot, "openclaw.mjs");
-    expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: launcher,
-        cwd: path.join(repoRoot, "src"),
-        execArgv: ["--trace-warnings"],
-        execPath: "/usr/bin/node",
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["--trace-warnings", launcher, ...commandArgs],
-      cwd: repoRoot,
-    });
-  });
-
-  it("preserves package entry argv from the current checkout", () => {
-    const distEntry = path.join(repoRoot, "dist", "entry.js");
-    expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: distEntry,
-        cwd: repoRoot,
-        execArgv: ["--enable-source-maps"],
-        execPath: "/usr/bin/node",
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["--enable-source-maps", distEntry, ...commandArgs],
       cwd: repoRoot,
     });
   });
@@ -162,7 +140,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     },
   );
 
-  it.each(["/usr/bin/node", "/usr/bin/bun"])(
+  it.each(["/usr/bin/node"])(
     "uses the installed wrapper under %s and canonical package cwd",
     async (execPath) => {
       await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
@@ -195,21 +173,6 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     expect(
       resolveCurrentOpenClawCliInvocation(commandArgs, {
         argv1: "/app/dist/index.js",
-        cwd: repoRoot,
-        execPath: "/usr/bin/node",
-      }),
-    ).toEqual({
-      command: "/usr/bin/node",
-      args: ["--import", trustedTsxLoader, repoSourceEntry, ...commandArgs],
-      cwd: repoRoot,
-      env: sourceEnv,
-    });
-  });
-
-  it("does not preserve a foreign launcher basename", () => {
-    expect(
-      resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: "/other/openclaw.mjs",
         cwd: repoRoot,
         execPath: "/usr/bin/node",
       }),

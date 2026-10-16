@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import type { ProgressCard, ProgressCardChangedEvent } from "@openclaw/gateway-protocol";
-import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -9,9 +8,13 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { emptyLegacyContent } from "../../lit/solid-content.tsx";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -20,11 +23,12 @@ import {
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
+  connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -33,23 +37,44 @@ import {
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 
 describe("chat pane assistant identity snapshots", () => {
-  it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({
-      client,
-      sessions: createSessionCapabilityFixture(),
-    });
-    (pane as TestChatPane & { agentId: string }).agentId = "personal";
-    pane.sessionKey = "global";
-    state.sessionKey = "global";
-    state.assistantAgentId = "personal";
-    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-    pane.context.agentSelection.set("work");
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+    installTranscriptDomMocks();
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.sessionKey = "agent:main:dashboard:first-paint";
+    const container = document.createElement("div");
+    const draw = () => {
+      pane.render();
+      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
+    };
+    try {
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
 
-    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
+      draw();
+      expect(container.textContent).toContain("Cached mission briefing.");
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
 
-    expect(state.assistantAgentId).toBe("personal");
-    expect(pane.context.agentSelection.state.selectedId).toBe("work");
+      state.chatMessages = [];
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+
+      state.currentSessionId = null;
+      state.connected = true;
+      state.chatLoading = true;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+
+      state.chatLoading = false;
+      draw();
+      expect(container.querySelector(".agent-chat__welcome")).not.toBeNull();
+    } finally {
+      renderPaneLegacyContent(emptyLegacyContent, container);
+      resetTranscriptTestDom();
+    }
   });
 
   it("rebinds agent-owned presentation when a retained fixed route changes owner", () => {
@@ -145,6 +170,7 @@ describe("chat pane assistant identity snapshots", () => {
       },
       runtimeConfig: {
         state: { configNeedsApply: false, configSnapshot: null },
+        ensureLoaded: async () => undefined,
         subscribe: () => () => undefined,
       },
     });
@@ -152,16 +178,20 @@ describe("chat pane assistant identity snapshots", () => {
     pane.context = context;
     pane.connectedClient = null;
     pane.sessionKey = "global";
-    (pane as TestChatPane & { render: () => null }).render = () => null;
+    pane.render = () => ({ layout: emptyLegacyContent, capabilityDialogs: undefined });
 
     try {
       pane.connectedCallback();
       await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        expect(pane.state.chatSessionMessageSubscription).toMatchObject({
+          key: "global",
           agentId: "main",
-          includeApprovals: true,
         }),
       );
+      expect(subscribeMessages).toHaveBeenCalledWith("global", {
+        agentId: "main",
+        includeApprovals: true,
+      });
       pane.state.chatSessionApprovalQueue = [
         {
           id: "stale-main-approval",
@@ -270,6 +300,10 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
+        presentation: {
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
+          agentId: "main",
+        },
         state: {
           result: null,
           agentId: "main",
@@ -287,7 +321,6 @@ describe("chat pane approval requester identity", () => {
     };
     const state = pane.initialize(context);
     state.sessionKey = host.key;
-    pane.presentationTitle = "Unrelated pane title";
     const now = Date.now();
     state.chatSessionApprovalQueue = projectSessionApprovalReplay(
       {
@@ -326,10 +359,10 @@ describe("chat pane approval requester identity", () => {
     });
     Object.freeze(approval.request);
     Object.freeze(approval);
-    const container = document.createElement("div");
+    const container = document.body.appendChild(createApplicationContextProvider(context));
     const redraw = vi.fn(() => {
       pane.render();
-      render(renderChat(pane.chatProps!), container);
+      renderPaneLegacyContent(renderChat(pane.chatProps!), container);
     });
     state.requestUpdate = redraw;
     const publications: Array<[GatewaySessionRow | undefined, string]> = [
@@ -361,6 +394,10 @@ describe("chat pane approval requester identity", () => {
           },
         });
         await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
+        const approvalElement = container.querySelector<
+          HTMLElement & { updateComplete: Promise<boolean> }
+        >("openclaw-exec-approval-card")!;
+        await approvalElement.updateComplete;
         const card = container.querySelector(".chat-inline-approval .exec-approval-card");
         expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
         expect
@@ -371,7 +408,8 @@ describe("chat pane approval requester identity", () => {
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
       cancelChatStreamRenderFrame(state);
-      render(html``, container);
+      renderPaneLegacyContent(emptyLegacyContent, container);
+      container.remove();
     }
   });
 });
@@ -438,10 +476,10 @@ function createGlobalFeaturePane(
     pane.requestUpdate();
   };
   select("research");
-  ChatPaneBase.prototype.connectedCallback.call(pane);
+  connectPaneTestView(pane);
   onTestFinished(() => {
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
-    ChatPaneBase.prototype.disconnectedCallback.call(pane);
+    pane.disconnectedCallback();
     cancelChatStreamRenderFrame(state);
   });
   const emit = (payload: ProgressCardChangedEvent) => {
@@ -520,10 +558,10 @@ describe("global chat pane feature ownership", () => {
           },
         });
       }
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(createApplicationContextProvider(context));
       const draw = async () => {
         await pane.updateComplete;
-        render(renderChat(pane.chatProps!), container);
+        renderPaneLegacyContent(renderChat(pane.chatProps!), container);
         if (container.querySelector("openclaw-chat-question-card")) {
           await questionPanelIn(container);
         }
@@ -569,14 +607,18 @@ describe("global chat pane feature ownership", () => {
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
         expect(container.querySelector(".chat-question-panel")).toBeNull();
-        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
+            "Skipped",
+          ),
+        );
         await expectStableQuestions();
 
         select("main");
         await draw();
         expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
       } finally {
-        render(html``, container);
+        renderPaneLegacyContent(emptyLegacyContent, container);
         container.remove();
       }
     },

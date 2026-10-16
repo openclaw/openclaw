@@ -99,6 +99,39 @@ describe("public reader admission", () => {
     expect(await pending).toEqual({ kind: "unavailable" });
   });
 
+  it("retains a late completion under byte pressure and evicts the least-recent result", async () => {
+    const gate = createGate();
+    const release = createDeferred<Buffer>();
+    const body = Buffer.alloc(9 * 1024 * 1024, "a");
+    const slowWork = vi.fn(() => release.promise);
+    const slow = gate.run({ ...request(0), work: slowWork });
+    const fast = await gate.run({
+      ...request(1),
+      work: async () => "Fast content".padEnd(9 * 1024 * 1024, "x"),
+    });
+    expect(fast.kind).toBe("ok");
+
+    release.resolve(body);
+    const completed = await slow;
+    if (completed.kind !== "ok" || !completed.value || fast.kind !== "ok" || !fast.value) {
+      throw new Error("Public builds did not return their representations");
+    }
+    expect(completed.value.body).toBe(body);
+    expect(completed.value.isCurrent()).toBe(true);
+    expect(fast.value.isCurrent()).toBe(false);
+    const cached = await gate.run({ ...request(0), work: slowWork });
+    expect(cached).toEqual({ kind: "ok", value: completed.value });
+    expect(slowWork).toHaveBeenCalledTimes(1);
+
+    // The late completion must count against the 16 MiB budget, not just survive eviction.
+    const next = await gate.run({
+      ...request(2),
+      work: async () => Buffer.alloc(8 * 1024 * 1024, "b"),
+    });
+    expect(next.kind === "ok" && next.value?.isCurrent()).toBe(true);
+    expect(completed.value.isCurrent()).toBe(false);
+  });
+
   it("keeps client and publication rate budgets even for cached responses", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const gate = createGate();

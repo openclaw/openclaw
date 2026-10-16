@@ -1,8 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureGatewayDeviceRevocation,
@@ -15,6 +19,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -103,6 +108,89 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
+  it("applies peer preferences to new notifications without revoking accepted events", async () => {
+    const callGateway = vi.fn();
+    callGateway.mockResolvedValue({ key: targetSessionKey, agentId: "main" });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      config,
+      callGateway,
+      idempotencyKey: runId,
+    });
+    const first = await tool.execute("notify-peer", {
+      sessionKey: targetSessionKey,
+      message: "accepted notice",
+      mode: "notify",
+    });
+    expect(first.details).toMatchObject({
+      status: "queued",
+      durability: "process",
+      runStarted: false,
+    });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: targetSessionKey },
+      { sessionId: "target-session", updatedAt: 2, communication: { receive: "never" } },
+    );
+    expect(peekSystemEvents(targetSessionKey)).toHaveLength(1);
+    const second = await tool.execute("notify-denied", {
+      sessionKey: targetSessionKey,
+      message: "unaccepted notice",
+      mode: "notify",
+    });
+    expect(second.details).toMatchObject({ status: "forbidden" });
+    const consumed = drainSystemEvents(targetSessionKey);
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0]).toContain("accepted notice");
+    expect(consumed[0]).not.toContain("unaccepted notice");
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+  });
+
+  it.each(["send", "receive"] as const)(
+    "rechecks an in-place default %s policy publication at final input admission",
+    async (direction) => {
+      const currentConfig: OpenClawConfig = {
+        ...config,
+        session: { ...config.session, communication: { send: "always", receive: "always" } },
+      };
+      setRuntimeConfigSnapshot(currentConfig);
+      let admitted = false;
+      const callGateway = vi.fn();
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "sessions.resolve") {
+            return { key: targetSessionKey, agentId: "main" };
+          }
+          if (request.method === "agent") {
+            currentConfig.session!.communication![direction] = "never";
+            setRuntimeConfigSnapshot(currentConfig);
+            request.assertDispatchCurrent?.();
+            request.sessionMutationCommitGuard?.();
+            admitted = true;
+            return { runId, status: "accepted" };
+          }
+          throw new Error(`Unexpected Gateway method: ${request.method}`);
+        },
+      );
+      const result = await createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        config: currentConfig,
+        callGateway,
+        idempotencyKey: runId,
+      }).execute("revoked-default", {
+        sessionKey: targetSessionKey,
+        message: "Must not enter the target after policy revocation",
+        mode: "followup",
+        timeoutSeconds: 0,
+      });
+      expect(admitted).toBe(false);
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("communication"),
+      });
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+    },
+  );
+
   const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
   it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
     if (sourceKey !== requesterSessionKey) {
@@ -116,6 +204,8 @@ describe("sessions_send dispatch admission", () => {
       );
     }
     const context = createContext();
+    // The admitted Gateway owns one current snapshot, not the factory's fresh {} per read.
+    context.getRuntimeConfig = () => config;
     const owner = createOperatorClient({ profileName: "send-owner", scopes: ["operator.write"] });
     const source = captureGatewayDeviceRevocation(
       context,
@@ -155,7 +245,11 @@ describe("sessions_send dispatch admission", () => {
             completion = SessionFollowupCompletion.bind(followup);
             followup.completion = completion;
             completion.markAccepted(runId);
-            await completion.settle(runId, { status: "ok", replyText: "Task complete" });
+            await completion.settle(runId, {
+              status: "ok",
+              replyText: "Task complete",
+              terminalReply: { disposition: "visible", text: "Task complete" },
+            });
             completion.finishExecution(runId);
           }
           return { runId, status: "accepted" };
@@ -213,7 +307,15 @@ describe("sessions_send dispatch admission", () => {
             },
           ),
       );
-      await capturing.promise;
+      await awaitGateBeforeSettlement(
+        capturing.promise,
+        pending.then((result) => {
+          throw new Error(
+            `Send settled before reply-source capture: ${JSON.stringify(result.details)}`,
+          );
+        }),
+        "Send completed without reaching reply-source capture",
+      );
       vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(0);
       vi.useRealTimers();
@@ -248,7 +350,6 @@ describe("sessions_send dispatch admission", () => {
       sourceKey: requesterSessionKey,
       threadId: 42,
     },
-    { name: "direct", accountId: "direct", sourceKey: requesterSessionKey, threadId: "42" },
     {
       name: "exact legacy DM",
       accountId: "default",
@@ -284,6 +385,21 @@ describe("sessions_send dispatch admission", () => {
             return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
           }
           if (request.method === "agent.wait") {
+            if (!isRecord(request.params) || typeof request.params.runId !== "string") {
+              throw new Error("Expected agent wait run ID");
+            }
+            await appendTranscriptMessage(
+              { agentId: "main", sessionKey: targetSessionKey, sessionId: "target-session" },
+              {
+                message: {
+                  role: "assistant",
+                  __openclaw: { runId: request.params.runId },
+                  phase: "final_answer",
+                  stopReason: "stop",
+                  content: [{ type: "text", text: "Task complete" }],
+                },
+              },
+            );
             return {
               status: "ok",
               terminalReply: { disposition: "visible", text: "Task complete" },
@@ -413,6 +529,21 @@ describe("sessions_send dispatch admission", () => {
             );
             return { runId };
           case "agent.wait":
+            if (!isRecord(request.params) || typeof request.params.runId !== "string") {
+              throw new Error("Expected agent wait run ID");
+            }
+            await appendTranscriptMessage(
+              { agentId: "main", sessionKey, sessionId: entry.sessionId },
+              {
+                message: {
+                  role: "assistant",
+                  __openclaw: { runId: request.params.runId },
+                  phase: "final_answer",
+                  stopReason: "stop",
+                  content: [{ type: "text", text: "Task complete" }],
+                },
+              },
+            );
             return {
               status: "ok",
               terminalReply: { disposition: "visible", text: "Task complete" },

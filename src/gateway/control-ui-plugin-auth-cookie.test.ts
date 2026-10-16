@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -32,8 +32,11 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   setControlUiPluginAuthCookieForRequest,
 } from "./http-auth-utils.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import type { OperatorScope } from "./operator-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -43,13 +46,20 @@ function issueCookie(
   {
     pluginId = "example",
     generation = resolveControlUiPluginAuthCookieGeneration("generation", getRuntimeConfig()),
-  }: { pluginId?: string; generation?: string } = {},
+    scopes = ["operator.read"],
+    request,
+  }: {
+    pluginId?: string;
+    generation?: string;
+    scopes?: OperatorScope[];
+    request?: IncomingMessage;
+  } = {},
 ): string {
   const { res, setHeader } = makeMockHttpResponse();
   setControlUiPluginAuthCookie(
     res,
-    [{ pluginId, path: "/plugins/example", match: "prefix", scopes: ["operator.read"] }],
-    { generation, ...(profileId ? { profileId } : {}) },
+    [{ pluginId, path: "/plugins/example", match: "prefix", scopes }],
+    { generation, ...(profileId ? { profileId } : {}), request },
   );
   const value = setHeader.mock.calls.at(-1)?.[1];
   const header = Array.isArray(value) ? value[0] : value;
@@ -93,6 +103,103 @@ describe("Control UI plugin auth cookie profile binding", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("caps a broader signed read cookie on remote native and panel reads without changing direct authority", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const auth = {
+          mode: "token",
+          token: "synthetic-cookie-ceiling",
+          allowTailscale: false,
+        } as const;
+        const authGeneration = resolveSharedGatewaySessionGeneration(auth);
+        const generation = resolveControlUiPluginAuthCookieGeneration(
+          authGeneration,
+          getRuntimeConfig(),
+        );
+        const signedScopes: OperatorScope[] = [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ];
+        for (const remote of [false, true]) {
+          const req = createGatewayRequest({
+            path: "/plugins/example/session",
+            headers: {},
+          });
+          if (remote) {
+            markGatewayIngressTransport(req, {
+              kind: "remote-forwarded",
+              context: createRemoteControlUiIngressTestContext({
+                operatorScopeCeiling: ["operator.read"],
+              }),
+            });
+          }
+          const cookie = issueCookie(remote ? "gateway-owner" : undefined, {
+            generation,
+            scopes: signedScopes,
+            request: req,
+          });
+          req.headers.cookie = cookie;
+          if (remote) {
+            const direct = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(direct, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            direct.destroy();
+            const other = createGatewayRequest({
+              path: "/plugins/example/session",
+              headers: { cookie },
+            });
+            markGatewayIngressTransport(other, {
+              kind: "remote-forwarded",
+              context: createRemoteControlUiIngressTestContext(),
+            });
+            expect(
+              resolveControlUiPluginAuthCookieGrants(other, {
+                requestPath: "/plugins/example/session",
+                generation,
+              }),
+            ).toEqual([]);
+            other.destroy();
+          }
+          const expected = remote ? ["operator.read"] : signedScopes;
+          expect(
+            resolveControlUiPluginAuthCookieGrants(req, {
+              requestPath: "/plugins/example/session",
+              generation,
+            })[0]?.scopes,
+          ).toEqual(expected);
+          const res = new ServerResponse(req);
+          try {
+            const admission = await authorizePluginGatewayHttpRequestOrReply({
+              req,
+              res,
+              auth,
+              requestPath: "/plugins/example/session",
+              resolveOperatorScopes: () => [],
+            });
+            expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
+            expect(admission?.requestAuth.revalidate).toBeTypeOf("function");
+            await admission?.requestAuth.revalidate?.();
+            expect(admission?.requestAuth.controlUiPluginGrants?.[0]?.scopes).toEqual(expected);
+          } finally {
+            res.destroy();
+            req.destroy();
+          }
+        }
+      },
+    });
   });
 
   it("prepares cold cookie profile facts and revalidates demotion without caller-thread SQL", async () => {

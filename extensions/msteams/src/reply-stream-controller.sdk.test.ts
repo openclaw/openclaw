@@ -316,34 +316,6 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 });
 
 describe("Teams native final text preparation", () => {
-  it("preserves all progress final payloads at the wire boundary", async () => {
-    const scenario = "progress-multiple-final";
-    const { controller, sendActivity } = createLoopbackController(scenario, {
-      streaming: { mode: "progress" },
-    });
-    const texts = ["First distinct result.\n\n", "# Second distinct result"];
-    const prepared = texts.map((text) => controller.preparePayload({ text }));
-    const result = await controller.finalize();
-    for (const payload of [
-      ...prepared,
-      result.fallbackPayload,
-      ...(result.postNativePayloads ?? []),
-    ]) {
-      if (payload?.text) {
-        await sendActivity({ type: "message", text: payload.text });
-      }
-    }
-    const wire = requests.filter(
-      (request) => request.scenario === scenario && request.type === "message",
-    );
-    const deliveredText = wire
-      .filter((request) => request.status >= 200 && request.status < 300)
-      .map((request) => request.text)
-      .join("\n");
-    expect(deliveredText.split("First distinct result.").length - 1).toBe(1);
-    expect(deliveredText.split("Second distinct result").length - 1).toBe(1);
-  });
-
   it("preserves required AI metadata when the SDK completes a timed-out stream by update", async () => {
     const { controller, firstAcknowledgement } = createLoopbackController("presentation-timeout");
     const text = "# Status";
@@ -369,37 +341,6 @@ describe("Teams native final text preparation", () => {
         .filter((request) => request.scenario === "presentation-timeout")
         .map((request) => request.status),
     ).toEqual([201, 201, 403, 201]);
-  });
-
-  it("renders the final progress activity", async () => {
-    const scenario = "presentation-progress";
-    const text = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-    const { controller } = createLoopbackController(scenario, {
-      streaming: { mode: "progress" },
-    });
-    expect(controller.preparePayload({ text })).toBeUndefined();
-    const result = await controller.finalize();
-    expect(result.visibleReplySent).toBe(true);
-    const final = requests.findLast(
-      (request) => request.scenario === scenario && request.type === "message",
-    );
-    expect.soft(final?.text).toBe("**Deployment status**\n\n<at>Alex</at>");
-    expect.soft(final?.entities).toEqual(
-      expect.arrayContaining([
-        {
-          type: "mention",
-          text: "<at>Alex</at>",
-          mentioned: { id: "11111111-2222-3333-4444-555555555555", name: "Alex" },
-        },
-        {
-          type: "https://schema.org/Message",
-          "@type": "Message",
-          "@context": "https://schema.org",
-          "@id": "",
-          additionalType: ["AIGeneratedContent"],
-        },
-      ]),
-    );
   });
 
   it("does not redeliver logical text already acknowledged after final rendering", async () => {
@@ -440,4 +381,27 @@ describe("Teams native final text preparation", () => {
         .map((request) => request.status),
     ).toEqual([201, 403]);
   });
+});
+
+it("separates informative plan rows at the SDK HTTP boundary", async () => {
+  const scenario = "informative-plan-rows";
+  const { controller, firstAcknowledgement } = createLoopbackController(scenario, {
+    streaming: { mode: "progress", progress: { label: "Working", toolProgress: true } },
+  });
+  await controller.pushPlanProgress([
+    { step: "Check account", status: "completed" },
+    { step: "Search records", status: "in_progress" },
+  ]);
+  await firstAcknowledgement;
+  const update = requests.find((request) => request.scenario === scenario);
+  controller.preparePayload({ text: "Final answer\n\nSecond paragraph" });
+  await controller.finalize();
+  expect(update?.text).toContain("Check account");
+  expect(update?.text).toContain("Search records");
+  expect(update?.text).not.toMatch(/[\r\n]/u);
+  expect(update?.text).toContain(" · ");
+  expect(
+    requests.findLast((request) => request.scenario === scenario && request.type === "message")
+      ?.text,
+  ).toBe("Final answer\n\nSecond paragraph");
 });

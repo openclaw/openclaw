@@ -1,3 +1,5 @@
+// Register closed mocks before runtime imports; keep the shared row fixtures real.
+import "./sessions-list.mocks.test-support.js";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
@@ -6,24 +8,7 @@ import { createSessionsListTool } from "./sessions-list-tool.js";
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_RULE = describeSessionLinkRule(SESSION_LINK_BASE);
 
-const mocks = vi.hoisted(() => ({
-  gatewayCall: vi.fn(),
-  getSessionStateVersions: vi.fn(
-    (_refs: Array<{ sessionKey: string; agentId: string }>) =>
-      ({}) as Record<string, Record<string, number>>,
-  ),
-}));
-
-vi.mock("./in-process-gateway.js", () => ({
-  hasGatewayToolRoutingContext: () => false,
-  getInProcessGatewayToolContext: () => undefined,
-  callAgentToolGatewayRequest: (opts: unknown) => mocks.gatewayCall(opts),
-}));
-
-vi.mock("../../sessions/session-state-events.js", () => ({
-  getSessionStateVersions: (refs: Array<{ sessionKey: string; agentId: string }>) =>
-    mocks.getSessionStateVersions(refs),
-}));
+const { mocks } = await import("./sessions-list.mocks.test-support.js");
 
 import { VALID_CONFIG, getSessionsListDetails } from "./sessions-list.test-support.js";
 
@@ -146,6 +131,7 @@ describe("sessions-list inventory projection", () => {
         {
           ...metadata,
           kind: "other",
+          sidebarRoot: false,
           group: "P1 issues",
           parentSessionKey: "agent:main:main",
           stateVersion: 4,

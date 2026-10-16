@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
@@ -148,9 +149,25 @@ describe("gateway multi-instance e2e", () => {
     "preserves scheduler runtime across a scheduler-disabled Gateway edit",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
+      const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
       const manager = await createOpenClawTestInstance({
         name: "cron-passive-manager",
-        config: { cron: { enabled: false }, plugins: { enabled: false } },
+        config: {
+          cron: { enabled: false },
+          plugins: { enabled: false },
+          agents: {
+            defaults: {
+              model: { primary: model.modelRef },
+              models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+            },
+          },
+        },
         env: { OPENCLAW_SKIP_CRON: "0" },
       });
       let managerClient: GatewayClient | undefined;
@@ -217,10 +234,13 @@ try {
 `,
               canary.id,
             ],
-            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: 60_000 },
+            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: E2E_TIMEOUT_MS },
           );
           expect(scheduler.stderr).toBe("");
-          expect(scheduler.status).toBe(0);
+          expect(
+            scheduler.status,
+            scheduler.error?.message ?? scheduler.signal ?? scheduler.stderr,
+          ).toBe(0);
           const before = JSON.parse(scheduler.stdout) as {
             state: { lastRunAtMs?: number; lastStatus?: string };
           };

@@ -27,15 +27,23 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
-import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
+import {
+  agentSessionQueuePromptContext,
+  agentSessionSetPromptPreparation,
+} from "../../sessions/agent-session-prompting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
-import { runPreparedTestPrompt } from "./attempt-prompt-admission.test-support.js";
+import {
+  createTestPromptContextQueue,
+  runPreparedTestPrompt,
+  type MutableSession,
+} from "./attempt-prompt-admission.test-support.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
   readMockSessionCacheTtlTimestamp,
@@ -197,7 +205,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     flushPendingToolResultsAsync: vi.fn(async () => undefined),
     clearPendingToolResults: vi.fn(),
     reloadPersistedTranscriptAsync: vi.fn(async () => undefined),
-    clearNextUserMessagePersistenceSuppression: vi.fn(),
+    setNextUserMessagePersistence: vi.fn(),
     removeTrailingEntriesAsync: vi.fn(async () => 0),
   };
   return {
@@ -445,9 +453,11 @@ vi.mock("../../docs-path.js", () => ({
   resolveOpenClawReferencePaths: async () => ({ docsPath: undefined, sourcePath: undefined }),
 }));
 
+// mock-isolation: Attempt fixtures use in-memory settings without reading project or user settings.
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
+    getCompactionEnabled: () => true,
     getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultProvider: () => undefined,
@@ -467,19 +477,6 @@ vi.mock("../../agent-project-settings.js", () => ({
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),
-}));
-
-vi.mock("../../agent-settings.js", () => ({
-  applyAgentAutoCompactionGuard: () => {},
-  applyAgentCompactionSettingsFromConfig: () => ({
-    didOverride: false,
-    compaction: {
-      reserveTokens: 0,
-      keepRecentTokens: 40_000,
-    },
-  }),
-  isSilentOverflowProneModel: () => false,
-  resolveEffectiveCompactionMode: () => "default",
 }));
 
 vi.mock("../extensions.js", () => ({
@@ -520,21 +517,18 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
     (hoisted.flushPendingToolResultsAfterIdleMock as (...args: unknown[]) => unknown)(...args),
 }));
 
+// mock-isolation: Workspace tests supply synthetic media without filesystem hydration.
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: (...args: unknown[]) =>
     (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
+  hydratePromptMediaMessages: async (messages: AgentMessage[]) => messages,
 }));
 
+// mock-isolation: Workspace tests supply runtime facts without host discovery.
 vi.mock("../../system-prompt-params.js", () => ({
   buildSystemPromptParams: () => ({
     runtimeInfo: {},
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   }),
-}));
-
-vi.mock("../../system-prompt-report.js", () => ({
-  buildSystemPromptReport: () => undefined,
 }));
 
 vi.mock("../../system-prompt-config.js", async (importOriginal) => {
@@ -636,8 +630,9 @@ vi.mock("../../custom-api-registry.js", () => ({
   ensureCustomApiRegistered: () => {},
 }));
 
+// mock-isolation: Workspace attempts do not resolve auth mode from host profiles or environment keys.
 vi.mock("../../model-auth.js", () => ({
-  resolveModelAuthMode: () => undefined,
+  resolveModelAuthModeAsync: () => undefined,
 }));
 
 vi.mock("../../model-tool-support.js", async (importOriginal) => ({
@@ -769,57 +764,6 @@ vi.mock("./compaction-timeout.js", () => ({
   shouldFlagCompactionTimeout: () => false,
 }));
 
-vi.mock("./history-image-prune.js", () => ({
-  installHistoryImagePruneContextTransform: () => () => {},
-  pruneProcessedHistoryImages: () => null,
-}));
-
-type MutableSession = {
-  sessionId: string;
-  sessionManager?: CreateAgentSessionOptions["sessionManager"];
-  messages: unknown[];
-  isCompacting: boolean;
-  isStreaming: boolean;
-  subscribe: AgentSession["subscribe"];
-  agent: {
-    convertToLlm: Agent["convertToLlm"];
-    prompt?: (...args: unknown[]) => Promise<unknown>;
-    streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
-    transport?: string;
-    subscribe?: (
-      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
-    ) => () => void;
-    reset: () => void;
-    state: {
-      messages: unknown[];
-      systemPrompt?: string;
-    };
-  };
-  prompt: (
-    prompt: string,
-    options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
-  ) => Promise<void>;
-  setBaseSystemPrompt: (systemPrompt: string) => void;
-  sendCustomMessage: (
-    message: {
-      customType: string;
-      content: string;
-      display: boolean;
-      details?: Record<string, unknown>;
-    },
-    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
-  ) => Promise<void>;
-  getActiveToolNames: () => string[];
-  setActiveToolsByName: (toolNames: string[]) => void;
-  abort: () => Promise<void>;
-  dispose: () => void;
-  steer: (text: string) => Promise<void>;
-  [agentSessionSetContextReplacementHook]: (
-    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
-  ) => void;
-  [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
-};
-
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
   agent: MutableSession["agent"] | Agent;
 };
@@ -910,7 +854,7 @@ export function resetEmbeddedAttemptHarness(
   });
   hoisted.subscribeEmbeddedAgentSessionMock
     .mockReset()
-    .mockImplementation(() => createSubscriptionMock());
+    .mockImplementation(params.subscribeImpl ?? (() => createSubscriptionMock()));
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
@@ -937,9 +881,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
-  if (params.subscribeImpl) {
-    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
-  }
 }
 
 export async function cleanupTempPaths(tempPaths: string[]) {
@@ -960,6 +901,10 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
+  let configuredTools: Agent["state"]["tools"] = [];
+  const promptContextQueue = createTestPromptContextQueue((message) => {
+    session.messages = [...session.messages, message];
+  });
   let promptPreparation: Parameters<AgentSession[typeof agentSessionSetPromptPreparation]>[0];
   let promptPreparationInstalled = false;
   let pendingPrompt:
@@ -984,8 +929,9 @@ export function createDefaultEmbeddedSession(params?: {
         await session.agent.streamFn?.(
           testModel,
           {
-            systemPrompt: session.agent.state.systemPrompt ?? "",
+            systemPrompt: session.agent.state.systemPrompt,
             messages: session.messages as Parameters<StreamFn>[1]["messages"],
+            tools: session.agent.state.tools,
           },
           {},
         );
@@ -1006,6 +952,14 @@ export function createDefaultEmbeddedSession(params?: {
       // session double never emits them.
       subscribe: () => () => {},
       state: {
+        systemPrompt: "",
+        get tools() {
+          return configuredTools.filter((tool) => activeToolNames.includes(tool.name));
+        },
+        set tools(tools) {
+          configuredTools = [...tools];
+          activeToolNames = tools.map((tool) => tool.name);
+        },
         get messages() {
           return session.messages;
         },
@@ -1023,6 +977,7 @@ export function createDefaultEmbeddedSession(params?: {
       session.agent.state.systemPrompt = systemPrompt;
     },
     prompt: async (prompt, options) => {
+      promptContextQueue.flush();
       await session.agent.prompt?.(prompt, options);
       if (params?.prompt) {
         return;
@@ -1033,25 +988,20 @@ export function createDefaultEmbeddedSession(params?: {
       ];
     },
     sendCustomMessage: async (message, options) => {
-      if (options?.deliverAs === "nextTurn") {
-        session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
-        return;
-      }
-      if (options?.triggerTurn) {
+      session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
+      if (options?.deliverAs !== "nextTurn" && options?.triggerTurn) {
         session.messages = [
           ...session.messages,
-          { role: "custom", timestamp: 1, ...message },
           { role: "assistant", content: "done", timestamp: 2 },
         ];
-        return;
       }
-      session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
     },
     abort: async () => {},
     dispose: () => {
       promptPreparation = undefined;
     },
     steer: async () => {},
+    [agentSessionQueuePromptContext]: promptContextQueue.queue,
     [agentSessionSetContextReplacementHook]: () => {},
     [agentSessionSetPromptPreparation]: (prepare) => {
       promptPreparation = prepare;
@@ -1065,7 +1015,10 @@ export function createDefaultEmbeddedSession(params?: {
       session.prompt = (...args) =>
         runPreparedTestPrompt(
           () => promptPreparation,
-          () => prompt(...args),
+          () => {
+            promptContextQueue.flush();
+            return prompt(...args);
+          },
         );
     },
   };
@@ -1197,6 +1150,12 @@ export async function createContextEngineAttemptRunner(params: {
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
+    session.agent.state.systemPrompt = options.systemPrompt;
+    hoisted.systemPromptTexts.push(options.systemPrompt);
+    session.agent.state.tools = (options.customTools ?? [])
+      .filter((tool) => options.tools.includes(tool.name))
+      .map((tool) => wrapToolDefinition(tool));
+    session.setActiveToolsByName(session.agent.state.tools.map((tool) => tool.name));
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {

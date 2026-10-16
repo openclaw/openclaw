@@ -9,8 +9,9 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import * as runLease from "./run-lease.js";
-import { resolveRepository } from "./service-preparation.js";
+import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -41,13 +42,26 @@ describe("interrupted ordinary worktree removal recovery", () => {
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
       }
       if (cleanupId) {
-        expect(runLease.hasLiveWorktreeRunLease(env, cleanupId)).toBe(false);
+        expect(hasLiveWorktreeRunLease(env, cleanupId)).toBe(false);
         await deleteRegistryWorktree(env, cleanupId);
       }
       cleanup();
     }),
   );
-  const initialize = useManagedWorktreeTestRepository();
+  let fixtureHead: string;
+  let fixtureSnapshot: string;
+  const initialize = useManagedWorktreeTestRepository(async (repo) => {
+    fixtureHead = await git(repo, "rev-parse", "HEAD");
+    fixtureSnapshot = await git(
+      repo,
+      "commit-tree",
+      `${fixtureHead}^{tree}`,
+      "-p",
+      fixtureHead,
+      "-m",
+      "original completed capture",
+    );
+  });
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
@@ -89,19 +103,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     record = getRegistryWorktree(env, record.id)!;
-    head = await git(repo, "rev-parse", "HEAD");
+    head = fixtureHead;
     admin = (await fs.readFile(path.join(record.path, ".git"), "utf8"))
       .trim()
       .slice("gitdir: ".length);
-    snapshot = await git(
-      repo,
-      "commit-tree",
-      `${head}^{tree}`,
-      "-p",
-      head,
-      "-m",
-      "original completed capture",
-    );
+    snapshot = fixtureSnapshot;
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
     await pinSnapshot();
     await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });

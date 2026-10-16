@@ -450,11 +450,9 @@ export function resolveEffectiveToolPolicy(params: {
     profileAlsoAllow: explicitProfileAlsoAllow
       ? uniqueStrings(explicitProfileAlsoAllow)
       : undefined,
-    providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
-      ? agentProviderPolicy?.alsoAllow
-      : Array.isArray(providerPolicy?.alsoAllow)
-        ? providerPolicy?.alsoAllow
-        : undefined,
+    providerProfileAlsoAllow:
+      resolveExplicitProfileAlsoAllow(agentProviderPolicy) ??
+      resolveExplicitProfileAlsoAllow(providerPolicy),
   };
 
   const gatewayConfigReadAllowed =

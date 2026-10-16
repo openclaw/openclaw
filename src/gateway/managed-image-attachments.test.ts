@@ -21,7 +21,7 @@ import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/i
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.js";
+import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.worker.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   completeSessionDelivery,
@@ -131,9 +131,9 @@ vi.mock("./http-utils.js", () => ({
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
-  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
+vi.mock("./session-utils-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store.js")>()),
+  loadGatewaySessionEntryReadOnlyAsync: async (...args: unknown[]) => loadSessionEntryMock(...args),
 }));
 
 vi.mock("./session-transcript-readers.js", () => ({
@@ -387,16 +387,11 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const { result } = await requestManagedImage({
       ...request,
       method: "HEAD",
-      headers: [
-        "Host",
-        "127.0.0.1",
-        "if-none-match",
-        `"not-the-current-tag", W/${etag}`,
-        "range",
-        "bytes=2-5",
-        "if-range",
-        '"stale"',
-      ],
+      headers: {
+        "if-none-match": `"not-the-current-tag", W/${etag}`,
+        range: "bytes=2-5",
+        "if-range": '"stale"',
+      },
     });
 
     expect(result.statusCode).toBe(304);
@@ -592,7 +587,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     }
   });
 
-  it("serves a sharp bounded 1600×800 thumbnail through local reads and the artifact ticket", async () => {
+  it("serves compressed bounded 1600×800 renditions through local reads and the artifact ticket", async () => {
     const source = createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
     const canonicalPath = mediaPath({ sessionKey, attachmentId });
@@ -616,8 +611,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     };
     const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
     expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
-      width: 1200,
-      height: 600,
+      format: "webp",
+      width: 960,
+      height: 480,
     });
     await expect(
       readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
@@ -635,13 +631,26 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(200);
-    expect(result.headers["content-type"]).toBe("image/png");
-    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(result.headers["content-type"]).toBe("image/webp");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.webp");
     expect(readImageProbeFromHeader(result.body)).toMatchObject({
-      width: 1200,
-      height: 600,
+      format: "webp",
+      width: 960,
+      height: 480,
     });
     expect(result.body).toEqual(localThumbnail);
+    const small = await requestManagedImage({
+      stateDir,
+      pathName: `${thumbnailUrl}&width=480`,
+      denyAuth: true,
+      transcriptMessages,
+    });
+    expect(readImageProbeFromHeader(small.result.body)).toMatchObject({
+      format: "webp",
+      width: 480,
+      height: 240,
+    });
+    expect(small.result.body.byteLength).toBeLessThanOrEqual(96 * 1024);
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 
@@ -661,42 +670,40 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(download).toBeNull();
   });
 
-  it("rejects non-owner trusted-proxy requests with self-declared session ownership", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+  it.each([
+    {
+      name: "non-owner trusted-proxy requests with self-declared session ownership",
+      method: "GET",
+      malformedSessionKey: false,
       authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      headers: { "x-openclaw-requester-session-key": sessionKey },
-    });
-
-    expect(result.statusCode).toBe(403);
-  });
-
-  it("rejects non-GET methods", async () => {
-    const { attachmentId, sessionKey } = await createFixture(stateDir);
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      statusCode: 403,
+    },
+    {
+      name: "non-GET methods",
       method: "POST",
+      malformedSessionKey: false,
+      authResponse: undefined,
+      statusCode: 405,
+    },
+    {
+      name: "malformed encoded session keys",
+      method: "GET",
+      malformedSessionKey: true,
+      authResponse: { authMethod: "device-token" },
+      statusCode: 404,
+    },
+  ])("rejects $name", async ({ method, malformedSessionKey, authResponse, statusCode }) => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const encodedSessionKey = malformedSessionKey ? "%E0%A4%A" : encodeURIComponent(sessionKey);
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodedSessionKey}/${attachmentId}/full`,
+      method,
+      authResponse,
       headers: { "x-openclaw-requester-session-key": sessionKey },
     });
 
-    expect(result.statusCode).toBe(405);
-  });
-
-  it("rejects malformed encoded session keys", async () => {
-    const { attachmentId } = await createFixture(stateDir);
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/%E0%A4%A/${attachmentId}/full`,
-      authResponse: { authMethod: "device-token" },
-    });
-
-    expect(result.statusCode).toBe(404);
+    expect(result.statusCode).toBe(statusCode);
   });
 });
 
@@ -859,10 +866,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       const filePath = path.join(stateDir, name);
       await fs.writeFile(filePath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       const sourcePath = await fs.realpath(filePath);
+      const sourceStat = await fs.stat(sourcePath);
       pending.push(
         actual.resolvePlaybackMetadataForSource({
           sourcePath,
-          sourceStat: await fs.stat(sourcePath),
+          sourceStat: {
+            size: sourceStat.size,
+            mtimeMs: sourceStat.mtimeMs,
+            ctimeMs: sourceStat.ctimeMs,
+            exactIdentity: await fs.stat(sourcePath, { bigint: true }),
+          },
           mimeType: "audio/mpeg",
           kind: "audio",
         }),
@@ -948,17 +961,11 @@ describe("createManagedOutgoingImageBlocks", () => {
     await expectPathMissing(path.join(stateDir, "media", "outgoing", "records"));
   });
 
-  it("rejects semicolon-heavy malformed data urls without backtracking", async () => {
-    const semicolons = ";".repeat(64);
-    const malformed = `data:image/png${semicolons}`;
-
-    await expect(createImages([malformed])).rejects.toThrow("Invalid image data URL");
-  });
-
-  it("rejects data urls without a media type", async () => {
-    await expect(createImages([`data:;base64,${TINY_PNG_BASE64}`])).rejects.toThrow(
-      "Invalid image data URL",
-    );
+  it.each([
+    { name: "semicolon-heavy malformed headers", url: `data:image/png${";".repeat(64)}` },
+    { name: "missing media type", url: `data:;base64,${TINY_PNG_BASE64}` },
+  ])("rejects data URLs with $name", async ({ url }) => {
+    await expect(createImages([url])).rejects.toThrow("Invalid image data URL");
   });
 
   it("rewrites file URLs into managed display blocks without leaking the source path", async () => {
@@ -1324,7 +1331,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(checkedSessionKeys).toEqual([fixture.sessionKey]);
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
     expect(
       await attachManagedImageRecordsToMessage({
         attachments: [fixture],
@@ -1395,7 +1402,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(failed).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
 
     const retried = await cleanupManagedOutgoingImageRecords({ stateDir });
 
@@ -1403,55 +1410,48 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     await expectPathMissing(fixture.originalPath);
   });
 
-  it("reaps aged files left before a SQLite record was committed", async () => {
-    const orphanPath = path.join(
-      stateDir,
-      "media",
-      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-      "orphan.png",
-    );
-    await writeSource(orphanPath, "orphan");
-    await fs.utimes(orphanPath, new Date(0), new Date(0));
+  it.each([false, true])(
+    "cleans aged unindexed files unless legacy metadata exists (%s)",
+    async (legacy) => {
+      const orphanPath = path.join(
+        stateDir,
+        "media",
+        MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+        legacy ? "legacy-owned.png" : "orphan.png",
+      );
+      await writeSource(orphanPath, legacy ? "legacy" : "orphan");
+      if (legacy) {
+        await writeSource(
+          path.join(
+            stateDir,
+            "media",
+            "outgoing",
+            "records",
+            "11111111-1111-4111-8111-111111111111.json",
+          ),
+          "{}",
+        );
+      }
+      await fs.utimes(orphanPath, new Date(0), new Date(0));
 
-    const result = await cleanupManagedOutgoingImageRecords({
-      stateDir,
-      nowMs: 1_000_000,
-      transientMaxAgeMs: 1_000,
-    });
+      const result = await cleanupManagedOutgoingImageRecords({
+        stateDir,
+        nowMs: 1_000_000,
+        transientMaxAgeMs: 1_000,
+      });
 
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 1, retainedCount: 0 });
-    await expectPathMissing(orphanPath);
-  });
-
-  it("does not reap old unindexed files while legacy metadata still exists", async () => {
-    const orphanPath = path.join(
-      stateDir,
-      "media",
-      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-      "legacy-owned.png",
-    );
-    const legacyRecordPath = path.join(
-      stateDir,
-      "media",
-      "outgoing",
-      "records",
-      "11111111-1111-4111-8111-111111111111.json",
-    );
-    await fs.mkdir(path.dirname(orphanPath), { recursive: true });
-    await fs.mkdir(path.dirname(legacyRecordPath), { recursive: true });
-    await fs.writeFile(orphanPath, "legacy");
-    await fs.writeFile(legacyRecordPath, "{}");
-    await fs.utimes(orphanPath, new Date(0), new Date(0));
-
-    const result = await cleanupManagedOutgoingImageRecords({
-      stateDir,
-      nowMs: 1_000_000,
-      transientMaxAgeMs: 1_000,
-    });
-
-    expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
-    await expect(fs.access(orphanPath)).resolves.toBeUndefined();
-  });
+      expect(result).toEqual({
+        deletedRecordCount: 0,
+        deletedFileCount: legacy ? 0 : 1,
+        retainedCount: 0,
+      });
+      if (legacy) {
+        await fs.access(orphanPath);
+      } else {
+        await expectPathMissing(orphanPath);
+      }
+    },
+  );
 
   it("does not let a valid fallback mask an unreadable exact row", async () => {
     const fixture = await createFixture(stateDir);
@@ -1473,7 +1473,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -1540,7 +1540,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
@@ -1581,8 +1581,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(0);
     expect(result.deletedFileCount).toBe(0);
     expect(result.retainedCount).toBe(2);
-    await expect(fs.access(firstFixture.originalPath)).resolves.toBeUndefined();
-    await expect(fs.access(secondFixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(firstFixture.originalPath);
+    await fs.access(secondFixture.originalPath);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1613,7 +1613,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
-    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(retainedFixture.originalPath);
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
@@ -1655,7 +1655,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
-    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(retainedFixture.originalPath);
     await expectPathMissing(deletedFixture.originalPath);
   });
 
@@ -1699,7 +1699,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(readSessionMessagesMock).toHaveBeenCalled();
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
   });
 
   it("treats legacy unscoped global records as the configured default agent", async () => {
@@ -1756,7 +1756,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.deletedRecordCount).toBe(1);
     expect(result.retainedCount).toBe(1);
     await expectPathMissing(deletedFixture.originalPath);
-    await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(retainedFixture.originalPath);
   });
 
   it("retains ownerless global records when no compatibility owner exists", async () => {
@@ -1775,7 +1775,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     expect(result).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 1 });
     expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
+    await fs.access(fixture.originalPath);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });

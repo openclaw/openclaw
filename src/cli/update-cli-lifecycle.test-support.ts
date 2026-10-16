@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import * as sourceArtifactPreflight from "../../scripts/lib/source-update-artifact-preflight.mts";
@@ -15,10 +15,12 @@ import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -200,6 +202,10 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Metadata process isolation has its own tests; keep real file and sidecar sizes here.
+    vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation(
+      (files, { signal }) => stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+    );
     // Service control is simulated; native artifact and database owners still run on the host OS.
     const inspectArtifacts = sourceArtifactPreflight.inspectSourceUpdateArtifacts;
     vi.spyOn(sourceArtifactPreflight, "inspectSourceUpdateArtifacts").mockImplementation(
@@ -236,18 +242,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     if (sqliteHostPlatform !== "win32") {
       vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
         (directoryPath) => {
-          fsSync.mkdirSync(directoryPath, { mode: 0o700 });
+          createDirectorySync(directoryPath, { mode: 0o700 });
         },
       );
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((filePath) =>
-        fsSync.openSync(
-          filePath,
-          fsSync.constants.O_RDWR |
-            fsSync.constants.O_CREAT |
-            fsSync.constants.O_EXCL |
-            fsSync.constants.O_NOFOLLOW,
-          0o600,
-        ),
+      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
+        createFileSync(file, { mode: 0o600 }),
       );
     }
     // Native-service platform simulations do not change the actual SQLite VFS.
@@ -489,6 +488,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
 
   afterAll(async () => {
     fixtureEnvSnapshot.restore();
+    // Direct command fixtures also own the native broker started from their checkout.
+    await closeDefaultRetainedNativeWorkerSource();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 

@@ -12,8 +12,8 @@ type BrowserControlOwner = "server" | "service";
 
 let state: BrowserServerState | null = null;
 let lifecycleTail = Promise.resolve();
-let completedEffectiveStops = 0;
 let pendingLifecycles = 0;
+let pendingStops = 0;
 
 /** Serialize complete Browser runtime start/stop workflows. */
 function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
@@ -28,14 +28,13 @@ function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** Queue startup, but never turn a request made during shutdown into a post-stop restart. */
+/** Serialize startup with the runtime's stop workflow. */
 export function withBrowserControlStart<T>(run: () => Promise<T>): Promise<T> {
-  const effectiveStopsAtRequest = completedEffectiveStops;
+  if (pendingStops > 0) {
+    return Promise.reject(new BrowserProfileUnavailableError("Browser runtime is stopping."));
+  }
   return enqueueBrowserControlLifecycle(() => {
-    if (
-      completedEffectiveStops !== effectiveStopsAtRequest ||
-      (state ? !isBrowserRuntimeRunning(state) : false)
-    ) {
+    if (state && !isBrowserRuntimeRunning(state)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
     return run();
@@ -94,6 +93,7 @@ export function stopBrowserControlRuntime(params: {
   closeServer?: boolean;
   onWarn: (message: string) => void;
 }): Promise<BrowserServerState | null> {
+  pendingStops += 1;
   return enqueueBrowserControlLifecycle(async () => {
     const current = state;
     if (!current) {
@@ -112,7 +112,8 @@ export function stopBrowserControlRuntime(params: {
       closeServer: params.closeServer,
       onWarn: params.onWarn,
     });
-    completedEffectiveStops += 1;
     return current;
+  }).finally(() => {
+    pendingStops -= 1;
   });
 }

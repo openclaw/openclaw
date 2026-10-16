@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { resolveChannelAccount, resolvePluginDmPolicy } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -16,6 +16,7 @@ import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-ins
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   listExactDirectMessageBindingPeerIds,
@@ -31,6 +32,37 @@ type DmPrincipalRoute = {
   logicalPrincipalKey: string;
   bucketKey: string;
 };
+
+/** Finds toolsBySender keys that only match mutable sender attributes. */
+function* mutableToolsBySenderKeys(
+  value: unknown,
+  path: string,
+  isAccountRoot = true,
+): Generator<{ path: string; key: string }> {
+  const record = asNullableRecord(value);
+  if (!record) {
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "toolsBySender") {
+      const policies = asNullableRecord(child);
+      for (const senderKey of Object.keys(policies ?? {})) {
+        const typed = parseToolsBySenderTypedKey(senderKey);
+        if (typed?.type === "name" || typed?.type === "username") {
+          yield { path: `${path}.toolsBySender`, key: typed.type };
+        }
+      }
+      continue;
+    }
+    // Top-level `accounts` maps are audited separately per account; nested
+    // room/channel entries literally named "accounts" (e.g. channels.slack.channels.accounts)
+    // are normal policy scopes and must still be traversed.
+    if (isAccountRoot && key === "accounts") {
+      continue;
+    }
+    yield* mutableToolsBySenderKeys(child, `${path}.${key}`, false);
+  }
+}
 
 function hasExplicitProviderAccountConfig(
   cfg: OpenClawConfig,
@@ -231,7 +263,7 @@ export async function collectChannelSecurityFindingsCore(params: {
         severity: "critical",
         title: `${input.label} DMs are open`,
         detail: `${policyPath}="open" allows anyone to DM the bot.`,
-        remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
+        remediation: `Use pairing/allowlist; if you really need open DMs, check that ${allowFromKey} includes "*".`,
       });
       if (!hasWildcard) {
         findings.push({
@@ -294,7 +326,7 @@ export async function collectChannelSecurityFindingsCore(params: {
           title: `[secrets] ${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
           detail: diagnostic,
           remediation:
-            "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
+            "Make the referenced secrets available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
         });
       }
       if (!enabled || !configured) {
@@ -303,14 +335,39 @@ export async function collectChannelSecurityFindingsCore(params: {
 
       const accountNote =
         orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
-      const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
-        ?.config;
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
+      const accountConfig =
+        (account as { config?: Record<string, unknown> } | null | undefined)?.config ??
+        asNullableRecord(account);
+      const dmPolicy = await resolvePluginDmPolicy({
+        plugin,
         cfg: params.cfg,
         accountId,
         account,
       });
       const nameMatchingEnabled = isDangerousNameMatchingEnabled(accountConfig);
+      const mutableToolKeys = [
+        ...mutableToolsBySenderKeys(
+          accountConfig,
+          hasExplicitAccountPath
+            ? `channels.${plugin.id}.accounts.${accountId}`
+            : `channels.${plugin.id}`,
+        ),
+      ];
+      if (mutableToolKeys.length > 0) {
+        const uniqueScopes = [...new Set(mutableToolKeys.map((entry) => entry.path))];
+        findings.push({
+          checkId: `channels.${plugin.id}.toolsBySender.mutable_entries`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} toolsBySender uses mutable sender keys${accountNote}`,
+          detail: `${mutableToolKeys.length} toolsBySender ${mutableToolKeys.length === 1 ? "entry" : "entries"} in ${uniqueScopes
+            .slice(0, 3)
+            .join(
+              ", ",
+            )}${uniqueScopes.length > 3 ? ", …" : ""} match mutable username:/name: sender attributes. Because group members can change their display names or handles, another sender could select that tool policy override.`,
+          remediation:
+            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+        });
+      }
       const configuredEntries = (dmPolicy?.allowFrom ?? [])
         .map(String)
         .filter((raw) => raw.trim() !== "*");

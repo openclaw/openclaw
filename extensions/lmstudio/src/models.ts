@@ -1,6 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -521,3 +522,31 @@ export function mapLmstudioWireModels(
     })
     .filter((entry): entry is ModelDefinitionConfig => entry !== null);
 }
+
+export function normalizeLmstudioModelKey(modelId: string): string {
+  const trimmed = modelId.trim();
+  if (trimmed.toLowerCase().startsWith("lmstudio/")) {
+    return trimmed.slice("lmstudio/".length).trim();
+  }
+  return trimmed;
+}
+
+export const getUnlistedLmstudioConfiguredModelIds: NonNullable<
+  NonNullable<ProviderPlugin["catalog"]>["getUnlistedConfiguredModelIds"]
+> = (catalog, configuredModels) => {
+  const modelIds = new Set(catalog.modelIds);
+  const aliases = new Set(catalog.aliases?.map((alias) => alias.toLowerCase()));
+  return configuredModels
+    .filter((model) => {
+      if (
+        model.provider !== "lmstudio" ||
+        (model.baseUrl &&
+          resolveLmstudioServerBase(model.baseUrl) !== resolveLmstudioServerBase(catalog.baseUrl))
+      ) {
+        return false;
+      }
+      const modelKey = normalizeLmstudioModelKey(model.modelId);
+      return !modelIds.has(modelKey) && !aliases.has(modelKey.toLowerCase());
+    })
+    .map((model) => model.modelId);
+};

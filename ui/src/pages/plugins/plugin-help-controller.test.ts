@@ -4,17 +4,11 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-cont
 import { createContext } from "../custodian/custodian-page.test-harness.ts";
 import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
-import type { PluginsPageViewModel } from "./plugins-page-view.ts";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 function createController() {
-  return new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
+  return new PluginHelpController();
 }
 
 afterEach(() => {
@@ -35,7 +29,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
         result: { plugins: [{ id, name: id, installed: true }] },
         detail: { pluginId: id },
         installedDetailTab: "configuration",
-      }) as unknown as PluginsPageViewModel;
+      }) as unknown as Parameters<PluginHelpController["update"]>[0];
     controller.update(model("first"));
     const ask = controller.ask.bind(controller);
     if (change === "plugin") {
@@ -46,7 +40,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
       setGatewayToken("replacement-operator");
       controller.update(model("first"));
     } else {
-      controller.hostDisconnected();
+      controller.dispose();
     }
     const toggled = vi.fn();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
@@ -62,7 +56,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
       expect(takePluginHelpDraft(context)).toBe("");
     } finally {
       window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );
@@ -144,7 +138,7 @@ it.each<{
         });
       }
     } finally {
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );
@@ -176,7 +170,7 @@ it.each([
       result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
       detail: { pluginId: "workboard" },
       installedDetailTab: "configuration",
-    } as unknown as PluginsPageViewModel);
+    } as unknown as Parameters<PluginHelpController["update"]>[0]);
     try {
       await controller.ask({
         path,
@@ -190,7 +184,7 @@ it.each([
       expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
       expect(draft).not.toContain("synthetic-sensitive-value");
     } finally {
-      controller.hostDisconnected();
+      controller.dispose();
     }
   },
 );

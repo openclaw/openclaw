@@ -5,14 +5,26 @@ import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
-import { isJsonObject } from "./protocol.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
+  flattenCodexDynamicToolFunctions,
+  isJsonObject,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
+import {
+  createCodexRuntimePlanFixture,
   createNativeRunParams as createParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -62,6 +74,7 @@ function runOneShot(
 ) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+  setRuntimeConfigSnapshot(params.config ?? {});
   params.oneShotCliRun = true;
   params.cleanupBundleMcpOnRunEnd = true;
   params.onExecutionPhase = onExecutionPhase;
@@ -80,6 +93,63 @@ describe("Codex one-shot cleanup receipts", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("uses host-owned tools for strict one-shot Codex runs", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "config/read": { config: {}, layers: [] },
+      "configRequirements/read": { requirements: null },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+      "thread/backgroundTerminals/list": { data: [], nextCursor: null },
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.oneShotCliRun = true;
+    params.cleanupBundleMcpOnRunEnd = true;
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    setRuntimeConfigSnapshot({});
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const run = runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
+    try {
+      await run.waitForTurnAccepted();
+      const start = await waitForHarnessRequest(harness, "thread/start");
+      expect(start.params).toMatchObject({ config: { "features.code_mode": false } });
+      const { dynamicTools } = start.params as { dynamicTools: CodexDynamicToolSpec[] };
+      expect(
+        flattenCodexDynamicToolFunctions(dynamicTools)
+          .map((tool) => tool.name)
+          .toSorted(),
+      ).toEqual(["exec", "message", "process"]);
+      await waitForHarnessRequest(harness, "turn/start");
+      harness.send({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+    } finally {
+      harness.client.close();
+      await run.catch(() => undefined);
+    }
   });
 
   it.each(["completed", "cancelled"] as const)(

@@ -14,6 +14,7 @@ import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
   resolveQueueSettings,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 
 export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
@@ -144,10 +145,23 @@ export async function maybeSteerSubagentAnnounce(params: {
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" }
 > {
+  return withSubagentRequesterDelivery(
+    params.requesterSessionKey,
+    params,
+    maybeSteerSubagentAnnounceBound,
+  );
+}
+
+async function maybeSteerSubagentAnnounceBound(
+  params: Parameters<typeof maybeSteerSubagentAnnounce>[0],
+): ReturnType<typeof maybeSteerSubagentAnnounce> {
   if (params.signal?.aborted) {
     return { status: "none" };
   }
-  const requester = loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId);
+  const requester = await loadRequesterSessionEntry(
+    params.requesterSessionKey,
+    params.requesterAgentId,
+  );
   const { cfg, entry, canonicalKey } = requester;
   const { sessionId, isActive } = resolveRequesterSessionActivity(
     params.requesterSessionKey,
@@ -213,7 +227,7 @@ export async function maybeSteerSubagentAnnounce(params: {
   }
   const currentActivity = resolveRequesterSessionActivity(
     params.requesterSessionKey,
-    loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId),
+    await loadRequesterSessionEntry(params.requesterSessionKey, params.requesterAgentId),
   );
   return { status: currentActivity.isActive ? "dropped" : "none" };
 }

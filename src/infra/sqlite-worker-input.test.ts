@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   type SqliteWorkerReply,
@@ -69,8 +71,22 @@ describe("SQLite worker staged input", () => {
   it("snapshots and persists a 72 MiB append across reopening with bounded frames", async () => {
     const file = databasePath();
     const store = await open(file);
+    await waitForDiagnosticEventsDrained();
+    const completed: DiagnosticWorkerRequestFields[] = [];
+    onTestFinished(
+      onInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "worker.request" && event.phase === "completed") {
+            completed.push(event);
+          }
+        },
+        { include: ["worker.request"] },
+      ),
+    );
+    const replyTimings: Array<NonNullable<DiagnosticWorkerRequestFields["timing"]>> = [];
     const value = payload(72);
     const inputFrames: Array<{ visible: number; backing: number }> = [];
+    const dispatchedInputs: Uint8Array[] = [];
     const receivedFrames: Array<{ visible: number; backing: number; framed: boolean }> = [];
     const commands: SqliteWorkerRequest["type"][] = [];
     // oxlint-disable-next-line typescript/unbound-method -- call restores the sending worker below.
@@ -81,6 +97,9 @@ describe("SQLite worker staged input", () => {
       transferList,
     ) {
       commands.push(request.type);
+      if ("input" in request) {
+        dispatchedInputs.push(request.input);
+      }
       if (request.type === "execute-frame") {
         inputFrames.push({
           visible: request.input.byteLength,
@@ -98,6 +117,9 @@ describe("SQLite worker staged input", () => {
     ) {
       const reply = args[0] as SqliteWorkerReply;
       if (event === "message" && reply.ok) {
+        if (reply.timing) {
+          replyTimings.push(reply.timing);
+        }
         receivedFrames.push({
           visible: reply.value.byteLength,
           backing: reply.value.buffer.byteLength,
@@ -112,7 +134,32 @@ describe("SQLite worker staged input", () => {
     expect(await admitted).toMatchObject({ writes: 1 });
     expect(commands.filter((kind) => kind === "execute-start")).toHaveLength(1);
     expect(inputFrames.length).toBeGreaterThan(1);
+    expect(dispatchedInputs.every((input) => input.byteLength === 0)).toBe(true);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(1);
+    const appendTiming = completed[0]?.timing;
+    expect(replyTimings.length).toBeGreaterThan(1);
+    expect(replyTimings[0]?.inputReady).toBeUndefined();
+    expect(appendTiming?.received).toBe(replyTimings[0]?.received);
+    expect(appendTiming?.inputReady).toBeGreaterThanOrEqual(replyTimings[0]!.replied!);
+    expect(appendTiming?.executeFinished).toBeGreaterThanOrEqual(appendTiming!.inputReady!);
+    const appendReplyCount = replyTimings.length;
     await expectRows(store, [value]);
+    await waitForDiagnosticEventsDrained();
+    expect(completed).toHaveLength(2);
+    const readTiming = completed[1]?.timing;
+    const readReplies = replyTimings.slice(appendReplyCount);
+    expect(readReplies.length).toBeGreaterThan(1);
+    expect(readTiming?.received).toBeGreaterThan(appendTiming!.received!);
+    for (const timing of readReplies) {
+      expect(timing.received).toBe(readTiming?.received);
+      expect(timing.inputReady).toBe(readTiming?.inputReady);
+      expect(timing.executeStarted).toBe(readTiming?.executeStarted);
+      expect(timing.executeFinished).toBe(readTiming?.executeFinished);
+      expect(timing.serialized).toBe(readTiming?.serialized);
+    }
+    expect(readTiming?.replied).toBeGreaterThan(readReplies[0]!.replied!);
+    expect(readTiming?.replyReceived).toBeGreaterThanOrEqual(readTiming!.replied!);
     await store.close();
     await expectRows(await open(file), [value]);
     for (const frame of inputFrames) {

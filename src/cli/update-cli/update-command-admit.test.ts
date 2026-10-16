@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot } from "../../config/io.runtime.js";
+import * as deferredPluginMigrations from "../../infra/deferred-plugin-migrations.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
@@ -145,6 +147,59 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("admits retained plugin config for Doctor without weakening normal validation", async () => {
+    const pluginId = "pending-settings";
+    const pluginDir = path.join(home, pluginId);
+    fs.mkdirSync(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: {
+          type: "object",
+          properties: { root: { type: "string" } },
+          additionalProperties: false,
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "throw new Error('must not activate');\n");
+    writeConfig({
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: [pluginId],
+        entries: { [pluginId]: { enabled: true, config: { legacyRoot: "/retained/source" } } },
+      },
+    });
+    vi.spyOn(deferredPluginMigrations, "readDeferredPluginMigrationsAsync").mockResolvedValue([
+      {
+        pluginId,
+        reason: "The owning plugin repair has not completed.",
+        command: "openclaw doctor --fix",
+        requiresDoctorInspection: true,
+        configPaths: [["plugins", "entries", pluginId, "config"]],
+        validationExcludedPaths: [["plugins", "entries", pluginId, "config", "legacyRoot"]],
+      },
+    ]);
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({ verdict: "admit", reasons: [] });
+    expect(snapshotFiles()).toEqual(before);
+    // Candidate runtime still requires canonical settings; only update admission carries the debt.
+    expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toContain('"legacyRoot":"/retained/source"');
+  });
+
   it.each(["retired call log", "Cannot inspect source: EACCES"])(
     "returns a published-driver refusal for plugin state failure: %s",
     async (message) => {

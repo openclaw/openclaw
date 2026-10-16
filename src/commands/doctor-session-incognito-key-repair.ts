@@ -3,10 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Compilable } from "kysely";
 import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import {
-  attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumns,
-} from "../config/sessions/session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "../config/sessions/session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "../config/sessions/session-entry-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,

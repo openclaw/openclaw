@@ -4,6 +4,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
@@ -79,6 +83,7 @@ afterEach(async () => {
   await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
   await Promise.all(modelServers.splice(0).map((server) => server.stop()));
   await Promise.all(cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  clearRuntimeConfigSnapshot();
 });
 
 async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -356,12 +361,17 @@ describe("plugin cron registry ownership e2e", () => {
             [provider]: {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
+              // Cron admission needs explicit key auth before the provider runtime loads.
+              auth: route === "cron" ? "api-key" : undefined,
+              apiKey: route === "cron" ? TEST_API_KEY : undefined,
               request: { allowPrivateNetwork: true },
               models: [model("unavailable")],
             },
             [fallbackProvider]: {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
+              auth: route === "cron" ? "api-key" : undefined,
+              apiKey: route === "cron" ? TEST_API_KEY : undefined,
               request: { allowPrivateNetwork: true },
               models: [model("available")],
             },
@@ -384,6 +394,7 @@ describe("plugin cron registry ownership e2e", () => {
       const sessionKey = "agent:main:subagent:provider-fallback";
       if (route === "subagent") {
         instance.state.applyEnv();
+        setRuntimeConfigSnapshot(config);
         await upsertSessionEntry({
           agentId: "main",
           sessionKey,

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,10 +70,8 @@ export function resolveAndroidSdkEnv(options: SdkOptions = {}) {
     platform === "darwin"
       ? path.join(homeDir, "Library", "Android", "sdk")
       : path.join(homeDir, "Android", "Sdk");
-  if (!existsSync(defaultSdkDir)) {
-    return env;
-  }
-  return { ...env, ANDROID_HOME: defaultSdkDir };
+  const sdkDir = [defaultSdkDir, path.join(homeDir, ".android-sdk")].find(existsSync);
+  return sdkDir ? { ...env, ANDROID_HOME: sdkDir } : env;
 }
 
 export async function run(
@@ -95,10 +95,11 @@ export async function run(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)) {
-  const { gradleArgs, postArgs } = splitAndroidGradleArgs(argv);
+  const proof = argv[0] === "--proof";
+  const { gradleArgs, postArgs } = splitAndroidGradleArgs(proof ? argv.slice(1) : argv);
   if (gradleArgs.length === 0) {
     console.error(
-      "Usage: node --import tsx scripts/run-android-gradle.mts <gradle-task...> [-- <post-command...>]",
+      "Usage: node scripts/run-android-gradle.mts [--proof] <gradle-task...> [-- <post-command...>]",
     );
     return 1;
   }
@@ -107,11 +108,44 @@ export async function main(argv: string[] = process.argv.slice(2)) {
     // Google's Linux AAPT2 artifact is x86_64-only, so resource tasks fail on
     // Linux arm64 before app code or tests run. CI Android lanes use x64 runners.
     console.log(linuxArmAndroidGradleSkipMessage());
-    return 0;
+    return proof ? 1 : 0;
   }
 
   const env = resolveAndroidSdkEnv();
+  if (proof) {
+    const missing: string[] = [];
+    const java = env.JAVA_HOME ? path.join(env.JAVA_HOME, "bin", "java") : "java";
+    if (spawnSync(java, ["-version"], { env, stdio: "ignore" }).status !== 0) {
+      missing.push("Java (set JAVA_HOME to a working JDK)");
+    }
+    if (
+      !env.ANDROID_HOME &&
+      !env.ANDROID_SDK_ROOT &&
+      !fs.existsSync(path.join(androidDir, "local.properties"))
+    ) {
+      missing.push("Android SDK (set ANDROID_HOME or apps/android/local.properties)");
+    }
+    try {
+      createRequire(path.join(repoRoot, "packages/gateway-protocol/package.json")).resolve(
+        "esbuild",
+      );
+      createRequire(path.join(repoRoot, "packages/mermaid-renderer/package.json")).resolve("vite");
+    } catch {
+      missing.push("native generation dependencies (run pnpm install --frozen-lockfile)");
+    }
+    if (missing.length > 0) {
+      console.error(
+        `[android-gradle] prerequisite failure; Gradle was not started and no tests executed: ${missing.join("; ")}. For focused Testbox proof, select .github/workflows/ci-android-focused-testbox.yml.`,
+      );
+      return 1;
+    }
+  }
   const gradleStatus = await run("./gradlew", gradleArgs, androidDir, env);
+  if (proof && gradleStatus !== 0) {
+    console.error(
+      "[android-gradle] Gradle failed after prerequisite checks; inspect the task output and test reports. A failed build is not an executed test.",
+    );
+  }
   const command = postArgs[0];
   if (gradleStatus !== 0 || command === undefined) {
     return gradleStatus;

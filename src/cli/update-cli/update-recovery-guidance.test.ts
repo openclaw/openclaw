@@ -3,20 +3,22 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import {
   createUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
+import { refuseUnsettledDoctorRecovery } from "./update-command-service-recovery.js";
 import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
@@ -86,6 +88,138 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it("keeps healthy previous-generation rollback guidance distinct from migrated candidate recovery", () => {
+    const action = resolveUpdateResultNextAction({
+      result: failure({
+        reason: "post-update-failed",
+        recovery: {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          service: "healthy",
+          version: "1.0.0",
+        },
+      }),
+      verifiedServingVersion: "1.0.0",
+      env: {},
+    });
+    expect(action).toContain("Your Gateway is still serving 1.0.0; nothing to restore.");
+    expect(action).not.toContain("candidate");
+    expect(action).not.toContain("stop the Gateway");
+  });
+
+  it.each([
+    { reason: "service-definition-rollback-unverified", dataAtRisk: false },
+    { reason: "runtime-verification-failed", dataAtRisk: false },
+    { reason: "state-migrated-no-rollback", dataAtRisk: true },
+    { reason: "state-migrated-no-rollback", dataAtRisk: false },
+    { reason: "rollback-state-unverified", dataAtRisk: true },
+    {
+      reason: "post-update-failed",
+      recoveryReason: "state-migration-started" as const,
+      dataAtRisk: true,
+    },
+    { reason: "unreadable-state", dataAtRisk: true },
+  ])(
+    "reserves stopped guidance for a named data risk ($reason)",
+    ({ reason, recoveryReason, dataAtRisk }) => {
+      const result = failure({
+        reason,
+        recovery: {
+          serviceRestartSafe: false,
+          reason: recoveryReason ?? "runtime-verification-failed",
+          ...(dataAtRisk ? { dataAtRisk: recoveryReason ?? reason } : {}),
+        },
+        ...(reason === "unreadable-state"
+          ? {
+              steps: [
+                {
+                  name: "doctor",
+                  command: "openclaw doctor",
+                  cwd: "/fixture",
+                  durationMs: 0,
+                  exitCode: 1,
+                  failureFacts: [{ check: "doctor-maintenance", code: reason }],
+                },
+              ],
+            }
+          : {}),
+      });
+      const action = resolveUpdateResultNextAction({ result, env: {}, serviceRunning: false });
+      expect(/keep the gateway stopped/i.test(action ?? "")).toBe(dataAtRisk);
+      if (dataAtRisk) {
+        expect(action).toContain(`data at risk (${recoveryReason ?? reason})`);
+      } else {
+        expect(action).toContain("openclaw update repair");
+        expect(action).toContain("openclaw gateway status --deep");
+        expect(action).toContain(reason);
+      }
+    },
+  );
+
+  it.each(["unsettled", "foreign", "settled"] as const)(
+    "keeps %s Doctor settlement guidance when the target Gateway responds",
+    (settlement) => {
+      const root = "/fixture/candidate";
+      const message =
+        "Doctor processes remain unsettled, data-at-risk. PIDs/process groups: 41001. Keep the Gateway stopped and preserve recovery snapshots; resolve retained process custody before retrying `openclaw update repair`.";
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        root,
+        reason: "state-migrated-no-rollback",
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.2" },
+        durationMs: 1,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.2" },
+        steps: [
+          {
+            name: "doctor process settlement",
+            command: "settle doctor process groups",
+            cwd: settlement === "foreign" ? "/fixture/other-candidate" : root,
+            durationMs: 1,
+            exitCode: settlement === "unsettled" ? 1 : 0,
+            ...(settlement === "unsettled"
+              ? {
+                  stderrTail: message,
+                  failureFacts: [
+                    { check: "openclaw doctor", code: "doctor-processes-unsettled", message },
+                  ],
+                }
+              : {}),
+            warnings: ["Optional maintenance remains deferred."],
+          },
+        ],
+      };
+      expect(refuseUnsettledDoctorRecovery(result, root, () => {})).toBe(settlement !== "settled");
+      const nextAction = resolveUpdateResultNextAction({
+        result,
+        env: {},
+        environment: { container: false, stateDir: "/fixture/state" },
+      });
+      expect(nextAction).toBeTruthy();
+      const input = updateRunReportInputFromResult(result, { origin: { nextAction } });
+      const saved = structuredClone(input);
+      const report = renderUpdateRunReport(input, {
+        currentHealth: { kind: "responding", version: "2026.9.2" },
+      });
+      expect(report.lines.join("\n")).toContain(nextAction);
+      expect(report.markdown).not.toContain("saved runtime verification failure no longer applies");
+      expect(report.headline).toContain("update failed: state-migrated-no-rollback");
+      expect(report.lines).toContain("Warning: Optional maintenance remains deferred.");
+      if (settlement === "unsettled") {
+        expect(nextAction).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
+        expect(report.lines.join("\n")).toContain("doctor-processes-unsettled");
+      } else if (settlement === "settled") {
+        expect(result.recovery).toMatchObject({ serviceRestartSafe: true, service: "healthy" });
+        expect(nextAction).toContain("candidate Gateway is healthy");
+      } else {
+        expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
+        expect(nextAction).toContain("data at risk (active-mutation)");
+      }
+      expect(input).toEqual(saved);
+    },
+  );
+
   it.each([true, false])(
     "publishes recovery observation consistently after validation fails (healthy=%s)",
     async (healthy) => {
@@ -98,7 +232,8 @@ describe("update recovery reporting", () => {
         cwd: "/fixture",
         durationMs: 1,
         exitCode: 1,
-        stderrTail: "Runtime inventory refused a retained backup link",
+        stderrTail: "Cannot safely retain a host-owned plugin dependency",
+        failureFacts: [{ check: "updater-runtime-retention", code: "host-owned-plugin-link" }],
       };
       const result = failure({
         reason: "update-failed",
@@ -116,10 +251,9 @@ describe("update recovery reporting", () => {
           staleGatewayPids: [],
           expectedVersion: "2026.9.6",
           gatewayVersion: "2026.9.6",
-          ...(healthy ? {} : { channelProbeErrors: [{ id: "discord", error: "not ready" }] }),
         },
         readyz: healthy,
-        http: undefined,
+        http: { healthz: 200, readyz: healthy ? 200 : 503 },
         launchAgentRecovery: null,
       });
       await verifyUpdatedGateway({
@@ -144,13 +278,15 @@ describe("update recovery reporting", () => {
       expect(reportPath).toBeDefined();
       const markdown = fs.readFileSync(reportPath!.slice("Report: ".length), "utf8");
       for (const output of [terminal, markdown, stored?.origin.nextAction ?? ""]) {
+        expect(output).toContain("https://docs.openclaw.ai/cli/update#runtime-retention-failures");
+        expect(output).toContain("Do not skip runtime retention");
         if (healthy) {
           expect(output).toContain("Your Gateway is still serving 2026.9.6; nothing to restore.");
-          expect(output).toContain("Fix update-failed then run `openclaw update` again.");
+          expect(output).toContain("After repairing the link, retry the update.");
           expect(output).not.toContain("did not pass verification");
         } else {
           expect(output).toContain("gateway is running 2026.9.6 but did not pass verification");
-          expect(output).toContain("channel-errors");
+          expect(output).toContain("readyz-unhealthy");
           expect(output).toContain(hostGuidance);
           expect(output).not.toContain("nothing to restore");
         }
@@ -162,150 +298,126 @@ describe("update recovery reporting", () => {
     },
   );
 
-  it.each([false, true])(
-    "records next action from the admitted row without a cold snapshot (terminal=%s)",
-    async (terminal) => {
+  it.each(["stopped", "healthy", "settled", "unsettled", "starting"])(
+    "publishes actionable migrated-state recovery with a %s Gateway",
+    async (state) => {
       vi.mocked(isContainerEnvironment).mockReturnValue(false);
-      const run = createRun({ nextAction: "previous guidance" });
-      const { env } = run;
-      if (terminal) {
-        finishUpdateRun(run.runId, { status: "failed", reason: "build-failed" }, { env });
-      }
-      const before = getUpdateRun(run.runId, { env });
-      closeOpenClawStateDatabaseForTest();
-      const read = vi
-        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation(() => {
-          throw new Error("SQLite source did not stabilize during update reporting");
-        });
-      let nextAction: string | undefined;
-      try {
-        nextAction = recordUpdateResultNextAction(
-          { opts: { run } },
-          {
-            status: "error",
-            mode: "git",
-            reason: "build-failed",
-            steps: [],
-            durationMs: 1,
-          },
-        );
-      } finally {
-        read.mockRestore();
-      }
-      expect(nextAction).toContain("openclaw triage");
-      const after = getUpdateRun(run.runId, { env });
-      if (terminal) {
-        expect(after).toEqual(before);
-      } else {
-        expect(after?.origin.nextAction).toBe(nextAction);
-        expect(after?.phase).toBe(before?.phase);
-        expect(after?.status).toBe("running");
-      }
-    },
-  );
-  it.each([true, false, undefined])(
-    "uses raw recovery facts for immediate guidance without replacing history (running=%s)",
-    (serviceRunning) => {
-      const run = createRun();
-      const { env } = run;
-      recordUpdateRunVerification(
-        run.runId,
+      const run = createRun({ profile: "work" });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const healthy = state === "healthy" || state === "settled";
+      const steps: UpdateRunResult["steps"] = [
         {
-          serviceRunning: serviceRunning !== true,
-          runningVersion: "2026.8.99",
-          booted: true,
-          recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+          name: "finalize-doctor",
+          command: "openclaw doctor --fix",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: "Doctor config promotion refused: authority-check-failed",
         },
-        { env },
-      );
-      recordUpdateRunStep(
-        run.runId,
-        { step: "gateway verification", status: "failed", detail: "stale-unhealthy" },
-        { env },
-      );
-      const saved = getUpdateRun(run.runId, { env })?.verification;
-      const latest = failure({
-        reason: "global-install-permission-denied",
-        recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
-        verification:
-          serviceRunning === undefined ? {} : { serviceRunning, runningVersion: "2026.9.5" },
-        steps:
-          serviceRunning === false
-            ? [
-                {
-                  name: "gateway recovery verification",
-                  command: "gateway verification",
-                  cwd: "/fixture",
-                  durationMs: 0,
-                  exitCode: 1,
-                  failureFacts: [
-                    {
-                      check: "gateway-recovery",
-                      code: "current-not-ready",
-                      message: "Current Gateway readiness failed",
-                    },
-                  ],
-                },
-              ]
-            : [],
-      });
-
-      const action = recordUpdateResultNextAction({ opts: { run } }, latest);
-
-      expect(action).not.toContain("2026.8.99");
-      expect(action).not.toContain("stale-unhealthy");
-      expect(action?.startsWith(permissionDetail)).toBe(true);
-      expect(action).toContain(redeploy);
-      expect(action).toContain("Update Doctor may have migrated state");
-      expect(action).toContain("keep the update installed and do not roll back code alone");
-      if (serviceRunning === true) {
-        expect(action).toContain("gateway is running 2026.9.5");
-        expect(action).not.toContain("Keep the gateway stopped");
-      } else if (serviceRunning === false) {
-        expect(action).toContain("Managed gateway remains stopped");
-        expect(action).toContain("Keep the gateway stopped");
-        expect(action).toContain("could not prove a runnable installation");
-        expect(action).toContain("current-not-ready");
-      } else {
-        expect(action).not.toContain("gateway is running");
-        expect(action).not.toContain("Managed gateway remains stopped");
-        expect(action).toContain("could not prove a runnable installation");
+        {
+          name: "database rollback",
+          command: "preserve migrated databases",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: 1,
+        },
+      ];
+      if (state === "settled" || state === "unsettled") {
+        steps.push({
+          name: "doctor process settlement",
+          command: "settle doctor process groups",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: state === "settled" ? 0 : 1,
+          stderrTail: "Doctor child PID 12345 remains unsettled.",
+        });
       }
-      const recorded = getUpdateRun(run.runId, { env });
-      expect(recorded?.verification).toEqual(saved);
-      expect(recorded?.origin.nextAction).toBe(action);
+      if (state === "starting") {
+        steps.push({
+          name: "gateway recovery verification",
+          command: "verify gateway readiness",
+          cwd: "/fixture",
+          durationMs: 0,
+          exitCode: null,
+          termination: "timeout",
+          advisory: { kind: "recoverable-maintenance", message: "Gateway is still starting." },
+        });
+      }
+
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, run }, coreAlreadyCurrent: false },
+        failure({
+          reason: "state-migrated-no-rollback",
+          steps,
+          failedStep: steps[0],
+          recovery: healthy
+            ? { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" }
+            : {
+                serviceRestartSafe: false,
+                reason: "state-migration-started",
+                dataAtRisk:
+                  state === "unsettled" ? "active-mutation" : "state-migrated-no-rollback",
+              },
+          verification: { serviceRunning: healthy || state === "starting" },
+        }),
+        { rolledBack: false },
+      );
+
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      const action = stored?.origin.nextAction;
+      expect(stored).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect(action).toContain("openclaw --profile work update repair");
+      expect(action).toContain("recovery snapshots");
+      if (state === "unsettled") {
+        expect(action).toContain("Doctor child PID 12345 remains unsettled.");
+        expect(action).toContain("Keep the Gateway stopped: data at risk (active-mutation)");
+        expect(action).toContain("after the recorded processes have stopped");
+      } else if (state === "stopped") {
+        expect(action).toContain("Keep the Gateway stopped");
+      }
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
     },
   );
 
-  it("retains the actionable Node runtime refusal in history", async () => {
-    const reason = "node-runtime-preflight";
-    vi.mocked(isContainerEnvironment).mockReturnValue(false);
+  it("uses raw recovery facts for immediate guidance without replacing history", () => {
     const run = createRun();
     const { env } = run;
-    const message =
-      "openclaw@2026.9.4 requires Node >=24.16.0; this host runs 22.23.2; upgrade Node then rerun openclaw update.";
-    const failedStep = {
-      name: reason,
-      command: "openclaw update",
-      cwd: "/fixture",
-      durationMs: 0,
-      exitCode: 1,
-      stderrTail: message,
-    };
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await publishUpdateCommandTerminalResult(
-      { opts: { json: true, run }, coreAlreadyCurrent: false },
-      failure({
-        reason,
-        failedStep,
-        steps: [failedStep],
-      }),
-      { rolledBack: false },
+    recordUpdateRunVerification(
+      run.runId,
+      {
+        serviceRunning: true,
+        runningVersion: "2026.8.99",
+        booted: true,
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      },
+      { env },
     );
-    const stored = getUpdateRun(run.runId, { env });
-    expect(stored?.origin.nextAction).toBe(message);
-    expect(stored && renderUpdateRunReport(stored).markdown).toContain(message);
+    recordUpdateRunStep(
+      run.runId,
+      { step: "gateway verification", status: "failed", detail: "stale-unhealthy" },
+      { env },
+    );
+    const saved = getUpdateRun(run.runId, { env })?.verification;
+    const latest = failure({
+      reason: "global-install-permission-denied",
+      recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
+      verification: {},
+      steps: [],
+    });
+    const action = recordUpdateResultNextAction({ opts: { run } }, latest);
+    expect(action).not.toContain("2026.8.99");
+    expect(action).not.toContain("stale-unhealthy");
+    expect(action?.startsWith(permissionDetail)).toBe(true);
+    expect(action).toContain(redeploy);
+    expect(action).not.toMatch(/keep the gateway stopped/i);
+    expect(action).toContain("openclaw update repair");
+    expect(action).not.toContain("gateway is running");
+    expect(action).not.toContain("Managed gateway remains stopped");
+    expect(action).toContain("could not prove a runnable installation");
+    const recorded = getUpdateRun(run.runId, { env });
+    expect(recorded?.verification).toEqual(saved);
+    expect(recorded?.origin.nextAction).toBe(action);
   });
 
   it("records an untouched dirty checkout", async () => {
@@ -360,12 +472,7 @@ describe("update recovery reporting", () => {
 
   it.each([
     ["unknown", true, true, "global-install-foreign-destination"],
-    ["unknown", true, false, "global-install-foreign-destination"],
-    ["npm", false, true, "global-install-permission-denied"],
-    ["pnpm", false, true, "global-install-failed"],
     ["bun", true, true, "global-install-failed"],
-    ["npm", false, false, "global-install-permission-denied"],
-    ["npm", true, false, "global-install-failed"],
   ] as const)(
     "publishes consistent %s recovery (json=%s, container=%s, reason=%s)",
     async (mode, json, container, reason) => {
@@ -390,9 +497,6 @@ describe("update recovery reporting", () => {
             : foreignDetail,
         );
       }
-      if (reason === "global-install-permission-denied") {
-        expect(action?.startsWith(permissionDetail)).toBe(true);
-      }
       if (container) {
         expect(action).toContain("inside a container");
         expect(action).toContain("Pull or build an OpenClaw image");
@@ -401,11 +505,7 @@ describe("update recovery reporting", () => {
         expect(action).not.toMatch(/sudo|npm config set prefix/);
       } else {
         expect(action).toBe(
-          reason === "global-install-permission-denied"
-            ? permissionDetail
-            : reason === "global-install-foreign-destination"
-              ? foreignDetail
-              : hostGuidance,
+          reason === "global-install-foreign-destination" ? foreignDetail : hostGuidance,
         );
       }
       expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
@@ -432,48 +532,6 @@ describe("update recovery reporting", () => {
     expect(resolveUpdateResultNextAction({ result, env: {} })).toContain(redeploy);
   });
 
-  it.each([
-    ["success", { status: "ok" }],
-    ["unknown install", { mode: "unknown" }],
-    ["missing failure", { steps: [], failedStep: undefined }],
-  ] satisfies [string, Partial<UpdateRunResult>][])(
-    "does not give image advice for %s",
-    (_name, overrides) => {
-      expect(
-        resolveUpdateResultNextAction({ result: failure(overrides), env: {} }) ?? "",
-      ).not.toContain(redeploy);
-    },
-  );
-
-  it.each(["other error", "unrelated step", "later failure", "advisory", "successful step"])(
-    "does not reinterpret %s as a container package failure",
-    (kind) => {
-      const result = failure();
-      const step = result.steps[0]!;
-      if (kind === "other error") {
-        step.stderrTail = "ENOSPC: no space left on device";
-      }
-      if (kind === "unrelated step") {
-        step.name = "config validate";
-      }
-      if (kind === "later failure") {
-        result.failedStep = {
-          ...step,
-          name: "config validate",
-          stderrTail: "invalid configuration",
-        };
-        result.steps.push(result.failedStep);
-      }
-      if (kind === "advisory") {
-        step.advisory = { kind: "recoverable-maintenance", message: "Old backup retained" };
-      }
-      if (kind === "successful step") {
-        step.exitCode = 0;
-      }
-      expect(resolveUpdateResultNextAction({ result, env: {} })).toBe(hostGuidance);
-    },
-  );
-
   it("preserves rollback refusal without recommending a replacement image", () => {
     const action = resolveUpdateResultNextAction({
       result: failure({ reason: "rollback-project-changed" }),
@@ -493,6 +551,48 @@ describe("update recovery reporting", () => {
     expect(action).toContain("retained migration originals eligible for permanent cleanup");
     expect(action).toContain("`openclaw --profile work update cleanup --dry-run`");
     expect(action).toContain("state `/fixture/state`");
+    expect(action).toContain("stop the Gateway first (`openclaw --profile work gateway stop`)");
     expect(action).toContain("Use the same profile, state, and config settings.");
   });
+
+  it.each([false, true])(
+    "retains plugin activation guidance when restart was skipped (core current=%s)",
+    async (coreAlreadyCurrent) => {
+      const run = createRun({ profile: "work" });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, restart: false, run }, coreAlreadyCurrent },
+        {
+          status: "ok",
+          mode: "npm",
+          before: { version: coreAlreadyCurrent ? "2026.9.7" : "2026.9.6" },
+          after: { version: "2026.9.7" },
+          steps: [],
+          durationMs: 0,
+          postUpdate: {
+            plugins: {
+              status: "ok",
+              changed: true,
+              sync: {
+                changed: false,
+                switchedToBundled: [],
+                switchedToNpm: [],
+                warnings: [],
+                errors: [],
+              },
+              npm: { changed: true, outcomes: [] },
+              integrityDrifts: [],
+            },
+          },
+        },
+        { rolledBack: false },
+      );
+      const stored = getUpdateRun(run.runId, { env: run.env });
+      const action =
+        "Plugins updated; Gateway restart skipped (--no-restart). Run `openclaw --profile work gateway restart` to activate them in the running Gateway.";
+      expect(stored?.origin.nextAction).toBe(action);
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+    },
+  );
 });

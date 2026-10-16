@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -28,6 +31,7 @@ import {
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -136,11 +140,31 @@ suite.define(() => {
         .poll(() => page.locator(".new-session-page__starting").textContent())
         .toContain("Session created");
       await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
+      if (label === "mobile") {
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+        ).toBe(0);
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await waitForMobileSidebarDrawerOpen(page);
+      }
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
+      if (label === "mobile") {
+        expect(
+          await page
+            .locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`)
+            .isVisible(),
+        ).toBe(true);
+        await page
+          .locator(".shell-nav-backdrop")
+          .click({ position: { x: viewport.width - 10, y: 100 } });
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .not.toContain("shell--nav-drawer-open");
+      }
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }
@@ -332,7 +356,7 @@ suite.define(() => {
     );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
@@ -427,7 +451,7 @@ suite.define(() => {
       await captureProof(page, "01-chat-route-preparing.png");
       await expectPendingNewSessionPresentation(page);
 
-      await page.evaluate(() => {
+      await evaluateControlUiContext(page, (application) => {
         const frames: SessionTransitionFrames = {
           invalid: 0,
           firstInvalid: null,
@@ -450,10 +474,7 @@ suite.define(() => {
             (!newSessionVisible && !chatVisible)
           ) {
             frames.invalid += 1;
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: ApplicationContext };
-            };
-            const route = app.runtime?.context.router.getState().matches[0];
+            const route = application.router.getState().matches[0];
             frames.firstInvalid ??= {
               activeViewTransition: Boolean(document.activeViewTransition),
               handoffCover,
@@ -490,13 +511,15 @@ suite.define(() => {
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await pendingPreviewModule.request;
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: ApplicationContext };
-        };
-        const route = app.runtime?.context.router.getState().matches[0];
-        return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-      });
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        await page.waitForFunction((application) => {
+          const route = application.router.getState().matches[0];
+          return route?.routeId === "chat" && route.module && route.isFetching === "loader";
+        }, applicationHandle);
+      } finally {
+        await applicationHandle.dispose();
+      }
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -696,17 +719,18 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}new`);
           await page.locator(".new-session-page__message").waitFor();
-          await page.evaluate((nextMode) => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime: { context: ApplicationContext };
-            };
-            app.runtime.context.theme.setMode(nextMode);
-          }, mode);
+          await evaluateControlUiContext(
+            page,
+            (context, nextMode) => {
+              context.theme.setMode(nextMode);
+            },
+            mode,
+          );
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
           await gateway.deferNext("sessions.create");
 
           const message = page.locator(".new-session-page__message");
-          const placeSelect = page.locator("wa-popover.new-session-page__project-popover");
+          const placeSelect = page.locator(".oc-popover.new-session-page__project-popover");
           const placeSummary = page.locator("#new-session-project-trigger");
           const startup = page.locator(".new-session-page__starting");
           const submittedPrompt = startup.locator(".chat-group.user");
@@ -727,7 +751,9 @@ suite.define(() => {
           });
           await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
           await placeSummary.click();
-          expect(await placeSelect.getAttribute("open")).not.toBeNull();
+          expect(await placeSelect.evaluate((element) => element.matches(":popover-open"))).toBe(
+            true,
+          );
           await page.getByRole("button", { name: "Start session" }).dblclick();
 
           const create = await gateway.waitForRequest("sessions.create");
@@ -799,9 +825,9 @@ suite.define(() => {
           // The visible chat header now owns the titlebar, not a second draft-scroll inset.
           const pendingChat = page.locator("openclaw-pending-session-create");
           expect(await pendingChat.locator(".chat-pane__header").isVisible()).toBe(true);
-          expect(
-            await pendingChat.locator(".agent-chat__composer-combobox textarea").isDisabled(),
-          ).toBe(true);
+          const followUpComposer = pendingChat.locator(".agent-chat__composer-combobox textarea");
+          expect(await followUpComposer.isEnabled()).toBe(true);
+          expect(await followUpComposer.inputValue()).toBe("");
           await captureUiProof(suite, page, `${proofName}-submitted.png`);
           const presentation = await expectPendingNewSessionPresentation(page);
           if (captureProofEnabled) {
@@ -810,9 +836,10 @@ suite.define(() => {
               JSON.stringify(presentation, null, 2),
             );
           }
-          await page.keyboard.press("Enter");
-          await page.keyboard.press("Control+Enter");
+          await followUpComposer.press("Enter");
+          await followUpComposer.press("Control+Enter");
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await submittedPrompt.locator(".chat-message-image-button").click();
           const attachmentViewer = page.locator("openclaw-image-lightbox");
           await expectDecodedThumbnail(attachmentViewer.locator("img.image"));

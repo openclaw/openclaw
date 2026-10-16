@@ -32,23 +32,31 @@ describe("sessionsCompactCommand", () => {
     expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it("prints the token delta and does not exit on a successful compaction", async () => {
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-      result: { tokensBefore: 243868, tokensAfter: 34941 },
-    });
-    const runtime = createNonExitingRuntimeEnv();
+  it.each([false, true])(
+    "prints successful compaction and its degradation warning (%s)",
+    async (qualityDegraded) => {
+      callGatewayCli.mockResolvedValue({
+        ok: true,
+        key: "agent:main:main",
+        compacted: true,
+        result: { tokensBefore: 243868, tokensAfter: 34941, details: { qualityDegraded } },
+      });
+      const runtime = createNonExitingRuntimeEnv();
 
-    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+      await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
-    const logged = joinedArgs(runtime.log);
-    expect(logged).toContain("243868");
-    expect(logged).toContain("34941");
-  });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
+      const logged = joinedArgs(runtime.log);
+      expect(logged).toContain("243868");
+      expect(logged).toContain("34941");
+      expect(logged.includes("degraded summary")).toBe(qualityDegraded);
+      if (qualityDegraded) {
+        expect(logged).toContain("Older details, exact identifiers, or pending requests");
+        expect(logged).toContain("/new or a larger model");
+      }
+    },
+  );
 
   it("reports an asynchronously started Codex compaction as pending, not a no-op", async () => {
     callGatewayCli.mockResolvedValue({

@@ -1,12 +1,11 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  parseSpeechDirectiveNumberOverride,
+  createSpeechDirectiveParser,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -84,29 +83,24 @@ async function synthesizeInworld(req: InworldSynthesisRequest): Promise<Buffer> 
   });
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
-  if (ctx.key === "temperature") {
-    return parseSpeechDirectiveNumberOverride({
-      ctx,
-      overrideKey: "temperature",
-      range: { min: 0, minExclusive: true, max: 2 },
-      warning: (value) => `invalid Inworld temperature "${value}"`,
-    });
-  }
-  const key = ["voice", "voiceid", "voice_id", "inworld_voice", "inworldvoice"].includes(ctx.key)
-    ? "voiceId"
-    : ["model", "modelid", "model_id", "inworld_model", "inworldmodel"].includes(ctx.key)
-      ? "modelId"
-      : undefined;
-  if (!key) {
-    return { handled: false };
-  }
-  return (key === "voiceId" ? ctx.policy.allowVoice : ctx.policy.allowModelId)
-    ? { handled: true, overrides: { [key]: ctx.value } }
-    : { handled: true };
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  temperature: [
+    "allowVoiceSettings",
+    ["temperature"],
+    {
+      number: {
+        range: { min: 0, minExclusive: true, max: 2 },
+        warning: (value) => `invalid Inworld temperature "${value}"`,
+      },
+    },
+  ],
+  voiceId: ["allowVoice", ["voice", "voiceid", "voice_id", "inworld_voice", "inworldvoice"]],
+  modelId: ["allowModelId", ["model", "modelid", "model_id", "inworld_model", "inworldmodel"]],
+});
 
 export function buildInworldSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(resolveInworldApiKey(readInworldProviderConfig(providerConfig).apiKey));
   return {
     id: "inworld",
     label: "Inworld",
@@ -160,8 +154,9 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
       });
     },
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveInworldApiKey(readInworldProviderConfig(providerConfig).apiKey)),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const useOpus = req.target === "voice-note";
       const audioEncoding: InworldAudioEncoding = useOpus ? "OGG_OPUS" : "MP3";

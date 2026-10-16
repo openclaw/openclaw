@@ -236,7 +236,7 @@ describe("discord exec approval monitor helpers", () => {
     expect(interaction["editReply"]).toHaveBeenCalledTimes(1);
     const terminalPayload = editReply.mock.calls[0]?.[0];
     expect(JSON.stringify(terminalPayload)).toContain("Approval already resolved");
-    expect(JSON.stringify(terminalPayload)).toContain("Canonical result: **Denied**");
+    expect(JSON.stringify(terminalPayload)).toContain("Recorded result: **Denied**");
     expect(JSON.stringify(terminalPayload)).not.toContain("execapproval");
     expect(interaction["followUp"]).toHaveBeenCalledWith({
       content: "This approval was already resolved: Denied.",

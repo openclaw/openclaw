@@ -5,8 +5,10 @@ import type { SessionAncestorReferences } from "./session-ancestor-references.js
 
 export type SessionEventProjection = {
   payload: unknown;
-  /** Certifies a fresh, mutable payload envelope and row bytes for this publication. */
+  /** Certifies a publication-owned envelope and stable row bytes; identical envelopes share encoding. */
   serializeSession?: () => string;
+  /** Publication-owned UTF-8 message field, including its trailing comma. */
+  serializeMessage?: () => Buffer;
   delivered?: () => void;
 };
 

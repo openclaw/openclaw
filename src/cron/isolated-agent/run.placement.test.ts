@@ -140,6 +140,7 @@ describe("current-bound cron placement", () => {
         config: cfg,
         agentSessionKey: SESSION_KEY,
         expectedTargetSessionId: run.sessionId,
+        completionOwner: "caller",
         callGateway,
       });
       for (const mode of [undefined, "followup"] as const) {

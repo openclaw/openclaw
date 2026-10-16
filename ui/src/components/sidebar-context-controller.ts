@@ -1,10 +1,10 @@
-import type { ReactiveController } from "lit";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
+import type { SolidController } from "../lit/solid-controller-host.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 
 /** Preserve the shared sidebar's scroll position for each destination. */
-export class SidebarContextController implements ReactiveController {
+export class SidebarContextController implements SolidController {
   private readonly positions = new Map<string, number>();
   private presentedKey = "sessions";
 
@@ -57,7 +57,9 @@ export class SidebarContextController implements ReactiveController {
   }
 
   private get key(): string {
-    return this.host.contextualSidebar?.key ?? "sessions";
+    return this.host.navigationView === "sessions"
+      ? (this.host.contextualSidebar?.key ?? "sessions")
+      : this.host.navigationView;
   }
   private get scroller(): HTMLElement | null {
     return this.host.querySelector<HTMLElement>(".sidebar-shell__body");

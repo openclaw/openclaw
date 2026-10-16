@@ -46,6 +46,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   expireParentWhileStopPending?: boolean;
   originalRecovery?: UpdateRunResult["recovery"];
   revokeOwner?: boolean;
+  disableChannelOnRevoke?: true;
   requester?: UpdateRequester;
   updaterExitCode?: number;
   recoveryExitCode?: number;
@@ -81,6 +82,7 @@ export type ManagedServiceManagerBoundaryResult = {
   sentinel: unknown;
   log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  recoveryDeadline?: { requestedMs: number; descendantPid?: number };
   triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
@@ -319,7 +321,15 @@ void (async () => {
     sleep(${options?.systemdStopDelayMs ?? 0});
     ${managedServiceStateUpdateScript(
       statePath,
-      `${options?.revokeOwner ? `fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+      `${
+        options?.revokeOwner
+          ? `const config = JSON.parse(fs.readFileSync(${JSON.stringify(params.configPath)}, "utf8"));
+          config.commands = { ...config.commands, ownerAllowFrom: [] };
+          ${options?.disableChannelOnRevoke ? "config.channels = { ...config.channels, slack: { ...config.channels?.slack, enabled: false } };" : ""}
+          fs.writeFileSync(${JSON.stringify(params.configPath)}, JSON.stringify(config));
+          state.ownerRevokedAfterExit = true;`
+          : ""
+      }
       state.stopCompleted = true`,
     )};
     return;
@@ -675,9 +685,11 @@ export function registerManagedHandoffOwnerTests(
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
-  itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
+  const allowedRequesters = ["unchanged", "internal", "channel-less"] as const;
+  itUnix.each(["revoked", "revoked with disabled channel", ...allowedRequesters] as const)(
     "rechecks the %s requester after helper readiness and parent exit",
     async (owner) => {
+      const revoked = owner === "revoked" || owner === "revoked with disabled channel";
       const { state, sentinel, log, sensitiveFilesRemoved } =
         await runManagedServiceManagerBoundary("systemd", {
           requester: {
@@ -686,16 +698,15 @@ export function registerManagedHandoffOwnerTests(
             accountId: "primary",
             senderId: "owner",
           },
-          revokeOwner: owner === "revoked",
-          helperExitCode: owner === "revoked" ? 1 : 0,
+          revokeOwner: revoked,
+          ...(owner === "revoked with disabled channel" ? { disableChannelOnRevoke: true } : {}),
+          helperExitCode: revoked ? 1 : 0,
           updaterExitCode: 0,
           updaterResult: { status: "ok", mode: "npm" },
         });
       expect(state).toMatchObject({ parked: true, stopCompleted: true });
-      expect(state.ownerChecked).toBe(
-        owner === "revoked" || owner === "unchanged" ? true : undefined,
-      );
-      if (owner === "revoked") {
+      expect(state.ownerChecked).toBe(revoked || owner === "unchanged" ? true : undefined);
+      if (revoked) {
         expect(state).toMatchObject({
           ownerRevokedAfterExit: true,
           restored: true,

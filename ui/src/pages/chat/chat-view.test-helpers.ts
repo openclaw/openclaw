@@ -1,13 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render, type ReactiveControllerHost } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { renderChat } from "./chat-view.ts";
+import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
+import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -41,7 +47,7 @@ export function createTestTranscript(
       removeController: () => undefined,
       requestUpdate: () => undefined,
       updateComplete: Promise.resolve(true),
-    } satisfies ReactiveControllerHost,
+    } satisfies ConstructorParameters<typeof ChatTranscriptController>[0],
     () => paneId,
   );
 }
@@ -126,10 +132,8 @@ export function stubAnimationFrames() {
   };
 }
 
-type ChatProps = Parameters<typeof renderChat>[0];
-
 export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
-  const transcript = createTestTranscript();
+  const transcript = overrides.transcript ?? createTestTranscript();
   const sessionKey = overrides.sessionKey ?? "main";
   const sessionHost = overrides.sessionHost;
   const exactSelectedSession = overrides.sessions?.sessions.find((row) =>
@@ -144,7 +148,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
           )
         : undefined));
   return {
-    transcript,
     paneId: "single",
     sessionKey,
     showThinking: false,
@@ -189,7 +192,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     showNewMessages: false,
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
-    getDraft: () => "",
     onDraftChange: () => undefined,
     onRequestUpdate: () => undefined,
     onSend: () => undefined,
@@ -206,20 +208,86 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onChatScroll: () => undefined,
     basePath: "",
     ...overrides,
+    transcript,
   };
 }
 
 export function renderChatView(overrides: Partial<ChatProps> = {}) {
-  const container = document.createElement("div");
-  onTestFinished(() => {
-    render(nothing, container);
-  });
-  render(renderChat(createChatProps(overrides)), container);
+  const container = createComposerContainer();
+  renderChatInto(container, overrides);
   return container;
 }
 
+const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+const mountedViews = new WeakMap<
+  HTMLElement,
+  { update: (props: ChatProps, application?: ApplicationContext) => void; unmount: () => void }
+>();
+
+export function disposeChatView(container: HTMLElement) {
+  mountedViews.get(container)?.unmount();
+  mountedViews.delete(container);
+  renderedTranscripts.get(container)?.hostDisconnected();
+  renderedTranscripts.delete(container);
+}
+
+export function renderChatPropsInto(
+  container: HTMLElement,
+  props: ChatProps,
+  application?: ApplicationContext,
+) {
+  const previous = renderedTranscripts.get(container);
+  if (!previous) {
+    const attached = !container.parentNode;
+    if (attached) {
+      document.body.append(container);
+    }
+    const [current, setCurrent] = createSignal({ props, application });
+    const view = mountSolid(
+      () =>
+        createComponent(ChatView, {
+          get props() {
+            return current().props;
+          },
+          get application() {
+            const value = current().application;
+            return value && normalizeApplicationContext(value);
+          },
+        }),
+      { container },
+    );
+    mountedViews.set(container, {
+      update: (nextProps, nextApplication) =>
+        setCurrent({ props: nextProps, application: nextApplication }),
+      unmount: view.unmount,
+    });
+    onTestFinished(() => {
+      disposeChatView(container);
+      if (attached) {
+        container.remove();
+      }
+    });
+  } else if (previous !== props.transcript) {
+    previous.hostDisconnected();
+  }
+  renderedTranscripts.set(container, props.transcript);
+  if (previous) {
+    mountedViews.get(container)?.update(props, application);
+  }
+  flush();
+  props.transcript.hostConnected();
+  props.transcript.hostUpdated();
+  flush();
+}
+
 export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
-  render(renderChat(createChatProps(overrides)), container);
+  renderChatPropsInto(
+    container,
+    createChatProps({
+      ...overrides,
+      transcript: overrides.transcript ?? renderedTranscripts.get(container),
+    }),
+  );
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
@@ -316,10 +384,10 @@ export function createReactiveDraftHarness({
   let draft = "";
   let currentOverrides = overrides;
   let active = true;
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   onTestFinished(() => {
     active = false;
-    render(nothing, container);
+    disposeChatView(container);
   });
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
@@ -355,5 +423,54 @@ export function createSlashRerenderHarness() {
       return renderCurrent();
     },
     renderCurrent,
+  };
+}
+
+export function createReplyPane(paneId: string, draft: string, quote: string) {
+  const container = createComposerContainer();
+  const host: Pick<ChatProps, "draft" | "replyTarget"> = {
+    draft,
+    replyTarget: { messageId: `${paneId}-message`, text: quote, senderLabel: "User" },
+  };
+  const onSend = vi.fn();
+  const onAbort = vi.fn();
+  const onDraftChange = vi.fn((next: string) => {
+    host.draft = next;
+  });
+  const onRequestUpdate = vi.fn(() => redraw());
+  const onClearReply = vi.fn(() => {
+    host.replyTarget = null;
+    redraw();
+  });
+  function redraw() {
+    renderChatInto(container, {
+      paneId,
+      sessionKey: `agent:main:${paneId}`,
+      draft: host.draft,
+      getDraft: () => host.draft,
+      replyTarget: host.replyTarget,
+      canAbort: true,
+      runActive: true,
+      onDraftChange,
+      onRequestUpdate,
+      onClearReply,
+      onSend,
+      onAbort,
+    });
+  }
+  return {
+    container,
+    host,
+    redraw,
+    onDraftChange,
+    onRequestUpdate,
+    onClearReply,
+    onSend,
+    onAbort,
+    dispose: () => {
+      disposeChatView(container);
+      container.remove();
+      resetChatViewState(paneId, container);
+    },
   };
 }

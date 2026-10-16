@@ -1,21 +1,20 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
-import { projectCronReceiptAuthorityJobFacts } from "./receipt-authority-facts.js";
+import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import type {
   CronRunReceipt,
   CronRunReceiptCurrentFacts,
   CronRunReceiptCurrentReadCommand,
   CronRunReceiptHandle,
-  CronRunReceiptOwnerObservation,
   CronRunReceiptRecoveryCandidate,
   CronRunReceiptStatus,
 } from "./run-receipt.types.js";
@@ -67,7 +66,7 @@ export function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
   };
 }
 
-export function matchesCronRunReceiptOwner(
+function matchesCronRunReceiptOwner(
   current: CronRunReceiptHandle | undefined,
   expected: CronRunReceiptCurrentReadCommand["handle"],
 ): boolean {
@@ -81,7 +80,7 @@ export function matchesCronRunReceiptOwner(
 
 /** Current receipt, definition and deletion facts share one native read snapshot. */
 export function readCronRunReceiptCurrentFactsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: CronRunReceiptCurrentReadCommand,
 ): CronRunReceiptCurrentFacts {
   return runSqliteDeferredTransactionSync(database, () => {
@@ -104,7 +103,13 @@ export function readCronRunReceiptCurrentFactsInDatabase(
         : undefined;
     return {
       receipt,
-      job: job ? projectCronReceiptAuthorityJobFacts(job) : undefined,
+      job: job
+        ? {
+            agentId: job.agentId,
+            sessionKey: job.sessionKey,
+            hasCanonicalDeliveryMode: hasCanonicalCronDeliveryMode(job.delivery),
+          }
+        : undefined,
       deletionBlocked,
     };
   });
@@ -112,7 +117,7 @@ export function readCronRunReceiptCurrentFactsInDatabase(
 
 /** Observe existing receipts without the writable owner's first-use initialization. */
 export function readActiveCronRunReceiptsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string | undefined,
   jobIds: readonly string[],
 ): CronRunReceiptRecoveryCandidate[] {
@@ -129,32 +134,4 @@ export function readActiveCronRunReceiptsInDatabase(
   return rows
     .filter((row) => selected.has(row.job_id))
     .map((row) => receiptHandle(receiptFromRow(row)));
-}
-
-/** Drainage needs receipt ownership even after its scheduled job has been removed. */
-export function readActiveCronRunReceiptOwnersInDatabase(
-  database: DatabaseSync,
-  agentId: string,
-): CronRunReceiptOwnerObservation[] {
-  try {
-    return executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<CronRunReceiptDatabase>(database)
-        .selectFrom("cron_run_receipts")
-        .select(["receipt_id", "owner_pid", "owner_start_time", "started_at_ms"])
-        .where("status", "=", "running")
-        .where("agent_id", "=", agentId),
-    ).rows.map((row) => ({
-      receiptId: row.receipt_id,
-      ownerPid: row.owner_pid,
-      ownerStartTime: row.owner_start_time,
-      startedAtMs: row.started_at_ms,
-    }));
-  } catch (error) {
-    // This additive table is initialized by the first receipt claim, never by a read.
-    if (error instanceof Error && error.message === "no such table: cron_run_receipts") {
-      return [];
-    }
-    throw error;
-  }
 }

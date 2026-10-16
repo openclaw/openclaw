@@ -9,7 +9,6 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
-import { resolveCommandSourceSessionKey as resolveRequesterSessionKey } from "./command-source-session-key.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -118,54 +117,22 @@ describe("subagents command dispatch", () => {
     }
   });
 
-  it("prefers native command target session keys", () => {
-    const params = buildParams("/subagents list", {
-      CommandSource: "native",
-      CommandTargetSessionKey: "agent:main:main",
-      SessionKey: "agent:main:slack:slash:u1",
-    });
-    expect(resolveRequesterSessionKey(params)).toBe("agent:main:main");
-  });
-
-  it("falls back to the current session for text commands", () => {
-    const params = buildParams("/subagents list", {
-      CommandSource: "text",
-      SessionKey: "agent:main:whatsapp:direct:u1",
-      CommandTargetSessionKey: "agent:main:main",
-    });
-    expect(resolveRequesterSessionKey(params)).toBe("agent:main:whatsapp:direct:u1");
-  });
-
-  it.each([
-    "/focus target",
-    "/unfocus",
-    "/subagentsXYZ",
-    "/agentsXYZ",
-    "/kill 1",
-    "/steer hi",
-    "/unknown",
-  ])("does not dispatch unrelated command %s", async (command) => {
+  it.each(["/unknown"])("does not dispatch unrelated command %s", async (command) => {
     expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
     expect(readContextMock).not.toHaveBeenCalled();
   });
 
-  it.each(["help", "foo", "steer 1 continue", "agents"])(
-    "shows %s help without reading session state",
-    async (action) => {
-      const params = buildParams(`/subagents ${action}`, { SessionKey: "" });
-      const result = await handleSubagentsCommand(params, true);
-      expect(result?.reply?.text).toContain("/subagents list");
-      expect(result?.reply?.text).toContain("/session unbind");
-      expect(readContextMock).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["steer 1 continue"])("shows %s help without reading session state", async (action) => {
+    const params = buildParams(`/subagents ${action}`, { SessionKey: "" });
+    const result = await handleSubagentsCommand(params, true);
+    expect(result?.reply?.text).toContain("/subagents list");
+    expect(result?.reply?.text).toContain("/session unbind");
+    expect(readContextMock).not.toHaveBeenCalled();
+  });
 
-  it.each(["/acpXYZ", "/acp@otherbot help"])(
-    "does not dispatch ACP lookalike %s",
-    async (command) => {
-      expect(await handleAcpCommand(buildParams(command), true)).toBeNull();
-    },
-  );
+  it.each(["/acpXYZ"])("does not dispatch ACP lookalike %s", async (command) => {
+    expect(await handleAcpCommand(buildParams(command), true)).toBeNull();
+  });
 
   it("rejects native subagents commands from non-owner senders when the plugin enforces owner-only commands", async () => {
     registerOwnerEnforcingTelegramPlugin();

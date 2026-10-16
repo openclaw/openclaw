@@ -15,11 +15,17 @@ const storeMocks = vi.hoisted(() => ({
   collectRefKeys: vi.fn((_config: unknown, _name: string) => new Set<string>()),
 }));
 
-vi.mock("../../secrets/runtime-state.js", () => ({
+vi.mock("../../secrets/runtime-source-contract.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../secrets/runtime-source-contract.js")>()),
   collectSecretStoreRefKeysInSnapshot: storeMocks.collectRefKeys,
+}));
+
+vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../secrets/runtime-state.js")>()),
   getActiveSecretsRuntimeSnapshotState: storeMocks.getSnapshot,
 }));
 
+// mock-isolation: Observe mutation dispatch without opening the real secret database.
 vi.mock("../../secrets/store/secret-store.js", () => {
   class SecretStoreValidationError extends Error {
     constructor(
@@ -36,6 +42,8 @@ vi.mock("../../secrets/store/secret-store.js", () => {
     purgeExpiredSecretStoreEntries: storeMocks.purgeEntries,
     SecretStoreValidationError,
     writeSecretStoreEntry: storeMocks.writeEntry,
+    writeSecretStoreEntries: vi.fn(),
+    updateSecretStoreAllowedHosts: vi.fn(),
   };
 });
 
@@ -337,18 +345,6 @@ describe("secrets handlers", () => {
     });
   });
 
-  it("rejects invalid secrets.resolve params", async () => {
-    const handlers = createHandlers();
-    const respond = vi.fn();
-    await invokeSecretsResolve({
-      handlers,
-      respond,
-      commandName: "",
-      targetIds: "bad",
-    });
-    expectRespondError(respond, { code: "INVALID_REQUEST" });
-  });
-
   it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
     const resolveSecrets = vi.fn();
     const handlers = createHandlers({ resolveSecrets });
@@ -463,6 +459,7 @@ describe("secrets handlers", () => {
       return expiry.promise;
     });
 
+    storeMocks.writeEntry.mockResolvedValueOnce("secret");
     const setRespond = vi.fn();
     const mutation = invokeStoreMethod({
       handlers,

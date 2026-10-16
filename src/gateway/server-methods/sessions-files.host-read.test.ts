@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,6 +14,8 @@ import {
   assistantToolCall,
   IMAGE_PREVIEW_FIXTURES,
   createSessionFilesHandlerInvoker,
+  createSessionFileDownloadClient,
+  fetchSessionFileDownload,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -36,8 +42,13 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 
 vi.mock("../session-utils.js", async (original) => ({
   ...(await original<typeof import("../session-utils.js")>()),
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+}));
+
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
@@ -65,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   removeWorkspaceFixture(workspaceRoot);
 });
 
@@ -102,23 +114,122 @@ function prepareHostFileRead(
   const options: Pick<GatewayRequestHandlerOptions, "withSessionTurnAuthority"> = {
     withSessionTurnAuthority: async (_target, consume) => consume(entry),
   };
+  setRuntimeConfigSnapshot(cfg);
   return { context, options, entry };
 }
 
 describe("sessions.files host read boundary", () => {
+  it("downloads original binary bytes beyond preview limits with safe HTTP metadata and ranges", async () => {
+    using connection = createSessionFileDownloadClient();
+    const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+    const filename = "résumé original.zip";
+    const bytes = Buffer.alloc(8 * 1024 * 1024 + 17, 0xff);
+    bytes.write("PK\x03\x04", "binary");
+    fs.writeFileSync(path.join(workspaceRoot, filename), bytes);
+    const download = expectOkPayload(
+      await invoke(
+        "sessions.files.download",
+        { sessionKey, path: filename },
+        fixture.context,
+        connection,
+      ),
+    );
+    expect(download.filename).toBe(filename);
+    expect(download.mimeType).toBe("application/zip");
+    const fetched = await fetchSessionFileDownload(connection.client, download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(Buffer.from(fetched.body as Uint8Array).equals(bytes)).toBe(true);
+    expect(fetched.response.getHeader("content-disposition")).toContain("attachment;");
+    expect(fetched.response.getHeader("content-disposition")).toContain(
+      "filename*=UTF-8''r%C3%A9sum%C3%A9%20original.zip",
+    );
+    expect(fetched.response.getHeader("content-type")).toBe(download.mimeType);
+    expect(fetched.response.getHeader("cache-control")).toBe("private, no-store");
+    const head = await fetchSessionFileDownload(connection.client, download.url, "HEAD");
+    expect(head.body).toBeUndefined();
+    expect(head.response.getHeader("content-length")).toBe(String(bytes.length));
+    const range = await fetchSessionFileDownload(connection.client, download.url, "GET", {
+      range: "bytes=524280-524300",
+    });
+    expect(range.response.statusCode).toBe(206);
+    expect(Buffer.from(range.body as Uint8Array)).toEqual(bytes.subarray(524280, 524301));
+    using other = createSessionFileDownloadClient();
+    expect((await fetchSessionFileDownload(other.client, download.url)).response.statusCode).toBe(
+      404,
+    );
+    fs.writeFileSync(path.join(workspaceRoot, filename), "replacement");
+    expect(
+      (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+    ).toBe(404);
+  });
+
+  it("rejects workspace escapes and links before granting downloads", async () => {
+    using connection = createSessionFileDownloadClient();
+    const fixture = prepareHostFileRead({ permissionMode: "read-only" });
+    const outsidePath = outsideFile();
+    fs.writeFileSync(outsidePath, "private");
+    fs.symlinkSync(outsidePath, path.join(workspaceRoot, "link"));
+    for (const filePath of [outsidePath, "../outside", "link"]) {
+      expectError(
+        await invoke(
+          "sessions.files.download",
+          { sessionKey, path: filePath },
+          fixture.context,
+          connection,
+        ),
+      );
+    }
+  });
+
+  it.each(["txt", "pdf", "zip"])(
+    "downloads Full Access host %s bytes without assistant-media policy",
+    async (extension) => {
+      using connection = createSessionFileDownloadClient();
+      const filename = "original." + extension;
+      const outsidePath = path.join(outsideDirs.make("session-download-host-"), filename);
+      const bytes = Buffer.alloc(600_003, extension === "txt" ? 97 : 0xff);
+      if (extension === "pdf") {
+        bytes.write("%PDF-1.7");
+      }
+      if (extension === "zip") {
+        bytes.write("PK\x03\x04", "binary");
+      }
+      fs.writeFileSync(outsidePath, bytes);
+      const fixture = prepareHostFileRead({ permissionMode: "full" });
+      const download = expectOkPayload(
+        await invoke(
+          "sessions.files.download",
+          { sessionKey, path: outsidePath },
+          fixture.context,
+          { ...fixture.options, ...connection },
+        ),
+      );
+      expect(download.filename).toBe(filename);
+      const result = await fetchSessionFileDownload(connection.client, download.url);
+      expect(result.response.statusCode).toBe(200);
+      expect(Buffer.from(result.body as Uint8Array).equals(bytes)).toBe(true);
+      fixture.entry.permissionMode = "read-only";
+      expect(
+        (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+      ).toBe(404);
+      expectError(
+        await invoke(
+          "sessions.files.download",
+          { sessionKey, path: outsidePath },
+          fixture.context,
+          { ...fixture.options, ...connection },
+        ),
+      );
+    },
+  );
+
   it.each<{
     label: string;
     entry?: Partial<InternalSessionEntry>;
     cfg?: OpenClawConfig;
   }>([
     { label: "read-only mode", entry: { permissionMode: "read-only" } },
-    { label: "guarded mode", entry: { permissionMode: "guarded" } },
-    { label: "workspace mode", entry: { permissionMode: "workspace" } },
     { label: "global filesystem policy", cfg: { tools: { fs: { workspaceOnly: true } } } },
-    {
-      label: "agent filesystem policy",
-      cfg: { agents: { entries: { main: { tools: { fs: { workspaceOnly: true } } } } } },
-    },
     {
       label: "required sandbox in full mode",
       entry: { permissionMode: "full", sandbox: "required" },

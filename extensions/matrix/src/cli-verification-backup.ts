@@ -158,12 +158,21 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           forceResetCrossSigning?: boolean;
         },
       ) => {
+        const recoveryKey = cli.resolveMatrixCliRecoveryKeyInput(options);
         await cli.runMatrixCliAccountCommand(options, {
+          gateway: {
+            method: "matrix.verify.bootstrap.owner",
+            params: async () => ({
+              accountId: options.account,
+              recoveryKey: await recoveryKey,
+              forceResetCrossSigning: options.forceResetCrossSigning === true,
+            }),
+          },
           run: async ({ accountId, cfg }) =>
             await verification.bootstrapMatrixVerification({
               accountId,
               cfg,
-              recoveryKey: await cli.resolveMatrixCliRecoveryKeyInput(options),
+              recoveryKey: await recoveryKey,
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
           onText: (result, verbose, accountId) => {
@@ -219,15 +228,17 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           recoveryKeyStdin?: boolean;
         },
       ) => {
+        const recoveryKey = cli.requireMatrixCliRecoveryKeyInput({
+          recoveryKey: key,
+          recoveryKeyStdin: options.recoveryKeyStdin,
+        });
         await cli.runMatrixCliAccountCommand(options, {
+          gateway: {
+            method: "matrix.verify.recoveryKey.owner",
+            params: async () => ({ accountId: options.account, key: await recoveryKey }),
+          },
           run: async ({ accountId, cfg }) =>
-            await verification.verifyMatrixRecoveryKey(
-              await cli.requireMatrixCliRecoveryKeyInput({
-                recoveryKey: key,
-                recoveryKeyStdin: options.recoveryKeyStdin,
-              }),
-              { accountId, cfg },
-            ),
+            await verification.verifyMatrixRecoveryKey(await recoveryKey, { accountId, cfg }),
           onText: (result, verbose, accountId) => {
             if (!result.success) {
               console.error(`Verification failed: ${cli.formatMatrixCliText(result.error)}`);

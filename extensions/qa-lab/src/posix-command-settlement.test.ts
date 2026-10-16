@@ -46,6 +46,7 @@ describe("POSIX command settlement", () => {
   function start(
     params: {
       executionTimeoutMs?: number;
+      forceKillAfterMs?: number;
       onSettled?: (outcome: TestOutcome) => void;
     } = {},
   ) {
@@ -56,7 +57,7 @@ describe("POSIX command settlement", () => {
       child,
       settlementFailureMessage: "settlement failed",
       executionTimeoutMs: params.executionTimeoutMs,
-      forceKillAfterMs: 20,
+      forceKillAfterMs: params.forceKillAfterMs ?? 20,
       initialSignal: "SIGTERM",
       onSettled: settled,
       processGroupId: 42,
@@ -84,6 +85,22 @@ describe("POSIX command settlement", () => {
     child.emit("close", 7, null);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(settled).toHaveBeenCalledOnce();
+  });
+
+  it("preserves success when pipes close after the normal TERM grace", async () => {
+    processGroupAlive = true;
+    const { child, settled, stdoutDestroy, stderrDestroy } = start({ forceKillAfterMs: 2_000 });
+    child.emit("exit", 0, null);
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    child.emit("close", 0, null);
+
+    expect(settled).toHaveBeenCalledOnce();
+    expect(settled).toHaveBeenCalledWith({
+      primary: { type: "exit", exitCode: 0, signal: null },
+    });
+    expect(stdoutDestroy).not.toHaveBeenCalled();
+    expect(stderrDestroy).not.toHaveBeenCalled();
   });
 
   it("caps active output at one second and destroys readers only after cleanup", async () => {

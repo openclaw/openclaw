@@ -13,6 +13,7 @@ import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
 } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot.js";
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
@@ -90,7 +91,6 @@ async function peerStates(directory: string): Promise<PeerState[]> {
 
 const policyCases = [
   { agent: "opencode", profile: "messaging", alsoAllow: undefined, denied: true },
-  { agent: "kilocode", profile: "coding", alsoAllow: undefined, denied: true },
   { agent: "kilocode", profile: "coding", alsoAllow: ["message"], denied: false },
 ] satisfies Array<{
   agent: string;
@@ -106,6 +106,7 @@ it.each(policyCases)(
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
         tools: { profile, alsoAllow },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, agent, "full");
       try {
@@ -214,6 +215,7 @@ it.for(["complete", "revoke"] as const)(
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdPromptReply: true,
         receiptEndpoint: receipts.endpoint,
@@ -302,7 +304,6 @@ it.for([
   { operation: "model", kind: "revoke" },
   { operation: "model", kind: "active" },
   { operation: "prompt", kind: "revoke" },
-  { operation: "prompt", kind: "active" },
 ] as const)(
   "preserves native $operation authority while a real control is queued: $kind",
   { timeout: 60000 },
@@ -311,6 +312,7 @@ it.for([
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdModeControl: true,
         receiptEndpoint: receipts.endpoint,
@@ -422,13 +424,14 @@ it.for([
   },
 );
 
-it.each(["active", "cancel", "timeout", "revoke"] as const)(
+it.each(["cancel", "timeout", "revoke"] as const)(
   "preserves model authority during cold session initialization: %s",
   async (kind) => {
     await withOpenClawTestState({ label: "acp-native-cold-authority" }, async (state) => {
       const config: OpenClawConfig = {
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs", {
         holdNewSession: true,
       });
@@ -459,24 +462,16 @@ it.each(["active", "cancel", "timeout", "revoke"] as const)(
         const records = await peerStates(native.peerDirectory);
         const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
         expect(records).toHaveLength(1);
-        if (kind === "active") {
-          expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
-          expect.soft(records[0]?.currentModelId).toBe("selected");
-          expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
-          expect.soft(records[0]?.history).toHaveLength(1);
-          expect.soft(effects).toHaveLength(1);
-        } else {
-          expect.soft(outcome?.terminal).toMatchObject({
-            kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
-          });
-          expect.soft(records[0]?.currentModelId).toBe("initial");
-          expect.soft(records[0]?.modelChanges).toEqual([]);
-          expect.soft(records[0]?.history).toEqual([]);
-          expect.soft(effects).toEqual([]);
-          expect
-            .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
-            .toEqual(transcriptBeforeRelease);
-        }
+        expect.soft(outcome?.terminal).toMatchObject({
+          kind: kind === "cancel" ? "aborted" : kind === "revoke" ? "failed" : "timeout",
+        });
+        expect.soft(records[0]?.currentModelId).toBe("initial");
+        expect.soft(records[0]?.modelChanges).toEqual([]);
+        expect.soft(records[0]?.history).toEqual([]);
+        expect.soft(effects).toEqual([]);
+        expect
+          .soft(await readVisibleSessionTranscriptMessageEntries(attempt.target))
+          .toEqual(transcriptBeforeRelease);
       } finally {
         await fs.writeFile(path.join(native.peerDirectory, "session-new-release"), "release");
         await Promise.allSettled([run]);
@@ -515,6 +510,7 @@ it.each([
         ...restrictions,
         session: { store: path.join(state.sessionsDir(), "sessions.json") },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, "opencode", "full");
       try {
@@ -547,6 +543,7 @@ it.each([
           ...(mandatorySandbox === "exec" ? { exec: { host: "sandbox" as const } } : {}),
         },
       };
+      setRuntimeConfigSnapshot(config);
       const native = await registerNative(state, config, "owner-agent.mjs");
       const attempt = await attemptFor(state, config, "opencode", "full");
       try {

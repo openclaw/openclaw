@@ -123,7 +123,7 @@ configured tools continue to read current credentials at execution time.
     AI-synthesized answers with citations via xAI web grounding.
   </Card>
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
-    AI-synthesized answers with citations via Moonshot web search; ungrounded chat fallbacks fail explicitly.
+    Structured results via Moonshot's search endpoint, with titles, URLs, and snippets.
   </Card>
   <Card title="MiniMax Search" icon="globe" href="/tools/minimax-search">
     Structured results via the MiniMax Token Plan search API.
@@ -150,23 +150,23 @@ configured tools continue to read current credentials at execution time.
 
 ### Provider comparison
 
-| Provider                                         | Result style                                                   | Filters                                          | API key                                                                                 |
-| ------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| [Brave](/tools/brave-search)                     | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
-| [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                                   | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
-| [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                            | --                                               | None (key-free)                                                                         |
-| [Exa](/tools/exa-search)                         | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
-| [Firecrawl](/tools/firecrawl)                    | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
-| [Gemini](/tools/gemini-search)                   | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
-| [Grok](/tools/grok-search)                       | AI-synthesized + citations                                     | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
-| [Kimi](/tools/kimi-search)                       | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
-| [MiniMax Search](/tools/minimax-search)          | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
-| [Ollama Web Search](/tools/ollama-search)        | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
-| [Parallel](/tools/parallel-search)               | Dense excerpts ranked for LLM context                          | --                                               | `PARALLEL_API_KEY` (paid)                                                               |
-| [Parallel Search (Free)](/tools/parallel-search) | Dense excerpts ranked for LLM context                          | --                                               | None (free Search MCP)                                                                  |
-| [Perplexity](/tools/perplexity-search)           | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
-| [SearXNG](/tools/searxng-search)                 | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
-| [Tavily](/tools/tavily)                          | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
+| Provider                                         | Result style                                       | Filters                                          | API key                                                                                 |
+| ------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [Brave](/tools/brave-search)                     | Structured snippets                                | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
+| [Codex Hosted Search](/plugins/codex-harness)    | AI-synthesized + source URLs                       | Domains, context size, user location             | None; uses Codex/OpenAI sign-in                                                         |
+| [DuckDuckGo](/tools/duckduckgo-search)           | Structured snippets                                | --                                               | None (key-free)                                                                         |
+| [Exa](/tools/exa-search)                         | Structured + extracted                             | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
+| [Firecrawl](/tools/firecrawl)                    | Structured snippets                                | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
+| [Gemini](/tools/gemini-search)                   | AI-synthesized + citations                         | --                                               | `GEMINI_API_KEY`                                                                        |
+| [Grok](/tools/grok-search)                       | AI-synthesized + citations                         | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
+| [Kimi](/tools/kimi-search)                       | Structured results with titles, URLs, and snippets | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
+| [MiniMax Search](/tools/minimax-search)          | Structured snippets                                | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
+| [Ollama Web Search](/tools/ollama-search)        | Structured snippets                                | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
+| [Parallel](/tools/parallel-search)               | Dense excerpts ranked for LLM context              | --                                               | `PARALLEL_API_KEY` (paid)                                                               |
+| [Parallel Search (Free)](/tools/parallel-search) | Dense excerpts ranked for LLM context              | --                                               | None (free Search MCP)                                                                  |
+| [Perplexity](/tools/perplexity-search)           | Structured snippets                                | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
+| [SearXNG](/tools/searxng-search)                 | Structured snippets                                | Categories, language                             | None (self-hosted)                                                                      |
+| [Tavily](/tools/tavily)                          | Structured snippets                                | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
 ## Result shape
 
@@ -238,7 +238,7 @@ true: provider prose (`title`, `snippet`, `siteName`, `content`, citation
 titles, error `message`) is stripped of any pre-existing envelope lines and
 re-wrapped exactly once at the core boundary, so no provider metadata can spoof
 the marker. `query` is always the requested query, citation and result URLs
-must parse as http(s), `published` must be ISO-date shaped, URLs are emitted canonicalized, and a
+must parse as http(s), `published` must be ISO-date shaped, URLs are normalized before output, and a
 payload carrying an `error` key is always reported as `kind: "error"` with the
 raw provider code preserved inside the wrapped message. Raw passthrough
 payloads keep whatever markers the provider set.
@@ -321,7 +321,10 @@ the OpenAI provider plugin, the managed search route stays available.
 Managed provider failures return the selected provider's identity and a safe,
 actionable diagnostic. Authentication failures identify the HTTP status and
 ask you to check credentials or select another provider. Upstream response
-bodies are not included in model-facing diagnostics. Automatic selection may
+bodies are not included in model-facing diagnostics. A provider's `TimeoutError`
+is reported as a search timeout, including its effective time limit when supplied
+as numeric metadata. Caller cancellation remains a cancellation rather than a
+provider failure. Automatic selection may
 try another configured provider; explicit provider choices never fall back.
 
 ## Native Codex web search
@@ -353,7 +356,7 @@ namespace.
 - When `allowedDomains` is set, it restricts both hosted `web_search` and
   managed `web_fetch` on turns where native hosted search is active. Turns
   using a managed search provider are unchanged. Automatic managed search
-  fallback also fails closed if hosted search is unavailable.
+  fallback is also blocked if hosted search is unavailable.
 - Tool-disabled LLM-only runs disable both native and managed search
 - `tools.web.search.enabled: false` disables both managed and native search
 
@@ -491,10 +494,11 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
   `plugins.entries.firecrawl.config.webFetch.*`
 
 When you choose **Kimi** during `openclaw onboard` or
-`openclaw configure --section web`, OpenClaw can also ask for:
-
-- the Moonshot API region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`)
-- the default Kimi web-search model (defaults to `kimi-k2.6`)
+`openclaw configure --section web`, OpenClaw can also ask for the Moonshot API
+region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`). Kimi search
+uses `POST /tools/search`, not a chat model. The former
+`plugins.entries.moonshot.config.webSearch.model` setting is deprecated and
+ignored; existing configs remain valid. See [Kimi search](/tools/kimi-search).
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
 same xAI auth profile as chat, or the `XAI_API_KEY` / plugin web-search
@@ -563,7 +567,7 @@ provider, OpenClaw does not show the `x_search` prompt.
   Not all parameters work with all providers. Brave `llm-context` mode
   rejects `ui_lang`; `date_before` also needs `date_after` because Brave custom
   freshness ranges require both start and end dates.
-  Gemini, Grok, and Kimi return one synthesized answer with citations. They
+  Gemini and Grok return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape. Gemini treats `day` freshness as a recency hint; wider
   freshness values and explicit dates set Google Search grounding time ranges.

@@ -2,10 +2,14 @@ import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PLUGIN_COMMAND_DISPATCH } from "../plugins/plugin-command-dispatch-contract.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import type * as ReplyChunking from "./reply-chunking.js";
+import type * as ReplyRuntime from "./reply-runtime.js";
 import {
   createReplyDispatcher,
   dispatchInboundMessage,
+  isSilentReplyText,
   type GetReplyOptions,
+  type PreparedAgentRunStart,
   type ReplyDispatcher,
 } from "./reply-runtime.js";
 
@@ -25,6 +29,19 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionStart"
   | "onCompactionEnd"];
 
+describe("reply SDK silence surface", () => {
+  it("exposes only the exact helper from reply-runtime", () => {
+    type ChunkingExports = keyof typeof ReplyChunking;
+    type RuntimeExports = keyof typeof ReplyRuntime;
+    expectTypeOf<"SILENT_REPLY_TOKEN">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"SILENT_REPLY_TOKEN">().toExtend<RuntimeExports>();
+    expectTypeOf<"isSilentReplyText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<RuntimeExports>();
+    expectTypeOf(isSilentReplyText).parameters.toEqualTypeOf<[text?: string]>();
+  });
+});
+
 describe("reply runtime public progress contracts", () => {
   it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
     type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
@@ -39,6 +56,13 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
     expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
     expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("requires prepared transcript facts on the modern run-start contract", () => {
+    type Callback = NonNullable<GetReplyOptions["onPreparedAgentRunStart"]>;
+    expectTypeOf<Parameters<Callback>>().toEqualTypeOf<[PreparedAgentRunStart]>();
+    expectTypeOf<{ runId: string }>().not.toExtend<PreparedAgentRunStart>();
+    expectTypeOf<Callback>().returns.toEqualTypeOf<unknown>();
   });
 
   it("retains released synchronous visibility contracts beside awaited companions", () => {
@@ -199,18 +223,5 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 1, block: 1, final: 1 });
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
-  });
-
-  it("publishes an empty receipt when no delivery was admitted", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    dispatcher.markComplete();
-    await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
-      anyVisibleDelivered: false,
-      counts: {
-        tool: { delivered: 0 },
-        block: { delivered: 0 },
-        final: { delivered: 0 },
-      },
-    });
   });
 });

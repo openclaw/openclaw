@@ -1,5 +1,3 @@
-// Canonical SQLite row helpers for exec approval policy state.
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -20,11 +18,14 @@ import {
   resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
+import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+// Canonical SQLite row helpers for exec approval policy state.
+import type { EngineConnection } from "./sql-connection.js";
 
 const EXEC_APPROVALS_CONFIG_KEY = "current";
 
@@ -41,7 +42,7 @@ export class ExecApprovalsMutationFencedError extends Error {
 }
 
 export function assertExecApprovalsMutationAllowed(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   current: ExecApprovalsFile;
   next: ExecApprovalsFile;
 }): void {
@@ -79,7 +80,9 @@ export function serializeExecApprovals(file: ExecApprovalsFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
-export function readExecApprovalsConfigRow(db: DatabaseSync): ExecApprovalsConfigRow | undefined {
+export function readExecApprovalsConfigRow(
+  db: EngineConnection,
+): ExecApprovalsConfigRow | undefined {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(db)
@@ -142,10 +145,11 @@ export function projectionValues(file: ExecApprovalsFile) {
 }
 
 export function writeExecApprovalsConfigRow(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   file: ExecApprovalsFile;
   raw?: string;
   now?: number;
+  change?: "policy" | "usage";
 }): string {
   const normalized = normalizeExecApprovalsInternal(params.file);
   const authored = params.raw ?? serializeExecApprovals(params.file);
@@ -168,21 +172,28 @@ export function writeExecApprovalsConfigRow(params: {
       .values({ config_key: EXEC_APPROVALS_CONFIG_KEY, ...values })
       .onConflict((conflict) => conflict.column("config_key").doUpdateSet(values)),
   );
+  const persisted = raw === authored ? parsed : parsePersistedExecApprovals(raw);
+  const file = persisted.ok ? persisted.value : createFailClosedExecApprovalsFallback();
+  const { socket: _socket, ...policy } = file;
+  execApprovalsPublication.stagePostimages(params.db, [
+    { file: policy, change: params.change ?? "policy" },
+  ]);
   return raw;
 }
 
-export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
+export function deleteExecApprovalsConfigRow(db: EngineConnection): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<ExecApprovalsDatabase>(db)
       .deleteFrom("exec_approvals_config")
       .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
   );
+  execApprovalsPublication.stageDeletions(db, [EXEC_APPROVALS_CONFIG_KEY]);
 }
 
 /** Called only inside the approval owner's winning resolution transaction. */
 export function mintMcpToolGrantLocked(
-  db: DatabaseSync,
+  db: EngineConnection,
   grant: { agentId: string; server: string; tool: string },
   nowMs: number,
 ): void {
@@ -236,7 +247,7 @@ export function warnFailClosed(message: string, error?: unknown): void {
 }
 
 export function snapshotFromExecApprovalsDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   displayPath = resolveExecApprovalsDisplayPath(),
 ): ExecApprovalsSnapshot {
   return snapshotFromExecApprovalsRow({

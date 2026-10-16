@@ -19,13 +19,7 @@ class DiscordActivityButton extends Button {
   customId = buildDiscordActivityCustomId(REGISTRATION_WIDGET_ID);
   override customIdParser = parseDiscordActivityCustomIdForInteraction;
 
-  constructor(
-    private readonly ctx: AgentComponentContext,
-    private readonly deps: {
-      reply: typeof replySilently;
-      logError: (message: string) => void;
-    },
-  ) {
+  constructor(private readonly ctx: AgentComponentContext) {
     super();
   }
 
@@ -36,12 +30,12 @@ class DiscordActivityButton extends Button {
       return;
     }
     this.pendingLaunchFailureLogged = true;
-    this.deps.logError(`discord activity: failed to record pending launch: ${String(error)}`);
+    logError(`discord activity: failed to record pending launch: ${String(error)}`);
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     if (typeof data.widgetId !== "string") {
-      await this.deps.reply(interaction, {
+      await replySilently(interaction, {
         content: "This widget is no longer valid.",
         ephemeral: true,
       });
@@ -86,10 +80,6 @@ class DiscordActivityButton extends Button {
 export function createDiscordActivityButton(
   ctx: AgentComponentContext,
   applicationId?: string,
-  deps: {
-    reply?: typeof replySilently;
-    logError?: (message: string) => void;
-  } = {},
 ): DiscordActivityButton | null {
   const runtime = getDiscordActivitiesRuntime();
   if (!runtime) {
@@ -101,8 +91,5 @@ export function createDiscordActivityButton(
   if (!runtime.resolveAccount(ctx.accountId, ctx.cfg)) {
     return null;
   }
-  return new DiscordActivityButton(ctx, {
-    reply: deps.reply ?? replySilently,
-    logError: deps.logError ?? logError,
-  });
+  return new DiscordActivityButton(ctx);
 }

@@ -493,7 +493,7 @@ suite.define(() => {
       const response = await surface.page.goto(url.href);
       expect(response?.status()).toBe(200);
       const confirmation = surface.page.locator("openclaw-gateway-url-confirmation");
-      await confirmation.waitFor();
+      await confirmation.getByText(remoteGatewayUrl, { exact: true }).waitFor();
       expect(await confirmation.getByText(remoteGatewayUrl, { exact: true }).count()).toBe(1);
       expect(await surface.gateway.getRequests("approval.get")).toHaveLength(0);
       await captureDocumentProof(surface.page, "after-remote-gateway-confirmation.png");

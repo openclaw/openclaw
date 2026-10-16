@@ -135,6 +135,88 @@ function doctorOperation(args: string[]) {
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {
+  it.each([false, true])("reports only final candidate warnings (pending=%s)", async (pending) => {
+    const migrations = await import("../../infra/deferred-plugin-migrations.js");
+    const freshDoctor = await import("./update-command-fresh-doctor.js");
+    const { renderUpdateRunReport, updateRunReportInputFromResult } =
+      await import("../../infra/update-run-report.js");
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("candidate-warnings-"));
+    vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    const migration = {
+      pluginId: "fixture-plugin",
+      reason: "The installed plugin has not confirmed its saved data and settings.",
+      command: "openclaw doctor --fix",
+    };
+    const earlyWarning = migrations.formatDeferredPluginMigration(migration, {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    });
+    const finalWarning = migrations.formatDeferredPluginMigration(migration, {});
+    const advisory = "Optional Doctor inspection needs attention.";
+    vi.spyOn(migrations, "readDeferredPluginMigrationsAsync").mockResolvedValue(
+      pending ? [migration] : [],
+    );
+    vi.spyOn(freshDoctor, "completePostCorePluginUpdate").mockImplementationOnce(async (params) => {
+      params.onWarnings?.([earlyWarning, advisory, advisory]);
+      return {
+        pluginUpdate: {
+          ...pluginUpdate,
+          status: pending ? "warning" : "ok",
+          warnings: pending
+            ? [
+                {
+                  pluginId: migration.pluginId,
+                  reason: "doctor-advisory",
+                  message: finalWarning,
+                  guidance: [
+                    `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                  ],
+                },
+              ]
+            : [],
+        },
+        configSnapshot: snapshot,
+      };
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins(
+      convergenceParams({
+        candidateRuntime: true,
+        result: {},
+      }),
+    );
+    expect(resultWithPostUpdate.status).toBe("ok");
+    const report = renderUpdateRunReport(updateRunReportInputFromResult(resultWithPostUpdate));
+    expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
+      `Warning: ${advisory}`,
+      ...(pending ? [`Warning: ${finalWarning}`] : []),
+    ]);
+    expect(report.markdown).not.toContain("Let the current update or repair finish.");
+  });
+  it("records the failed post-core child even without supplied failure facts", async () => {
+    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
+      resumed: false,
+      exitCode: 1,
+      error: "x",
+      failureFacts: [],
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins(
+      convergenceParams({
+        result: { mode: "npm", before: { version: VERSION }, after: { version: "2026.9.4" } },
+        downgradeRisk: true,
+      }),
+    );
+    expect(resultWithPostUpdate).toMatchObject({
+      status: "error",
+      steps: [
+        {
+          name: "post-update verification",
+          exitCode: 1,
+          stderrTail: "x",
+          failureFacts: [{ check: "runtime", code: "post-core-update-failed" }],
+        },
+      ],
+    });
+  });
   it("cancels runtime classification with its enclosing command scope", async () => {
     const controller = new AbortController();
     const cancellation = new Error("Update command was cancelled");
@@ -503,7 +585,13 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(result.resultWithPostUpdate.steps).toEqual(
           changed === "runtime"
             ? [expect.objectContaining({ name: "source runtime publication", exitCode: 0 })]
-            : [],
+            : [
+                expect.objectContaining({
+                  name: "post-plugin doctor",
+                  exitCode: 0,
+                  deferredInspectionCheckIds: null,
+                }),
+              ],
         );
         if (changed === "plugins") {
           expect(mocks.runExec.mock.calls.map(([, args]) => doctorOperation(args))).toEqual([

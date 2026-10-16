@@ -220,8 +220,9 @@ describe("memory provenance through a real Gateway", () => {
         repoRoot: path.resolve(import.meta.dirname, "../../../.."),
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        // Cron captures a stored account; the QA harness stages one for openai.
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna-alt",
         transportBaseUrl: "http://127.0.0.1:9",
         controlUiEnabled: false,
         enabledPluginIds: ["memory-core"],
@@ -375,8 +376,8 @@ describe("memory provenance through a real Gateway", () => {
           `Hidden QA fact: the project codename is ORBIT-9. ${EXPLICIT_OWNER_MARKER}\n`,
           "utf8",
         );
+        await activeGateway.runCli(["memory", "index", "--force", "--agent", "researcher"]);
       });
-      await activeGateway.runCli(["memory", "index", "--force", "--agent", "researcher"]);
 
       await sendAndWait({
         call: activeGateway.call.bind(activeGateway),

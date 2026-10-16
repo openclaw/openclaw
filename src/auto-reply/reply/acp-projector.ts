@@ -11,6 +11,7 @@ import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { truncateUtf16WithEllipsis as truncateText } from "../../shared/text-truncate.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { isAcpTagVisible, resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -112,7 +113,11 @@ export function createAcpReplyProjector(params: {
   });
   const blockReplyPipeline = createBlockReplyPipeline({
     onBlockReply: async (payload) => {
-      await params.deliver("block", payload);
+      // The chunker emits disjoint pieces, not replacement snapshots.
+      await params.deliver(
+        "block",
+        copyReplyPayloadMetadata(payload, { ...payload, textMode: "delta" }),
+      );
     },
     timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
     coalescing: isLive ? undefined : streaming.coalescing,

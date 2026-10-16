@@ -4,13 +4,23 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -55,6 +65,9 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFileDownloadClient,
+  fetchSessionFileDownload,
+  openSessionFileDownload,
   createWorkspaceFixture,
   expectError,
   expectOkPayload,
@@ -68,11 +81,40 @@ const mocks = vi.hoisted(() => ({
   store: vi.fn(),
   open: vi.fn(),
 }));
-vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
-vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
-  ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
-  loadSessionEntryReadOnly: () => mocks.load().entry,
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+    mocks.load(params.key, { agentId: params.agentId }),
 }));
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) => {
+  const actual =
+    await original<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: ((database, request, owner) => {
+      const loaded = mocks.load();
+      if (
+        !loaded ||
+        database.agentId !== loaded.agentId ||
+        database.path !== loaded.storePath ||
+        !request.sessionKeys?.includes(loaded.canonicalKey)
+      ) {
+        return actual.readRetainedSessionEntryFacts(database, request, owner);
+      }
+      return {
+        kind: "session-exact-entries",
+        entries: [{ sessionKey: loaded.canonicalKey, entry: loaded.entry }],
+        lifecycleTimestamps: {},
+        source: { ...database, databaseIdentity: "repository-files-fixture" },
+        databaseIdentity: {
+          identity: "repository-files-fixture",
+          incarnation: "repository-files-fixture",
+          filename: database.path,
+        },
+      };
+    }) satisfies typeof actual.readRetainedSessionEntryFacts,
+  };
+});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,
@@ -97,7 +139,7 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 }));
 
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const sessionKey = "agent:main:repository";
+let sessionKey = "agent:main:repository";
 const gatewayDeviceId = "repository-gateway";
 const identity = {
   gatewayNamespace: nodeWorkerGatewayNamespace(gatewayDeviceId),
@@ -113,7 +155,7 @@ let source: Awaited<ReturnType<typeof store.create>>;
 let runtime: NodeWorkerWorkspaceRuntime;
 let generation: number;
 let active: boolean;
-let onTunnel: (() => void) | undefined;
+let onTunnel: (() => void | Promise<void>) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
 let lifecycleRevision: string;
@@ -158,7 +200,7 @@ function requestContext() {
     workerEnvironmentService: {
       get: () => ({ state: "attached", ownerEpoch: 1, attachedSessionIds: [identity.sessionId] }),
       startTunnel: async () => {
-        onTunnel?.();
+        await onTunnel?.();
         return { environmentId: identity.environmentId, ownerEpoch: 1, runWorkspaceCommand: run };
       },
     },
@@ -166,6 +208,7 @@ function requestContext() {
 }
 
 beforeEach(async () => {
+  sessionKey = "agent:main:repository";
   vi.clearAllMocks();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
   vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
@@ -229,10 +272,13 @@ beforeEach(async () => {
     agentId: "main",
     canonicalKey: sessionKey,
     cfg: {},
-    storePath: path.join(gatewayRoot, "sessions.sqlite"),
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     storeKeys: [sessionKey],
     entry: { sessionId, repositoryWorkspaceId: source.workspaceId, lifecycleRevision, archivedAt },
   }));
+  context = requestContext();
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  await persistSessionEntry();
   run = vi.fn(async (command: WorkerWorkspaceCommand) => {
     command.assertCurrent?.();
     const input = parseNodeWorkerWorkspaceExecInput(
@@ -242,18 +288,18 @@ beforeEach(async () => {
     onResult?.();
     return result;
   });
-  context = requestContext();
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
-async function withCheckpointAcceptance(failCapture = false) {
+async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -264,6 +310,9 @@ async function withCheckpointAcceptance(failCapture = false) {
       archivedAt,
     },
   );
+}
+
+async function withCheckpointAcceptance(failCapture = false) {
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -450,6 +499,109 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
   ]);
 });
 
+it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
+  using connection = createSessionFileDownloadClient();
+  const baseCommit = source.baseCommit!;
+  const baseManifestHash = source.baseManifestHash!;
+  sessionKey = "agent:main:dashboard:incognito-repository-download";
+  source = await store.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://example.test/private.git",
+    assertCurrent() {},
+  });
+  source = await store.bindBase({
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent() {},
+  });
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() =>
+    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+  );
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      sessionId,
+      updatedAt: 1,
+      incognito: true,
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+    },
+  );
+  const download = expectOkPayload(
+    await invoke("sessions.files.download", { sessionKey, path: "README" }, context, connection),
+  );
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  expect(fetched.response.statusCode).toBe(200);
+  expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("untouched source\n");
+  memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
+});
+
+it("downloads original live repository bytes in bounded windows and rejects stale placement", async () => {
+  using connection = createSessionFileDownloadClient();
+  const bytes = Buffer.alloc(8 * 1024 * 1024 + 3, 0xff);
+  fs.writeFileSync(path.join(workspace, "binary.zip"), bytes);
+  const download = expectOkPayload(
+    await invoke(
+      "sessions.files.download",
+      { sessionKey, path: "binary.zip" },
+      context,
+      connection,
+    ),
+  );
+  expect(download.filename).toBe("binary.zip");
+  // The RPC prepares metadata without reading any file bytes.
+  expect(run.mock.calls.every(([command]) => JSON.parse(command.input!).offset === undefined)).toBe(
+    true,
+  );
+  const nextWindow = createDeferredCore();
+  onTestFinished(() => nextWindow.resolve());
+  const readWindow = run.getMockImplementation()!;
+  run.mockImplementation(async (command) => {
+    const { offset } = JSON.parse(command.input!);
+    if (offset > 0) {
+      await nextWindow.promise;
+    }
+    return readWindow(command);
+  });
+  const response = await openSessionFileDownload(connection.client, download.url);
+  expect(response.status).toBe(200);
+  const reader = response.body!.getReader();
+  const first = await reader.read();
+  expect(first.value!.length).toBeGreaterThan(0);
+  expect(Buffer.from(first.value!).equals(bytes.subarray(0, first.value!.length))).toBe(true);
+  nextWindow.resolve();
+  const chunks = [first.value!];
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
+    chunks.push(next.value);
+  }
+  expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+  const windows = await Promise.all(run.mock.results.map((call) => call.value));
+  expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
+  for (const filePath of ["../outside", "/etc/passwd"]) {
+    expectError(
+      await invoke("sessions.files.download", { sessionKey, path: filePath }, context, connection),
+    );
+  }
+  onResult = () => {
+    generation++;
+  };
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
+  expect(mocks.workspace).not.toHaveBeenCalled();
+});
+
 it("browses, previews, edits and diffs only the live repository without a Gateway checkout", async () => {
   const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toContain("README");
@@ -521,7 +673,7 @@ it.each(["tunnel", "result"])("rejects a replaced placement after %s work", asyn
 it.each(["reset", "archive", "lifecycle revision"])(
   "rejects a session %s before dispatching an editor write",
   async (change) => {
-    onTunnel = () => {
+    onTunnel = async () => {
       if (change === "reset") {
         sessionId = "replacement";
       } else if (change === "archive") {
@@ -529,6 +681,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else {
         lifecycleRevision = `${lifecycleRevision}-next`;
       }
+      await persistSessionEntry();
     };
     await expect(
       invoke(
@@ -554,10 +707,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   });
   fs.writeFileSync(path.join(workspace, "changed.txt"), "retained first\n");
   fs.writeFileSync(path.join(workspace, "second.txt"), "retained second\n");
-  fs.writeFileSync(
-    path.join(workspace, "oversized.txt"),
-    Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
-  );
+  fs.writeFileSync(path.join(workspace, "oversized.txt"), Buffer.alloc(8 * 1024 * 1024 + 1, 97));
   const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
@@ -597,8 +747,34 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();
   expect(retained.root).toBeUndefined();
-  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "blob").length;
+  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
+  using connection = createSessionFileDownloadClient();
+  const download = expectOkPayload(
+    await invoke(
+      "sessions.files.download",
+      { sessionKey, path: "oversized.txt" },
+      context,
+      connection,
+    ),
+  );
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  expect(fetched.response.statusCode).toBe(200);
+  expect(
+    Buffer.from(fetched.body as Uint8Array).equals(Buffer.alloc(8 * 1024 * 1024 + 1, 97)),
+  ).toBe(true);
+  expectError(
+    await invoke("sessions.files.download", { sessionKey, path: "README" }, context, connection),
+  );
+  expectError(
+    await invoke(
+      "sessions.files.download",
+      { sessionKey, path: "../changed.txt" },
+      context,
+      connection,
+    ),
+  );
   const beforeOversized = blobsRead();
+  expect(beforeOversized).toBeGreaterThan(0);
   const oversized = expectError(
     await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
   );
@@ -609,7 +785,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
       type: "session_file_too_large",
       path: "oversized.txt",
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      size: WORKSPACE_PREVIEW_MAX_BYTES + 1,
+      size: 8 * 1024 * 1024 + 1,
     },
   });
   expect(blobsRead()).toBe(beforeOversized);
@@ -628,15 +804,22 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
 
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
-    return args[1][1] === "blob" ? { ...result, stdout: Buffer.from("tampered\n") } : result;
+    if (args[1][1] !== "--batch") {
+      return result;
+    }
+    const stdout = Buffer.from(result.stdout);
+    const contentStart = stdout.indexOf(0x0a) + 1;
+    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
+    return { ...result, stdout };
   });
   await expect(
     invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
   ).rejects.toThrow("staged result payload is invalid");
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
-    if (args[1][1] === "blob") {
+    if (args[1][1] === "--batch") {
       lifecycleRevision = `${lifecycleRevision}-next`;
+      await persistSessionEntry();
     }
     return result;
   });
@@ -763,7 +946,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   let stopEntered = false;
   let contentAtStop: string | undefined;
   const stopping = runExclusiveSessionLifecycleMutation("drain", {
-    scope: path.join(gatewayRoot, "sessions.sqlite"),
+    scope: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     identities: [sessionKey, identity.sessionId],
     run: async () => {
       stopEntered = true;

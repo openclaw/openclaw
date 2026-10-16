@@ -2,15 +2,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -20,8 +21,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  SESSION_TITLE_SOURCE_MAX_CHARS,
+  resolveSessionTitleSource,
+} from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
@@ -29,7 +35,7 @@ import {
   resolveExplicitSessionName,
   sessionTitleRequests,
 } from "./session-title-state.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -44,7 +50,6 @@ type DashboardSessionTitleModelEntry = Pick<
 >;
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
-const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
   "Generate a concise session title (3-6 words, max 60 characters) from the supplied source message. Use the language the message is written in, not the language of quoted literals, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
@@ -84,7 +89,7 @@ export function buildDashboardSessionTitleSource(params: {
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
     const separatorLength = source ? 1 : 0;
-    const remaining = DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS - source.length - separatorLength;
+    const remaining = SESSION_TITLE_SOURCE_MAX_CHARS - source.length - separatorLength;
     if (remaining <= 0) {
       break;
     }
@@ -95,9 +100,9 @@ export function buildDashboardSessionTitleSource(params: {
     source += `${source ? "\n" : ""}${truncateUtf16Safe(text, remaining)}`;
   }
   if (!source && slashCommand) {
-    return truncateUtf16Safe(visibleMessage, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
+    return truncateUtf16Safe(visibleMessage, SESSION_TITLE_SOURCE_MAX_CHARS);
   }
-  return truncateUtf16Safe(source.trim(), DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
+  return truncateUtf16Safe(source.trim(), SESSION_TITLE_SOURCE_MAX_CHARS);
 }
 
 type SessionTitleParams = {
@@ -116,6 +121,7 @@ type SessionTitleParams = {
   /** Settles with the turn this title overlapped; a failed label retries once after it. */
   retryAfter?: Promise<void>;
   onFallback?: () => void;
+  onTitleStateChanged?: () => void;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -129,9 +135,7 @@ export function isDashboardSessionTitleCandidate(params: {
   userMessage: string;
 }): boolean {
   const sourceText = params.userMessage.trim();
-  return Boolean(
-    sourceText && !sourceText.startsWith("/") && isAutoTitleSessionKey(params.sessionKey),
-  );
+  return Boolean(sourceText && isAutoTitleSessionKey(params.sessionKey));
 }
 
 function resolveDashboardTitleAuthProfile(params: {
@@ -227,11 +231,31 @@ function normalizeDashboardSessionTitle(raw: string): string | null {
   return /[^\s"'`„“”«»‘’]/u.test(normalized) ? normalized : null;
 }
 
+async function prepareTitleSkillCommands(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry?: SessionEntry;
+  sessionKey?: string;
+  assertCurrent?: () => void;
+}): Promise<SkillCommandSpec[]> {
+  const { prepareSkillCommandsForWorkspace } = await import("../skills/discovery/chat-commands.js");
+  return await prepareSkillCommandsForWorkspace(
+    {
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      sessionEntry: params.entry,
+      sessionKey: params.sessionKey,
+    },
+    params.assertCurrent,
+  );
+}
+
 async function generateDashboardSessionTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;
-  userMessage: string;
+  sourceText: string;
   utilityOnly?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
@@ -239,12 +263,7 @@ async function generateDashboardSessionTitle(params: {
   retryAfter?: Promise<void>;
   onFallback?: () => void;
 }): Promise<string | null> {
-  const sourceText = buildDashboardSessionTitleSource({
-    message: params.userMessage,
-  });
-  if (!sourceText || sourceText.startsWith("/")) {
-    return null;
-  }
+  const sourceText = params.sourceText;
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: regularModel.provider,
@@ -327,7 +346,15 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    return await generateDashboardSessionTitle({ ...params, utilityOnly: true });
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      assertCurrent: params.assertCurrent,
+    });
+    const sourceText = resolveSessionTitleSource(params.userMessage, skillCommands);
+    return sourceText
+      ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
+      : null;
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
@@ -340,26 +367,25 @@ export async function prepareDashboardSessionTitle(params: {
 export async function generateWorktreeSessionTitle(
   params: SessionTitleParams & {
     onError: (error: unknown) => void;
-    onPersisted: () => void;
   },
 ): Promise<string | undefined> {
-  const request = maybeGenerateSessionTitle(params).then((persisted) => {
-    if (persisted) {
-      params.onPersisted();
-    }
-  });
+  const scope = {
+    agentId: params.agentId,
+    sessionKey: resolveStoredSessionKeyForAgentStore(params),
+    storePath: params.storePath,
+  };
+  const request = maybeGenerateSessionTitle(params);
   try {
     await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
     params.onError(error);
   }
-  const readCurrent = (assertSourceCurrent?: () => void) => {
+  const readCurrent = async (assertSourceCurrent?: () => void) => {
     params.commitGuard?.();
     assertSourceCurrent?.();
-    const current = loadSessionEntry({
-      agentId: params.agentId,
-      sessionKey: resolveStoredSessionKeyForAgentStore(params),
-      storePath: params.storePath,
+    const current = await readSessionEntryReadOnlyInWorker(scope, () => {
+      params.commitGuard?.();
+      assertSourceCurrent?.();
     });
     if (current?.sessionId !== params.sessionId) {
       throw new Error("Session changed while naming its worktree; retry from the current session.");
@@ -384,10 +410,28 @@ export async function maybeGenerateDashboardSessionTitle(
 export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
-  const requestTarget = { ...scope, sessionId: params.sessionId };
+  const assertCurrent = () => params.commitGuard?.();
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (memory && !memory.owner?.readSession(sessionKey, memory.authority)?.entry) {
+    return false;
+  }
+  const assertMemorySessionCurrent = memory?.owner?.captureSessionReadGuard(sessionKey);
+  const assertMemoryCurrent = () => {
+    assertMemorySessionCurrent?.();
+    memory?.binding?.actor.assertReadable();
+    memory?.authority.assertCurrent();
+  };
+  const requestTarget = {
+    ...scope,
+    sessionId: params.sessionId,
+  };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
     const persisted = await (params.retryFailedJoin ? existing.catch(() => false) : existing);
+    assertMemoryCurrent();
     // A failed join can retry once with fresh session state and this caller's authority.
     return !persisted && params.retryFailedJoin
       ? await maybeGenerateSessionTitle({ ...params, retryFailedJoin: false })
@@ -403,6 +447,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       const assertCommitAllowed = composeSessionSourceAssertion([
         params.commitGuard,
         assertSourceCurrent,
+        ...(memory ? [assertMemoryCurrent] : []),
       ]);
       if (assertSourceCurrent) {
         assertCommitAllowed?.();
@@ -429,68 +474,79 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  return await sessionTitleRequests.run(requestTarget, () =>
-    Promise.resolve().then(async () => {
-      const entry = loadSessionEntry(scope);
-      if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-        return false;
-      }
+  const run = async () => {
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+    if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
+      return false;
+    }
 
-      // A retry may be triggered by a later send or by discussion open. Always
-      // title the session from its original user message when the transcript owns it.
-      const transcriptSource = readSessionTitleFieldsFromTranscript({
+    // Select the first usable task, not an earlier control-only turn. Carry the
+    // same prepared command metadata through history selection and generation.
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      assertCurrent: assertMemoryCurrent,
+    });
+    const transcriptScope = {
+      agentId: params.agentId,
+      sessionEntry: entry,
+      sessionId: params.sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    };
+    const transcriptSource = (
+      await readSessionTitleFieldsFromTranscriptAsync(transcriptScope, { skillCommands })
+    ).firstUserMessage;
+    assertMemoryCurrent();
+    const transcriptText = transcriptSource ?? "";
+    const currentText = resolveSessionTitleSource(params.currentUserMessage ?? "", skillCommands);
+    // A first-turn transcript may win the persistence race before title work starts.
+    // When it is the current turn, retain the supplied attachment-enriched source.
+    const sourceText =
+      resolveSessionTitleSource(entry.pendingWorktree?.titleSource ?? "", skillCommands) ??
+      (!transcriptText || (currentText && currentText === transcriptText)
+        ? resolveSessionTitleSource(params.userMessage, skillCommands)
+        : transcriptText);
+    if (!sourceText) {
+      return false;
+    }
+
+    const generate = (abortSignal?: AbortSignal) =>
+      generateDashboardSessionTitle({
+        cfg: params.cfg,
         agentId: params.agentId,
-        sessionEntry: entry,
-        sessionId: params.sessionId,
-        sessionKey,
-        storePath: params.storePath,
-      }).firstUserMessage;
-      const transcriptText = transcriptSource ? stripInboundMetadata(transcriptSource).trim() : "";
-      const currentText = params.currentUserMessage?.trim() ?? "";
-      // A first-turn transcript may win the persistence race before title work starts.
-      // When it is the current turn, retain the supplied attachment-enriched source.
-      const sourceText =
-        entry.pendingWorktree?.titleSource?.trim() ??
-        (!transcriptText || (currentText && currentText === transcriptText)
-          ? params.userMessage.trim()
-          : transcriptText);
-      if (!sourceText) {
-        return false;
-      }
-
-      const generate = (abortSignal?: AbortSignal) =>
-        generateDashboardSessionTitle({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          entry: params.entry ?? entry,
-          userMessage: sourceText,
-          operatorAuthority: params.operatorAuthority,
-          ...(abortSignal ? { abortSignal } : {}),
-          ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),
-          onFallback: params.onFallback,
+        entry: params.entry ?? entry,
+        sourceText,
+        operatorAuthority: params.operatorAuthority,
+        ...(abortSignal ? { abortSignal } : {}),
+        ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),
+        onFallback: params.onFallback,
+        ...(memory ? { assertCurrent: assertMemoryCurrent } : {}),
+      });
+    const withSource = params.withSource;
+    if (!withSource) {
+      params.commitGuard?.();
+      return await finish(generate());
+    }
+    return await runWithAsyncWorkResources(
+      async () => {
+        const runInGenerationContext = AsyncLocalStorage.snapshot();
+        const pending = await withSource((source) => {
+          params.commitGuard?.();
+          source.assertCurrent();
+          // Release source custody during inference; reacquire it only to persist.
+          const completion = runInGenerationContext(() =>
+            trackAsyncWork(() => generate(getAsyncWorkSignal())),
+          );
+          void completion.catch(() => undefined);
+          return { completion };
         });
-      const withSource = params.withSource;
-      if (!withSource) {
-        params.commitGuard?.();
-        return await finish(generate());
-      }
-      return await runWithAsyncWorkResources(
-        async () => {
-          const runInGenerationContext = AsyncLocalStorage.snapshot();
-          const pending = await withSource((source) => {
-            params.commitGuard?.();
-            source.assertCurrent();
-            // Release source custody during inference; reacquire it only to persist.
-            const completion = runInGenerationContext(() =>
-              trackAsyncWork(() => generate(getAsyncWorkSignal())),
-            );
-            void completion.catch(() => undefined);
-            return { completion };
-          });
-          return await finish(pending.completion);
-        },
-        { cancelOnError: true },
-      );
-    }),
-  );
+        return await finish(pending.completion);
+      },
+      { cancelOnError: true },
+    );
+  };
+  return await sessionTitleRequests.run(requestTarget, run, params.onTitleStateChanged);
 }

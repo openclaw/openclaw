@@ -30,6 +30,7 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
@@ -154,11 +155,15 @@ const GITHUB_RATE_LIMITED_ERROR = {
 
 /** Stubs only api.github.com user lookups; `quotaExhausted` switches to GitHub's real 403. */
 function stubGitHubUserLookups(users: Record<string, { id: number; login: string }>) {
+  // Load the source plugin before opening sockets and starting handshake deadlines.
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+  const githubApiOrigin = gitHubPublicApi.GITHUB_API_ORIGIN;
   const realFetch = globalThis.fetch;
   const github = { requests: [] as string[], quotaExhausted: false };
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== "https://api.github.com") {
+    if (url.origin !== githubApiOrigin) {
       return await realFetch(input, init);
     }
     github.requests.push(url.pathname);
@@ -187,9 +192,6 @@ function gitHubTailscalePeople(
   if (!endpoint) {
     throw new Error("expected managed Tailscale listener");
   }
-  // The GitHub API transport is the GitHub plugin's public surface; load it lazily from source.
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
-  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
   return async (
     login: string,
     run: (ws: WebSocket, connected: Awaited<ReturnType<typeof connectReq>>) => Promise<void>,

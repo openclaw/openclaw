@@ -1,14 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { retryAsync } from "openclaw/plugin-sdk/speech-provider";
+import { createSpeechDirectiveParser, retryAsync } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -100,28 +98,10 @@ function readGoogleTtsOverrides(
   };
 }
 
-function parseDirectiveToken(
-  ctx: SpeechDirectiveTokenParseContext,
-): SpeechDirectiveTokenParseResult {
-  switch (ctx.key) {
-    case "voicename":
-    case "voice_name":
-    case "google_voice":
-    case "googlevoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { voiceName: ctx.value } };
-    case "google_model":
-    case "googlemodel":
-      if (!ctx.policy.allowModelId) {
-        return { handled: true };
-      }
-      return { handled: true, overrides: { model: ctx.value } };
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voiceName: ["allowVoice", ["voicename", "voice_name", "google_voice", "googlevoice"]],
+  model: ["allowModelId", ["google_model", "googlemodel"]],
+});
 
 type GoogleTtsSynthesisRequest = Pick<
   SpeechSynthesisRequest,
@@ -161,6 +141,16 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
 }
 
 export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({
+    cfg,
+    providerConfig,
+  }) =>
+    Boolean(
+      resolveGoogleTtsApiKey({
+        cfg,
+        providerConfig: readGoogleTtsProviderConfig(providerConfig),
+      }),
+    );
   return {
     id: "google",
     label: "Google",
@@ -202,13 +192,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
     listVoices: async () => GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ cfg, providerConfig }) =>
-      Boolean(
-        resolveGoogleTtsApiKey({
-          cfg,
-          providerConfig: readGoogleTtsProviderConfig(providerConfig),
-        }),
-      ),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     prepareSynthesis: (ctx) => {
       const config = readGoogleTtsProviderConfig(ctx.providerConfig);
       const overrides = readGoogleTtsOverrides(ctx.providerOverrides);

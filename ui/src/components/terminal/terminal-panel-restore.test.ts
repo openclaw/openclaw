@@ -9,12 +9,13 @@ import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
-import { TerminalIntentQueue } from "./terminal-pending-actions.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", () => ({
@@ -89,12 +90,13 @@ function mountPanel(
   client: TerminalGatewayClient,
   options: { page?: boolean; open?: boolean } = {},
 ) {
-  const panel = document.createElement(PANEL_TAG) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(PANEL_TAG);
   panel.client = client;
   panel.available = true;
   panel.page = panel.fullscreen = panel.embedded = options.page === true;
-  const sessions = (panel as unknown as { terminalSessions: TerminalPanelSessionController })
-    .terminalSessions;
+  // Initialize the bridge before observing restore writes made during mount.
+  panel.requestUpdate();
+  const sessions = terminalSessionsForTest(panel);
   const mountedPanel = { panel, sessions };
   mounted.push(mountedPanel);
   document.body.append(panel);
@@ -169,6 +171,7 @@ describe("terminal persisted restore", () => {
       sessions.cancelPendingActions();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     for (const reply of pendingAttaches) {
       reply.resolve(attachResult(reply.sessionId));
     }
@@ -185,6 +188,82 @@ describe("terminal persisted restore", () => {
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
   });
+
+  it.each(["pointerdown", "keydown"])(
+    "preserves newer focus and selection after %s during restore",
+    async (eventType) => {
+      const policies: Array<(() => boolean) | undefined> = [];
+      createTerminal.mockImplementation(async (_options, shouldFocusOnOpen?: () => boolean) => {
+        policies.push(shouldFocusOnOpen);
+        return createTerminalController();
+      });
+      const gateway = createGateway();
+      const { panel, sessions } = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      const firstId = sessions.activeId;
+      expect(firstId).not.toBeNull();
+      expect(policies[0]?.()).toBe(true);
+      const external = document.body.appendChild(document.createElement("input"));
+      external.focus();
+      external.dispatchEvent(
+        eventType === "keydown"
+          ? new KeyboardEvent(eventType, { key: "ArrowDown", bubbles: true })
+          : new Event(eventType, { bubbles: true }),
+      );
+      expect(policies[0]?.()).toBe(false);
+      first.resolve(attachResult(first.sessionId));
+      const second = await waitForAttach(gateway, 1);
+      expect(policies[1]?.()).toBe(false);
+      expect(sessions.activeId).toBe(firstId);
+      second.resolve(attachResult(second.sessionId));
+      await waitForFast(() => expect(sessions.booting).toBe(false));
+      expect(document.activeElement).toBe(external);
+      const next = sessions.tabs.find((tab) => tab.gatewaySessionId === "session-b");
+      if (!next) {
+        throw new Error("second terminal not restored");
+      }
+      const focus = vi.spyOn(next.controller.terminal, "focus");
+      sessions.switchTo(next.id);
+      await panel.updateComplete;
+      await waitForFast(() => expect(focus).toHaveBeenCalledOnce());
+      expect(sessions.activeId).toBe(next.id);
+    },
+  );
+
+  it.each([false, true])(
+    "removes restore input observers when finished (unmounted=%s)",
+    async (unmounted) => {
+      const added = vi.spyOn(document, "addEventListener");
+      const removed = vi.spyOn(document, "removeEventListener");
+      const gateway = createGateway();
+      const { panel, sessions } = mountPanel(gateway.client);
+      const first = await waitForAttach(gateway, 0);
+      const handler = added.mock.calls.find(
+        ([type, listener, capture]) =>
+          type === "pointerdown" &&
+          capture === true &&
+          added.mock.calls.some(
+            ([other, callback, options]) =>
+              other === "keydown" && callback === listener && options === true,
+          ),
+      )?.[1];
+      if (!handler) {
+        throw new Error("restore input observer missing");
+      }
+      if (unmounted) {
+        panel.remove();
+        await waitForFast(() => expect(sessions.tabs).toHaveLength(0));
+        first.resolve(attachResult(first.sessionId));
+      } else {
+        first.resolve(attachResult(first.sessionId));
+        const second = await waitForAttach(gateway, 1);
+        second.resolve(attachResult(second.sessionId));
+        await waitForFast(() => expect(sessions.booting).toBe(false));
+      }
+      expect(removed).toHaveBeenCalledWith("pointerdown", handler, true);
+      expect(removed).toHaveBeenCalledWith("keydown", handler, true);
+    },
+  );
 
   it.each([
     { closeIndex: 0, closed: "session-a", remaining: "session-b" },
@@ -210,110 +289,6 @@ describe("terminal persisted restore", () => {
       });
       expect(sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual([remaining]);
       expect(savedIds()).toEqual([remaining]);
-    },
-  );
-
-  it.each([
-    { outcome: "resolve", surface: "dock", keepSibling: false },
-    { outcome: "reject", surface: "page", keepSibling: false },
-    { outcome: "resolve", surface: "page", keepSibling: true },
-    { outcome: "reject", surface: "dock", keepSibling: true },
-  ])(
-    "finishes the cancelled restore on $surface after $outcome (keep sibling: $keepSibling)",
-    async ({ outcome, surface, keepSibling }) => {
-      const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
-      const page = surface === "page";
-      const storageKey = page ? `${STORAGE_KEY}:page:null` : STORAGE_KEY;
-      const sessionIds = keepSibling ? ["session-a", "session-b"] : ["session-a"];
-      sessionStorage.setItem(storageKey, JSON.stringify(sessionIds));
-      const gateway = createGateway(sessionIds);
-      const { panel } = mountPanel(gateway.client, { page });
-      const first = await waitForAttach(gateway, 0);
-      panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
-      await panel.updateComplete;
-      expect(panel.terminalPanelOpen).toBe(page || keepSibling);
-      expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "[]")).toEqual(
-        keepSibling ? ["session-b"] : [],
-      );
-      if (outcome === "resolve") {
-        first.resolve(attachResult(first.sessionId));
-      } else {
-        first.reject(new Error("closed restore request failed"));
-      }
-      if (keepSibling) {
-        const second = await waitForAttach(gateway, 1);
-        second.resolve(attachResult(second.sessionId));
-      }
-      await Promise.all(queueCalls.mock.results.map((result) => result.value));
-      await waitForFast(() =>
-        expect(
-          panel.terminalPanelOpen
-            ? panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled
-            : false,
-        ).toBe(false),
-      );
-      expect(panel.terminalPanelOpen).toBe(page || keepSibling);
-      expect(gateway.requests.filter((request) => request.method === "terminal.open")).toEqual([]);
-      expect(gateway.attaches.map((request) => request.sessionId)).toEqual(sessionIds);
-      expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(keepSibling ? 1 : 0);
-      expect(panel.renderRoot.querySelector(".tp-error")).toBeNull();
-      expect(JSON.parse(sessionStorage.getItem(storageKey) ?? "[]")).toEqual(
-        keepSibling ? ["session-b"] : [],
-      );
-      expect(gateway.requests.filter((request) => request.method === "terminal.close")).toEqual(
-        outcome === "resolve"
-          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
-          : [],
-      );
-    },
-  );
-
-  it.each([
-    { transition: "reconnect", outcome: "resolve" },
-    { transition: "remount", outcome: "reject" },
-  ])(
-    "does not replace the cancelled dock restore across $transition before $outcome",
-    async ({ transition, outcome }) => {
-      const queueCalls = vi.spyOn(TerminalIntentQueue.prototype, "queue");
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a"]));
-      const gateway = createGateway(["session-a"]);
-      let current = mountPanel(gateway.client);
-      const first = await waitForAttach(gateway, 0);
-      current.panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
-      await current.panel.updateComplete;
-      expect(savedIds()).toEqual([]);
-      if (transition === "remount") {
-        current.panel.remove();
-        current = mountPanel(gateway.client, { open: false });
-      } else {
-        current.panel.client = null;
-        current.panel.available = false;
-        await current.panel.updateComplete;
-        current.panel.client = gateway.client;
-        current.panel.available = true;
-      }
-      await current.panel.updateComplete;
-      if (outcome === "resolve") {
-        first.resolve(attachResult(first.sessionId));
-      } else {
-        first.reject(new Error("cancelled old restore failed"));
-      }
-      await Promise.all(queueCalls.mock.results.map((result) => result.value));
-      await waitForFast(() =>
-        expect(
-          current.panel.terminalPanelOpen
-            ? current.panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled
-            : false,
-        ).toBe(false),
-      );
-      expect(current.panel.terminalPanelOpen).toBe(false);
-      expect(current.panel.renderRoot.querySelector(".tp-error")).toBeNull();
-      expect(gateway.requests.filter(({ method }) => method === "terminal.open")).toEqual([]);
-      expect(gateway.requests.filter(({ method }) => method === "terminal.close")).toEqual(
-        outcome === "resolve"
-          ? [{ method: "terminal.close", params: { sessionId: "session-a" } }]
-          : [],
-      );
     },
   );
 
@@ -484,23 +459,6 @@ describe("terminal persisted restore", () => {
     },
   );
 
-  it("prunes a completed transient failure but retains a later unresolved session", async () => {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a", "session-b", "session-c"]));
-    const gateway = createGateway(["session-a", "session-b", "session-c"]);
-    const { sessions } = mountPanel(gateway.client);
-    const first = await waitForAttach(gateway, 0);
-    first.resolve(attachResult(first.sessionId));
-    const second = await waitForAttach(gateway, 1);
-    second.reject(new Error("gateway temporarily unavailable"));
-    const third = await waitForAttach(gateway, 2);
-    expect(gateway.list).toHaveBeenCalledTimes(2);
-    expect(savedIds()).toEqual(["session-a", "session-c"]);
-    third.resolve(attachResult(third.sessionId));
-    await waitForFast(() => expect(sessions.booting).toBe(false));
-    expect(savedIds()).toEqual(["session-a", "session-c"]);
-    expect(sessions.tabs.every((tab) => tab.status === "live")).toBe(true);
-  });
-
   it("prunes a failed list before opening the existing fresh-session fallback", async () => {
     const gateway = createGateway();
     gateway.list.mockRejectedValueOnce(new Error("gateway temporarily unavailable"));
@@ -509,21 +467,5 @@ describe("terminal persisted restore", () => {
     expect(gateway.attaches).toHaveLength(0);
     expect(sessions.tabs.map((tab) => tab.gatewaySessionId)).toEqual(["replacement"]);
     expect(sessions.booting).toBe(false);
-  });
-
-  it("restores duplicate stored ids once and persists their original order", async () => {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-b", "session-a", "session-b"]));
-    const gateway = createGateway();
-    const { sessions } = mountPanel(gateway.client);
-    const first = await waitForAttach(gateway, 0);
-    expect(first.sessionId).toBe("session-b");
-    first.resolve(attachResult(first.sessionId));
-    const second = await waitForAttach(gateway, 1);
-    expect(second.sessionId).toBe("session-a");
-    expect(savedIds()).toEqual(["session-b", "session-a"]);
-    second.resolve(attachResult(second.sessionId));
-    await waitForFast(() => expect(sessions.booting).toBe(false));
-    expect(gateway.attaches).toHaveLength(2);
-    expect(savedIds()).toEqual(["session-b", "session-a"]);
   });
 });

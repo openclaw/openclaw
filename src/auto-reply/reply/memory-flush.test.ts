@@ -323,7 +323,7 @@ describe("Anthropic server compaction host threshold", () => {
 
   it.each([
     {
-      name: "keeps Anthropic disabled by default",
+      name: "keeps the local threshold for default-on Anthropic compaction",
       params: {},
       contextWindowTokens: 200_000,
       expected: undefined,

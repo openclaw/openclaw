@@ -1,8 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,17 +15,19 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
+import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
   classifySessionStateActor,
   getSessionStateVersion,
   handleSessionStateSessionDeleted,
-  listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
   recordSessionGoalChanged,
@@ -52,6 +58,18 @@ const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 
+async function readAmbientTargets(
+  sessionKey: string,
+  options: ReturnType<typeof createDatabaseOptions>,
+) {
+  const reader = prepareAmbientGroupWatchTargetsRead(sessionKey, options);
+  try {
+    return new Set(await reader.read());
+  } finally {
+    reader.release();
+  }
+}
+
 async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
@@ -62,11 +80,60 @@ async function createWatcherSession(
   );
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   await cleanupSessionStateTestState();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({
+      dedupeKey: "replayed-event",
+      summary: "event \ud800",
+      payload: { reason: "requested" },
+    });
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db: writer }) => recordSessionStateEventInDatabase(writer, input, now),
+        database,
+      );
+    const reads = trackSqliteStatementExecutions(db, ["events"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_state_events"/i.test(sql) ? "events" : null,
+    );
+    let first: ReturnType<typeof record>;
+    try {
+      first = record(1000);
+    } finally {
+      reads.restore();
+    }
+    expect(reads.counts.events).toBe(0);
+    expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.row).toMatchObject({
+      summary: "event \ufffd",
+      payload_json: '{"reason":"requested"}',
+      occurred_at: 1000,
+    });
+    expect(first.notices).toHaveLength(1);
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+
+    const replay = record(2000);
+    expect(replay.row).toEqual(first.row);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
@@ -99,44 +166,44 @@ describe("session state events", () => {
       }
       let changedAfterVerdict = false;
       let verdicts = 0;
-      const peer = new DatabaseSync(current.source.path);
+      const writer = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: current.source.path,
+        env: database.env,
+      });
       const check = {
         source: current.source,
         assertCurrent: (facts: { lifecycleRunId?: unknown } | undefined) => {
           current.assertSourceCurrent();
           expect(facts?.lifecycleRunId).toBe("original-run");
           if (++verdicts === verdict) {
-            peer
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-              )
-              .run(`$.${field}`, "successor-run", key);
+            const previous = readExactSessionEntryRow(writer, key)?.entry;
+            if (!previous) {
+              throw new Error("Expected an existing session for the owner write");
+            }
+            writeSessionEntry(writer, key, { ...previous, [field]: "successor-run" });
             changedAfterVerdict = true;
           }
         },
       };
-      try {
-        const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
-        const options = { ...database, now: 0, sessionEntryCurrent: check };
-        const recorded = await recordSessionStateEventAsync(input, options);
-        expect(changedAfterVerdict).toBe(true);
-        if (records) {
-          expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
-          expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
-        } else {
-          expect(recorded).toBeUndefined();
-          expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-        }
-
-        await upsertSessionEntryCore(target, entry);
-        expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
-          sessionKey: child,
-          sessionId: entry.sessionId,
-        });
+      const input = eventInput({ watcherSessionKeys: [], dedupeKey: "currency-signal" });
+      const options = { ...database, now: 0, sessionEntryCurrent: check };
+      const recorded = await recordSessionStateEventAsync(input, options);
+      expect(changedAfterVerdict).toBe(true);
+      if (records) {
+        expect(recorded).toMatchObject({ sessionKey: child, sessionId: entry.sessionId });
         expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
-      } finally {
-        peer.close();
+      } else {
+        expect(recorded).toBeUndefined();
+        expect(await getSessionStateVersion(child, "main", database)).toBe(0);
       }
+
+      await upsertSessionEntryCore(target, entry);
+      expect(await recordSessionStateEventAsync(input, options)).toMatchObject({
+        sessionKey: child,
+        sessionId: entry.sessionId,
+      });
+      expect(await getSessionStateVersion(child, "main", database)).toBeGreaterThan(0);
     },
   );
 
@@ -248,7 +315,7 @@ describe("session state events", () => {
         database,
       ),
     ).toBe(false);
-    expect(listAmbientGroupWatchTargets(mainSessionKey, database)).toEqual(new Set());
+    expect(await readAmbientTargets(mainSessionKey, database)).toEqual(new Set());
   });
 
   it("prunes dormant ambient cursors while retaining active cursors", async () => {
@@ -277,7 +344,7 @@ describe("session state events", () => {
     );
     await sweepSessionStateWatchNotices({ ...database, now: activeAt });
 
-    expect(listAmbientGroupWatchTargets(watcher, database)).toEqual(new Set([group]));
+    expect(await readAmbientTargets(watcher, database)).toEqual(new Set([group]));
     const cursors = openOpenClawStateDatabase(database)
       .db.prepare("SELECT COUNT(*) AS count FROM session_watch_cursors")
       .get() as { count: number };
@@ -344,6 +411,7 @@ describe("session state events", () => {
     ] as const) {
       const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
+        agentId: "main",
         requesterSessionKey: watcher,
         ...terminal,
       });
@@ -398,7 +466,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,

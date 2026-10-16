@@ -15,6 +15,7 @@ export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSc
 export const StateDatabaseDiscoverySchema = z.object({
   spellings: z.tuple([z.string()], z.string()),
   owners: z.array(UpdateStateDatabaseOwnerSchema).optional(),
+  registeredPaths: z.array(z.string()).optional(),
 });
 export type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 
@@ -39,6 +40,7 @@ export function queueStateDatabaseSpelling(
   stateRoot: string,
   file: string,
   owner?: UpdateStateDatabaseOwner,
+  registeredPath?: string,
 ): void {
   const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
   const discovery = files.get(identity);
@@ -46,12 +48,15 @@ export function queueStateDatabaseSpelling(
     if (!discovery.spellings.includes(file)) {
       discovery.spellings.push(file);
     }
+    if (registeredPath !== undefined) {
+      (discovery.registeredPaths ??= []).push(registeredPath);
+    }
     if (
       owner &&
       !discovery.owners?.some(
         (current) =>
           current.role === owner.role &&
-          (current.role === "global" ||
+          (current.role !== "agent" ||
             (owner.role === "agent" && current.agentId === owner.agentId)),
       )
     ) {
@@ -59,7 +64,11 @@ export function queueStateDatabaseSpelling(
     }
     return;
   }
-  files.set(identity, { spellings: [file], ...(owner ? { owners: [owner] } : {}) });
+  files.set(identity, {
+    spellings: [file],
+    ...(owner ? { owners: [owner] } : {}),
+    ...(registeredPath === undefined ? {} : { registeredPaths: [registeredPath] }),
+  });
 }
 
 // Keep path projection independent of snapshot orchestration: the snapshot owner

@@ -20,7 +20,19 @@ the saved key remains; follow the reported recovery step. Removing a stored key
 keeps model defaults and provider connection settings. See
 [Auth profiles](/cli/models#auth-profiles) for the matching CLI commands.
 
-Provider controls appear as soon as credentials, the model catalog, and configuration are ready. Usage and local costs load independently afterward, so a slow usage response does not block provider settings.
+Configured global model defaults remain available while provider details load.
+Provider and installed-app details keep their initial loading view until
+credentials, the model catalog, configuration, and the installed-app inventory
+are ready. Usage and local costs load independently afterward, so a slow usage
+response does not block provider settings. The AI setup summary stays in place
+when model discovery finishes.
+
+Background catalog updates keep the current provider rows and usage visible.
+Finishing sign-in updates that provider's credentials without restarting usage
+or local-cost loading for the other providers. If another client changes
+credentials while the sign-in picker is open, the page reconciles those changes
+when you finish, cancel, or close sign-in. Use **Refresh** to explicitly reload all
+provider data.
 
 After an account's quota recovers, model availability reflects the recovered account even if a catalog refresh began while it was blocked.
 
@@ -30,7 +42,9 @@ Use **Test connection** to run a live provider check and see latency or a catego
 
 The **Defaults** card manages the primary model, utility model, first fallback, thinking level, and Fast mode from the configured model catalog. Changes save automatically to the existing `agents.defaults` settings. For the utility model, **Auto** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
 
-The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured; selecting **No fallback model** clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
+If model discovery fails, the Defaults card shows the reported error with **Retry**. Your saved model choices remain available while you retry.
+
+The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured. A count below the label shows those additional fallbacks. When there is more than one fallback, **No fallback model** shows how many models it will remove when it clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
 
 ## Plugin-owned provider behavior
 

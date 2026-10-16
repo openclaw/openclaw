@@ -1,9 +1,9 @@
 ---
-summary: "Routine local test order, the core test commands, and the local PR gate"
+summary: "Focused local proof, core test commands, and optional full local runs"
 title: "Run tests locally"
 read_when:
   - You are running or fixing tests on your own machine
-  - You need the local land and gate command list
+  - You need focused local proof or an explicitly needed full local run
 ---
 
 ## Routine local order
@@ -91,8 +91,9 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
-runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
+Local tests and `pnpm dev` default to the pinned OpenClaw Bun fork. Node 24.16+
+or Node 26.1+ is still required for orchestration and build preparation. Older
+Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 To compare the same Vitest selection on Node and Bun, use the existing wrapper:
 
@@ -101,12 +102,28 @@ OPENCLAW_VITEST_RUNTIME=node pnpm test <path-or-filter>
 OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
 ```
 
-Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
-for comparable results. This selects the
+The runner automatically stages the build pinned by `scripts/lib/openclaw-bun.json`
+using `scripts/stage-openclaw-bun.sh`, which verifies the release checksums. It
+reuses a verified per-user cache at
+`${XDG_CACHE_HOME:-~/.cache}/openclaw/bun/<tag>/<platform>-<arch>`.
+Set `OPENCLAW_BUN_PATH` to override the Bun executable explicitly.
+The runtime selection applies to the
 actual Vitest process and workers while retaining Node for orchestration and
 compiler preparation. Source-runner CLI fixtures also use the selected runtime
 after Node completes build preparation. This does not use Bun's native test runner.
-`bun run` alone does not select Bun for tests. Node remains the local default.
+Set `OPENCLAW_VITEST_RUNTIME=node` to force Node, or `bun` to require Bun.
+Without an explicit selection, CI retains Node (`CI` is nonempty and not `false`).
+When CI selects Bun, the runner uses the workflow-provisioned `bun` on PATH without
+staging a local cache, unless `OPENCLAW_BUN_PATH` explicitly overrides it.
+Windows and platforms without a pinned artifact fall back to Node, as do offline
+machines without a usable cached fork. The runner prints one notice with the
+reason; explicitly selecting Node silences it. An explicit Bun selection fails
+if its executable is unavailable.
+On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
+Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
+For an x64 Bun under Rosetta, build the pinned library with
+`scripts/build-mac-sqlite.sh universal <dir>` and set
+`OPENCLAW_SQLITE_LIBRARY=<dir>/lib/libsqlite3.dylib`.
 
 For the CI Control UI comparison, run the full selection on Node followed by Bun:
 
@@ -140,7 +157,7 @@ Isolated native worker and subprocess fixtures use `mockNativeModuleExports` fro
 The mocks live until that child exits. Capture original call-through functions before
 registering replacements because Bun updates existing module namespace bindings.
 
-The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
+The test toolchain pins stable Vitest `5.0.3`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.
@@ -344,9 +361,15 @@ Tests that discover real bundled provider runtimes declare that prerequisite in
 `scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
 selection. Local runners and CI prepare those artifacts before admitting workers.
 
-## Local PR gate
+<a id="local-pr-gate" />
 
-For local PR land/gate checks, run:
+## Full local run (only when explicitly needed)
+
+PR CI is the broad gate. Before opening a ready PR, run focused tests for touched
+code and targeted typecheck, lint, and format checks. Do not run the full local
+suite to diagnose a failed PR CI run; use `pnpm test:ci-failed <pr>` instead.
+
+The full local commands remain available for an explicitly needed investigation:
 
 - `pnpm check:changed`
 - `pnpm check`
@@ -361,7 +384,14 @@ their candidate's fork from the captured main snapshot, so inherited main
 changes retain their allowance even when the shared `origin/main` ref is stale.
 Other check stages still run normally.
 
-If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
+If an explicitly requested full local run fails, isolate the failed tests with
+`pnpm test <path/to/test>` and investigate the owner; a passing replay does not
+prove a repair. For a PR CI failure, read its published classification, fix new
+failures, run `pnpm test:ci-failed <pr> --run` until those pass locally, then push
+once. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+Never rerun CI just to chase green. For memory-constrained hosts explicitly
+running the full local suite:
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`

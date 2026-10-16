@@ -6,8 +6,9 @@ import { createConfigIO } from "../config/io.factory.js";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -20,7 +21,7 @@ import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -254,7 +255,9 @@ describe("runDoctorConfigPreflight", () => {
 
         await expect(runDoctorConfigPreflight(options)).rejects.toThrow(/plugins\.installs/);
         expect(await fs.readFile(configPath, "utf8")).toBe(restored);
-        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({ existing: canonical });
+        expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual({
+          existing: canonical,
+        });
         expect(await fs.readFile(`${configPath}.bak`, "utf8").catch(() => undefined)).toBe(
           backupBefore,
         );
@@ -612,6 +615,10 @@ describe("runDoctorConfigPreflight", () => {
           const scope = {
             agentId: "main",
             env: { ...process.env },
+            storePath: resolveSessionStorePathCore(undefined, {
+              agentId: "main",
+              env: process.env,
+            }),
             sessionKey: "agent:main:historical-directives",
             sessionId: "historical-directives",
           };
@@ -655,7 +662,7 @@ describe("runDoctorConfigPreflight", () => {
 
             expect(readEventJson()).toBe(originalJson);
             // Preserve the same process: readiness must not suppress plain Doctor.
-            const doctor = await prepareDoctorContext(configPath, {
+            await using doctor = await prepareDoctorContext(configPath, {
               options: { nonInteractive: true },
             });
 

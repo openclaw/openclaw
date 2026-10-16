@@ -158,6 +158,24 @@ it("does not reclaim a handoff from a programmatic call without CLI process owne
   ).toBe(false);
 });
 
+it("registered update repair leaves a live current root owner alone", async () => {
+  const acquired = fixture.store.acquire(state.root, "current-update", { kind: "update" });
+  expect(acquired.kind).toBe("acquired");
+  const retained = fixture.store.read(state.root);
+
+  await withCliProcessScope(() =>
+    runRegisteredCli({
+      register: registerUpdateCli,
+      argv: ["update", "repair", "--yes", "--no-restart", "--json"],
+    }),
+  );
+
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
+  expect(fixture.store.read(state.root)).toEqual(retained);
+});
+
 function seedLegacyLineage(nested = false, bound = false) {
   const previous = fixture.seed({ ageMs: 13 * 60 * 60_000 });
   const key = `${state.root}/.openclaw-update-child-01234567-89ab-cdef-0123-456789abcdef-lineage-${"a".repeat(64)}`;

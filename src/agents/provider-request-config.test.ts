@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import {
   applyPreparedRuntimeAuthToModel,
   attachModelProviderRequestRouteFacts,
@@ -16,7 +17,6 @@ import {
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "./provider-request-config.js";
-import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 function buildProviderMetadataOwners(
@@ -261,6 +261,14 @@ describe("provider request config", () => {
         },
       ),
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
+  });
+
+  it.each<NonNullable<ConfiguredProviderRequest["auth"]>>([
+    { mode: "authorization-bearer", token: "" },
+    { mode: "authorization-bearer", token: "   " },
+    { mode: "header", headerName: "X-Server-Key", value: "" },
+  ])("rejects empty explicitly selected auth instead of silently dropping it: %j", (auth) => {
+    expect(() => sanitizeConfiguredModelProviderRequest({ auth })).toThrow(/request.auth/);
   });
 
   it("sanitizes configured request overrides into runtime transport overrides", () => {

@@ -82,8 +82,8 @@ esac
   const native = join(stage, "native");
   mkdirSync(wrapper);
   mkdirSync(native);
-  writeFileSync(join(wrapper, "package.json"), '{"version":"12.7.0"}');
-  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.7.0\n");
+  writeFileSync(join(wrapper, "package.json"), '{"version":"12.10.1"}');
+  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.10.1\n");
   function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
@@ -93,8 +93,8 @@ esac
   }
   const hashes = {
     node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
-    wrapper: archive("wrapper", "pnpm-12.7.0.tgz", "sha512"),
-    native: archive("native", "exe.linux-x64-12.7.0.tgz", "sha512"),
+    wrapper: archive("wrapper", "pnpm-12.10.1.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.10.1.tgz", "sha512"),
   };
   const productionSpec = source.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
   const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
@@ -146,7 +146,7 @@ fi
     .replace(productionSpec, spec)
     .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
     .replaceAll(
-      "8065bb349166af7dc827a299bbed70f74281b45c4c55fffe0141bc68a269cb8bfa7519d4779bfce0f707d9e8d4bb1a7f7e6df3334218ea1f4bc1c60fbbd77176",
+      "641c95d034605b319a0d28d3e5d75104049dc33fabfea3cc621ee8e911a63d08ed4463456d297de316360dc00cf26a82399254503b405d0fb0a415dc7692a592",
       hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
@@ -227,8 +227,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     for (let run = 0; run < 2; run++) {
       mkdirSync(join(f.install, "bin"), { recursive: true });
       executable(join(f.install, "bin", "node"), "#!/bin/sh\nexit 91\n");
-      mkdirSync(join(f.corepack, "v1", "pnpm", "12.7.0"), { recursive: true });
-      writeFileSync(join(f.corepack, "v1", "pnpm", "12.7.0", ".corepack"), '{"bin":"bad"}');
+      mkdirSync(join(f.corepack, "v1", "pnpm", "12.10.1"), { recursive: true });
+      writeFileSync(join(f.corepack, "v1", "pnpm", "12.10.1", ".corepack"), '{"bin":"bad"}');
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
     }
@@ -257,8 +257,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
         kind === "node"
           ? "node-v24.21.0-linux-x64.tar.xz"
           : kind === "wrapper"
-            ? "pnpm-12.7.0.tgz"
-            : "exe.linux-x64-12.7.0.tgz";
+            ? "pnpm-12.10.1.tgz"
+            : "exe.linux-x64-12.10.1.tgz";
       const bytes = Buffer.from("substituted archive");
       writeFileSync(join(f.image, archive), bytes);
       writeFileSync(

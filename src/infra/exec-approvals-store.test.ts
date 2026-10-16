@@ -10,6 +10,7 @@ import {
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -20,6 +21,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -28,6 +30,10 @@ import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
 } from "./exec-approvals-migration-gate.js";
+import {
+  execApprovalsPublication,
+  type ExecApprovalsPublicationValue,
+} from "./exec-approvals-publication.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -40,7 +46,6 @@ import {
   loadExecApprovals,
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
-  prepareExecApprovalsCurrentRead,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
@@ -181,28 +186,39 @@ describe("exec approvals SQLite store", () => {
 
   it("rolls back a policy replacement when current authority ends before commit", async () => {
     const before = await ensureExecApprovalsSnapshot();
-    let current = true;
-    let commitObserved = false;
-    workerProbe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "commit") {
-        commitObserved = true;
-        current = false;
+    const unknown = vi.fn();
+    const release = execApprovalsPublication.subscribeFacts((change) => {
+      if (change.kind === "unknown") {
+        unknown();
       }
-      admit(request, grant);
     });
-    await expect(
-      updateExecApprovals({
-        baseHash: before.hash,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("request authority ended");
-          }
-        },
-        update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
-      }),
-    ).rejects.toThrow("request authority ended");
-    expect(commitObserved).toBe(true);
-    expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
+    try {
+      let current = true;
+      let commitObserved = false;
+      workerProbe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === "commit") {
+          commitObserved = true;
+          current = false;
+        }
+        admit(request, grant);
+      });
+      await expect(
+        updateExecApprovals({
+          baseHash: before.hash,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("request authority ended");
+            }
+          },
+          update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
+        }),
+      ).rejects.toThrow("request authority ended");
+      expect(commitObserved).toBe(true);
+      expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
+      expect(unknown).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
   });
 
   it("mints one socket token and reuses it on later initialization", async () => {
@@ -351,6 +367,9 @@ describe("exec approvals SQLite store", () => {
                 : "UPDATE agent_deletion_journal SET operation_id = 'replacement' WHERE agent_id = 'removed'",
             )
             .run();
+          if (journal === "missing") {
+            publishAgentDeletionJournalStatus(openOpenClawStateDatabase().db, "removed", "absent");
+          }
         } finally {
           foreign.close();
         }
@@ -539,6 +558,77 @@ describe("exec approvals SQLite store", () => {
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
 
+  it.each(["usage", "one-shot", "allow-always"] as const)(
+    "fences concurrent %s writes only when they can change policy",
+    async (kind) => {
+      const entry = { id: "echo", pattern: "/usr/bin/echo" };
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+      const input: ExecAuthorizationCommitInput = {
+        agentId: "main",
+        matches: [entry],
+        command: "echo before",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "on-miss",
+          allowlistSatisfied: true,
+        },
+      };
+      const assertCurrent = await commitExecAuthorizationLocked(input);
+      const failures: unknown[] = [];
+      const stages: string[] = [];
+      workerProbe.admission(workerAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        stages.push(request.stage);
+        try {
+          assertCurrent();
+        } catch (error) {
+          failures.push(error);
+        }
+      });
+      const requests = [commitExecAuthorizationLocked({ ...input, command: "echo after" })];
+      if (kind !== "usage") {
+        requests.push(
+          commitExecAuthorizationLocked({
+            ...input,
+            authorization: {
+              ...input.authorization,
+              source: "explicit-approval",
+              policySnapshot: createExecApprovalPolicySnapshot({
+                file: loadExecApprovals(),
+                agentId: "main",
+              }),
+            },
+            allowAlwaysDecision:
+              kind === "one-shot"
+                ? { kind: "one-shot", reasons: ["prompt-only"] }
+                : { kind: "exact-command", commandText: "echo approved" },
+            command: "echo after",
+          }),
+        );
+      }
+      const next = await Promise.all(requests);
+      expect(stages).toEqual(["transaction", "commit"]);
+      expect(failures).toEqual(
+        kind === "allow-always"
+          ? [
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+            ]
+          : [],
+      );
+      expect(assertCurrent).not.toThrow();
+      for (const guard of next) {
+        expect(guard).not.toThrow();
+      }
+      expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo after");
+    },
+  );
+
   it("does not batch authorizations across an intervening policy denial", async () => {
     const entry = { id: "echo", pattern: "/usr/bin/echo" };
     saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
@@ -553,9 +643,16 @@ describe("exec approvals SQLite store", () => {
         allowlistSatisfied: true,
       },
     };
-    // Admit the final reader before checking the warmed write path for caller SQL.
-    prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext());
     const sql = observeMainThreadSql();
+    const publications: ExecApprovalsPublicationValue[] = [];
+    const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        const fact = change.receipt.facts.get("current");
+        if (fact?.kind === "postimage") {
+          publications.push(fact.value);
+        }
+      }
+    });
     try {
       const [before, denied, after] = await Promise.allSettled([
         commitExecAuthorizationLocked(input),
@@ -580,8 +677,14 @@ describe("exec approvals SQLite store", () => {
         status: "rejected",
         reason: expect.objectContaining({ message: "Exec approval changed before execution" }),
       });
+      expect(publications.map((publication) => publication.change)).toEqual(["usage", "policy"]);
+      expect(publications[0]?.file.agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe(
+        "echo before",
+      );
+      expect(publications[1]?.file.agents?.["*"]?.security).toBe("deny");
       sql.expectIdle();
     } finally {
+      releaseFacts();
       sql.restore();
     }
     expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo before");

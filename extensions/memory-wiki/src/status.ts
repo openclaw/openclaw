@@ -1,23 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
+import { parseWikiMarkdown, WIKI_PAGE_GROUPS, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
+const STATUS_WARNING_FIXES = {
+  "vault-missing": "Run `openclaw wiki init` to create the vault layout.",
+  "obsidian-cli-missing": "Install the official Obsidian CLI or disable `obsidian.useOfficialCli`.",
+  "bridge-disabled":
+    "Enable `plugins.entries.memory-wiki.config.bridge.enabled` or switch vaultMode away from `bridge`.",
+  "bridge-artifacts-missing":
+    "Use a memory plugin that exports public artifacts, create/import memory artifacts first, or switch the wiki back to isolated mode.",
+  "unsafe-local-disabled":
+    "Enable `unsafeLocal.allowPrivateMemoryCoreAccess` or switch vaultMode away from `unsafe-local`.",
+  "unsafe-local-paths-missing":
+    "Add explicit `unsafeLocal.paths` entries before running unsafe-local imports.",
+  "unsafe-local-without-mode":
+    "Disable private memory-core access unless you explicitly want unsafe-local mode.",
+};
+
 type MemoryWikiStatusWarning = {
-  code:
-    | "vault-missing"
-    | "obsidian-cli-missing"
-    | "bridge-disabled"
-    | "bridge-artifacts-missing"
-    | "unsafe-local-disabled"
-    | "unsafe-local-paths-missing"
-    | "unsafe-local-without-mode";
+  code: keyof typeof STATUS_WARNING_FIXES;
   message: string;
 };
 
@@ -53,41 +63,43 @@ function createEmptyVaultCounts() {
 
 async function collectVaultCounts(vaultPath: string) {
   const { pageCounts, sourceCounts } = createEmptyVaultCounts();
-  const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
-  for (const dir of dirs) {
-    for (const relativePath of await listMemoryWikiPagePaths(vaultPath, dir)) {
-      const absolutePath = path.join(vaultPath, relativePath);
-      const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
-      if (raw === null) {
-        continue;
-      }
-      const page = toWikiPageSummary({
-        absolutePath,
-        relativePath,
-        raw,
-      });
-      if (!page) {
-        continue;
-      }
-      pageCounts[page.kind] += 1;
-      if (page.kind !== "source") {
-        continue;
-      }
-      if (page.sourceType === "memory-bridge-events") {
-        sourceCounts.bridgeEvents += 1;
-      } else if (page.sourceType === "memory-bridge") {
-        sourceCounts.bridge += 1;
-      } else if (
-        page.provenanceMode === "unsafe-local" ||
-        page.sourceType === "memory-unsafe-local"
-      ) {
-        sourceCounts.unsafeLocal += 1;
-      } else if (!page.sourceType) {
-        sourceCounts.native += 1;
-      } else {
-        sourceCounts.other += 1;
-      }
-    }
+  for (const { dir, kind } of WIKI_PAGE_GROUPS) {
+    await runTasksWithConcurrency({
+      tasks: (await listMemoryWikiPagePaths(vaultPath, dir)).map((relativePath) => async () => {
+        const raw = await fs.readFile(path.join(vaultPath, relativePath), "utf8").catch(() => null);
+        if (raw === null) {
+          return;
+        }
+        let frontmatter: Record<string, unknown>;
+        try {
+          frontmatter = parseWikiMarkdown(raw).frontmatter;
+        } catch {
+          return;
+        }
+        pageCounts[kind] += 1;
+        if (kind !== "source") {
+          return;
+        }
+        const sourceType = normalizeOptionalString(frontmatter.sourceType);
+        if (sourceType === "memory-bridge-events") {
+          sourceCounts.bridgeEvents += 1;
+        } else if (sourceType === "memory-bridge") {
+          sourceCounts.bridge += 1;
+        } else if (
+          normalizeOptionalString(frontmatter.provenanceMode) === "unsafe-local" ||
+          sourceType === "memory-unsafe-local"
+        ) {
+          sourceCounts.unsafeLocal += 1;
+        } else if (!sourceType) {
+          sourceCounts.native += 1;
+        } else {
+          sourceCounts.other += 1;
+        }
+      }),
+      limit: 16,
+      errorMode: "stop",
+      throwOnError: true,
+    });
   }
   return { pageCounts, sourceCounts };
 }
@@ -98,70 +110,46 @@ function buildWarnings(params: {
   vaultExists: boolean;
   obsidianCommand: string | null;
 }): MemoryWikiStatusWarning[] {
-  const warnings: MemoryWikiStatusWarning[] = [];
-  if (!params.vaultExists) {
-    warnings.push({
-      code: "vault-missing",
-      message: "Wiki vault has not been initialized yet.",
-    });
-  }
-  if (
-    params.config.obsidian.enabled &&
-    params.config.obsidian.useOfficialCli &&
-    !params.obsidianCommand
-  ) {
-    warnings.push({
-      code: "obsidian-cli-missing",
-      message: "Obsidian CLI is enabled in config but `obsidian` is not available on PATH.",
-    });
-  }
-  if (params.config.vaultMode === "bridge" && !params.config.bridge.enabled) {
-    warnings.push({
-      code: "bridge-disabled",
-      message: "vaultMode is `bridge` but bridge.enabled is false.",
-    });
-  }
-  if (
-    params.config.vaultMode === "bridge" &&
-    params.config.bridge.enabled &&
-    params.config.bridge.readMemoryArtifacts &&
-    params.bridgePublicArtifactCount === 0
-  ) {
-    warnings.push({
-      code: "bridge-artifacts-missing",
-      message:
-        "Bridge mode is enabled but the active memory plugin is not exporting any public memory artifacts yet.",
-    });
-  }
-  if (
-    params.config.vaultMode === "unsafe-local" &&
-    !params.config.unsafeLocal.allowPrivateMemoryCoreAccess
-  ) {
-    warnings.push({
-      code: "unsafe-local-disabled",
-      message: "vaultMode is `unsafe-local` but private memory-core access is disabled.",
-    });
-  }
-  if (
-    params.config.vaultMode === "unsafe-local" &&
-    params.config.unsafeLocal.allowPrivateMemoryCoreAccess &&
-    params.config.unsafeLocal.paths.length === 0
-  ) {
-    warnings.push({
-      code: "unsafe-local-paths-missing",
-      message: "unsafe-local access is enabled but no private paths are configured.",
-    });
-  }
-  if (
-    params.config.vaultMode !== "unsafe-local" &&
-    params.config.unsafeLocal.allowPrivateMemoryCoreAccess
-  ) {
-    warnings.push({
-      code: "unsafe-local-without-mode",
-      message: "Private memory-core access is enabled outside unsafe-local mode.",
-    });
-  }
-  return warnings;
+  const { config, bridgePublicArtifactCount, vaultExists, obsidianCommand } = params;
+  const rules: Array<[boolean, MemoryWikiStatusWarning["code"], string]> = [
+    [!vaultExists, "vault-missing", "Wiki vault has not been initialized yet."],
+    [
+      config.obsidian.enabled && config.obsidian.useOfficialCli && !obsidianCommand,
+      "obsidian-cli-missing",
+      "Obsidian CLI is enabled in config but `obsidian` is not available on PATH.",
+    ],
+    [
+      config.vaultMode === "bridge" && !config.bridge.enabled,
+      "bridge-disabled",
+      "vaultMode is `bridge` but bridge.enabled is false.",
+    ],
+    [
+      config.vaultMode === "bridge" &&
+        config.bridge.enabled &&
+        config.bridge.readMemoryArtifacts &&
+        bridgePublicArtifactCount === 0,
+      "bridge-artifacts-missing",
+      "Bridge mode is enabled but the active memory plugin is not exporting any public memory artifacts yet.",
+    ],
+    [
+      config.vaultMode === "unsafe-local" && !config.unsafeLocal.allowPrivateMemoryCoreAccess,
+      "unsafe-local-disabled",
+      "vaultMode is `unsafe-local` but private memory-core access is disabled.",
+    ],
+    [
+      config.vaultMode === "unsafe-local" &&
+        config.unsafeLocal.allowPrivateMemoryCoreAccess &&
+        config.unsafeLocal.paths.length === 0,
+      "unsafe-local-paths-missing",
+      "unsafe-local access is enabled but no private paths are configured.",
+    ],
+    [
+      config.vaultMode !== "unsafe-local" && config.unsafeLocal.allowPrivateMemoryCoreAccess,
+      "unsafe-local-without-mode",
+      "Private memory-core access is enabled outside unsafe-local mode.",
+    ],
+  ];
+  return rules.flatMap(([matches, code, message]) => (matches ? [{ code, message }] : []));
 }
 
 export async function resolveMemoryWikiStatus(
@@ -222,20 +210,9 @@ export async function resolveMemoryWikiStatus(
 export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   const fixes = status.warnings.map((warning) => ({
     code: warning.code,
-    message:
-      warning.code === "vault-missing"
-        ? "Run `openclaw wiki init` to create the vault layout."
-        : warning.code === "obsidian-cli-missing"
-          ? "Install the official Obsidian CLI or disable `obsidian.useOfficialCli`."
-          : warning.code === "bridge-disabled"
-            ? "Enable `plugins.entries.memory-wiki.config.bridge.enabled` or switch vaultMode away from `bridge`."
-            : warning.code === "bridge-artifacts-missing"
-              ? "Use a memory plugin that exports public artifacts, create/import memory artifacts first, or switch the wiki back to isolated mode."
-              : warning.code === "unsafe-local-disabled"
-                ? "Enable `unsafeLocal.allowPrivateMemoryCoreAccess` or switch vaultMode away from `unsafe-local`."
-                : warning.code === "unsafe-local-paths-missing"
-                  ? "Add explicit `unsafeLocal.paths` entries before running unsafe-local imports."
-                  : "Disable private memory-core access unless you explicitly want unsafe-local mode.",
+    message: Object.hasOwn(STATUS_WARNING_FIXES, warning.code)
+      ? STATUS_WARNING_FIXES[warning.code]
+      : STATUS_WARNING_FIXES["unsafe-local-without-mode"],
   }));
   return {
     healthy: status.warnings.length === 0,
@@ -252,7 +229,7 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
     `Render mode: ${status.renderMode}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
-    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${typeof status.bridgePublicArtifactCount === "number" ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
+    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
     `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports`,
     `Source provenance: ${status.sourceCounts.native} native, ${status.sourceCounts.bridge} bridge, ${status.sourceCounts.bridgeEvents} bridge-events, ${status.sourceCounts.unsafeLocal} unsafe-local, ${status.sourceCounts.other} other`,

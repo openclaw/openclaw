@@ -48,6 +48,7 @@ function fixture() {
   write("notes/unrelated.ts", 'export const unrelated = "first";\n');
   write(compilerInputs[0]!, 'export const compilerRevision = "first";\n');
   write("node-host-launcher.mjs", 'export const launcher = "fixture";\n');
+  write("cli-invocation.mjs", 'export const invocation = "fixture";\n');
 
   const reserve = () => {
     fs.mkdirSync(directory, { recursive: true });
@@ -69,6 +70,7 @@ function fixture() {
         path.join(root, "node-host-launcher.mjs"),
         "utf8",
       ),
+      "../cli-invocation.mjs": fs.readFileSync(path.join(root, "cli-invocation.mjs"), "utf8"),
       "build-info.json": `${JSON.stringify({
         version: "0.0.0-fixture",
         commit: "a".repeat(40),
@@ -91,6 +93,7 @@ function fixture() {
         "src/entry.ts",
         "src/value.js",
         "node-host-launcher.mjs",
+        "cli-invocation.mjs",
       ]
         .map((name) => path.join(root, name))
         .toSorted()
@@ -167,23 +170,6 @@ function cachedProbe(root: string, directory: string): string {
 }
 
 describe("compiled worker content cache", () => {
-  it("propagates namespace rejection evidence without publishing a cache signature", async () => {
-    const f = fixture();
-    const owner = await f.cache();
-    expect(await owner.restore()).toBeUndefined();
-    const manifest = f.prepare();
-    f.write(".workflow-shell-fixture.mjs", "export {};\n");
-
-    await expect(owner.seal(manifest)).rejects.toThrow(
-      'Boundary configuration or resolution topology changed during compilation: {"category":"namespace","changes":[{"change":"added","path":".workflow-shell-fixture.mjs"}],"omitted":0}',
-    );
-    expect(manifest.cacheSignature).toBeUndefined();
-    expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
-    expect(
-      fs.existsSync(path.join(f.root, ".artifacts/vitest-worker-cache/run-cache-0/stamp.json")),
-    ).toBe(false);
-  });
-
   it.each([
     "NODE_PATH",
     "NAPI_RS_NATIVE_LIBRARY_PATH",

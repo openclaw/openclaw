@@ -22,6 +22,8 @@ export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  /** Worker provider ids offering config suggestions through worker-profile-api. */
+  "workerProfileSuggestions",
   "storageProviders",
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   "usageProviders",

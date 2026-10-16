@@ -23,6 +23,7 @@ export {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
+  isOpenClawDatabaseMaintenanceWorkerAccess,
   observeOpenClawDatabaseMaintenanceResource,
   runOutsideOpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-maintenance-context.js";
@@ -47,6 +48,8 @@ export type OpenClawStateDatabaseReadAdmission = {
 };
 export type OpenClawStateIntegrityAdmission = {
   identity: DatabasePathIdentity;
+  /** Physical-owner lifetime survives renewable schema and integrity proof. */
+  readonly lifetime: { readonly revision: SharedArrayBuffer; readonly epoch: bigint };
   readonly revision: SharedArrayBuffer;
   readonly epoch: bigint;
   readonly proof: SharedArrayBuffer;
@@ -66,7 +69,10 @@ type IdentityRecord = {
 };
 type ReadSeal = { record?: IdentityRecord };
 type CloseAttempt = {
-  seal: ReadSeal;
+  /** Absent after failed drainage released reads; the next attempt seals again. */
+  seal?: ReadSeal;
+  /** A published replacement keeps reads sealed until this record's native handle retires. */
+  superseded?: true;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
   queue?: Set<OpenClawStateDatabaseAsyncResource>;
@@ -116,7 +122,16 @@ export function createOpenClawDatabaseMaintenanceScope(
         if (access === "read") {
           return;
         }
-        throw new Error("Database maintenance authority check cannot admit a nested effect");
+        // Function names identify the admission without exposing stack paths or arguments.
+        const callers = new Error().stack
+          ?.split("\n")
+          .slice(2, 6)
+          .flatMap((line) => line.match(/^\s+at (?:async )?([\w$.]+) \(/u)?.[1] ?? [])
+          .join(" <- ")
+          .slice(0, 160);
+        throw new Error(
+          `Database maintenance authority check cannot admit a nested effect (access=effect; caller=${callers || "unknown"})`,
+        );
       }
       checkingOwner = true;
       try {
@@ -144,6 +159,17 @@ export function createOpenClawDatabaseMaintenanceScope(
         assertDatabaseAccess(databasePath);
       } else if (parent) {
         parent.assertDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
+    },
+    assertCleanupDatabaseAccess(databasePath) {
+      assertOpen();
+      // Revoked operation authority cannot strand resources under the same physical owner.
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertCleanupDatabaseAccess(databasePath);
       } else {
         throw new Error("Database maintenance scope does not own this database");
       }
@@ -274,7 +300,21 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const generationFor = (identity: DatabasePathIdentity) => {
     const revision = new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT);
-    return { integrity: { identity, revision, epoch: 0n, proof: proofFor() } };
+    const lifetime = {
+      revision: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+      epoch: 0n,
+    };
+    return { integrity: { identity, lifetime, revision, epoch: 0n, proof: proofFor() } };
+  };
+
+  const publishCreatedIdentity = (record: IdentityRecord, identity: DatabasePathIdentity) => {
+    // Pre-creation integrity cannot certify the newly bound physical file.
+    Atomics.add(new BigInt64Array(record.generation.integrity.revision), 0, 1n);
+    Atomics.add(new BigInt64Array(record.generation.integrity.lifetime.revision), 0, 1n);
+    records.delete(record.identity.key);
+    record.identity = identity;
+    record.generation.integrity.identity = identity;
+    records.set(identity.key, record);
   };
 
   const known = (pathname: string) =>
@@ -307,6 +347,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     }
     return false;
   };
+  // A failed path close keeps custody after releasing reads, so its retry still
+  // targets the identity whose native handle and resources it failed to retire.
+  const hasCloseCustody = (record: IdentityRecord) => isSealed(record) || attempts.has(record);
   const assertOpen = (record: IdentityRecord) => {
     if (isSealed(record)) {
       throw new StateDatabaseReadAdmissionInvalidatedError(
@@ -316,7 +359,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
     const record = records.get(identity.key);
-    if (!record || !identity.key.startsWith("file:") || isSealed(record)) {
+    if (!record || !identity.key.startsWith("file:") || hasCloseCustody(record)) {
       return record;
     }
     // Cold binding retires vanished paths even when another hardlink keeps the file alive.
@@ -370,10 +413,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       });
       if (record) {
-        records.delete(record.identity.key);
-        record.identity = identity;
-        record.generation.integrity.identity = identity;
-        records.set(identity.key, record);
+        publishCreatedIdentity(record, identity);
       }
     }
     if (!record) {
@@ -402,6 +442,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
       Atomics.store(new BigInt64Array(current.generation.integrity.revision), 0, -1n);
+      Atomics.store(new BigInt64Array(current.generation.integrity.lifetime.revision), 0, -1n);
       current.generation = generationFor(current.identity);
       current.admissions.clear();
     }
@@ -412,8 +453,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     seals.add(held);
     return held;
   };
+  const release = (attempt: CloseAttempt) => {
+    if (attempt.seal) {
+      seals.delete(attempt.seal);
+      attempt.seal = undefined;
+    }
+  };
   const forget = (record: IdentityRecord) => {
-    if (!isSealed(record) && records.get(record.identity.key) === record) {
+    if (!hasCloseCustody(record) && records.get(record.identity.key) === record) {
       records.delete(record.identity.key);
       for (const pathname of record.paths) {
         if (recordsByPath.get(pathname) === record) {
@@ -451,10 +498,12 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         admission.assertCurrent();
         const current = generation.integrity;
         const epoch = Atomics.load(new BigInt64Array(current.revision), 0);
-        if (epoch !== current.epoch) {
+        const lifetimeEpoch = Atomics.load(new BigInt64Array(current.lifetime.revision), 0);
+        if (epoch !== current.epoch || lifetimeEpoch !== current.lifetime.epoch) {
           generation.integrity = {
             ...current,
             identity: record.identity,
+            lifetime: { revision: current.lifetime.revision, epoch: lifetimeEpoch },
             epoch,
             proof: proofFor(),
           };
@@ -501,13 +550,18 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
-          records.delete(previous.identity.key);
-          previous.identity = identity;
-          previous.generation.integrity.identity = identity;
-          records.set(identity.key, previous);
+          publishCreatedIdentity(previous, identity);
           record = previous;
         } else {
-          invalidate(previous);
+          const failed = attempts.get(previous);
+          if (failed) {
+            // The replaced file still has unretired native custody. Its path stays
+            // bound to that record, so reads there wait for the close retry.
+            failed.superseded = true;
+            failed.seal ??= seal(previous);
+          } else {
+            invalidate(previous);
+          }
           forget(previous);
         }
       }
@@ -530,7 +584,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         }
       }
     },
-    register(resource: OpenClawStateDatabaseAsyncResource): () => void {
+    register(this: void, resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
       for (const attempt of attempts.values()) {
         attempt.queue?.add(resource);
@@ -579,9 +633,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         return attempt.pending;
       }
       if (!attempt) {
-        attempt = { seal: seal(record), retained: new Set() };
+        attempt = { retained: new Set() };
         attempts.set(record, attempt);
       }
+      // A retry after failed drainage seals again before draining: invalidation
+      // retires admissions captured while reads were open, and the drain below
+      // settles resources those readers entered.
+      attempt.seal ??= seal(record);
       const current = attempt;
       const pending = tail
         .then(async () => {
@@ -621,16 +679,21 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
               }),
             );
           }
+          if (errors.length && !current.superseded) {
+            // Native handles were not retired, so the database stays live and
+            // reads can resume. Failed resources stay retained for the retry.
+            release(current);
+          }
           throwSqliteLifecycleErrors(errors, "OpenClaw state resource drainage failed");
           const retired = await retireNative(record?.identity);
           attempts.delete(record);
-          seals.delete(current.seal);
+          release(current);
           if (record === undefined) {
             // A successful whole-cache retry also discharges prior failed path closes.
             for (const [key, entry] of attempts) {
               if (!entry.pending) {
                 attempts.delete(key);
-                seals.delete(entry.seal);
+                release(entry);
               }
             }
             for (const entry of records.values()) {
@@ -650,7 +713,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         () => undefined,
       );
       void pending.catch(() => {
-        // Keep the seal and failed resource custody, while allowing an explicit retry.
+        // Failed native retirement keeps its seal; failed drainage released it above.
+        // Both keep failed resource custody for an explicit retry.
         current.pending = undefined;
       });
       return pending;

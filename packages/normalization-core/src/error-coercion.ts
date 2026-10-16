@@ -1,8 +1,7 @@
-// Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
-// owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
+// Structural formatting stays policy-free; diagnostic adapters supply their redaction policy.
 export type FormatErrorMessageOptions = {
   includeCode?: boolean;
-  redact: (text: string) => string;
+  redact?: (text: string) => string;
 };
 
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
@@ -145,8 +144,11 @@ export function readErrorCauses(current: Record<string, unknown>): unknown[] {
   ];
 }
 
-/** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
-export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
+/** Formats unknown errors with cause/aggregate details and optional diagnostic redaction. */
+export function formatErrorMessage(
+  value: unknown,
+  options: FormatErrorMessageOptions = {},
+): string {
   let formatted: string;
   if (isErrorObject(value)) {
     formatted = readErrorText(value, "message") || readErrorText(value, "name") || "Error";
@@ -187,7 +189,28 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
   } else {
     formatted = formatStatusAndCode(value) ?? stringifyUnknown(value);
   }
-  return options.redact(formatted);
+  return options.redact ? options.redact(formatted) : formatted;
+}
+
+/**
+ * Formats an error's stack so it always names the error. Bun can materialize
+ * `stack` during garbage collection with a bare `Error` header, dropping the
+ * message that V8-style stacks carry.
+ */
+export function formatErrorStackWithMessage(error: Error): string {
+  const name = readErrorText(error, "name") || "Error";
+  const message = readErrorText(error, "message") ?? "";
+  const stack = readProperty(error, "stack");
+  if (typeof stack !== "string" || !stack) {
+    return message || name;
+  }
+  if (!message || stack.includes(message)) {
+    return stack;
+  }
+  const header = `${name}: ${message}`;
+  const lineEnd = stack.indexOf("\n");
+  const firstLine = lineEnd < 0 ? stack : stack.slice(0, lineEnd);
+  return firstLine === name ? header + stack.slice(firstLine.length) : `${header}\n${stack}`;
 }
 
 /**

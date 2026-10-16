@@ -8,8 +8,9 @@ import * as toast from "../lib/toast.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 const people: UsersMentionableResult = {
   users: [
@@ -470,21 +471,28 @@ describe("command palette people mentions", () => {
         f.palette.remove();
         f.provider.append(f.palette);
       } else if (change === "destination") {
+        f.palette.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+        await waitForSolid(() =>
+          expect(
+            f.palette.querySelector(".palette-session-settings")?.matches(":popover-open"),
+          ).toBe(true),
+        );
         const agent = f.palette.querySelector("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");
-        const reviewer = agent.querySelector('wa-dropdown-item[aria-label="Reviewer"]')!;
-        expect(reviewer).not.toBeNull();
-        agent.querySelector("wa-dropdown")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            cancelable: true,
-            detail: { item: reviewer },
-          }),
+        for (const item of agent.querySelectorAll<HTMLElement>("[role='menuitemradio']")) {
+          item.scrollIntoView = vi.fn();
+        }
+        agent.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+        await waitForSolid(() =>
+          expect(agent.querySelector(".agent-select__menu")?.matches(":popover-open")).toBe(true),
         );
-        await f.palette.updateComplete;
-        await agent.updateComplete;
-        expect(agent.value).toBe("reviewer");
+        const reviewer = agent.querySelector<HTMLElement>(
+          '.agent-select__option[aria-label="Reviewer"]',
+        )!;
+        expect(reviewer).not.toBeNull();
+        reviewer.click();
+        await waitForSolid(() => expect(agent.value).toBe("reviewer"));
         expect(f.context.agentSelection.state.selectedId).toBe("main");
         expect(f.menu()).toBeNull();
       } else {

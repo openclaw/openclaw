@@ -8,6 +8,7 @@ import type {
   SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
+  SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SchemaContract } from "../../../../packages/gateway-protocol/src/schema-contract.js";
@@ -36,6 +37,7 @@ import type {
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
+import type { BootRoster } from "./session-boot-roster.ts";
 import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
@@ -121,7 +123,6 @@ export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
 type SessionRowReadOutcome =
   | { status: "current"; row: GatewaySessionRow | null }
-  | { status: "invalidated" }
   | { status: "retired" };
 
 export type SessionRowObservation = {
@@ -228,7 +229,10 @@ export type SessionCapability = {
   /** Advances for every publication, including pending facts outside state. */
   readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
-  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
+  readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached"> & {
+    /** Display-only profile admitted with these rows; never live RPC authority. */
+    profileId?: string | null;
+  };
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   /** Initial routing hints only; cached agent discovery never grants live authority. */
@@ -237,6 +241,7 @@ export type SessionCapability = {
     readonly scope: "per-sender" | "global";
   };
   whenCachedRosterSettled: () => Promise<void>;
+  captureBootRoster: () => BootRoster | null;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
@@ -263,7 +268,6 @@ export type SessionCapability = {
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & {
-      sourceCanonicalListRevision?: number;
       sourceListScope?: SessionListScope;
     },
   ) => boolean | "defaults-only";
@@ -288,6 +292,8 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
+  /** Roster activity lasts until the shared run owner settles, including final output delivery. */
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */
@@ -303,7 +309,7 @@ export type SessionCapability = {
     options?: { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  recover: (params: { key: string; agentId?: string }) => Promise<SessionsRecoverResult | null>;
+  recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (
     targets: SessionsPatchManyParams["targets"],
@@ -387,8 +393,6 @@ export type SessionCapability = {
   ) => Promise<SessionsBranchesSwitchResult>;
   /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
   groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
-  /** Generation of the catalog/defaults snapshot used by group-target routes. */
-  groupsGeneration: () => number;
   /** Whether group defaults are current enough for a group-target route. */
   groupsStatus: () => SessionGroupDefaultsStatus;
   /** Invalidates the connection-owned group catalog before an explicit route retry. */

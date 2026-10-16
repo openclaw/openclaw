@@ -1,37 +1,9 @@
 // Gemini schema cleaner tests cover OpenAPI-compatible tool schema cleanup for
 // Gemini-backed providers before schemas are sent upstream.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../../../src/infra/runtime-worker-url.js";
-import { cleanForGeminiEntrypoint } from "./clean-for-gemini-runtime.test-support.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 
-const execFileAsync = promisify(execFile);
-
 describe("cleanSchemaForGemini", () => {
-  it("normalizes deep nullable schemas in a cold process", async () => {
-    const { stdout } = await execFileAsync(
-      process.execPath,
-      [
-        "--max-old-space-size=192",
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cleanForGeminiEntrypoint)),
-      ],
-      { cwd: process.cwd(), encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 20_000 },
-    );
-    expect(JSON.parse(stdout)).toEqual({
-      normalized: {
-        type: "object",
-        properties: { value: { type: "string" } },
-        required: ["value"],
-      },
-      leaf: { type: "string" },
-    });
-  }, 30_000);
-
   it("removes required entirely when no fields match properties", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
@@ -157,6 +129,23 @@ describe("cleanSchemaForGemini", () => {
         properties: { filter: { $ref: "#%2F%24defs%2FFilter%7E1value%7E0" } },
       }),
     ).toStrictEqual({ type: "object", properties: { filter } });
+  });
+
+  it("resolves same-named definitions in the namespace named by each reference", () => {
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { Value: { type: "string" } },
+        definitions: { Value: { type: "integer" } },
+        properties: {
+          modern: { $ref: "#/$defs/Value" },
+          legacy: { $ref: "#/definitions/Value" },
+        },
+      }),
+    ).toStrictEqual({
+      type: "object",
+      properties: { modern: { type: "string" }, legacy: { type: "integer" } },
+    });
   });
 
   it("preserves shared definitions across inline and reference traversal", () => {

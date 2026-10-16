@@ -146,29 +146,6 @@ describe("prepared model catalog builder", () => {
     expect(snapshot.authoritative).toBe(true);
   });
 
-  it("projects and sorts one lifecycle registry generation", async () => {
-    const snapshot = await build({
-      entries: [
-        { id: "z", name: "Zulu", provider: "beta", input: ["text"] },
-        {
-          id: "a",
-          name: "Alpha",
-          provider: "alpha",
-          contextWindow: 64_000,
-          thinkingLevelMap: { off: null, max: "max" },
-          input: ["text", "image"],
-        },
-      ],
-    });
-
-    expect(snapshot.entries.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
-      "alpha/a",
-      "beta/z",
-    ]);
-    expect(snapshot.entries[0]?.thinkingLevelMap).toEqual({ off: null, max: "max" });
-    expect(snapshot.routeVariants).toEqual(snapshot.entries);
-  });
-
   it.each(["unowned", "disabled"] as const)(
     "ignores %s provider-alias declarations",
     async (kind) => {

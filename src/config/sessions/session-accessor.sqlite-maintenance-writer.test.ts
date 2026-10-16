@@ -22,8 +22,11 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
+import {
+  commitReplySessionInitialization,
+  loadReplySessionInitializationSnapshot,
+} from "./session-accessor.reset.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   runSqliteSessionDeletionTransaction,
@@ -32,6 +35,7 @@ import {
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,
@@ -183,6 +187,181 @@ it("avoids inventory projection for sequential writes with no retention candidat
   }
 });
 
+it("preserves current provider keys without loading unrelated protection rows", async () => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const expired = now - 40 * 24 * 60 * 60 * 1_000;
+  const { database, storePath } = createPlannerStore(3, expired);
+  const scope = (index: number) => ({ sessionKey: `agent:main:planner-${index}`, storePath });
+  replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: now });
+  let protectedKey = scope(0).sessionKey;
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [protectedKey],
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
+  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
+    sql.includes(
+      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+    )
+      ? "protection"
+      : null,
+  );
+  const maintain = () =>
+    runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
+          forceMaintenance: true,
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+  try {
+    expect(maintain().archivedEntries).toEqual([
+      { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
+    ]);
+    expect(loadSessionEntry(scope(0))).toMatchObject({ sessionId: "planner-0" });
+    expect(loadSessionEntry(scope(0))?.archivedAt).toBeUndefined();
+
+    protectedKey = scope(2).sessionKey;
+    replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: expired });
+    expect(maintain().archivedEntries).toEqual([
+      { sessionKey: scope(0).sessionKey, sessionId: "planner-0" },
+    ]);
+    expect(loadSessionEntry(scope(2))).toMatchObject({
+      sessionId: "planner-2",
+      updatedAt: expired,
+    });
+    expect(loadSessionEntry(scope(2))?.archivedAt).toBeUndefined();
+    expect(inventory.rowCounts.protection).toBe(0);
+  } finally {
+    inventory.restore();
+  }
+});
+
+it.each([false, true])(
+  "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
+  async (forceMaintenance) => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const day = 24 * 60 * 60 * 1_000;
+    const { database, storePath } = createPlannerStore(0);
+    const key = (name: string) => `agent:main:${name}`;
+    const oldModel = key("explicit:model-run-00000000-0000-0000-0000-000000000001");
+    const pressureModel = key("explicit:model-run-00000000-0000-0000-0000-000000000002");
+    const fixtures: Array<[string, number, Partial<SessionEntry>?]> = [
+      [key("normal-expired"), 31],
+      [key("normal-not-due"), 10],
+      [key("dashboard:expired"), 8],
+      [key("dashboard:not-due"), 3],
+      [key("dashboard:recent-activity"), 8, { lastActivityAt: now }],
+      [oldModel, 31],
+      [pressureModel, 10],
+    ];
+    for (const [index, [sessionKey, ageDays, entry]] of fixtures.entries()) {
+      replaceSessionEntrySync(
+        { sessionKey, storePath },
+        { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry },
+      );
+    }
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
+    const candidates = trackSqliteStatementExecutions(database.db, ["candidates"], (sql) =>
+      sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
+    );
+    try {
+      const plan = runOpenClawAgentWriteTransaction(
+        (owner) =>
+          maintenance.applySessionEntryMaintenance(owner, {
+            preservation: preservation.capture,
+            forceMaintenance,
+            archiveDirectory: path.join(path.dirname(database.path), "archives"),
+            maintenanceConfig: {
+              ...resolveMaintenanceConfigFromInput(),
+              maxEntries: forceMaintenance ? 5 : 5_000,
+            },
+            storePath,
+          }),
+        { agentId: "main", path: database.path },
+      );
+      expect(plan.archivedEntries.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
+        key("dashboard:expired"),
+        key("normal-expired"),
+      ]);
+      expect(plan.entryRemovals.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
+        forceMaintenance ? [oldModel, pressureModel] : [oldModel],
+      );
+      for (const name of ["normal-not-due", "dashboard:not-due", "dashboard:recent-activity"]) {
+        const entry = loadSessionEntry({ sessionKey: key(name), storePath });
+        expect(entry).toBeDefined();
+        expect(entry?.archivedAt).toBeUndefined();
+      }
+      expect(
+        loadSessionEntry({ sessionKey: key("dashboard:recent-activity"), storePath }),
+      ).toMatchObject({ lastActivityAt: now });
+      expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
+    } finally {
+      candidates.restore();
+    }
+  },
+);
+
+it("limits protection reads to active ancestry and preserves cyclic or missing parents", async () => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const { database, storePath } = createPlannerStore(32, now);
+  const key = (index: number) => `agent:main:planner-${index}`;
+  const expired = now - 40 * 24 * 60 * 60 * 1_000;
+  // Root 0; child 1 -> 2; cycle 3 <-> 4; child 5 -> absent 32; unrelated victim 6.
+  const parents = [undefined, 2, undefined, 4, 3, 32, undefined];
+  for (const [index, parent] of parents.entries()) {
+    replaceSessionEntrySync(
+      { sessionKey: key(index), storePath },
+      {
+        sessionId: `planner-${index}`,
+        updatedAt: expired,
+        ...(parent === undefined ? {} : { parentSessionKey: key(parent) }),
+      },
+    );
+  }
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
+  const inventory = trackSqliteStatementExecutions(database.db, ["protection"], (sql) =>
+    sql.includes(
+      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+    )
+      ? "protection"
+      : null,
+  );
+  try {
+    const plan = runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          preservation: preservation.capture,
+          activeSessionKeys: [key(0), key(1), key(3), key(5)],
+          archiveDirectory: path.join(path.dirname(database.path), "archives"),
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+          storePath,
+        }),
+      { agentId: "main", path: database.path },
+    );
+    expect(plan.archivedEntries).toEqual([{ sessionKey: key(6), sessionId: "planner-6" }]);
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const entry = loadSessionEntry({ sessionKey: key(index), storePath });
+      expect(entry).toMatchObject({ sessionId: `planner-${index}` });
+      expect(entry?.archivedAt).toBeUndefined();
+    }
+    expect(inventory.rowCounts.protection).toBe(6);
+  } finally {
+    inventory.restore();
+  }
+});
+
 it("resolves protection once before capping aged candidates", async () => {
   const { database, storePath } = createPlannerStore(6, Date.now());
   const key = (index: number) => `agent:main:planner-${index}`;
@@ -257,7 +436,15 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
     ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
     ["started", { sessionStartedAt: now }],
-    ["pinned", { pinnedAt: old }],
+    [
+      "pinned",
+      {
+        pinnedAt: old,
+        sidebarRoot: true,
+        spawnedBy: key("parent"),
+        parentSessionKey: key("parent"),
+      },
+    ],
     ["locked", { modelSelectionLocked: true }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],
@@ -410,108 +597,109 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
   expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
 });
 
-it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
-  const tempDir = sessionDirs.make();
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
-  const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
-  const finalized = createDeferredCore();
-  void finalized.promise.catch(() => {});
-  const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  vi.spyOn(
-    maintenance,
-    "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
-  ).mockImplementation(async (...args) => {
-    const includesLaterEntry = args[1].some((plan) =>
-      plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
-    );
-    try {
-      const result = await finalize(...args);
-      if (includesLaterEntry) {
-        finalized.resolve();
-      }
-      return result;
-    } catch (error) {
-      if (includesLaterEntry) {
-        finalized.reject(error);
-      }
-      throw error;
-    }
-  });
-  replaceSessionEntrySync(
-    { sessionKey: staleSessionKey, storePath },
-    { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
-  );
-
-  const materializationStarted = createDeferredCore();
-  const materializationReleased = createDeferredCore();
-  archiveMaterializationHook.beforeMaterialize = async () => {
-    materializationStarted.resolve();
-    await materializationReleased.promise;
-  };
-
-  const entryWrite = recordInboundSession({
-    storePath,
-    sessionKey: "agent:main:discord:direct:maintenance-ingress",
-    ctx: {
-      Body: "maintenance ingress proof",
-      ChatType: "direct",
-      From: "discord:maintenance-ingress",
-      Provider: "discord",
-      SenderId: "maintenance-ingress",
-      To: "discord:bot",
-    },
-    updateLastRoute: {
-      accountId: "default",
-      channel: "discord",
-      sessionKey: "agent:main:discord:direct:maintenance-ingress",
-      to: "user:maintenance-ingress",
-    },
-    onRecordError(error) {
-      throw error;
-    },
-  });
-  const firstCompleted = await Promise.race([
-    entryWrite.then(() => "entry-write" as const),
-    materializationStarted.promise.then(() => "maintenance" as const),
-  ]);
-  if (firstCompleted === "entry-write") {
-    await materializationStarted.promise;
-    replaceSessionEntrySync(
-      { sessionKey: laterStaleSessionKey, storePath },
-      { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
-    );
-    await recordInboundSession({
-      storePath,
-      sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
-      ctx: {
-        Body: "later maintenance ingress proof",
-        ChatType: "direct",
-        From: "discord:maintenance-ingress-later",
-        Provider: "discord",
-        SenderId: "maintenance-ingress-later",
-        To: "discord:bot",
-      },
-      updateLastRoute: {
-        accountId: "default",
-        channel: "discord",
-        sessionKey: "agent:main:discord:direct:maintenance-ingress-later",
-        to: "user:maintenance-ingress-later",
-      },
-      onRecordError(error) {
+it.for(["channel recording", "reply initialization"] as const)(
+  "does not hold %s behind automatic session maintenance",
+  async (operation, { signal }) => {
+    const tempDir = sessionDirs.make();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
+    const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
+    const finalized = createDeferredCore();
+    void finalized.promise.catch(() => {});
+    const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+    vi.spyOn(
+      maintenance,
+      "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
+    ).mockImplementation(async (...args) => {
+      const includesLaterEntry = args[1].some((plan) =>
+        plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
+      );
+      try {
+        const result = await finalize(...args);
+        if (includesLaterEntry) {
+          finalized.resolve();
+        }
+        return result;
+      } catch (error) {
+        if (includesLaterEntry) {
+          finalized.reject(error);
+        }
         throw error;
-      },
+      }
     });
-  }
-  materializationReleased.resolve();
-  await entryWrite;
+    replaceSessionEntrySync(
+      { sessionKey: staleSessionKey, storePath },
+      { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
+    );
 
-  expect(firstCompleted).toBe("entry-write");
-  // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
-  await racePromiseWithAbortSignal(finalized.promise, signal);
-  expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
-});
+    const materializationStarted = createDeferredCore();
+    const materializationReleased = createDeferredCore();
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      materializationStarted.resolve();
+      await materializationReleased.promise;
+    };
+
+    const write = async (suffix: string) => {
+      const sessionKey = `agent:main:discord:direct:maintenance-ingress${suffix}`;
+      if (operation === "reply initialization") {
+        const target = { agentId: "main", storePath, sessionKey };
+        const snapshot = await loadReplySessionInitializationSnapshot(target);
+        const result = await commitReplySessionInitialization({
+          ...target,
+          activeSessionKey: sessionKey,
+          expectedRevision: snapshot.revision,
+          sessionEntry: { sessionId: `maintenance-ingress${suffix}`, updatedAt: Date.now() },
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+        });
+        expect(result.ok).toBe(true);
+        expect(loadSessionEntry(target)?.sessionId).toBe(`maintenance-ingress${suffix}`);
+        return;
+      }
+      await recordInboundSession({
+        storePath,
+        sessionKey,
+        ctx: {
+          Body: "maintenance ingress proof",
+          ChatType: "direct",
+          From: `discord:maintenance-ingress${suffix}`,
+          Provider: "discord",
+          SenderId: `maintenance-ingress${suffix}`,
+          To: "discord:bot",
+        },
+        updateLastRoute: {
+          accountId: "default",
+          channel: "discord",
+          sessionKey,
+          to: `user:maintenance-ingress${suffix}`,
+        },
+        onRecordError(error) {
+          throw error;
+        },
+      });
+    };
+    const entryWrite = write("");
+    const firstCompleted = await Promise.race([
+      entryWrite.then(() => "entry-write" as const),
+      materializationStarted.promise.then(() => "maintenance" as const),
+    ]);
+    if (firstCompleted === "entry-write") {
+      await materializationStarted.promise;
+      replaceSessionEntrySync(
+        { sessionKey: laterStaleSessionKey, storePath },
+        { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
+      );
+      await write("-later");
+    }
+    materializationReleased.resolve();
+    await entryWrite;
+
+    expect(firstCompleted).toBe("entry-write");
+    // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
+    await racePromiseWithAbortSignal(finalized.promise, signal);
+    expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
+  },
+);
 
 it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
   const { database, storePath } = createPlannerStore(66);
@@ -576,33 +764,4 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
   });
   expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
-});
-
-it("refreshes the retained parent query planner after worker analysis", async () => {
-  const { database } = createPlannerStore(1);
-  database.db.exec(`
-    CREATE TABLE maintenance_planner_probe (a INTEGER, b INTEGER, payload TEXT);
-    CREATE INDEX maintenance_probe_a ON maintenance_planner_probe(a);
-    CREATE INDEX maintenance_probe_b ON maintenance_planner_probe(b);
-    WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
-    INSERT INTO maintenance_planner_probe
-      SELECT CASE WHEN i<=9900 THEN 1 ELSE i-9899 END,
-        CASE WHEN i<=9900 THEN i+1 ELSE 1 END, 'synthetic' FROM n;
-    PRAGMA analysis_limit=0;
-    ANALYZE main;
-  `);
-  const plan = () =>
-    database.db
-      .prepare("EXPLAIN QUERY PLAN SELECT payload FROM maintenance_planner_probe WHERE a=1 AND b=1")
-      .all()
-      .map((row) => row.detail);
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_b")]);
-  database.db.exec("DELETE FROM maintenance_planner_probe WHERE a=1");
-
-  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(
-    { agentId: "main", path: database.path },
-    9900,
-  );
-
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_a")]);
 });

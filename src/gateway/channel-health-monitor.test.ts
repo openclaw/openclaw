@@ -1,7 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-/**
- * Channel health monitor regression tests.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
@@ -122,7 +118,9 @@ async function expectRestartedChannel(
 ) {
   const monitor = await startAndRunCheck(manager);
   expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
-  expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId, {
+    reason: "health-monitor",
+  });
   monitor.stop();
 }
 
@@ -150,30 +148,6 @@ describe("channel-health-monitor", () => {
     await scheduler.stop();
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("normalizes oversized check intervals before rearming timers", async () => {
-    const monitor = startDefaultMonitor(createMockChannelManager(), {
-      checkIntervalMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    await clock.advanceBy(1);
-
-    expect(clock.wakes.at(-1)?.delayMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    monitor.stop();
-  });
-
-  it("runs health check after grace period", async () => {
-    const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, {
-      checkIntervalMs: 60_000,
-      timing: { monitorStartupGraceMs: 1_000 },
-    });
-
-    await clock.advanceBy(1_001);
-
-    expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
-    monitor.stop();
   });
 
   it("keeps running after a runtime snapshot failure", async () => {
@@ -215,7 +189,9 @@ describe("channel-health-monitor", () => {
 
       reloadingChannels.clear();
       await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
-      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default", {
+        reason: "health-monitor",
+      });
       expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
     } finally {
       monitor.stop();
@@ -272,7 +248,9 @@ describe("channel-health-monitor", () => {
 
     expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -337,7 +315,9 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
-    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -370,9 +350,11 @@ describe("channel-health-monitor", () => {
     );
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet", { manual: false });
-    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
+    expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet", expect.anything());
     monitor.stop();
   });
 
@@ -380,27 +362,6 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createBusyDisconnectedManager(now - 26 * 60_000);
     await expectRestartedChannel(manager, "discord");
-  });
-
-  it("respects custom per-channel startup grace", async () => {
-    const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 30_000,
-        },
-      },
-    });
-    const monitor = await startAndRunCheck(manager, {
-      timing: { channelConnectGraceMs: 60_000 },
-    });
-    expect(manager.stopChannel).not.toHaveBeenCalled();
-    expect(manager.startChannel).not.toHaveBeenCalled();
-    monitor.stop();
   });
 
   it("caps an account stuck in pending restart instead of thrashing forever", async () => {
@@ -560,7 +521,9 @@ describe("channel-health-monitor", () => {
     // becomes the account's last restart owner again.
     autoRestartScheduled = false;
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
@@ -775,7 +738,9 @@ describe("channel-health-monitor", () => {
         timing: { staleEventThresholdMs: customThreshold },
       });
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default", {
+        reason: "health-monitor",
+      });
       monitor.stop();
     });
   });

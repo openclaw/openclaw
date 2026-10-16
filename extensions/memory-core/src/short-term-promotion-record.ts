@@ -9,7 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import pLimit from "p-limit";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -186,11 +186,7 @@ export async function recordShortTermRecalls(params: {
     for (const [agentId, sessionIds] of sourceSessions) {
       forgottenByAgent.set(
         agentId,
-        new Set(
-          (await listMemorySessionTombstones({ agentId, sessionIds: [...sessionIds] })).map(
-            (entry) => entry.sessionId,
-          ),
-        ),
+        await findForgottenMemorySessionIds({ agentId, sessionIds: [...sessionIds] }),
       );
     }
     // Revalidate after acquiring the shared mutation lock: a purge can finish

@@ -55,7 +55,66 @@ describe("snapshot write serialization and scheduling", () => {
     vi.useRealTimers();
   });
 
+  it("keeps pairing QR credentials in memory without writing them to the browser cache", async () => {
+    const content = [
+      { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+      {
+        type: "openclaw_pairing_qr",
+        image_url: "data:image/png;base64,cGFpcmluZy1xci1maXh0dXJl",
+        terminalText: "synthetic pairing QR",
+        sensitive: true,
+        expiresAtMs: Date.now() + 60_000,
+      },
+      { type: "image", url: "https://example.com/photo.png" },
+    ];
+    const value = {
+      ...snapshot(),
+      messages: [{ role: "assistant", content, openclawDisplayContent: content }],
+    };
+
+    store.write(sessionKey, value);
+    await store.flush();
+
+    const storedContent = [
+      { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
+      { type: "image", url: "https://example.com/photo.png" },
+    ];
+    expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({
+      snapshot: {
+        ...snapshot(),
+        messages: [
+          { role: "assistant", content: storedContent, openclawDisplayContent: storedContent },
+        ],
+      },
+    });
+    expect(value.messages[0]?.content).toBe(content);
+    expect(value.messages[0]?.openclawDisplayContent).toBe(content);
+    expect(content).toHaveLength(3);
+    expect(content[1]?.image_url).toBe("data:image/png;base64,cGFpcmluZy1xci1maXh0dXJl");
+    expect(content[1]?.terminalText).toBe("synthetic pairing QR");
+  });
+
   it.each([
+    {
+      name: "transcript display facts and progress",
+      value: {
+        ...snapshot(),
+        transcriptMetadata: {
+          key: "agent:main:notes",
+          kind: "direct",
+          status: "done",
+          lastRunId: "run-1",
+          runtimeMs: 65000,
+          participants: [{ identity: { type: "profile", id: "reader" }, label: "Reader" }],
+        },
+        progressCard: {
+          sessionKey: "agent:main:notes",
+          revision: 3,
+          updatedAt: 100,
+          markdown: "Reviewing results",
+        },
+      },
+    },
     {
       name: "nested non-JSON values",
       value: {
@@ -106,7 +165,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 1,
+        projectionVersion: 2,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -187,7 +246,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 1,
+        projectionVersion: 2,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

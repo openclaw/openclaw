@@ -4,6 +4,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import {
+  getServiceInspectionClock,
+  runServiceInspectionGuard,
+  withServiceInspectionBudget,
+} from "./service-inspection-budget.js";
+import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -33,7 +38,6 @@ type SystemdExecResult = ExecResult & {
 
 type SystemdStopInspection = { warn: (message: string) => void };
 // Four possible manager routes share this allowance, including native admission.
-// A single custody database read can already consume the ordinary five-second probe budget.
 const SYSTEMD_STOP_INSPECTION_TIMEOUT_MS = 60_000;
 
 export type SystemdUnitScope = "system" | "user";
@@ -181,12 +185,15 @@ async function execSystemdUserCommand(
   assertCurrent?: () => void,
   stopInspection?: SystemdStopInspection,
 ): Promise<SystemdExecResult> {
-  const deadline = timeoutMs && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+  const now = stopInspection ? () => performance.now() : getServiceInspectionClock();
+  const deadline = timeoutMs && timeoutMs > 0 ? now() + timeoutMs : undefined;
   try {
     const inspect = () =>
       resolveSystemdUserTransport(
         env,
-        stopInspection ? performance.now() + SYSTEMD_STOP_INSPECTION_TIMEOUT_MS : deadline,
+        stopInspection
+          ? getServiceInspectionClock()() + SYSTEMD_STOP_INSPECTION_TIMEOUT_MS
+          : deadline,
         // Stop custody is checked once after routing, immediately before dispatch.
         // Native probe admission retains its inherited update authority checks.
         stopInspection ? undefined : assertCurrent,
@@ -216,8 +223,8 @@ async function execSystemdUserCommand(
                 : undefined,
             DBUS_SESSION_BUS_ADDRESS: transport.address,
           };
-    assertCurrent?.();
-    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+    runServiceInspectionGuard(assertCurrent);
+    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - now());
     if (remaining !== undefined && remaining <= 0) {
       return {
         code: 1,
@@ -231,7 +238,7 @@ async function execSystemdUserCommand(
     return await execSystemdCommand(command, [...scope, ...args], childEnv, remaining);
   } catch (error) {
     assertServiceInspectionFallbackAllowed(error);
-    assertCurrent?.();
+    runServiceInspectionGuard(assertCurrent);
     if (!(error instanceof ServiceInspectionError)) {
       throw error;
     }
@@ -269,7 +276,9 @@ export async function execBusctlUser(
   timeoutMs?: number,
   assertCurrent?: () => void,
 ): Promise<SystemdExecResult> {
-  return await execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent);
+  return await withServiceInspectionBudget(() =>
+    execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent),
+  );
 }
 
 export async function disableSystemdUserUnitForRemoval(
@@ -333,7 +342,9 @@ export async function assertSystemdAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   timeoutMs?: number,
 ) {
-  const res = await execSystemctlUser(env, ["status"], timeoutMs);
+  const res = await withServiceInspectionBudget(() =>
+    execSystemctlUser(env, ["status"], timeoutMs),
+  );
   if (res.code === 0) {
     return;
   }

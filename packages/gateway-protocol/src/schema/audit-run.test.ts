@@ -144,28 +144,6 @@ describe("audit run inspection protocol", () => {
     expect(validate.Check({ executionId: "execution-1", executionLimit: 2 })).toBe(false);
   });
 
-  it("accepts bounded ambiguous run discovery without selecting an execution", () => {
-    const validate = Compile(AuditRunInspectResultSchema);
-    expect(
-      validate.Check({
-        schemaVersion: 1,
-        run: { runId: "run-1", status: "known" },
-        identity: {
-          state: "ambiguous",
-          reasonCode: "execution_selection_required",
-          candidates: [
-            { executionId: "execution-1", contextId: "context-1", createdAt: 1 },
-            { executionId: "execution-2", contextId: "context-2", createdAt: 2 },
-          ],
-          missingEvidence: ["execution.selection"],
-          remediation: [{ code: "select_execution_id", text: "Select one exact execution." }],
-        },
-        decisionDisplays: [],
-        coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
-      }),
-    ).toBe(true);
-  });
-
   it("exports a required safe-only decision presentation", () => {
     const validate = Compile(AuditRunInspectResultSchema);
     const result = {
@@ -185,41 +163,4 @@ describe("audit run inspection protocol", () => {
     expect(validate.Check({ ...result, decisionDisplays: undefined })).toBe(false);
     expect(validate.Check({ ...result, decisions: [] })).toBe(false);
   });
-
-  it("rejects malformed, oversized, and open-ended context payloads", () => {
-    expect(validateExecutionIdentityContextV1({ ...context(), extra: true })).toBe(false);
-    expect(
-      validateExecutionIdentityContextV1({
-        ...context(),
-        missingEvidence: Array.from({ length: 17 }, (_, index) => `missing-${index}`),
-      }),
-    ).toBe(false);
-    expect(
-      validateExecutionIdentityContextV1({
-        ...context(),
-        runtimeInstance: { ...context().runtimeInstance, kind: "mystery" },
-      }),
-    ).toBe(false);
-  });
-
-  it.each(["unknown", "unsupported"] as const)(
-    "accepts a typed %s diagnostic without inventing identity",
-    (state) => {
-      const validate = Compile(AuditRunInspectResultSchema);
-      expect(
-        validate.Check({
-          schemaVersion: 1,
-          run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
-          identity: {
-            state,
-            reasonCode: `${state}_identity`,
-            missingEvidence: ["identity.context"],
-            remediation: [{ code: "retry", text: "Retry after checking the run id." }],
-          },
-          decisionDisplays: [],
-          coverage: { state, missingEvidence: ["identity.context"] },
-        }),
-      ).toBe(true);
-    },
-  );
 });

@@ -6,13 +6,21 @@ import {
 } from "../../test/helpers/promise.js";
 import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import { resolveExecNotificationDefaults } from "../agents/bash-tools.exec-request-preparation.js";
+import { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
+import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
+import { createMessageTool } from "../agents/tools/message-tool-execution.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
@@ -35,6 +43,7 @@ import type { HeartbeatDeps } from "./heartbeat-runner.js";
 import {
   readSessionStoreForTest,
   seedSessionStore,
+  setHeartbeatSilentCompletion,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -65,9 +74,11 @@ it("suppresses a routeless cron reminder on a WebChat session", async () => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetSystemEventsForTest();
   resetHeartbeatEventsForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 type ProjectionScenario = {
@@ -88,6 +99,7 @@ async function withProjectionScenario(
       messages: { visibleReplies: "message_tool" },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = options.sessionKey ?? resolveMainSessionKey(cfg);
     const sessionId = "publication-boundary-session";
     await seedSessionStore(storePath, sessionKey, {
@@ -118,6 +130,7 @@ function runProjectionWake(
   getReplyFromConfig: HeartbeatDeps["getReplyFromConfig"],
   wake: "exec-event" | "manual" | "cron" = "exec-event",
 ) {
+  setRuntimeConfigSnapshot(scenario.cfg);
   return runHeartbeatOnce({
     cfg: scenario.cfg,
     agentId: "main",
@@ -249,6 +262,93 @@ it.for(["route preparation", "model reply"] as const)(
   },
 );
 
+it("keeps an encoded external destination subject to explicit targeting", async () => {
+  await withProjectionScenario(
+    async (scenario) => {
+      enqueueSystemEvent("Exec completed (encoded-route-proof, code 0) :: PRIVATE_OUTPUT", {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: false,
+          summary: "private",
+        }),
+      );
+      const result = await runProjectionWake(scenario, reply);
+      expect(result.status).toBe("ran");
+      expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+      expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+    },
+    { sessionKey: "agent:main:telegram:direct:123456" },
+  );
+});
+
+it("keeps an isolated WebChat completion subject to explicit targeting", async () => {
+  await withProjectionScenario(async (scenario) => {
+    scenario.cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+    const isolatedKey = `${scenario.sessionKey}:heartbeat`;
+    await seedSessionStore(scenario.storePath, isolatedKey, {
+      sessionId: "isolated-source-policy",
+      heartbeatIsolatedBaseSessionKey: scenario.sessionKey,
+    });
+    enqueueSystemEvent("Exec completed (isolated-proof, code 0) :: PRIVATE_OUTPUT", {
+      sessionKey: isolatedKey,
+    });
+    const reply = vi
+      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .mockResolvedValue(
+        createHeartbeatToolResponsePayload({ outcome: "done", notify: false, summary: "private" }),
+      );
+    const result = await runProjectionWake({ ...scenario, sessionKey: isolatedKey }, reply);
+    expect(result.status).toBe("ran");
+    expect(reply).toHaveBeenCalledOnce();
+    expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+    expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+  });
+});
+
+it("preserves explicit target:none before target:last delivers in the same WebChat session", async () => {
+  await withProjectionScenario(async (scenario) => {
+    const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
+    if (!heartbeat) {
+      throw new Error("projection scenario heartbeat is missing");
+    }
+    for (const target of ["none", "last"] as const) {
+      heartbeat.target = target;
+      const marker = `EXPLICIT_TARGET_${target}`;
+      enqueueSystemEvent(`Exec completed (target-proof, code 0) :: ${marker}`, {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: true,
+          summary: "private",
+          notificationText: marker,
+        }),
+      );
+      await runProjectionWake(scenario, reply);
+      expect(reply).toHaveBeenCalledOnce();
+      const context = reply.mock.calls[0]?.[0];
+      const messages = await readProjectionMessages(scenario);
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: target === "none",
+      });
+      if (target === "none") {
+        expect(messages).toEqual([]);
+        expect(context?.Body).toContain("user delivery is disabled");
+      } else {
+        expect(messages).toHaveLength(1);
+        expect(JSON.stringify(messages[0]?.content)).toContain(marker);
+        expect(context?.Body).toContain(marker);
+        expect(context?.Body).not.toContain("user delivery is disabled");
+      }
+    }
+  });
+});
+
 it.each(["automatic", "message_tool"] as const)(
   "settles an unneeded completion silently in %s mode",
   async (visibleReplies) => {
@@ -257,22 +357,28 @@ it.each(["automatic", "message_tool"] as const)(
       enqueueSystemEvent("Exec completed (already-handled, code 0) :: Previously reported output", {
         sessionKey: scenario.sessionKey,
       });
-      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
-        visibleReplies === "automatic"
-          ? { text: "NO_REPLY" }
-          : createHeartbeatToolResponsePayload({
-              outcome: "done",
-              notify: false,
-              summary: "Result already handled; no new user-facing information.",
-            }),
-      );
+      const reply = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockImplementation(async (_ctx, options) => {
+          if (visibleReplies === "automatic") {
+            setHeartbeatSilentCompletion(options);
+            return undefined;
+          }
+          return createHeartbeatToolResponsePayload({
+            outcome: "done",
+            notify: false,
+            summary: "Result already handled; no new user-facing information.",
+          });
+        });
 
       // The runner must offer silence and retire the event without publishing a recap.
       expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
       const prompt = reply.mock.calls[0]?.[0].Body;
       expect(prompt).toContain("duplicate or superseded results");
       expect(prompt).toContain(
-        visibleReplies === "automatic" ? "reply NO_REPLY only" : "notify=false",
+        visibleReplies === "automatic"
+          ? "reply with exactly NO_REPLY as the entire final answer"
+          : "notify=false",
       );
       expect(await readProjectionMessages(scenario)).toEqual([]);
       expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
@@ -350,9 +456,12 @@ it.each(visibleCompletions)(
         expect(reply).toHaveBeenCalledOnce();
         expect(reply.mock.calls[0]?.[0]).toMatchObject({
           From: "heartbeat",
-          To: undefined,
-          OriginatingChannel: undefined,
-          OriginatingTo: undefined,
+          To: publishes ? scenario.sessionKey : undefined,
+          OriginatingChannel: publishes ? "webchat" : undefined,
+          OriginatingTo: publishes ? scenario.sessionKey : undefined,
+        });
+        expect(reply.mock.calls[0]?.[1]).toMatchObject({
+          requireExplicitMessageTarget: !publishes,
         });
         expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
         const messages = await readProjectionMessages(scenario);
@@ -418,6 +527,109 @@ it.each([
     }
   }, options);
 });
+
+it.each([
+  { field: "unchanged", phase: "routing" },
+  { field: "sessionId", phase: "routing" },
+  { field: "lifecycleRevision", phase: "routing" },
+  { field: "sessionId", phase: "tool" },
+  { field: "lifecycleRevision", phase: "tool" },
+] as const)(
+  "fences a targetless source send ($field replacement at $phase)",
+  async ({ field, phase }) => {
+    await withProjectionScenario(async (scenario) => {
+      const marker = "STALE_TOOL_COMPLETION";
+      enqueueSystemEvent(`Exec completed (source-race, code 0) :: ${marker}`, {
+        sessionKey: scenario.sessionKey,
+      });
+      const replaceSource = async () => {
+        if (field === "unchanged") {
+          return;
+        }
+        const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey];
+        await replaceSessionEntry(
+          { agentId: "main", storePath: scenario.storePath, sessionKey: scenario.sessionKey },
+          {
+            ...current,
+            sessionId: scenario.sessionId,
+            updatedAt: Date.now(),
+            [field]: "replacement-generation",
+          },
+        );
+      };
+      const resolveTarget = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
+      vi.spyOn(
+        heartbeatTargets,
+        "resolveHeartbeatDeliveryTargetWithSessionRoute",
+      ).mockImplementationOnce(async (params) => {
+        const delivery = await resolveTarget(params);
+        // Reset can keep the session ID while rotating the admitted lifecycle.
+        if (phase === "routing") {
+          await replaceSource();
+        }
+        return delivery;
+      });
+      let sent = false;
+      const reply = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockImplementation(async (_ctx, options) => {
+          if (phase === "tool") {
+            await replaceSource();
+          }
+          const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey]!;
+          // Model boundary: reply initialization selected B. Exercise the real
+          // targetless tool and canonical sink, not a pre-persisted fake receipt.
+          const message = createMessageTool({
+            config: scenario.cfg,
+            agentId: "main",
+            agentSessionKey: scenario.sessionKey,
+            sessionId: current.sessionId,
+            runId: "source-race-run",
+            currentChannelProvider: "webchat",
+            sourceReplyDeliveryMode: "message_tool_only",
+            requireExplicitTarget: (options as InternalGetReplyOptions)
+              .requireExplicitMessageTarget,
+            preparedMessageToolCatalog: {
+              version: 0,
+              channels: [],
+              getChannel: () => undefined,
+            },
+            getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+            resolveCommandSecretRefsViaGateway: async ({ config }) => ({
+              resolvedConfig: config,
+              diagnostics: [],
+              targetStatesByPath: {},
+              hadUnresolvedTargets: false,
+            }),
+          });
+          const result = await message.execute("source-race-send", {
+            action: "send",
+            message: marker,
+          });
+          sent = true;
+          return buildEmbeddedRunPayloads({
+            assistantTexts: [],
+            lastAssistant: undefined,
+            sessionKey: scenario.sessionKey,
+            agentId: "main",
+            sourceReplyDeliveryMode: "message_tool_only",
+            messagingToolSourceReplyPayloads: [extractMessagingToolSourceReplyPayload(result)!],
+          });
+        });
+      await runProjectionWake(scenario, reply);
+      const targetSessionId = field === "sessionId" ? "replacement-generation" : scenario.sessionId;
+      const messages = await readProjectionMessages({ ...scenario, sessionId: targetSessionId });
+      // The tool receipt owns the single row; heartbeat publication must reuse it.
+      const sourceMessages = messages.filter(
+        (message) => message !== undefined && JSON.stringify(message.content).includes(marker),
+      );
+      expect(sourceMessages, JSON.stringify(getLastHeartbeatEvent())).toHaveLength(
+        field === "unchanged" ? 1 : 0,
+      );
+      expect(sent).toBe(field === "unchanged");
+    });
+  },
+);
 
 it.each(["sessionId", "lifecycleRevision"] as const)(
   "rejects output after a %s replacement",

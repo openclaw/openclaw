@@ -124,22 +124,12 @@ export function readSourceJournalMode(
   try {
     const header = Buffer.alloc(SQLITE_HEADER_BYTES);
     const bytesRead = fs.readSync(source.descriptor, header, 0, header.length, 0);
-    const confirmedHeader = Buffer.alloc(SQLITE_HEADER_BYTES);
-    const confirmedBytesRead = fs.readSync(
-      source.descriptor,
-      confirmedHeader,
-      0,
-      confirmedHeader.length,
-      0,
-    );
     assertPinnedIdentityUnchanged(source);
-    if (bytesRead === 0 && confirmedBytesRead === 0) {
+    if (bytesRead === 0) {
       return "empty";
     }
     if (
       bytesRead !== header.length ||
-      confirmedBytesRead !== confirmedHeader.length ||
-      !header.equals(confirmedHeader) ||
       header.subarray(0, 16).toString("utf8") !== "SQLite format 3\u0000"
     ) {
       return "unknown";
@@ -643,8 +633,16 @@ export async function inspectSqliteSchemaHeaderInProcess(
   pathname: string,
   stagingRoot?: string,
   agentSchemaVersionForOwnership?: number,
+  preserveSourceArtifacts = false,
 ) {
   const canonicalPath = fs.realpathSync.native(pathname);
+  if (preserveSourceArtifacts) {
+    return readSqliteSchemaHeaderFromSnapshot(
+      await prepareSqliteReadOnlyCopyInProcess(canonicalPath, stagingRoot),
+      undefined,
+      agentSchemaVersionForOwnership,
+    );
+  }
   const mode = readSourceJournalMode(canonicalPath);
   const sidecars = readSourceSidecars(canonicalPath);
   if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {

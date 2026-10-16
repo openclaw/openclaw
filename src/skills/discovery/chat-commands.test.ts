@@ -123,8 +123,14 @@ vi.mock("../runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({}),
 }));
 
+// mock-isolation: Command-discovery tests supply node eligibility without opening host approval storage.
 vi.mock("../../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+  resolveNodeExecEligibilityAsync: resolveNodeExecEligibilityMock,
+}));
+
+// mock-isolation: Command discovery uses the eligibility fixture without reading host approval storage.
+vi.mock("../../agents/exec-defaults.legacy.js", () => ({
+  resolveNodeExecEligibilityLegacy: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("./agent-filter.js", () => ({
@@ -168,15 +174,6 @@ describe("resolveSkillCommandInvocation", () => {
   it("preserves multiline args for /skill invocations", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/skill demo_skill first line\nsecond line",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.name).toBe("demo_skill");
-    expect(invocation?.args).toBe("first line\nsecond line");
-  });
-
-  it("preserves multiline args for direct skill slash invocations", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/demo_skill first line\nsecond line",
       skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
     });
     expect(invocation?.command.name).toBe("demo_skill");

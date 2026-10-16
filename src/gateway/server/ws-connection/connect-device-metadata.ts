@@ -139,50 +139,31 @@ export function isMobileNodeBootstrapConnect(params: {
   );
 }
 
-function pairedDeviceAllowsBootstrapRole(params: {
-  device: PairedDevice;
-  profile: DeviceBootstrapProfile;
-  role: string;
-}): boolean {
-  return (
-    hasEffectivePairedDeviceRole(params.device, params.role) &&
-    roleScopesAllow({
-      role: params.role,
-      requestedScopes: resolveBootstrapProfileScopesForRole(
-        params.role,
-        params.profile.scopes,
-        params.profile.purpose,
-      ),
-      allowedScopes: resolvePairedAccessScopes(params.device),
-    })
-  );
-}
-
-export function pairedDeviceAllowsBootstrapProfile(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
+export function pairedDeviceAllowsBootstrapProfile(
+  params: {
+    device: PairedDevice | null | undefined;
+    devicePublicKey: string;
+    profile: DeviceBootstrapProfile;
+  },
+  roles: readonly string[] = params.profile.roles,
+): boolean {
   const device = params.device;
   return Boolean(
     device &&
     device.publicKey === params.devicePublicKey &&
-    params.profile.roles.every((role) =>
-      pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role }),
+    roles.every(
+      (role) =>
+        hasEffectivePairedDeviceRole(device, role) &&
+        roleScopesAllow({
+          role,
+          requestedScopes: resolveBootstrapProfileScopesForRole(
+            role,
+            params.profile.scopes,
+            params.profile.purpose,
+          ),
+          allowedScopes: resolvePairedAccessScopes(device),
+        }),
     ),
-  );
-}
-
-export function pairedDeviceAllowsBootstrapOperator(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
-  const device = params.device;
-  return Boolean(
-    device &&
-    device.publicKey === params.devicePublicKey &&
-    pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role: "operator" }),
   );
 }
 

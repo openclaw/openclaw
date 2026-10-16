@@ -191,7 +191,7 @@ it.each([
     const forgetCachedDatabase = () => {
       const cached = getOpenClawAgentDatabaseIfOpen(databaseOptions);
       if (cached) {
-        closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cached);
       }
       clearOpenClawAgentDatabaseValidationCache(state.root);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
@@ -456,13 +456,62 @@ it.each([
   },
 );
 
+it("measures the disk budget after a committed patch but not after unchanged entry attempts", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", scenario: "minimal" });
+  states.push(state);
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    storePath,
+    sessionKey: "agent:main:budget-noop",
+  };
+  const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
+  replaceSessionEntrySync(scope, { sessionId: "budget-noop", updatedAt: 1, label: "unchanged" });
+  await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  queueSpy.mockClear();
+  const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
+  const options = {
+    skipMaintenance: true,
+    preserveActivity: true,
+    maintenanceConfig: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: 1024 * 1024 * 1024,
+      highWaterBytes: 512 * 1024 * 1024,
+    }),
+  };
+  try {
+    for (const update of [() => null, () => ({ label: "unchanged" })]) {
+      await expect(patchSessionEntryCore(scope, update, options)).resolves.toMatchObject({
+        sessionId: "budget-noop",
+        updatedAt: 1,
+        label: "unchanged",
+      });
+    }
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(
+      queueSpy.mock.calls.filter(
+        ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
+      ),
+    ).toEqual([]);
+    expect(measureSpy).not.toHaveBeenCalled();
+
+    await expect(
+      patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+    ).resolves.toMatchObject({ sessionId: "budget-noop", label: "committed" });
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(measureSpy).toHaveBeenCalledExactlyOnceWith(storePath);
+  } finally {
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  }
+});
+
 it("skips an originating incognito budget kick without disk or background work", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });
   states.push(state);
   const successor = state.path("successor-state");
   fs.mkdirSync(successor);
   const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const memory = openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: sentinel });
   const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
   const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
   kickSessionHistoryDiskBudgetMaintenance({
@@ -476,16 +525,12 @@ it("skips an originating incognito budget kick without disk or background work",
     }),
   });
   vi.stubEnv("OPENCLAW_STATE_DIR", successor);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
   expect(
     queueSpy.mock.calls.filter(
       ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
     ),
   ).toEqual([]);
   expect(measureSpy).not.toHaveBeenCalled();
-  expect(memory.db.isOpen).toBe(true);
   expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
   expect(fs.readdirSync(successor)).toEqual([]);
 });

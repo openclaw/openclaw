@@ -2,6 +2,7 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
@@ -416,16 +417,40 @@ function withNativeRequireAliases<T>(
             ? fileURLToPath(context.parentURL)
             : undefined;
           const aliasTarget = resolveAlias(specifier, parent);
-          return aliasTarget
-            ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
-            : nextResolve(specifier, context);
+          if (aliasTarget) {
+            return { shortCircuit: true, url: pathToFileURL(aliasTarget).href };
+          }
+          try {
+            return nextResolve(specifier, context);
+          } catch (error) {
+            // Compiled workers can load source SDKs without a TypeScript resolver.
+            // Keep the native graph while resolving its emitted JavaScript suffixes.
+            if (
+              parent &&
+              isPluginSourceModulePath(parent) &&
+              specifier.startsWith(".") &&
+              /\.[cm]?js$/u.test(specifier) &&
+              hasErrnoCode(error, "ERR_MODULE_NOT_FOUND")
+            ) {
+              const sourceUrl = new URL(
+                specifier.replace(/\.([cm]?)js$/u, ".$1ts"),
+                context.parentURL,
+              );
+              if (fs.existsSync(fileURLToPath(sourceUrl))) {
+                return nextResolve(sourceUrl.href, context);
+              }
+            }
+            throw error;
+          }
         },
       })
     : undefined;
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {
-      return aliasTarget;
+      // Callers may pass Jiti alias maps (forward slashes on Windows). Bun keys native
+      // modules by this filename, so another spelling loads a second SDK instance.
+      return path.normalize(aliasTarget);
     }
     return originalResolveFilename(request, parent, isMain, options);
   }) satisfies ResolveFilename;

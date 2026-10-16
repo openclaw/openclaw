@@ -18,6 +18,7 @@ import type {
   CronFormState,
   CronJobsLastStatusFilter,
 } from "../../lib/cron/types.ts";
+import type { CronEventSourceView } from "./event-source.ts";
 
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
@@ -43,6 +44,7 @@ export type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
+  eventSource?: CronEventSourceView;
   heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
@@ -87,6 +89,7 @@ export type CronProps = {
   onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
+    cronRunsRunId?: string | null;
     cronRunsStatuses?: CronRunsStatusValue[];
     cronRunsDeliveryStatuses?: CronDeliveryStatus[];
     cronRunsQuery?: string;
@@ -94,3 +97,5 @@ export type CronProps = {
   }) => void | Promise<void>;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };
+
+export type CronPanelMode = "overview" | "create" | "job";

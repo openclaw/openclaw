@@ -12,6 +12,10 @@ on:
   schedule:
     - cron: "17 * * * *"
 
+# Match npm preflight and FRV only for full-build cache publication.
+env:
+  RELEASE_BUILD_NODE_VERSION: "24.21.0"
+
 permissions:
   contents: read
 
@@ -104,13 +108,17 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           semantic-checks: "true"
-          build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
           install-bun: "false"
           node-compile-cache: "true"
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
+
+      - name: Remember test Node runtime
+        id: test-node
+        if: ${{ matrix.platform == 'linux' }}
+        run: echo "version=$(node -p 'process.versions.node')" >> "$GITHUB_OUTPUT"
 
       - name: Setup pinned Bun test runtime
         uses: ./.github/actions/setup-test-bun
@@ -156,6 +164,19 @@ jobs:
           cache-write-allowed: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
           cache-hit: ${{ steps.extension-package-boundary-cache.outputs.cache-hit }}
 
+      # Release consumers pin Node exactly; the ordinary 24.x test runtime may
+      # resolve an older image version. Switch only this existing build segment.
+      - name: Setup release build runtime and cache
+        id: release-build-env
+        if: ${{ matrix.platform == 'linux' }}
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.RELEASE_BUILD_NODE_VERSION }}
+          install-deps: "false"
+          install-bun: "false"
+          cache-mode: read-write
+          build-all-cache-scope: full
+
       # Packaged declarations must see the same tree as ordinary build consumers.
       # The native lint output belongs only in its completed cache archive.
       - name: Clear native SDK boundary output before build
@@ -169,12 +190,12 @@ jobs:
         run: pnpm build
 
       - name: Save build-all cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}
+        if: ${{ steps.release-build-env.outputs.cache-mode == 'read-write' && steps.release-build-env.outputs.build-all-cache-key != '' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/build-all-cache
-          key: ${{ steps.setup-node-env.outputs.build-all-cache-key }}
+          key: ${{ steps.release-build-env.outputs.build-all-cache-key }}
 
       - name: Save dist build cache
         if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' }}
@@ -188,6 +209,15 @@ jobs:
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
           key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
+
+      - name: Restore test Node runtime
+        if: ${{ matrix.platform == 'linux' }}
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ steps.test-node.outputs.version }}
+          install-deps: "false"
+          install-bun: "false"
+          cache-mode: "off"
 
       - name: Warm transform and compile caches
         id: warm-caches

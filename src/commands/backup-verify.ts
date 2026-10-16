@@ -5,7 +5,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   recordArchiveSymbolicLink,
   type BackupSymbolicLink,
@@ -13,6 +12,7 @@ import {
   normalizeArchivePath,
   normalizeArchiveRoot,
 } from "../infra/backup-archive-path-policy.js";
+import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -122,8 +122,8 @@ function formatResult(result: BackupVerifyResult): string {
     `Archive entries scanned: ${result.entryCount}`,
     `Symbolic links checked: ${result.symlinkCount}`,
     result.sqliteInventoryVerified
-      ? "Canonical SQLite inventory verified."
-      : "Canonical SQLite completeness unknown: this legacy archive has no database inventory.",
+      ? "SQLite database inventory verified."
+      : "SQLite database coverage unknown: this legacy archive has no database inventory.",
   ].join("\n");
 }
 
@@ -227,7 +227,9 @@ function listSqliteSnapshotEntries(
       continue;
     }
     if (entry.normalized !== owner.archivePath) {
-      throw new Error(`Backup contains a case-mangled canonical SQLite path: ${entry.normalized}`);
+      throw new Error(
+        `Backup contains a SQLite path with incorrect letter casing: ${entry.normalized}`,
+      );
     }
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);

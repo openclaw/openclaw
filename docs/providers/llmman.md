@@ -677,6 +677,8 @@ Replace model ids with names from `llmman list` or
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas; it disables tool use entirely. For a deliberately narrower agent, prefer `tools.profile` or a per-agent tool policy.
 
+    When you switch an existing session to a no-tools model, OpenClaw replays earlier tool names, arguments, and results as assistant text. Stored session history stays unchanged.
+
   </Accordion>
 
   <Accordion title="Multiple llmman hosts">
@@ -910,12 +912,51 @@ container, or service account.
     }
     ```
 
+    Coming from Ollama? llmman also serves `/api/embed`, so the `ollama` provider works with just a new `remote.baseUrl` (no `/v1`). Pull the same model name, then run `openclaw memory index --force` so every vector comes from one server:
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "ollama",
+          model: "embeddinggemma",
+          remote: { baseUrl: "http://127.0.0.1:17434" },
+        },
+      },
+    }
+    ```
+
     Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
 
   </Accordion>
 
   <Accordion title="Ollama-compatible API">
-    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. Prefer `api: "openai-completions"` from OpenClaw anyway: llmman's `/api/show` reports only `completion` and `vision` capabilities, so the bundled Ollama plugin's discovery would mark every llmman model `compat.supportsTools: false`. If you do point the Ollama plugin at `http://127.0.0.1:17434` (no `/v1`), list models explicitly instead of relying on discovery.
+    llmman also implements Ollama's native `/api/chat`, `/api/tags`, `/api/show`, and `/api/ps`, and `OLLAMA_HOST=127.0.0.1:17434 ollama run <model>` works against it. The native route also works from OpenClaw. Use a custom provider id such as `llmman`, not `ollama`: discovery on that id reads llmman's `/api/show`, which reports only `completion` and `vision`, and marks every model `compat.supportsTools: false`. Set `api: "ollama"`, omit `/v1`, and list models explicitly:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          llmman: {
+            baseUrl: "http://127.0.0.1:17434",
+            apiKey: "${LLMMAN_API_KEY}",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3.8",
+                name: "Qwen3.8 (llmman)",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 65536,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 
   <Accordion title="Compat flags">

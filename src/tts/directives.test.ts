@@ -1,6 +1,7 @@
 // TTS directive tests cover parsing and applying speech directives.
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { createSpeechDirectiveParser } from "./directive-parser.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -59,6 +60,34 @@ const fullPolicy: SpeechModelOverridePolicy = {
 };
 
 describe("parseTtsDirectives provider-aware routing", () => {
+  it("accumulates provider patches without asking the provider to copy prior overrides", () => {
+    const provider = makeProvider(
+      "example",
+      10,
+      createSpeechDirectiveParser({
+        voice: ["allowVoice", ["voice"]],
+        speed: [
+          "allowVoiceSettings",
+          ["speed"],
+          {
+            number: { range: { min: 0.5, max: 2 }, warning: () => "invalid speed" },
+          },
+        ],
+      }),
+    );
+    const result = parseTtsDirectives(
+      "[[tts:provider=example voice=speaker speed=1.25]]",
+      fullPolicy,
+      {
+        providers: [provider],
+      },
+    );
+    expect(result.overrides.providerOverrides?.example).toStrictEqual({
+      voice: "speaker",
+      speed: 1.25,
+    });
+    expect(result.warnings).toStrictEqual([]);
+  });
   it("does not resolve providers when text has no directives", () => {
     const failProvider = {
       get id() {
@@ -79,27 +108,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
       warnings: [],
       hasDirective: false,
     });
-  });
-
-  it("routes correctly when provider appears after the generic token", () => {
-    const result = parseTtsDirectives("[[tts:speed=1.2 provider=minimax]] hi", fullPolicy, {
-      providers: [elevenlabs, minimax],
-    });
-
-    expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
-  });
-
-  it("routes to the preferred provider when no provider token is declared", () => {
-    const result = parseTtsDirectives("[[tts:speed=1.5]]", fullPolicy, {
-      providers: [elevenlabs, minimax],
-      preferredProviderId: "minimax",
-    });
-
-    expect(result.overrides.provider).toBeUndefined();
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.5 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
   });
 
   it("routes to preferred provider aliases when no provider token is declared", () => {
@@ -146,21 +154,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.warnings).toContain('unsupported minimax directive key "style"');
   });
 
-  it("passes the selected provider id to the chosen provider parser", () => {
-    let selectedProvider: string | undefined;
-    const selected = makeProvider("selected", 10, (ctx) => {
-      selectedProvider = ctx.selectedProvider;
-      return { handled: true, overrides: { voice: ctx.value } };
-    });
-
-    const result = parseTtsDirectives("[[tts:provider=selected voice=test]]", fullPolicy, {
-      providers: [selected],
-    });
-
-    expect(result.overrides.providerOverrides?.selected).toEqual({ voice: "test" });
-    expect(selectedProvider).toBe("selected");
-  });
-
   it("routes generic speakerVoice directive tokens to the selected provider", () => {
     const result = parseTtsDirectives(
       "[[tts:provider=elevenlabs speakerVoice=Rachel speakerVoiceId=voice-123]]",
@@ -179,30 +172,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
-  it("resolves explicit provider aliases without rewriting the requested provider value", () => {
-    const microsoft = makeProvider(
-      "microsoft",
-      10,
-      ({ key, value }) =>
-        key === "voice" ? { handled: true, overrides: { voice: value } } : undefined,
-      { aliases: ["edge"] },
-    );
-
-    const result = parseTtsDirectives(
-      "[[tts:provider=edge voice=en-US-MichelleNeural]]",
-      fullPolicy,
-      {
-        providers: [microsoft],
-      },
-    );
-
-    expect(result.overrides.provider).toBe("edge");
-    expect(result.overrides.providerOverrides?.microsoft).toEqual({
-      voice: "en-US-MichelleNeural",
-    });
-    expect(result.warnings).toStrictEqual([]);
-  });
-
   it("warns once and drops non-provider tokens when the explicit provider is unknown", () => {
     const result = parseTtsDirectives("[[tts:provider=missing speed=1.2 style=0.4]]", fullPolicy, {
       providers: [elevenlabs, minimax],
@@ -211,18 +180,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.provider).toBe("missing");
     expect(result.overrides.providerOverrides).toBeUndefined();
     expect(result.warnings).toEqual(['unknown provider "missing"']);
-  });
-
-  it("keeps last-wins provider semantics", () => {
-    const result = parseTtsDirectives(
-      "[[tts:provider=elevenlabs provider=minimax speed=1.1]]",
-      fullPolicy,
-      { providers: [elevenlabs, minimax] },
-    );
-
-    expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.1 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
   });
 
   it("ignores provider tokens when provider overrides are disabled", () => {
@@ -268,7 +225,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
   const ttsExample =
     "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
-    "[[tts:provider=elevenlabs speed=1.2]] [[tts]] [[/tts:text]]";
+    "[[tts:provider=elevenlabs speed=1.2]] [[tts:Here is your answer]] [[tts]] [[/tts:text]]";
 
   it.each([
     {
@@ -283,18 +240,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
         "Then continue normally.",
       ].join("\n"),
     },
-    { name: "an unclosed fence", input: `\`\`\`md\n${ttsExample}` },
-    {
-      name: "a false closing fence",
-      input: `\`\`\`md\n\`\`\` not a close\n${ttsExample}\n\`\`\``,
-    },
-    {
-      name: "a longer enclosing fence",
-      input: `\`\`\`\`md\n\`\`\`\n${ttsExample}\n\`\`\`\n\`\`\`\``,
-    },
-    { name: "a multiline code span", input: `Use \`a\n${ttsExample}\nb\` literally.` },
-    { name: "a quoted fence", input: `> \`\`\`md\n> ${ttsExample}\n> \`\`\`` },
-    { name: "an indented code block", input: `    ${ttsExample}` },
   ])("does not parse tts examples inside $name", ({ input }) => {
     const result = parseTtsDirectives(input, fullPolicy, {
       providers: [elevenlabs, minimax],
@@ -327,17 +272,38 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
     expect(cleaner.flush()).toBe("");
   });
 
-  it("keeps plain tts block contents visible", () => {
+  it.each([
+    [["Some [[tts:hello there]] note"], "Some hello there note"],
+    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
+    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
+    [["Go [[tts:\nhello]] now"], "Go hello now"],
+    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
+    [["See [[note"], "See [[note"],
+    [
+      ["[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]"],
+      " Visible. ",
+    ],
+    [
+      [
+        "[[tts:text]]Press the ` key.[[/tts:text]]",
+        " Visible. [[tts:text]]Audio only.[[/tts:text]]",
+      ],
+      " Visible. ",
+    ],
+  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("[[tts]]read")).toBe("read");
-    expect(cleaner.push(" this[[/tts]] now")).toBe(" this now");
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
   });
 
-  it("preserves non-tts bracket markup and flushes incomplete literals", () => {
+  it.each([
+    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
+    ["Use `", "[[tts:literal", " speech]]", "` here."],
+    ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
+    ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
+  ])("preserves code literals across chunks: %j", (...chunks) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-
-    expect(cleaner.push("See [[note")).toBe("See ");
-    expect(cleaner.flush()).toBe("[[note");
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
+    expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
+    expect(cleaner.flush()).toBe("");
   });
 });

@@ -71,15 +71,11 @@ import {
   resolveSessionEntryResetFreshness,
   resolveSessionEntryResetFreshnessAsync,
 } from "../../config/sessions/entry-freshness.js";
-import {
-  readSessionUpdatedAtCore,
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "../../config/sessions/session-accessor.js";
+import { recordInboundSessionMeta } from "../../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -91,6 +87,11 @@ import {
   publicChannelTurnParams,
   type PublicChannelTurnParams,
 } from "../../plugin-sdk/reply-options.js";
+import {
+  readSessionUpdatedAt,
+  updateLastRoute,
+  updateLastRouteWithAuthority,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
@@ -157,13 +158,14 @@ export function createRuntimeChannel(options?: {
   } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
-    readSessionUpdatedAt: readSessionUpdatedAtCore,
+    readSessionUpdatedAt,
     readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute,
+    updateLastRouteWithAuthority,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
     resolveEntryResetFreshnessAsync: resolveSessionEntryResetFreshnessAsync,
   };
@@ -220,6 +222,7 @@ export function createRuntimeChannel(options?: {
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
+      deleteMediaBuffer,
     },
     activity: {
       record: recordChannelActivity,

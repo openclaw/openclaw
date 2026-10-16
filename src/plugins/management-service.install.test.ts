@@ -28,6 +28,13 @@ const mocks = vi.hoisted(() => ({
   slotSelection: vi.fn((config: unknown) => config),
 }));
 
+// A beta package version forces the beta update channel, so pin a stable host to keep
+// the default stable-channel expectations independent of the checkout's release train.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
+}));
+
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: (params?: { env?: NodeJS.ProcessEnv }) => {
     if (params?.env?.OPENCLAW_NIX_MODE === "1") {

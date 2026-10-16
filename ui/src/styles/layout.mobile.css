@@ -78,7 +78,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .shell--mobile-nav .shell-nav-backdrop {
-  position: fixed;
+  /* Use the positioned app canvas, including its safe-area padding. Safari
+     extends fixed backgrounds into browser chrome with an independent fade. */
+  position: absolute;
   z-index: 65;
   inset: 0;
   display: block;
@@ -94,19 +96,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s linear 160ms;
   touch-action: none;
-}
-
-.shell--mobile-nav .shell-nav:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: transform;
-}
-
-.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: opacity;
-}
-
-.shell--mobile-nav .shell-nav[data-nav-drawer-dragging],
-.shell--mobile-nav .shell-nav-backdrop[data-nav-drawer-dragging] {
-  transition: none;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
@@ -337,11 +326,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     font-size: 12px;
   }
 
-  .pill {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
   .chat-thread {
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
@@ -456,7 +440,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .btn {
     padding: 6px 10px;
-    font-size: 12px;
   }
 }
 
@@ -477,7 +460,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
-  wa-dropdown.session-menu {
+  .session-menu__panel {
     --menu-item-height: 40px;
     --menu-padding: 3px;
   }
@@ -547,11 +530,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     overflow-wrap: normal;
     word-break: normal;
   }
-
-  .filters {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
 }
 
 /* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
@@ -588,7 +566,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 12px;
   }
 
   .session-key-cell {

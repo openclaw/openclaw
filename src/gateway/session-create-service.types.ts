@@ -20,7 +20,10 @@ import type {
   ModelAccountConnectAction,
   UserModelAccountSelection,
 } from "./model-account-authority.js";
-import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type {
+  GatewayOperatorRoleActor,
+  SessionMutationAuthorization,
+} from "./server-methods/shared-types.js";
 import type { SessionCreatePhase } from "./session-create-diagnostics.js";
 
 type TrustedCatalogSessionTarget = {
@@ -139,15 +142,18 @@ export type CreateGatewaySessionParams = {
   spawnToolPolicy?: {
     version: 1;
     completionOwnerSessionKey?: string;
+    delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
     allow: string[];
     deny: string[];
   };
+  deviceFolder?: SessionEntry["deviceFolder"];
   spawnedCwd?: string;
   sessionRoot?: string;
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionToolOverrides;
+  communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -178,6 +184,8 @@ export type CreateGatewaySessionParams = {
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
+  /** Request-owned deadline and cancellation; shared discovery may outlive this wait. */
+  waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
@@ -216,6 +224,8 @@ export type CreateGatewaySessionParams = {
   /** Non-throwing notification of the exact newly committed row, before initial-turn work. */
   onCreatedSessionCommitted?: (created: CreatedGatewaySession) => void;
   afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
+  bindSharingCreation?: SessionEntryCreateWithTranscriptOptions["bindCreation"];
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: SessionSourceAssertion;
 };

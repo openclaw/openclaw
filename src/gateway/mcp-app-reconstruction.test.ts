@@ -17,7 +17,8 @@ vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   releaseSessionMcpRuntime: async (lease: { releaseLease: () => void }) => lease.releaseLease(),
 }));
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
@@ -42,9 +43,9 @@ vi.mock("./session-transcript-readers.js", () => ({
     };
   },
 }));
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: mocks.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: mocks.loadSessionEntry,
+// mock-isolation: transcript reconstruction tests control session identity without a live store.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";
@@ -164,7 +165,11 @@ describe("MCP App transcript reconstruction", () => {
           toolCallId: "call-1",
         }),
       );
-      expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: expectedOwner });
+      expect(mocks.loadSessionEntry).toHaveBeenCalledWith({
+        cfg: {},
+        key: sessionKey,
+        agentId: expectedOwner,
+      });
       expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
     },
   );

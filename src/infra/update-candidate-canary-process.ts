@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -18,12 +19,20 @@ export function launchCanary(params: {
   assertCurrent?: () => void;
   capture: (line: string) => void;
   onLine?: (line: string) => void;
+  /** Receipt lines reach onLine only; they never become logs or failure reasons. */
+  hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
   const runtime = params.nodeRunner ?? process.execPath;
-  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
+  const invocation = resolveOpenClawCliInvocation({
+    execPath: runtime,
+    execArgv: resolveRuntimeArgs(runtime),
+    entryPath: entry,
+    args,
+  });
+  const child = spawn(invocation.command, invocation.args, {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
@@ -69,10 +78,12 @@ export function launchCanary(params: {
     let pending = "";
     let droppingLine = false;
     const captureLine = (line: string) => {
-      if (stream === child.stderr) {
-        captureStderr(line);
+      if (!params.hidesLine?.(line)) {
+        if (stream === child.stderr) {
+          captureStderr(line);
+        }
+        capture(line);
       }
-      capture(line);
       params.onLine?.(line);
     };
     stream.on("data", (chunk: string) => {

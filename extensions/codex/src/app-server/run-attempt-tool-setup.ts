@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
-  resolveAgentDir,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
@@ -33,6 +32,7 @@ import {
   selectInactiveCodexHeartbeatResponseTool,
 } from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
+import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
@@ -199,8 +199,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   >;
   let creatorAuthorityPromise: ReturnType<CreatorAuthorityResolver> | undefined;
   let resolveCreatorAuthorityImpl: CreatorAuthorityResolver | undefined;
-  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
+  const runtimeYieldCompletionClaim: {
+    current?: () => boolean | { pendingChildren: NativePendingChild[] };
+  } = {};
   const commonToolParams = {
+    nativeExecutionPolicy: runtime.nativeExecutionPolicy,
     // Both catalogs describe one attempt; a later attempt discovers fresh connections.
     nodeExecAvailability: {},
     params: dynamicToolParams,
@@ -347,7 +350,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
@@ -538,6 +541,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             cwd: effectiveCwd ?? effectiveWorkspace,
           });
     const toolBridge = createCodexDynamicToolBridge({
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredFallbackTools,

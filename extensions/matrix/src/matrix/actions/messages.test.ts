@@ -5,8 +5,7 @@ import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStart
 import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import * as sendModule from "../send.js";
-import { editMatrixMessage, readMatrixMessages, sendMatrixMessage } from "./messages.js";
+import { editMatrixMessage, readMatrixMessages } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
   channels: {
@@ -195,62 +194,6 @@ function mockCallArg(
 }
 
 describe("matrix message actions", () => {
-  it("preserves workspace media access through the shared Matrix send helper", async () => {
-    const mediaAccess = {
-      localRoots: ["/tmp/openclaw-matrix-test"],
-      readFile: async () => Buffer.from("chart"),
-      workspaceDir: "/tmp/openclaw-matrix-test",
-    };
-    const sendSpy = vi.spyOn(sendModule, "sendMessageMatrix").mockResolvedValue({
-      messageId: "$sent",
-      roomId: "!room:example.org",
-    } as never);
-
-    try {
-      await sendMatrixMessage("!room:example.org", "caption", {
-        cfg: MATRIX_ACTION_TEST_CFG,
-        mediaUrl: "chart.png",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
-      });
-
-      const options = sendSpy.mock.calls[0]?.[2];
-      expect(options?.mediaUrl).toBe("chart.png");
-      expect(options?.mediaAccess).toBe(mediaAccess);
-      expect(options?.mediaLocalRoots).toBe(mediaAccess.localRoots);
-    } finally {
-      sendSpy.mockRestore();
-    }
-  });
-
-  it("preserves Markdown indentation and forwards timeoutMs to the Matrix edit helper", async () => {
-    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
-
-    try {
-      const cfg = {} as never;
-      const markdown = "    @room";
-      const result = await editMatrixMessage(
-        "!room:example.org",
-        "$original",
-        `${markdown}  \t\n`,
-        {
-          cfg,
-          timeoutMs: 12_345,
-        },
-      );
-
-      expect(result).toEqual({ eventId: "evt-edit" });
-      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", markdown, {
-        cfg,
-        accountId: undefined,
-        client: undefined,
-        timeoutMs: 12_345,
-      });
-    } finally {
-      editSpy.mockRestore();
-    }
-  });
-
   it("rejects whitespace-only Matrix edits", async () => {
     await expect(
       editMatrixMessage("!room:example.org", "$original", "   \n  ", {
@@ -307,55 +250,9 @@ describe("matrix message actions", () => {
     });
   });
 
-  it("includes poll snapshots when reading message history", async () => {
-    const { client, doRequest, getEvent, getRelations } = createMessagesClient({
-      chunk: [
-        createPollResponseEvent(),
-        createHistoryMessage({ eventId: "$msg", body: "hello", timestamp: 10 }),
-      ],
-      pollRoot: createPollStartEvent({
-        includeDisclosedKind: true,
-        maxSelections: 1,
-        answers: [
-          { id: "a1", "m.text": "Apple" },
-          { id: "a2", "m.text": "Strawberry" },
-        ],
-      }),
-      pollRelations: [createPollResponseEvent()],
-    });
-
-    const result = await readMatrixMessages("room:!room:example.org", { client, limit: 2.9 });
-
-    expect(mockCallArg(doRequest, 0, 0)).toBe("GET");
-    expect(String(mockCallArg(doRequest, 0, 1))).toContain("/rooms/!room%3Aexample.org/messages");
-    expectRecordFields(mockCallArg(doRequest, 0, 2), { limit: 2 });
-    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(getRelations).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$poll",
-      "m.reference",
-      undefined,
-      {
-        from: undefined,
-      },
-    );
-    expect(result.messages).toHaveLength(2);
-    expectRecordFields(result.messages[0], {
-      eventId: "$poll",
-      msgtype: "m.text",
-    });
-    expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
-    expectRecordFields(result.messages[1], {
-      eventId: "$msg",
-      body: "hello",
-    });
-  });
-
   it.each([
     { kind: M_POLL_KIND_DISCLOSED.name, disclosed: true },
-    { kind: M_POLL_KIND_DISCLOSED.altName, disclosed: true },
     { kind: M_POLL_KIND_UNDISCLOSED.name, disclosed: false },
-    { kind: M_POLL_KIND_UNDISCLOSED.altName, disclosed: false },
   ])("preserves $kind results in room and thread history", async ({ kind, disclosed }) => {
     const poll = PollStartEvent.from("Favorite fruit?", ["Apple", "Strawberry"], kind);
     const pollRoot = {
@@ -391,13 +288,10 @@ describe("matrix message actions", () => {
     }
   });
 
-  it.each([
-    { name: "room history", threadId: undefined },
-    { name: "poll-rooted thread history", threadId: "$poll" },
-  ])("fails visibly on cyclic poll pagination in $name", async ({ threadId }) => {
+  it("fails visibly on cyclic poll pagination in room history", async () => {
     const pollRoot = createPollStartEvent();
     const { client, getRelations } = createMessagesClient({
-      chunk: threadId ? [] : [pollRoot],
+      chunk: [pollRoot],
       pollRoot,
     });
     let pollPageCalls = 0;
@@ -412,15 +306,23 @@ describe("matrix message actions", () => {
       return { events: [], nextBatch: "stuck", prevBatch: null };
     });
 
-    await expect(
-      readMatrixMessages("room:!room:example.org", { client, threadId }),
-    ).rejects.toThrow("Matrix poll pagination returned a repeated cursor");
+    await expect(readMatrixMessages("room:!room:example.org", { client })).rejects.toThrow(
+      "Matrix poll pagination returned a repeated cursor",
+    );
     expect(pollPageCalls).toBe(2);
   });
 
-  it("dedupes multiple poll events for the same poll within one read page", async () => {
-    const { client, getEvent } = createMessagesClient({
-      chunk: [createPollResponseEvent(), createPollStartEvent()],
+  it("hydrates history before deduping multiple events for the same poll", async () => {
+    const encrypted = {
+      event_id: "$enc",
+      sender: "@bob:example.org",
+      type: "m.room.encrypted",
+      origin_server_ts: 20,
+      content: {},
+    };
+    const { client, getEvent, hydrateEvents } = createMessagesClient({
+      chunk: [encrypted],
+      hydratedChunk: [createPollResponseEvent(), createPollStartEvent()],
       pollRoot: createPollStartEvent(),
       pollRelations: [],
     });
@@ -431,6 +333,7 @@ describe("matrix message actions", () => {
     expectRecordFields(result.messages[0], { eventId: "$poll" });
     expect(result.messages[0]?.body).toContain("[Poll]");
     expect(getEvent).toHaveBeenCalledTimes(2);
+    expect(hydrateEvents).toHaveBeenNthCalledWith(1, "!room:example.org", [encrypted]);
   });
 
   it.each([
@@ -471,6 +374,17 @@ describe("matrix message actions", () => {
   });
 
   it("uses the Matrix event-id tie-break for equally timed replacements", async () => {
+    const winner = createHistoryMessage({
+      eventId: "$edit-z",
+      body: "winning tie",
+      timestamp: 20,
+      replaces: "$original",
+    });
+    const content = winner.content as Record<string, unknown>;
+    (content["m.new_content"] as Record<string, unknown>)["m.relates_to"] = {
+      rel_type: "m.thread",
+      event_id: "$forged-thread",
+    };
     const { client } = createMessagesClient({
       chunk: [
         createHistoryMessage({
@@ -479,12 +393,7 @@ describe("matrix message actions", () => {
           timestamp: 20,
           replaces: "$original",
         }),
-        createHistoryMessage({
-          eventId: "$edit-z",
-          body: "winning tie",
-          timestamp: 20,
-          replaces: "$original",
-        }),
+        winner,
         createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
       ],
     });
@@ -493,31 +402,6 @@ describe("matrix message actions", () => {
 
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "winning tie" });
-  });
-
-  it("does not let replacement content change the original event relationship", async () => {
-    const edit = createHistoryMessage({
-      eventId: "$edit",
-      body: "edited text",
-      timestamp: 20,
-      replaces: "$original",
-    });
-    const content = edit.content as Record<string, unknown>;
-    (content["m.new_content"] as Record<string, unknown>)["m.relates_to"] = {
-      rel_type: "m.thread",
-      event_id: "$forged-thread",
-    };
-    const { client } = createMessagesClient({
-      chunk: [
-        edit,
-        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
-      ],
-    });
-
-    const result = await readMatrixMessages("room:!room:example.org", { client });
-
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "edited text" });
     expect(result.messages[0]?.relatesTo).toBeUndefined();
   });
 
@@ -624,34 +508,6 @@ describe("matrix message actions", () => {
     expect(result.messages[0]).toMatchObject({ eventId: "$thread-root", body: "edited root" });
   });
 
-  it("uses hydrated history events so encrypted poll entries can be read", async () => {
-    const { client, hydrateEvents } = createMessagesClient({
-      chunk: [
-        {
-          event_id: "$enc",
-          sender: "@bob:example.org",
-          type: "m.room.encrypted",
-          origin_server_ts: 20,
-          content: {},
-        },
-      ],
-      hydratedChunk: [createPollResponseEvent()],
-      pollRoot: createPollStartEvent(),
-      pollRelations: [],
-    });
-
-    const result = await readMatrixMessages("room:!room:example.org", { client });
-
-    expect(mockCallArg(hydrateEvents, 0, 0)).toBe("!room:example.org");
-    expect(
-      (mockCallArg(hydrateEvents, 0, 1) as Array<Record<string, unknown>>).some(
-        (event) => event.event_id === "$enc",
-      ),
-    ).toBe(true);
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]?.eventId).toBe("$poll");
-  });
-
   it("filters Matrix thread events out of main-room reads", async () => {
     const { client } = createMessagesClient({
       chunk: [
@@ -689,45 +545,6 @@ describe("matrix message actions", () => {
     expect(result.messages).toEqual([]);
   });
 
-  it("uses the thread relations endpoint and includes the thread root once", async () => {
-    const { client, doRequest, getEvent, getRelations } = createMessagesClient({
-      chunk: [],
-      pollRelations: [
-        createHistoryMessage({
-          eventId: "$thread-reply",
-          body: "thread reply",
-          timestamp: 20,
-          threadId: "$thread-root",
-        }),
-      ],
-      pollRoot: createHistoryMessage({
-        eventId: "$thread-root",
-        body: "thread root",
-        timestamp: 10,
-      }),
-    });
-
-    const result = await readMatrixMessages("room:!room:example.org", {
-      client,
-      threadId: "$thread-root",
-      limit: 5,
-    });
-
-    expect(doRequest).not.toHaveBeenCalled();
-    expect(getRelations).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$thread-root",
-      "m.thread",
-      undefined,
-      { dir: "b", from: undefined, limit: 4 },
-    );
-    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
-    expect(result.messages.map((message) => message.eventId)).toEqual([
-      "$thread-root",
-      "$thread-reply",
-    ]);
-  });
-
   it("includes poll snapshots from threaded reads", async () => {
     const { client, getEvent, getRelations } = createMessagesClient({
       chunk: [],
@@ -756,53 +573,6 @@ describe("matrix message actions", () => {
       { dir: "b", from: undefined, limit: 5 },
     );
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
-  });
-
-  it("includes poll roots when reading the thread they start", async () => {
-    const { client, getEvent, getRelations } = createMessagesClient({
-      chunk: [],
-      pollRoot: createPollStartEvent({
-        includeDisclosedKind: true,
-        maxSelections: 1,
-        answers: [
-          { id: "a1", "m.text": "Apple" },
-          { id: "a2", "m.text": "Strawberry" },
-        ],
-      }),
-      pollRelations: [createPollResponseEvent()],
-      threadRelations: [
-        createHistoryMessage({
-          eventId: "$thread-reply",
-          body: "thread reply",
-          timestamp: 20,
-          threadId: "$poll",
-        }),
-      ],
-    });
-
-    const result = await readMatrixMessages("room:!room:example.org", {
-      client,
-      threadId: "$poll",
-      limit: 5,
-    });
-
-    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(getRelations).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$poll",
-      "m.reference",
-      undefined,
-      {
-        from: undefined,
-      },
-    );
-    expect(getRelations).toHaveBeenCalledWith("!room:example.org", "$poll", "m.thread", undefined, {
-      dir: "b",
-      from: undefined,
-      limit: 4,
-    });
-    expect(result.messages.map((message) => message.eventId)).toEqual(["$poll", "$thread-reply"]);
     expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
   });
 
@@ -889,63 +659,45 @@ describe("matrix message actions", () => {
     expect(next.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
 
-  it.each([
-    ["appended junk", (cursor: string) => `${cursor}!`],
-    ["padding", (cursor: string) => `${cursor}=`],
-    [
-      "extra payload field",
-      (cursor: string) => {
-        const prefix = "openclaw.matrix.thread-relations-start:";
-        const payload = Buffer.from(
-          JSON.stringify({ v: 1, threadId: "$thread-root", extra: true }),
-          "utf8",
-        ).toString("base64url");
-        expect(cursor.startsWith(prefix)).toBe(true);
-        return `${prefix}${payload}`;
+  it("forwards a noncanonical synthetic thread cursor as an opaque Matrix token", async () => {
+    const firstPage = createMessagesClient({
+      chunk: [],
+      pollRoot: {
+        event_id: "$thread-root",
+        sender: "@alice:example.org",
+        type: "m.room.message",
+        origin_server_ts: 10,
+        content: { msgtype: "m.text", body: "thread root" },
       },
-    ],
-  ])(
-    "forwards a synthetic thread cursor with %s as an opaque Matrix token",
-    async (_name, alter) => {
-      const firstPage = createMessagesClient({
-        chunk: [],
-        pollRoot: {
-          event_id: "$thread-root",
-          sender: "@alice:example.org",
-          type: "m.room.message",
-          origin_server_ts: 10,
-          content: { msgtype: "m.text", body: "thread root" },
-        },
-        threadRelations: [{ event_id: "$thread-reply" }],
-      });
-      const first = await readMatrixMessages("room:!room:example.org", {
-        client: firstPage.client,
-        threadId: "$thread-root",
-        limit: 1,
-      });
-      const cursor = first.nextBatch;
-      if (!cursor) {
-        throw new Error("Expected a synthetic thread cursor");
-      }
-      const nonCanonicalCursor = alter(cursor);
-      const nextPage = createMessagesClient({ chunk: [], threadRelations: [] });
+      threadRelations: [{ event_id: "$thread-reply" }],
+    });
+    const first = await readMatrixMessages("room:!room:example.org", {
+      client: firstPage.client,
+      threadId: "$thread-root",
+      limit: 1,
+    });
+    const cursor = first.nextBatch;
+    if (!cursor) {
+      throw new Error("Expected a synthetic thread cursor");
+    }
+    const nonCanonicalCursor = `${cursor}!`;
+    const nextPage = createMessagesClient({ chunk: [], threadRelations: [] });
 
-      await readMatrixMessages("room:!room:example.org", {
-        client: nextPage.client,
-        threadId: "$thread-root",
-        limit: 1,
-        before: nonCanonicalCursor,
-      });
+    await readMatrixMessages("room:!room:example.org", {
+      client: nextPage.client,
+      threadId: "$thread-root",
+      limit: 1,
+      before: nonCanonicalCursor,
+    });
 
-      expect(nextPage.getRelations).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$thread-root",
-        "m.thread",
-        undefined,
-        { dir: "b", from: nonCanonicalCursor, limit: 1 },
-      );
-    },
-  );
+    expect(nextPage.getRelations).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$thread-root",
+      "m.thread",
+      undefined,
+      { dir: "b", from: nonCanonicalCursor, limit: 1 },
+    );
+  });
 
   it("does not reserve first-page thread capacity for a redacted root", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({

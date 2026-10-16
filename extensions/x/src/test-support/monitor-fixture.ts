@@ -70,8 +70,7 @@ export function fixture(options: {
   onCursor?: () => void;
   cfg?: OpenClawConfig;
   replyText?: string;
-  /** Null models an older host without capability advertisement. */
-  capabilities?: readonly string[] | null;
+  visibleSessionUrl?: string | null;
 }) {
   const cfg = options.cfg ?? config;
   const replies: Array<{ text: string; parent: string }> = [];
@@ -112,13 +111,18 @@ export function fixture(options: {
   client.getXApi.mockResolvedValue(api);
   const resolveStable = vi.fn(resolveStableChannelMessageIngress);
   const dispatch = vi.fn(async (plan: Plan) => {
-    plan.replyOptions?.onVisibleWorkSessions?.([
-      {
-        sessionKey: "agent:maintainer:work:example",
-        url: "https://example.test/work/42",
-        label: "Work session",
-      },
-    ]);
+    await plan.replyOptions?.onVisibleWorkSessions?.(
+      options.visibleSessionUrl === null
+        ? []
+        : [
+            {
+              sessionKey: "agent:maintainer:work:example",
+              url: options.visibleSessionUrl ?? "https://example.test/work/42",
+              label: "Work session",
+            },
+          ],
+      { createdSessionKey: "agent:maintainer:work:example" },
+    );
     if (!plan.delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
     }
@@ -143,9 +147,6 @@ export function fixture(options: {
   const stateDir = `synthetic-x-monitor:${randomUUID()}`;
   const runtime = {
     version: "2026.9.8",
-    ...(options.capabilities === null
-      ? {}
-      : { capabilities: options.capabilities ?? ["sender-restricted-hidden-helpers-v1"] }),
     state: {
       openKeyedStore,
       resolveStateDir: () => stateDir,

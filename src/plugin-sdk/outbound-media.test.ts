@@ -33,6 +33,22 @@ function prepare(
   });
 }
 
+function createClockedStateStore<T>(
+  options: Parameters<typeof createPluginStateSyncKeyedStoreForTests>[1],
+): PluginStateKeyedStore<T> {
+  // Native workers have a real clock; retention fixtures need SQLite and media on one fake clock.
+  const store = createPluginStateSyncKeyedStoreForTests<T>("fixture-plugin", options);
+  return {
+    register: async (...args) => store.register(...args),
+    registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
+    lookup: async (...args) => store.lookup(...args),
+    consume: async (...args) => store.consume(...args),
+    delete: async (key) => store.delete(key),
+    entries: async () => store.entries(),
+    clear: async () => store.clear(),
+  };
+}
+
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
@@ -240,14 +256,14 @@ describe("createHostedOutboundMediaStore", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     loadWebMediaMock.mockResolvedValueOnce(imageMedia());
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
-      "fixture-plugin",
-      { namespace: "ttl-media", maxEntries: 10 },
-    );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
-      "fixture-plugin",
-      { namespace: "ttl-media-chunks", maxEntries: 100 },
-    );
+    const metadataStore = createClockedStateStore<HostedOutboundMediaMetaRecord>({
+      namespace: "ttl-media",
+      maxEntries: 10,
+    });
+    const chunkStore = createClockedStateStore<HostedOutboundMediaChunkRecord>({
+      namespace: "ttl-media-chunks",
+      maxEntries: 100,
+    });
     const store = createHostedOutboundMediaStore({
       metadataStore,
       chunkStore,
@@ -263,49 +279,31 @@ describe("createHostedOutboundMediaStore", () => {
     await prepare(store);
     const { db } = openOpenClawStateDatabase();
     const sql = getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db);
-    const persistedTtls = executeSqliteQuerySync(
-      db,
-      sql
-        .selectFrom("plugin_state_entries")
-        .select("namespace")
-        .select((eb) => eb("expires_at", "-", eb.ref("created_at")).as("ttlMs"))
-        .where("plugin_id", "=", "fixture-plugin")
-        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"])
-        .orderBy("namespace")
-        .orderBy("entry_key"),
-    ).rows;
-    expect(persistedTtls).toEqual([
+    const persistedRows = sql
+      .selectFrom("plugin_state_entries")
+      .select("namespace")
+      .select((eb) => eb("expires_at", "-", eb.ref("created_at")).as("ttlMs"))
+      .where("plugin_id", "=", "fixture-plugin")
+      .where("namespace", "in", ["ttl-media", "ttl-media-chunks"])
+      .orderBy("namespace")
+      .orderBy("entry_key");
+    expect(executeSqliteQuerySync(db, persistedRows).rows).toEqual([
       { namespace: "ttl-media", ttlMs: 200 },
       { namespace: "ttl-media-chunks", ttlMs: 100 },
       { namespace: "ttl-media-chunks", ttlMs: 100 },
       { namespace: "ttl-media-chunks", ttlMs: 100 },
     ]);
-    // Keep physical expiry independent of the parent test's logical media clock.
-    executeSqliteQuerySync(
-      db,
-      sql
-        .updateTable("plugin_state_entries")
-        .set({ expires_at: vi.getRealSystemTime() + 86_400_000 })
-        .where("plugin_id", "=", "fixture-plugin")
-        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"]),
-    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
     vi.setSystemTime(1101);
-    executeSqliteQuerySync(
-      db,
-      sql
-        .updateTable("plugin_state_entries")
-        .set({ expires_at: 1 })
-        .where("plugin_id", "=", "fixture-plugin")
-        .where("namespace", "=", "ttl-media-chunks"),
-    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toEqual([]);
     await store.cleanupExpired(1101);
     expect(await metadataStore.entries()).toEqual([]);
     expect(await chunkStore.entries()).toEqual([]);
+    // Expired chunks must be deleted, not merely hidden by the backing store.
+    expect(executeSqliteQuerySync(db, persistedRows).rows).toEqual([]);
   });
 
   it("retains metadata until a failed chunk cleanup can be retried", async () => {
@@ -599,11 +597,11 @@ describe("hosted media bulk read error order", () => {
             dataBase64: Buffer.from(early === "invalid-bytes" ? "x" : "1234").toString("base64"),
           });
         }
-        await chunkStore.register(key(1), { id, index: 1, dataBase64: "NTY3OA==" });
         const { db } = openOpenClawStateDatabase();
+        // Seed corruption before a keyed write receipt can cache a valid chunk.
         db.prepare(
-          "UPDATE plugin_state_entries SET value_json = ? WHERE namespace = ? AND entry_key = ?",
-        ).run("invalid JSON", `chunks-${early}`, key(1));
+          "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+        ).run("fixture-plugin", `chunks-${early}`, key(1), "invalid JSON", Date.now());
         const store = createHostedOutboundMediaStore({
           metadataStore,
           chunkStore,
@@ -634,22 +632,6 @@ describe("hosted outbound media retention and aggregate capacity", () => {
   // Keep backing expiry independent of the logical URL/grace window.
   const PHYSICAL_TTL_MS = 120_000;
   const LOGICAL_TTL_MS = 100;
-
-  function createClockedStateStore<T>(
-    options: Parameters<typeof createPluginStateSyncKeyedStoreForTests>[1],
-  ): PluginStateKeyedStore<T> {
-    // Native workers have a real clock; retention fixtures need SQLite and media on one fake clock.
-    const store = createPluginStateSyncKeyedStoreForTests<T>("fixture-plugin", options);
-    return {
-      register: async (...args) => store.register(...args),
-      registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
-      lookup: async (...args) => store.lookup(...args),
-      consume: async (...args) => store.consume(...args),
-      delete: async (key) => store.delete(key),
-      entries: async () => store.entries(),
-      clear: async () => store.clear(),
-    };
-  }
 
   beforeEach(() => {
     vi.useFakeTimers();

@@ -243,6 +243,9 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
     }
     if (scenario.outcome === "unknown") {
+      vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
+        () => {},
+      );
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) => {
@@ -344,6 +347,14 @@ describe("worker placement workspace journal", () => {
         workspaceAcceptedAtMs: scenario.outcome === "rollback" ? null : 1_000,
       },
     ]);
-    expect(store.validateTurnClaim(claim)).toBe(true);
+    expect(store.validateTurnClaim(claim)).toBe(scenario.outcome !== "unknown");
+    if (scenario.outcome === "unknown") {
+      // An uncertain receipt must be reloaded before the durable claim can authorize work.
+      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject({
+        claimId: claim.claimId,
+        runId: claim.runId,
+      });
+      expect(store.validateTurnClaim(claim)).toBe(true);
+    }
   });
 });

@@ -79,6 +79,45 @@ function displayParser(handlers: ReturnType<typeof createCliEventHandlers>) {
 }
 
 describe("cli tool result events", () => {
+  it.each([undefined, "side-question"] as const)(
+    "keeps input progress separate from execution in %s mode",
+    (executionMode) => {
+      const context = buildContext(`input-${executionMode ?? "normal"}`);
+      context.params.executionMode = executionMode;
+      context.params.onExecutionPhase = vi.fn();
+      const tracking = buildToolTracking();
+      const { handlers, events, dispose } = eventFixture(context, tracking);
+      try {
+        handlers.emitCliToolInputDelta({
+          toolCallId: "write",
+          name: "write",
+          diff: { added: 2, removed: 0 },
+        });
+        handlers.finalizeParsedTools();
+        expect(context.params.onExecutionPhase).not.toHaveBeenCalled();
+        expect(tracking.handleCliToolUseStart).not.toHaveBeenCalled();
+        expect(handlers.hasObservedCliActivity()).toBe(true);
+        expect(events.map(({ stream, data }) => ({ stream, data }))).toEqual(
+          executionMode
+            ? []
+            : [
+                {
+                  stream: "tool",
+                  data: {
+                    phase: "input_delta",
+                    toolCallId: "write",
+                    name: "write",
+                    diff: { added: 2, removed: 0 },
+                  },
+                },
+              ],
+        );
+      } finally {
+        dispose();
+      }
+    },
+  );
+
   it.each([
     ["poll", "kill", false],
     ["kill", "poll", true],
@@ -708,4 +747,48 @@ describe("CLI plan channel bridge", () => {
       }
     },
   );
+});
+
+describe("CLI prepared live output", () => {
+  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "NO_REPLY\nNO_REPLY"])(
+    "preserves ordinary producer output %j",
+    (raw) => {
+      const { handlers, events, dispose } = eventFixture(buildContext("cli-visible-control"));
+      const text = raw.startsWith("NO_REPLY\n") ? raw.slice(9) : raw;
+      try {
+        handlers.emitCliAssistantDelta({ text: raw, delta: raw });
+        handlers.emitCliCompletedReply(raw, 0);
+        handlers.emitCliCommentaryText(raw);
+        expect(events.map((event) => event.data)).toEqual([
+          expect.objectContaining({ text, delta: text }),
+          expect.objectContaining({ completedText: text }),
+          expect.objectContaining({ progressText: text }),
+        ]);
+      } finally {
+        dispose();
+      }
+    },
+  );
+
+  it("withholds only possible exact controls before releasing the full leading-line suffix", () => {
+    const { handlers, events, dispose } = eventFixture(buildContext("cli-control-prefix"));
+    try {
+      handlers.emitCliAssistantDelta({ text: "NO", delta: "NO" });
+      handlers.emitCliAssistantDelta({ text: "NO_REPLY", delta: "_REPLY" });
+      handlers.emitCliCompletedReply("NO_REPLY", 0);
+      handlers.emitCliCommentaryText(" \tNO_REPLY\n");
+      expect(events).toEqual([]);
+      handlers.emitCliAssistantDelta({
+        text: "NO_REPLY\n  Answer.\n",
+        delta: "NO_REPLY\n  Answer.\n",
+      });
+      expect(events).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({ text: "  Answer.\n", delta: "  Answer.\n" }),
+        }),
+      ]);
+    } finally {
+      dispose();
+    }
+  });
 });

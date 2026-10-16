@@ -169,6 +169,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: params.sessionId,
       cwd: effectiveCwd,
       agentDir,
       cfg: params.config,
@@ -184,6 +185,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const extensionFactories = buildEmbeddedExtensionFactories({
       cfg: params.config,
       sessionManager,
+      workspaceDir: effectiveWorkspace,
       model: effectiveModel,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
@@ -257,8 +259,13 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         });
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          (tokensAfter, tokensBefore) =>
-            recordCompaction({ tokensBefore, tokensAfter, compactionKind: "context-engine" }),
+          (tokensAfter, tokensBefore, details) =>
+            recordCompaction({
+              tokensBefore,
+              tokensAfter,
+              compactionKind: "context-engine",
+              details,
+            }),
           assertActive,
         );
         session.setBaseSystemPrompt(systemPromptText.trim());
@@ -274,6 +281,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
+          modelCallUrgency:
+            params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,
@@ -385,6 +394,24 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           assertActive,
           onHookMessages: params.onCompactionHookMessages,
         });
+        const activeSessionFile = memoryTranscript
+          ? params.sessionFile
+          : formatSqliteSessionFileMarker({
+              ...sessionTarget,
+              sessionId: params.sessionId,
+            });
+        const completeSkippedCompaction = async (reason: string) => {
+          await runCompactionHooks({
+            ...hookContext(),
+            phase: "after",
+            messageCountAfter: beforeHookMetrics.messageCountBefore,
+            tokensAfter: beforeHookMetrics.tokenCountBefore,
+            compactedCount: 0,
+            compactionOutcome: "skipped",
+            sessionFile: activeSessionFile,
+          });
+          return { ok: true, compacted: false, reason };
+        };
         await runCompactionHooks({
           ...hookContext(),
           phase: "before",
@@ -411,11 +438,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
-          return {
-            ok: true,
-            compacted: false,
-            reason: "no real conversation messages",
-          };
+          return await completeSkippedCompaction("no real conversation messages");
         }
 
         const compactStartedAt = Date.now();
@@ -427,7 +450,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // replacement window synchronously with its accepted rewrite.
           serverTokensAfter = estimateLlmBoundaryTokenPressure({
             messages: sessionManager.buildSessionContext().messages,
-            systemPrompt: systemPromptText,
+            systemPrompt: accountingRecorder?.requestBudget ? undefined : systemPromptText,
             prompt: "",
             replay: {
               model: effectiveModel,
@@ -436,6 +459,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
+          // Keep replay-aware history, but charge the foreground system/tools.
+          serverTokensAfter += accountingRecorder?.requestBudget
+            ? accountingRecorder.requestBudget.fixedTokens -
+              estimateLlmBoundaryTokenPressure({ messages: [], prompt: "" })
+            : 0;
           recordCompaction({
             tokensBefore,
             tokensAfter: serverTokensAfter,
@@ -549,7 +577,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             if (outcome.status === "skipped") {
               assertActive();
-              return { ok: true, compacted: false, reason: outcome.reason };
+              return await completeSkippedCompaction(outcome.reason);
             }
             clientResult = outcome.result;
           } finally {
@@ -570,12 +598,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
-        const activeSessionFile = memoryTranscript
-          ? params.sessionFile
-          : formatSqliteSessionFileMarker({
-              ...sessionTarget,
-              sessionId: params.sessionId,
-            });
         if (!memoryTranscript) {
           await runPostCompactionSideEffects({
             config: params.config,

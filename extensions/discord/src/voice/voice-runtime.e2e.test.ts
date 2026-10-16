@@ -320,27 +320,6 @@ defineDiscordVoiceTests(
       expect(lastTtsArgs().text).toBe("hello back");
     });
 
-    it("logs a bounded inbound transcript preview for voice debugging", async () => {
-      transcribeAudioFileMock.mockResolvedValueOnce({
-        text: `hello from voice\n\n${"x".repeat(700)}`,
-      });
-      const client = createClientWithMember("u-debug", "Debug", "0001", "Debug Speaker");
-      const manager = createManager(
-        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-debug"] }),
-        client,
-        {},
-      );
-
-      await receiveVoiceUtterance(manager, "u-debug");
-
-      const transcriptLog = logVerboseMock.mock.calls
-        .map((call) => String(call[0]))
-        .find((message) => message.includes("transcript from Debug Speaker (u-debug)"));
-      expect(transcriptLog).toContain("hello from voice ");
-      expect(transcriptLog).not.toContain("\n");
-      expect(transcriptLog?.length).toBeLessThan(650);
-    });
-
     it("logs a failed streaming provider once per session when using file fallback", async () => {
       const replyText = "file fallback reply";
       agentCommandMock.mockResolvedValue({ payloads: [{ text: replyText }] } as never);

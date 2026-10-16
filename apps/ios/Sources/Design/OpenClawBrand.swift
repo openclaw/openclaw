@@ -65,8 +65,8 @@ enum OpenClawBrand {
     static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
     // Accent fills stay dark enough for white content; foreground accents adapt
     // separately so small labels retain 4.5:1 contrast on dark surfaces and tinted pills.
-    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
-    static let uiAccentForeground = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
+    static let uiAccentFill = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
+    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
     static let uiAccentHot = adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86))
     static let uiAccentHotForeground = adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115))
     static let uiVoid = adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17))
@@ -83,7 +83,7 @@ enum OpenClawBrand {
     static let uiStatusError = adaptiveUIColor(light: (220, 38, 38), dark: (239, 68, 68))
 
     static let accent = Color(uiColor: Self.uiAccent)
-    static let accentForeground = Color(uiColor: Self.uiAccentForeground)
+    static let accentFill = Color(uiColor: Self.uiAccentFill)
     static let accentHot = Color(uiColor: Self.uiAccentHot)
     static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
     static let void = Color(uiColor: Self.uiVoid)
@@ -102,12 +102,6 @@ enum OpenClawBrand {
     static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
     static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))
     static let activationSurface = Color(uiColor: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30)))
-    static let activationSecondaryActionTop = Color(uiColor: adaptiveUIColor(
-        light: (255, 255, 255),
-        dark: (36, 32, 33)))
-    static let activationSecondaryActionBottom = Color(uiColor: adaptiveUIColor(
-        light: (248, 248, 250),
-        dark: (30, 27, 28)))
     static let activationInsetSurface = Color(uiColor: adaptiveUIColor(light: (246, 241, 238), dark: (44, 37, 38)))
     static let activationNeutralSurface = Color(uiColor: adaptiveUIColor(light: (242, 242, 247), dark: (34, 34, 37)))
     static let activationNeutralInsetSurface = Color(uiColor: adaptiveUIColor(
@@ -178,16 +172,6 @@ enum OpenClawBrand {
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing)
-    }
-
-    static var activationDisabledGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                activationNeutralInsetSurface,
-                activationNeutralSurface.opacity(0.92),
-            ],
-            startPoint: .top,
-            endPoint: .bottom)
     }
 
     private static func adaptiveUIColor(
@@ -272,165 +256,119 @@ extension View {
     }
 }
 
+/// Capsule surface shared by the branded button styles. iOS 26 uses system
+/// Liquid Glass (prominent is tinted); earlier systems get a flat adaptive fill.
+/// No gradients, sheens, or shadows: they turn into a muddy halo on dark surfaces.
+enum OpenClawButtonSurfaceKind {
+    case prominent
+    case secondary
+}
+
+private struct OpenClawButtonSurfaceModifier: ViewModifier {
+    let kind: OpenClawButtonSurfaceKind
+    let isEnabled: Bool
+    let isPressed: Bool
+
+    private var isFilled: Bool {
+        self.kind == .prominent && self.isEnabled
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(self.glass, in: .capsule)
+        } else {
+            content
+                .background(Capsule(style: .continuous).fill(self.fallbackFill))
+                .overlay {
+                    if !self.isFilled {
+                        Capsule(style: .continuous).strokeBorder(Color(uiColor: .separator), lineWidth: 0.75)
+                    }
+                }
+                .opacity(self.isPressed && self.isEnabled ? 0.82 : 1)
+                .animation(.smooth(duration: 0.14), value: self.isPressed)
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private var glass: Glass {
+        self.isFilled ? .regular.tint(OpenClawBrand.accentFill).interactive() : .regular.interactive(self.isEnabled)
+    }
+
+    private var fallbackFill: Color {
+        self.isFilled ? OpenClawBrand.accentFill : OpenClawBrand.activationNeutralSurface
+    }
+}
+
+extension View {
+    func openClawButtonSurface(
+        _ kind: OpenClawButtonSurfaceKind,
+        isEnabled: Bool,
+        isPressed: Bool) -> some View
+    {
+        self.modifier(OpenClawButtonSurfaceModifier(kind: kind, isEnabled: isEnabled, isPressed: isPressed))
+    }
+
+    /// System prominent button filled with the accent. The app tint is the readable
+    /// foreground accent, so prominent fills must opt into the darker fill accent.
+    func openClawProminentButton() -> some View {
+        self.buttonStyle(.borderedProminent).tint(OpenClawBrand.accentFill)
+    }
+}
+
 struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 54
-
-    private var resolvedCornerRadius: CGFloat {
-        self.height / 2
-    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.subheadSemiBold)
             .foregroundStyle(self.isEnabled ? OpenClawBrand.activationPrimaryActionText : Color.secondary)
+            // Spinners inside the label must not inherit the red app tint over the red fill.
             .tint(self.isEnabled ? OpenClawBrand.activationPrimaryActionText : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: self.height)
-            .background {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .fill(self.isEnabled ? Self.primaryFill : OpenClawBrand.activationDisabledGradient)
-                    .actionButtonShadow(self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear)
-            }
-            .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .actionButtonHighlight(
-                        colors: [.white.opacity(self.isEnabled ? 0.14 : 0.06), .white.opacity(0)],
-                        endPoint: .center,
-                        height: self.height * 0.48)
-            }
-            .overlay(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .actionButtonHighlight(
-                        colors: [.white.opacity(0), .white.opacity(self.isEnabled ? 0.08 : 0.03)],
-                        endPoint: .bottom,
-                        height: self.height * 0.34)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .stroke(
-                        self.isEnabled
-                            ? OpenClawBrand.activationPrimaryAction.opacity(0.72)
-                            : OpenClawBrand.activationNeutralStroke,
-                        lineWidth: 0.75)
-            }
-            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
-            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
-    }
-
-    private static var primaryFill: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(red: 0.93, green: 0.27, blue: 0.25),
-                Color(red: 0.91, green: 0.25, blue: 0.24),
-            ],
-            startPoint: .top,
-            endPoint: .bottom)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: self.height)
+            .openClawButtonSurface(.prominent, isEnabled: self.isEnabled, isPressed: configuration.isPressed)
+            .contentShape(Capsule(style: .continuous))
     }
 }
 
 struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var height: CGFloat = 50
-    var shadowOpacity: Double = 0.035
-
-    private var resolvedCornerRadius: CGFloat {
-        self.height / 2
-    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.subheadSemiBold)
-            .foregroundStyle(self.isEnabled ? OpenClawBrand.activationPrimaryAction : .secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: self.height)
-            .background {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .fill(Self.secondaryFill)
-                    .actionButtonShadow(self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear)
-            }
-            .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .actionButtonHighlight(
-                        colors: [.white.opacity(0.42), .white.opacity(0)],
-                        endPoint: .center,
-                        height: self.height * 0.48)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
-                    .stroke(OpenClawBrand.activationHairline, lineWidth: 0.75)
-            }
-            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
-            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
-    }
-
-    private static var secondaryFill: LinearGradient {
-        LinearGradient(
-            colors: [
-                OpenClawBrand.activationSecondaryActionTop,
-                OpenClawBrand.activationSecondaryActionBottom,
-            ],
-            startPoint: .top,
-            endPoint: .bottom)
+            .foregroundStyle(self.isEnabled ? OpenClawBrand.accent : Color.secondary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: self.height)
+            .openClawButtonSurface(.secondary, isEnabled: self.isEnabled, isPressed: configuration.isPressed)
+            .contentShape(Capsule(style: .continuous))
     }
 }
 
 struct OpenClawCloseButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    var minWidth: CGFloat = 36
+    var height: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.subheadSemiBold)
-            .foregroundStyle(
-                self.isEnabled
-                    ? OpenClawBrand.activationPrimaryAction
-                    : Color.secondary)
+            .foregroundStyle(self.isEnabled ? OpenClawBrand.accent : Color.secondary)
+            .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: 36)
-            .frame(height: 36)
+            .frame(minWidth: self.minWidth, minHeight: self.height)
             .padding(.horizontal, 7)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(OpenClawBrand.activationNeutralGradient)
-                    .shadow(
-                        color: self.isEnabled ? Color.black.opacity(0.045) : .clear,
-                        radius: 1,
-                        x: 0,
-                        y: 1)
-                    .shadow(
-                        color: self.isEnabled ? Color.black.opacity(0.03) : .clear,
-                        radius: 4,
-                        x: 0,
-                        y: 2)
-            }
-            .overlay(alignment: .top) {
-                Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(0.55), lineWidth: 0.5)
-                    .blendMode(.plusLighter)
-            }
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(OpenClawBrand.activationNeutralStroke, lineWidth: 0.6)
-            }
-            .contentShape(Capsule(style: .continuous))
-            .opacity(configuration.isPressed && self.isEnabled ? 0.66 : 1)
-            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
-            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
-    }
-}
-
-extension RoundedRectangle {
-    fileprivate func actionButtonHighlight(colors: [Color], endPoint: UnitPoint, height: CGFloat) -> some View {
-        self.fill(LinearGradient(colors: colors, startPoint: .top, endPoint: endPoint))
-            .frame(height: height)
-            .allowsHitTesting(false)
-    }
-}
-
-extension View {
-    fileprivate func actionButtonShadow(_ color: Color) -> some View {
-        self
-            .shadow(color: color, radius: 1, x: 0, y: 1)
-            .shadow(color: color, radius: 2, x: 0, y: 2)
+            .openClawButtonSurface(.secondary, isEnabled: self.isEnabled, isPressed: configuration.isPressed)
+            // Visual stays 36pt; the vertical padding brings the hit area to 44pt.
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
     }
 }

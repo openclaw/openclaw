@@ -44,7 +44,10 @@ export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 export type ChatFastModeSelectState = {
   /** Fast output is effectively enabled (explicitly or via auto/inherited default). */
   active: boolean;
+  /** Effective selection shown after defaults and capability recovery. */
   currentOverride: ChatFastModeSelectValue;
+  /** Saved session choice; an empty value still inherits the configured tier. */
+  persistedOverride: ChatFastModeSelectValue;
   disabled: boolean;
   /** Resolved speed label, separate from the saved preference. */
   label: string;
@@ -62,16 +65,13 @@ export type ChatFastModeTarget = Pick<
 >;
 
 type ChatFastModeSelectStateInput = {
-  activeRunId: string | null;
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
   fastModeTarget?: ChatFastModeTarget;
   gatewayAvailable: boolean;
   loading: boolean;
-  sending: boolean;
   sessionsResult: SessionsListResult | null;
-  stream: string | null;
 };
 
 // Preserve existing controls only when the selected request's applicability is unknown.
@@ -492,15 +492,9 @@ export function resolveChatFastModeSelectState(
   return {
     active,
     currentOverride,
+    persistedOverride: configuredOverride,
     disabled:
-      standardOnly ||
-      !supported ||
-      !input.connected ||
-      input.loading ||
-      input.sending ||
-      Boolean(input.activeRunId) ||
-      input.stream !== null ||
-      !input.gatewayAvailable,
+      standardOnly || !supported || !input.connected || input.loading || !input.gatewayAvailable,
     label,
     hint: observation
       ? observation.responseTier

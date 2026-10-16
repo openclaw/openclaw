@@ -190,31 +190,46 @@ it("rejects stale identities after reconnecting the same client", async () => {
   expect(capability.get("main")?.name).toBe("Current");
 });
 
-it("rejects an in-flight identity after that agent is invalidated", async () => {
-  const staleRequest = createDeferred<AgentIdentityResult>();
-  const currentRequest = createDeferred<AgentIdentityResult>();
-  const request = vi
-    .fn()
-    .mockImplementationOnce(() => staleRequest.promise)
-    .mockImplementationOnce(() => currentRequest.promise);
-  const client = createTestGatewayClient(request);
-  const capability = createAgentIdentityCapability({
-    snapshot: { client, phase: "connected" },
-    subscribe: () => () => undefined,
-  });
+it.each(["local", "Gateway"])(
+  "rejects an in-flight identity after %s invalidation",
+  async (source) => {
+    const staleRequest = createDeferred<AgentIdentityResult>();
+    const currentRequest = createDeferred<AgentIdentityResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise);
+    const client = createTestGatewayClient(request);
+    let onEvent = (_event: { event: string; payload?: unknown }) => {};
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        onEvent = listener;
+        return () => undefined;
+      },
+    });
+    const publish = vi.fn();
+    capability.subscribe(publish);
 
-  const stale = capability.ensure(["main"]);
-  capability.invalidate(["main"]);
-  const current = capability.ensure(["main"]);
+    const stale = capability.ensure(["main"]);
+    if (source === "Gateway") {
+      onEvent({ event: "agent.identity.changed", payload: { agentId: "main" } });
+    } else {
+      capability.invalidate(["main"]);
+    }
+    expect(publish).toHaveBeenCalledOnce();
+    const current = capability.ensure(["main"]);
 
-  staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
-  await stale;
-  expect(capability.entries()).toEqual([]);
+    staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
+    await stale;
+    expect(capability.entries()).toEqual([]);
 
-  currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
-  await current;
-  expect(capability.get("main")?.name).toBe("Current");
-});
+    currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
+    await current;
+    expect(capability.get("main")?.name).toBe("Current");
+  },
+);
 
 it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
   const pending = createDeferred();

@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -27,6 +28,7 @@ import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -96,6 +98,7 @@ export async function handleChatHistoryRequest({
     inputRunIds,
   } = params;
   const pageCursor = decodeChatHistoryPageCursor(cursor);
+  const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const messageId = pageCursor?.messageId ?? wireMessageId;
   const deltaCursor = pageCursor ? undefined : cursor;
   const retainedSessionId = retainedTranscript?.sessionId;
@@ -187,8 +190,9 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Recovery lookahead keeps its read budget; every response has the same byte target.
-    const maxResponseBytes = Math.min(maxBytes ?? Infinity, 512 * 1024, maxHistoryBytes);
+    // Keep the default response small while honoring explicit back-scroll budgets.
+    // Recovery lookahead retains its separate read budget.
+    const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
@@ -246,6 +250,7 @@ export async function handleChatHistoryRequest({
                   {
                     // Internal adapters may inspect message objects before responding.
                     encodeResponse: acceptsSerializedJson && method === req.method,
+                    includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
                     sessionId,
@@ -333,6 +338,7 @@ export async function handleChatHistoryRequest({
                 ...selectedSession,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
+                preparedRuntimeOwnership: null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
@@ -385,6 +391,8 @@ export async function handleChatHistoryRequest({
         requestedSessionKey: sessionKey,
         canonicalSessionKey: canonicalKey,
         sessionId,
+        agentId: sessionAgentId,
+        defaultAgentId: compatibilityOwnerAgentId,
       });
       if (sessionInfo && Object.hasOwn(historyPage, "activeLeafEntryId")) {
         sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
@@ -396,6 +404,7 @@ export async function handleChatHistoryRequest({
               ...getSessionDefaults(cfg, defaultModelCatalog, {
                 agentId: sessionAgentId,
                 allowPluginNormalization: false,
+                metadataSnapshot: readPreparedGatewayModelMetadata(cfg),
                 providerPolicySource: "active",
               }),
               modelSelectionTarget: resolveGatewayModelSelectionPolicy({
@@ -490,6 +499,7 @@ export async function handleChatHistoryRequest({
             delta = await readChatHistoryDelta(
               {
                 toolResultMaxChars,
+                includePluginSteering,
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,

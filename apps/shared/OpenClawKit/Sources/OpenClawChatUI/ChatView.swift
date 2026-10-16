@@ -120,6 +120,7 @@ public struct OpenClawChatView: View {
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollCommand = ChatScrollCommand()
+    @State private var dismissedProgressCards: Set<String> = []
     @State private var hasPerformedInitialScroll = false
     @State private var lastTurnStartID: UUID?
     @State private var hasNewerContentBelow = false
@@ -349,10 +350,20 @@ extension OpenClawChatView {
     @ViewBuilder
     private var progressCard: some View {
         if let progressCard = self.viewModel.progressCard {
-            ChatProgressCard(
-                steps: progressCard.steps ?? [],
-                markdown: progressCard.markdown,
-                isInline: self.usesInlineProgressCard)
+            // Dismissal lasts until the card changes: an update is worth showing again.
+            let signature = String(describing: progressCard)
+            if !self.dismissedProgressCards.contains(signature) {
+                ChatProgressCard(
+                    steps: progressCard.steps ?? [],
+                    markdown: progressCard.markdown,
+                    isInline: self.usesInlineProgressCard,
+                    isRefreshing: self.viewModel.progressCardRefreshPending,
+                    onRefresh: self.viewModel.progressCardRefreshAvailable
+                        ? { self.viewModel.requestProgressCardRefresh() } : nil,
+                    onClearSaved: self.viewModel.progressCardStoreAvailable == true
+                        ? { self.viewModel.clearSavedProgressCard() } : nil,
+                    onDismiss: { self.dismissedProgressCards.insert(signature) })
+            }
         }
     }
 
@@ -391,6 +402,34 @@ extension OpenClawChatView {
             resolveInputModel: self.resolveComposerModel)
     }
 
+    /// The turn has ended, but a helper it started is still running.
+    @ViewBuilder
+    private var subagentWaitRow: some View {
+        if let wait = self.viewModel.subagentWait {
+            HStack(spacing: 7) {
+                ChatWorkingClawView(seed: "subagent-wait", parked: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Waiting on subagents")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                    if let child = wait.child {
+                        Button {
+                            self.viewModel.switchSession(to: child.key)
+                        } label: {
+                            Text(child.name)
+                                .font(OpenClawChatTypography.caption)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("chat-subagent-wait-child")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
     @ViewBuilder
     private var turnRecapRow: some View {
         if !self.showsWorkingIndicator,
@@ -417,6 +456,7 @@ extension OpenClawChatView {
                     if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
                         self.turnRecapRow
                     }
+                    self.subagentWaitRow
 
                     Color.clear
                         #if os(macOS)
@@ -684,7 +724,8 @@ extension OpenClawChatView {
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean,
                 runIdentity: self.viewModel.workingIndicatorIdentity,
-                outputTokens: self.viewModel.liveRunOutputTokens)
+                outputTokens: self.viewModel.liveRunOutputTokens,
+                status: self.viewModel.runStartupStatus)
                 .equatable()
         }
 
@@ -1455,6 +1496,7 @@ private struct ChatNoticeCard: View {
                         .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .controlSize(.large)
             }
         }
