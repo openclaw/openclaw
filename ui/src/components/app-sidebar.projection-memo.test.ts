@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
@@ -11,6 +12,8 @@ import {
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
+import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
+import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import {
   mountRoster,
   settleRoster,
@@ -27,12 +30,13 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SelectPicker } from "./select-picker.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
   sidebarNarrationLines: ReadonlyMap<string, string>;
@@ -128,6 +132,84 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {
+    const pending = createDeferred<SidebarSnapshotModel | null>();
+    const read = vi
+      .spyOn(SessionSnapshotStore.prototype, "readSidebar")
+      .mockReturnValue(pending.promise);
+    const sessions = createSessionsHarness("main", [key("cached")]);
+    const gateway = createGatewayHarness(
+      createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
+    );
+    gateway.publish({ phase: "connecting", client: null, hello: null });
+    const context = createContext(gateway.gateway, sessions.sessions, {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
+    onTestFinished(
+      admitSidebarBootScope(gateway.gateway, {
+        scope: gateway.gateway.connection.gatewayUrl,
+        recoveryScope: "synthetic-account",
+        profileId: null,
+      }),
+    );
+    const { sidebar, provider } = await mountSidebarContext(context);
+    const host = sidebar.hostElement;
+    const owner = getAppSidebarOwner(host);
+    expect(host.querySelector("aside.sidebar")).toBeNull();
+    provider.setContext({ ...context });
+    await settleLitElement(sidebar);
+    expect(getAppSidebarOwner(host)).toBe(owner);
+    expect(host.querySelector("aside.sidebar")).toBeNull();
+    pending.resolve({
+      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      mode: "chip",
+    });
+    await waitForSolid(() =>
+      expect(host.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state")).toBe(
+        "cached",
+      ),
+    );
+    expect(read).toHaveBeenCalledOnce();
+    host.remove();
+    await settleLitElement(sidebar);
+    provider.append(host);
+    await waitForSolid(() =>
+      expect(host.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state")).toBe("live"),
+    );
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("publishes a saved receipt without recapturing or replacing the sidebar", async () => {
+    const written = createDeferred<boolean>();
+    const write = vi
+      .spyOn(SessionSnapshotStore.prototype, "writeSidebar")
+      .mockReturnValue(written.promise);
+    const { sidebar, context, gateway } = await mount([session("saved")]);
+    Object.assign(context.plugins, { registryStatus: "complete" });
+    context.sessions.captureBootRoster = () => captureBootRoster(context.sessions.state);
+    sidebar.connected = true;
+    gateway.publish({
+      hello: {
+        ...gatewayHelloForMethods([]),
+        auth: { role: "operator", scopes: [], recoveryScope: "synthetic-account" },
+      },
+    });
+    await waitForSolid(() => expect(write).toHaveBeenCalled());
+    await settleLitElement(sidebar);
+    const frame = sidebar.querySelector("aside.sidebar");
+    expect(frame?.getAttribute("data-snapshot-saved")).toBe("false");
+    const capture = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "captureSidebarSnapshot");
+    projectRows.mockClear();
+    written.resolve(true);
+    await waitForSolid(() => expect(frame?.getAttribute("data-snapshot-saved")).toBe("true"));
+    expect(sidebar.querySelector("aside.sidebar")).toBe(frame);
+    expect(capture).not.toHaveBeenCalled();
+    expect(projectRows).not.toHaveBeenCalled();
+  });
+
   it("watches live PR rows after preparation releases the boot snapshot", async () => {
     const target = session("live-checkout", {
       worktree: { id: "wt-live", branch: "main", repoRoot: "/synthetic/repo" },

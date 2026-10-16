@@ -19,8 +19,8 @@ import {
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 
 const scope = {
   gatewayScope: "wss://sidebar.example",
@@ -95,7 +95,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   let settled = false;
   let captured = model;
   const capture = vi.fn(() => captured);
-  const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
+  const host: Parameters<typeof createSidebarSnapshot>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: {
       gateway,
@@ -119,9 +119,9 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
       host.sidebarSnapshot = null;
     },
   };
-  const controller = new SidebarSnapshotController(host);
-  controller.subscribe(() => {
-    if (controller.saved) {
+  const snapshotOwner = createSidebarSnapshot(host);
+  snapshotOwner.subscribe(() => {
+    if (snapshotOwner.read().saved) {
       saved.resolve();
     }
   });
@@ -129,15 +129,15 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     gateway,
     capture,
     host,
-    controller,
+    snapshotOwner,
     restored: restored.promise,
     selectPageScope(scopeId: string | null) {
       pageScopeId = scopeId;
-      controller.synchronize();
+      snapshotOwner.synchronize();
     },
     selectAgent(agentId: string) {
       selectedAgentId = agentId;
-      controller.synchronize();
+      snapshotOwner.synchronize();
     },
     settle(value = model) {
       captured = value;
@@ -186,10 +186,10 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.controller.disconnect(),
+      () => test.snapshotOwner.disconnect(),
     );
-    test.controller.connect();
-    expect(test.controller.pending).toBe(true);
+    test.snapshotOwner.connect();
+    expect(test.snapshotOwner.read().pending).toBe(true);
     await test.restored;
     return { ...test, store };
   }
@@ -240,9 +240,9 @@ describe("sidebar snapshot lifecycle", () => {
     );
     disposers.push(
       () => sessions.dispose(),
-      () => test.controller.disconnect(),
+      () => test.snapshotOwner.disconnect(),
     );
-    test.controller.connect();
+    test.snapshotOwner.connect();
     await Promise.all([test.restored, sessions.whenCachedRosterSettled()]);
     expect(sessions.state.result?.sessions).toEqual(roster.result.sessions);
     expect(sessions.state.resultCached).toBe(true);
@@ -275,13 +275,13 @@ describe("sidebar snapshot lifecycle", () => {
       const test = fixture(timing === "before" ? "other" : "main");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-        () => test.controller.disconnect(),
+        () => test.snapshotOwner.disconnect(),
       );
-      test.controller.connect();
+      test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
-          const stop = test.controller.subscribe(() => {
-            if (!test.controller.pending) {
+          const stop = test.snapshotOwner.subscribe(() => {
+            if (!test.snapshotOwner.read().pending) {
               stop();
               resolve();
             }
@@ -293,7 +293,7 @@ describe("sidebar snapshot lifecycle", () => {
         test.selectAgent("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.controller.saved).toBe(false);
+      expect(test.snapshotOwner.read().saved).toBe(false);
     },
   );
 
@@ -309,13 +309,13 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.controller.disconnect(),
+      () => test.snapshotOwner.disconnect(),
     );
-    test.controller.connect();
-    expect(test.controller.pending).toBe(true);
+    test.snapshotOwner.connect();
+    expect(test.snapshotOwner.read().pending).toBe(true);
     void test.settle();
     test.publish();
-    expect(test.controller.pending).toBe(false);
+    expect(test.snapshotOwner.read().pending).toBe(false);
     stalled.resolve(model);
     await vi.dynamicImportSettled();
     expect(test.host.sidebarSnapshot).toBeNull();
@@ -332,13 +332,13 @@ describe("sidebar snapshot lifecycle", () => {
       const test = fixture("main", timing === "before" ? "other" : "main");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-        () => test.controller.disconnect(),
+        () => test.snapshotOwner.disconnect(),
       );
-      test.controller.connect();
+      test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
-          const stop = test.controller.subscribe(() => {
-            if (!test.controller.pending) {
+          const stop = test.snapshotOwner.subscribe(() => {
+            if (!test.snapshotOwner.read().pending) {
               stop();
               resolve();
             }
@@ -349,7 +349,7 @@ describe("sidebar snapshot lifecycle", () => {
         test.selectPageScope("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.controller.saved).toBe(false);
+      expect(test.snapshotOwner.read().saved).toBe(false);
     },
   );
 
@@ -362,9 +362,9 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.controller.disconnect(),
+      () => test.snapshotOwner.disconnect(),
     );
-    test.controller.connect();
+    test.snapshotOwner.connect();
     await test.restored;
     test.selectAgent("other");
     expect(test.host.sidebarSnapshot).toEqual(pages);
@@ -374,16 +374,16 @@ describe("sidebar snapshot lifecycle", () => {
     const test = await warmFixture();
     expect(test.host.sidebarSnapshot).toEqual(model);
     expect(test.gateway.snapshot.phase).toBe("connecting");
-    expect(test.controller.pending).toBe(false);
+    expect(test.snapshotOwner.read().pending).toBe(false);
     test.publish();
-    test.controller.capture();
+    test.snapshotOwner.capture();
     expect(test.host.sidebarSnapshot).toEqual(model);
     const live = { ...model, brand: { ...model.brand, name: "Updated workspace" } };
     const saved = test.settle(live);
-    test.controller.synchronize();
+    test.snapshotOwner.synchronize();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
-    test.controller.capture();
+    test.snapshotOwner.capture();
     await saved;
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
@@ -398,20 +398,20 @@ describe("sidebar snapshot lifecycle", () => {
       issued.resolve();
       return written.promise;
     });
-    test.controller.connect();
-    disposers.push(() => test.controller.disconnect());
+    test.snapshotOwner.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
     test.publish();
     const saved = test.settle();
-    test.controller.capture();
+    test.snapshotOwner.capture();
     await issued.promise;
     try {
-      test.controller.capture();
-      expect(test.controller.saved).toBe(false);
+      test.snapshotOwner.capture();
+      expect(test.snapshotOwner.read().saved).toBe(false);
     } finally {
       written.resolve(true);
     }
     await saved;
-    expect(test.controller.saved).toBe(true);
+    expect(test.snapshotOwner.read().saved).toBe(true);
   });
 
   it("waits for a reverted model to finish writing after a different model was queued", async () => {
@@ -424,14 +424,14 @@ describe("sidebar snapshot lifecycle", () => {
     });
     test.publish();
     void test.settle({ ...model, peoplePresenceFilter: "all" });
-    test.controller.synchronize();
-    test.controller.capture();
+    test.snapshotOwner.synchronize();
+    test.snapshotOwner.capture();
     await issued.promise;
     const saved = test.settle(model);
     try {
-      test.controller.capture();
-      test.controller.capture();
-      expect(test.controller.saved).toBe(false);
+      test.snapshotOwner.capture();
+      test.snapshotOwner.capture();
+      expect(test.snapshotOwner.read().saved).toBe(false);
     } finally {
       written.resolve(true);
     }
@@ -447,7 +447,7 @@ describe("sidebar snapshot lifecycle", () => {
       }
       test.publish(change === "profile" ? { selfUser: { id: "profile-b" } } : {});
       expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.controller.saved).toBe(false);
+      expect(test.snapshotOwner.read().saved).toBe(false);
     },
   );
 
@@ -461,7 +461,7 @@ describe("sidebar snapshot lifecycle", () => {
           )
         : deleteStoredChatSnapshot(sessionKey, kind === "cache-eviction" ? kind : undefined));
       expect(test.host.sidebarSnapshot).toEqual(kind === "cache-eviction" ? model : null);
-      expect(test.controller.saved).toBe(kind === "cache-eviction");
+      expect(test.snapshotOwner.read().saved).toBe(kind === "cache-eviction");
     },
   );
 
@@ -469,9 +469,9 @@ describe("sidebar snapshot lifecycle", () => {
     const test = fixture();
     disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
-    test.controller.connect();
-    disposers.push(() => test.controller.disconnect());
-    expect(test.controller.pending).toBe(false);
+    test.snapshotOwner.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    expect(test.snapshotOwner.read().pending).toBe(false);
     expect(test.host.sidebarSnapshot).toBeNull();
   });
 
@@ -482,9 +482,9 @@ describe("sidebar snapshot lifecycle", () => {
     disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
     const clearing = deleteStoredChatSnapshot(sessionKey);
     try {
-      test.controller.connect();
-      disposers.push(() => test.controller.disconnect());
-      expect(test.controller.pending).toBe(false);
+      test.snapshotOwner.connect();
+      disposers.push(() => test.snapshotOwner.disconnect());
+      expect(test.snapshotOwner.read().pending).toBe(false);
     } finally {
       stop();
       deletion.resolve();
@@ -498,11 +498,11 @@ describe("sidebar snapshot lifecycle", () => {
     clearBootRecords(scope.gatewayScope, { recoveryScope: "previous-account" });
     expect(test.host.sidebarSnapshot).toEqual(model);
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
-    test.controller.synchronize();
+    test.snapshotOwner.synchronize();
     expect(test.gateway.snapshot.phase).toBe("connecting");
     expect(test.gateway.snapshot.lastErrorAuthReason).toBeUndefined();
     expect(test.host.sidebarSnapshot).toBeNull();
-    expect(test.controller.saved).toBe(false);
+    expect(test.snapshotOwner.read().saved).toBe(false);
   });
 
   it("preserves same-owner replacement and waits for a new hello after admission retirement", async () => {
@@ -529,13 +529,13 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.sidebarSnapshot).toEqual(model);
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
     const saved = test.settle();
-    test.controller.synchronize();
-    test.controller.capture();
+    test.snapshotOwner.synchronize();
+    test.snapshotOwner.capture();
     expect(test.capture).not.toHaveBeenCalled();
     test.publish();
-    test.controller.capture();
+    test.snapshotOwner.capture();
     await saved;
-    expect(test.controller.saved).toBe(true);
+    expect(test.snapshotOwner.read().saved).toBe(true);
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
     ).toEqual(model);
@@ -543,14 +543,14 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("does not hold a cold render and can save again after remount", async () => {
     const test = fixture();
-    disposers.push(() => test.controller.disconnect());
-    test.controller.connect();
-    expect(test.controller.pending).toBe(false);
-    test.controller.disconnect();
-    test.controller.connect();
+    disposers.push(() => test.snapshotOwner.disconnect());
+    test.snapshotOwner.connect();
+    expect(test.snapshotOwner.read().pending).toBe(false);
+    test.snapshotOwner.disconnect();
+    test.snapshotOwner.connect();
     test.publish();
     const saved = test.settle();
-    test.controller.capture();
+    test.snapshotOwner.capture();
     await saved;
     const store = new SessionSnapshotStore();
     store.connect();
