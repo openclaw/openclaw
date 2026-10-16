@@ -242,15 +242,14 @@ function writePersistedInstalledPluginIndexRow(
     revision,
     index: persistedIndex,
   } satisfies PersistedInstalledPluginIndexValue);
-  const row: InstalledPluginIndexRow = {
-    state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
-    value_json: valueJson,
-    updated_at_ms: revision,
-  };
   const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
     getNodeSqliteKysely<InstalledPluginIndexDatabase>(database)
       .insertInto("config_machine_state")
-      .values(row)
+      .values({
+        state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
+        value_json: valueJson,
+        updated_at_ms: revision,
+      })
       .onConflict((conflict) =>
         conflict.column("state_key").doUpdateSet((eb) => ({
           value_json: eb.ref("excluded.value_json"),
@@ -260,7 +259,11 @@ function writePersistedInstalledPluginIndexRow(
   );
   // sqlite-allow-raw: Serialization precedes native prepare; the caller owns rollback.
   database.prepare(compiled.sql).run(...bind());
-  return row;
+  return {
+    state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
+    value_json: valueJson,
+    updated_at_ms: revision,
+  };
 }
 
 export function writePersistedInstalledPluginIndexToSqlite(
