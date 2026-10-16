@@ -26,6 +26,15 @@ vi.mock("../media.runtime.js", async (importOriginal) => ({
   fetchWithRuntimeDispatcher: mediaFetchMock,
 }));
 
+const imageFile = (id: string) => ({
+  id,
+  name: `${id}.png`,
+  mimetype: "image/png",
+  url_private: `https://files.slack.com/${id}.png`,
+});
+const imageResponse = (status = 200) =>
+  new Response(Buffer.from("image data"), { status, headers: { "content-type": "image/png" } });
+
 describe("Slack platform-authoritative automatic room history", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-room-history-");
   const mediaPaths = new Set<string>();
@@ -67,18 +76,14 @@ describe("Slack platform-authoritative automatic room history", () => {
     const ctx = createContext();
     const account = createSlackTestAccount();
     type Input = Parameters<typeof prepareSlackMessage>[0];
-    const prepare = async ({
-      message: messageOverrides,
-      opts,
-      ...overrides
-    }: Omit<Partial<Input>, "message" | "opts"> & {
-      message?: Partial<SlackMessageEvent>;
-      opts?: Partial<Input["opts"]>;
-    } = {}) => {
+    const prepare = async (
+      messageOverrides: Partial<SlackMessageEvent> = {},
+      opts: Partial<Input["opts"]> = {},
+      context = ctx,
+    ) => {
       const prepared = await prepareSlackMessage({
-        ctx,
+        ctx: context,
         account,
-        ...overrides,
         message: { ...message, ...messageOverrides },
         opts: { source: "app_mention", ...opts },
       });
@@ -118,10 +123,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       { ts: "14.000", user: "U1", text: "outside cap" },
     ]);
     for (const ctx of [f.ctx, f.createContext()]) {
-      const prepared = await f.prepare({
-        ctx,
-        opts: { source: "app_mention", sourceMessageIds: ["19.000", "20.000"] },
-      });
+      const prepared = await f.prepare({}, { sourceMessageIds: ["19.000", "20.000"] }, ctx);
       expect(prepared?.InboundHistory?.map((entry) => entry.body)).toEqual([
         "offline discussion",
         "edited platform value",
@@ -143,13 +145,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     async (kind) => {
       const table = kind === "table image";
       const f = fixture(table ? 5 : 4);
-      mediaFetchMock.mockImplementation(
-        async () =>
-          new Response(Buffer.from("image data"), {
-            status: table ? 200 : 500,
-            headers: { "content-type": "image/png" },
-          }),
-      );
+      mediaFetchMock.mockImplementation(async () => imageResponse(table ? 200 : 500));
       const attachmentCounts = table ? [1] : [4, 4, 4, 4];
       f.setHistory(
         attachmentCounts.map((count, index) => ({
@@ -164,16 +160,11 @@ describe("Slack platform-authoritative automatic room history", () => {
                 },
               ]
             : undefined,
-          files: Array.from({ length: count }, (_, image) => ({
-            id: `F${index}-${image}`,
-            name: `image-${index}-${image}.png`,
-            mimetype: "image/png",
-            url_private: `https://files.slack.com/image-${index}-${image}.png`,
-          })),
+          files: Array.from({ length: count }, (_, image) => imageFile(`F${index}-${image}`)),
         })),
       );
       const prepared = await f.prepare(
-        table ? { message: { text: "<@B1> inspect the recent diagram", ts: "501.000" } } : {},
+        table ? { text: "<@B1> inspect the recent diagram", ts: "501.000" } : {},
       );
       const media = prepared?.InboundHistory?.flatMap((entry) => entry.media ?? []) ?? [];
       expect(mediaFetchMock).toHaveBeenCalledTimes(table ? 1 : 4);
@@ -208,25 +199,15 @@ describe("Slack platform-authoritative automatic room history", () => {
         user: allowed ? "U1" : "UDENIED",
         bot_id: "BOTHER",
         text: "bot root decision",
-        files: [
-          {
-            id: "FROOT",
-            name: "root.png",
-            mimetype: "image/png",
-            url_private: "https://files.slack.com/root.png",
-          },
-        ],
+        files: [imageFile("FROOT")],
       };
       f.setThread(root, [
         root,
         { ts: "11.000", user: "UDENIED", bot_id: "BOTHER", text: "denied bot follow-up" },
         { ts: "12.000", user: "U1", bot_id: "BOTHER", text: "allowed bot follow-up" },
       ]);
-      mediaFetchMock.mockImplementation(
-        async () =>
-          new Response(Buffer.from("root image"), { headers: { "content-type": "image/png" } }),
-      );
-      const prepared = await f.prepare({ message: { thread_ts: "10.000" } });
+      mediaFetchMock.mockImplementation(async () => imageResponse());
+      const prepared = await f.prepare({ thread_ts: "10.000" });
       const includeRoot = allowed || mode === "all";
       expect(prepared?.RawBody).toContain("current request");
       expect(prepared?.ThreadHistoryBody).toContain("allowed bot follow-up");
@@ -244,15 +225,15 @@ describe("Slack platform-authoritative automatic room history", () => {
       .fn()
       .mockResolvedValue({ messages: [{ ts: "19.000", user: "U1", text: "workspace two only" }] });
     f.setHistory([{ ts: "19.000", user: "U1", text: "workspace one secret" }]);
-    const prepared = await f.prepare({
-      opts: {
-        source: "app_mention",
+    const prepared = await f.prepare(
+      {},
+      {
         eventScope: {
           teamId: "T2",
           client: { conversations: { history: scopedHistory } } as unknown as App["client"],
         },
       },
-    });
+    );
     expect(prepared?.Body).toContain("workspace two only");
     expect(prepared?.Body).not.toContain("workspace one secret");
     expect(f.history).not.toHaveBeenCalled();
@@ -261,10 +242,7 @@ describe("Slack platform-authoritative automatic room history", () => {
 
   it("does no automatic room history transport for quiet ingress or historyLimit zero", async () => {
     const f = fixture();
-    const quiet = await f.prepare({
-      message: { text: "quiet discussion" },
-      opts: { source: "message" },
-    });
+    const quiet = await f.prepare({ text: "quiet discussion" }, { source: "message" });
     expect(quiet).toBeNull();
     f.ctx.historyLimit = 0;
     const active = await f.prepare();
@@ -276,11 +254,7 @@ describe("Slack platform-authoritative automatic room history", () => {
 
   it("respects the canonical session start and reset tombstone without inspecting command text", async () => {
     const f = fixture();
-    const sessionKey = "agent:main:slack:channel:c1";
-    await f.seed(
-      { sessionId: "new-generation", updatedAt: 15_000, sessionStartedAt: 15_000 },
-      sessionKey,
-    );
+    await f.seed({ sessionId: "new-generation", updatedAt: 15_000, sessionStartedAt: 15_000 });
     f.setHistory([
       { ts: "19.000", user: "U1", text: "after reset" },
       { ts: "14.000", user: "U1", text: "discarded generation" },
@@ -288,7 +262,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     const first = await f.prepare();
     expect(first?.InboundHistory?.map((entry) => entry.body)).toEqual(["after reset"]);
     expect(first?.Body).not.toContain("discarded generation");
-    await f.seed({ sessionId: "reset-tombstone", updatedAt: 0 }, sessionKey);
+    await f.seed({ sessionId: "reset-tombstone", updatedAt: 0 });
     f.history.mockClear();
     const reset = await f.prepare();
     expect(reset?.InboundHistory).toEqual([]);
@@ -303,17 +277,15 @@ describe("Slack platform-authoritative automatic room history", () => {
       controller.abort();
       return { messages: [{ ts: "19.000", user: "U1", text: "late context" }] };
     });
-    await expect(
-      f.prepare({ opts: { source: "app_mention", abortSignal: controller.signal } }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(f.prepare({}, { abortSignal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
     let policyCurrent = true;
     f.history.mockImplementation(async () => {
       policyCurrent = false;
       return { messages: [{ ts: "19.000", user: "U1", text: "revoked context" }] };
     });
-    const revoked = await f.prepare({
-      opts: { source: "app_mention", isRuntimePolicyCurrent: () => policyCurrent },
-    });
+    const revoked = await f.prepare({}, { isRuntimePolicyCurrent: () => policyCurrent });
     expect(revoked).toBeNull();
   });
 
@@ -337,7 +309,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       { ts: "20.000", user: "U1", text: "current request" },
       { ts: "21.000", user: "U1", text: "future thread message" },
     ]);
-    const prepared = await f.prepare({ message: { thread_ts: "10.000" } });
+    const prepared = await f.prepare({ thread_ts: "10.000" });
     expect(prepared?.InboundHistory?.map((entry) => entry.body)).toEqual([
       "thread history one",
       "thread history two",
@@ -359,7 +331,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       { ts: "11.000", user: "U1", text: "initial thread note one" },
       { ts: "12.000", user: "U1", text: "initial thread note two" },
     ]);
-    const prepared = await f.prepare({ message: { thread_ts: "10.000" } });
+    const prepared = await f.prepare({ thread_ts: "10.000" });
     expect(prepared?.ThreadHistoryBody).toContain("initial thread note one");
     expect(prepared?.ThreadHistoryBody).toContain("initial thread note two");
     expect(prepared?.InboundHistory?.map((entry) => entry.body)).toEqual(["channel-wide decision"]);
@@ -372,7 +344,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       response_metadata: { next_cursor: limit === 1 ? "" : "another-page" },
     }));
     const warn = vi.spyOn(f.ctx.logger, "warn").mockImplementation(() => undefined);
-    const prepared = await f.prepare({ message: { thread_ts: "10.000" } });
+    const prepared = await f.prepare({ thread_ts: "10.000" });
     expect(prepared?.InboundHistory).toEqual([]);
     expect(prepared?.ThreadHistoryBody).toBeUndefined();
     expect(prepared?.Body).not.toContain("incomplete old prefix");
@@ -398,10 +370,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       };
     });
     const result = await f
-      .prepare({
-        message: { thread_ts: "10.000" },
-        opts: { source: "app_mention", isRuntimePolicyCurrent: () => policyCurrent },
-      })
+      .prepare({ thread_ts: "10.000" }, { isRuntimePolicyCurrent: () => policyCurrent })
       .catch((error: unknown) => {
         expect(error).toBeInstanceOf(Error);
         return null;
@@ -425,7 +394,7 @@ describe("Slack platform-authoritative automatic room history", () => {
         response_metadata: { next_cursor: offset + count < 601 ? String(offset + count) : "" },
       };
     });
-    const prepared = await f.prepare({ message: { ts: "1000.000" } });
+    const prepared = await f.prepare({ ts: "1000.000" });
     expect(prepared?.InboundHistory).toHaveLength(601);
     expect(prepared?.InboundHistory?.[0]?.messageId).toBe("399.000");
     expect(prepared?.InboundHistory?.at(-1)?.messageId).toBe("999.000");
