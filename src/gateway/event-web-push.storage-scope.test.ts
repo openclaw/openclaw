@@ -143,6 +143,28 @@ function upsertBinding(stateDir: string, userProfileId: string, nowMs: number) {
   });
 }
 
+function boundSubscription(
+  params: UpsertInput,
+  preferences?: Parameters<typeof normalizeWebPushDevicePreferences>[0],
+): BoundWebPushSubscription {
+  return {
+    subscriptionId: "scope-subscription",
+    endpoint: params.endpoint,
+    keys: { ...params.keys },
+    createdAtMs: 1,
+    updatedAtMs: params.nowMs,
+    ...expectDefined(params.binding, "synthetic browser binding"),
+    devicePreferences: normalizeWebPushDevicePreferences(preferences),
+  };
+}
+
+function outcome(promise: Promise<unknown>) {
+  return promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+}
+
 it("orders binding and pairing reads before rebinding without retaining provider work", async () => {
   const stateDir = mockCapturedContext();
   const pairedDevices: PairedDevice[] = [
@@ -174,28 +196,16 @@ it("orders binding and pairing reads before rebinding without retaining provider
   const releaseReply = createDeferred();
   const providerResult = createDeferred<Awaited<ReturnType<PreparedSender>>>();
   let current: BoundWebPushSubscription | undefined;
-  let mutationSettled = false;
-  let providerSettled = false;
+  const mutationSettled = vi.fn();
+  const providerSettled = vi.fn();
   const order: string[] = [];
   const starts: Array<{
     subscriptions: Parameters<PreparedSender>[0]["subscriptions"];
     current: BoundWebPushSubscription;
   }> = [];
   mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
-    const binding = expectDefined(params.binding, "synthetic browser binding");
-    current = {
-      subscriptionId: "scope-subscription",
-      endpoint: params.endpoint,
-      keys: { ...params.keys },
-      createdAtMs: 1,
-      updatedAtMs: params.nowMs,
-      ...binding,
-      devicePreferences: normalizeWebPushDevicePreferences({
-        enabled: true,
-        categories: { agentFinished: true },
-      }),
-    };
-    order.push(`mutation:${binding.userProfileId}`);
+    current = boundSubscription(params, { enabled: true, categories: { agentFinished: true } });
+    order.push(`mutation:${current.userProfileId}`);
     return current;
   });
   mocks.executeWorker.mockImplementation(
@@ -221,9 +231,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
     order.push(`send:${binding.userProfileId}`);
     return providerResult.promise;
   });
-  void providerResult.promise.then(() => {
-    providerSettled = true;
-  });
+  void providerResult.promise.then(providerSettled);
   // Publish the initial binding before exposing the held worker reply.
   await upsertBinding(stateDir, "profile-a", 1);
   order.length = 0;
@@ -235,19 +243,17 @@ it("orders binding and pairing reads before rebinding without retaining provider
   });
   delivery.handleEvent("chat", { state: "final", runId: "scope-run" });
   await selected.promise;
-  const mutation = upsertBinding(stateDir, "profile-b", 2).then(() => {
-    mutationSettled = true;
-  });
+  const mutation = upsertBinding(stateDir, "profile-b", 2).then(mutationSettled);
   try {
     await nextTurn();
-    expect(mutationSettled, "rebinding must wait while the worker reply is held").toBe(false);
+    expect(mutationSettled).not.toHaveBeenCalled();
     expect(current?.userProfileId).toBe("profile-a");
     expect(starts).toEqual([]);
 
     releaseReply.resolve();
     await pairingSelected.promise;
     await nextTurn();
-    expect(mutationSettled, "rebinding must also wait while pairing authority loads").toBe(false);
+    expect(mutationSettled).not.toHaveBeenCalled();
     expect(starts).toEqual([]);
     pairingReply.resolve(pairedDevices);
     await nextTurn();
@@ -256,8 +262,8 @@ it("orders binding and pairing reads before rebinding without retaining provider
       subscriptions: [{ userProfileId: "profile-a" }],
       current: { userProfileId: "profile-a" },
     });
-    expect(mutationSettled, "provider completion must not retain the storage lease").toBe(true);
-    expect(providerSettled).toBe(false);
+    expect(mutationSettled).toHaveBeenCalledOnce();
+    expect(providerSettled).not.toHaveBeenCalled();
     expect(current?.userProfileId).toBe("profile-b");
     expect(order).toEqual(["send:profile-a", "mutation:profile-b"]);
   } finally {
@@ -317,15 +323,7 @@ it("keeps browser storage responsive while notification session facts load", asy
   });
   let current: BoundWebPushSubscription;
   mocks.workerUpsert.mockImplementation((params: UpsertInput) => {
-    current = {
-      subscriptionId: "scope-subscription",
-      endpoint: params.endpoint,
-      keys: params.keys,
-      createdAtMs: 1,
-      updatedAtMs: params.nowMs,
-      ...expectDefined(params.binding, "browser binding"),
-      devicePreferences: normalizeWebPushDevicePreferences(undefined),
-    };
+    current = boundSubscription(params);
     return current;
   });
   mocks.executeWorker.mockImplementation(
@@ -350,7 +348,7 @@ it("keeps browser storage responsive while notification session facts load", asy
     },
   );
   await entered.promise;
-  let browserFinished = false;
+  const browserFinished = vi.fn();
   const browser = (async () => {
     await upsertBinding(stateDir, "profile-b", 2);
     await withBoundWebPushSubscriptionByEndpoint(
@@ -359,11 +357,11 @@ it("keeps browser storage responsive while notification session facts load", asy
         start: () => expect(subscription?.userProfileId).toBe("profile-b"),
       }),
     );
-    browserFinished = true;
+    browserFinished();
   })();
   try {
     await nextTurn();
-    expect(browserFinished, "session reads must not retain the subscription lease").toBe(true);
+    expect(browserFinished).toHaveBeenCalledOnce();
     expect(start).not.toHaveBeenCalled();
     release.resolve();
     await nextTurn();
@@ -397,10 +395,7 @@ it.each([
       upsertBinding(stateDir, profile, index + 2),
     );
     const overflow = upsertBinding(stateDir, profile, count + 2);
-    const refusal = overflow.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const refusal = outcome(overflow);
     try {
       expect(await Promise.race([refusal, nextTurn()])).toMatchObject({ code: "overloaded" });
       expect(mocks.executeWorker).toHaveBeenCalledOnce();
@@ -428,20 +423,15 @@ it.each(["read rejection", "preparation exception"] as const)(
     const read = withBoundWebPushSubscriptions(stateDir, () => {
       throw error;
     });
-    const readResult = read.then(
-      () => undefined,
-      (caught: unknown) => caught,
-    );
+    const readResult = outcome(read);
     await selected.promise;
-    let mutationSettled = false;
-    const mutation = upsertBinding(stateDir, "profile-b", 2).then(() => {
-      mutationSettled = true;
-    });
+    const mutationSettled = vi.fn();
+    const mutation = upsertBinding(stateDir, "profile-b", 2).then(mutationSettled);
     try {
       releaseReply.resolve();
       await expect(readResult).resolves.toBe(error);
       await nextTurn();
-      expect(mutationSettled).toBe(true);
+      expect(mutationSettled).toHaveBeenCalledOnce();
       expect(mocks.workerUpsert).toHaveBeenCalledTimes(2);
     } finally {
       releaseReply.resolve();
@@ -462,27 +452,19 @@ it("canonical close seals retained and new admissions and joins the held binding
   }));
   const start = vi.fn();
   const read = withBoundWebPushSubscriptions(stateDir, () => ({ start }));
-  const readResult = read.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const readResult = outcome(read);
   await selected.promise;
   const queuedMutation = upsertBinding(stateDir, "profile-b", 2);
-  const mutationResult = queuedMutation.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  let closed = false;
-  const closing = closeOpenClawStateDatabaseByPathAsync(databasePath).then(() => {
-    closed = true;
-  });
+  const mutationResult = outcome(queuedMutation);
+  const closed = vi.fn();
+  const closing = closeOpenClawStateDatabaseByPathAsync(databasePath).then(closed);
   const postSealMutation = upsertBinding(stateDir, "profile-c", 3);
   try {
     await expect(postSealMutation).rejects.toMatchObject({
       code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
     });
     await nextTurn();
-    expect(closed, "canonical close must retain the pending SELECT owner").toBe(false);
+    expect(closed).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(mocks.workerUpsert).not.toHaveBeenCalled();
 
@@ -494,7 +476,7 @@ it("canonical close seals retained and new admissions and joins the held binding
       code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
     });
     await closing;
-    expect(closed).toBe(true);
+    expect(closed).toHaveBeenCalledOnce();
     expect(start).not.toHaveBeenCalled();
     expect(mocks.workerUpsert).not.toHaveBeenCalled();
   } finally {
