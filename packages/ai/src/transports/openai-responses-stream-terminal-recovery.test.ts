@@ -1,85 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   completed,
+  expected,
+  message,
+  outputItem,
+  outputTextDelta,
+  outputTextPart,
+  reasoning,
   runFixture,
+  startedMessage,
+  textEvents,
+  tool,
+  toolCall,
   type ParityFixture,
 } from "./openai-responses-stream-parity.test-helpers.js";
-
-function outputItem(event: "added" | "done", item: Record<string, unknown>, index?: number) {
-  return {
-    type: `response.output_item.${event}`,
-    ...(index === undefined ? {} : { output_index: index }),
-    item,
-  };
-}
-function message(id: string, text: string, phase?: "commentary" | "final_answer") {
-  return {
-    id,
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    ...(phase ? { phase } : {}),
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-}
-function startedMessage(id: string, phase?: "final_answer") {
-  return {
-    id,
-    type: "message",
-    role: "assistant",
-    status: "in_progress",
-    ...(phase ? { phase } : {}),
-    content: [],
-  };
-}
-
-function reasoning(id: string, text?: string, encrypted_content?: string) {
-  return {
-    id,
-    type: "reasoning",
-    summary: text === undefined ? [] : [{ type: "summary_text", text }],
-    content: [],
-    ...(encrypted_content === undefined ? {} : { encrypted_content }),
-  };
-}
-function tool(
-  id: string,
-  args: string,
-  status?: "completed" | "incomplete" | "in_progress",
-  name = "lookup",
-) {
-  return {
-    id: `fc_${id}`,
-    call_id: `call_${id}`,
-    type: "function_call",
-    name,
-    arguments: args,
-    ...(status === undefined ? {} : { status }),
-  };
-}
-function toolCall(
-  id: string,
-  name: string,
-  args: unknown,
-): ParityFixture["canonical"]["content"][number] {
-  return { type: "toolCall", id, name, arguments: args, partialJson: false };
-}
-
-function textEvents(text: string, contentIndex = 0) {
-  return [
-    { type: "text_start", contentIndex },
-    { type: "text_end", contentIndex, content: text },
-  ];
-}
-
-function expected(
-  responseId: string | null,
-  events: ParityFixture["canonical"]["events"],
-  content: ParityFixture["canonical"]["content"],
-  outcome: Partial<Pick<ParityFixture["canonical"], "error" | "stopReason">> = {},
-): ParityFixture["canonical"] {
-  return { responseId, events, content, error: null, stopReason: "stop", ...outcome };
-}
 
 const rejectedTerminalToolFixture = (params: {
   name: string;
@@ -99,7 +33,7 @@ const rejectedTerminalToolFixture = (params: {
     ],
     canonical: expected(
       "resp_rejected_terminal_tool",
-      [...textEvents("Checking...")],
+      textEvents("Checking..."),
       [{ type: "text", text: "Checking..." }],
       { error: params.error },
     ),
@@ -236,13 +170,7 @@ const rejectedOutOfOrderTerminalFixture = (
       ? [outputItem("done", later, 1)]
       : [
           outputItem("added", { ...later, status: "in_progress", content: [] }, 1),
-          {
-            type: "response.output_text.delta",
-            output_index: 1,
-            item_id: later.id,
-            content_index: 0,
-            delta: "Final answer",
-          },
+          outputTextDelta(later.id, "Final answer", 1),
         ];
   return {
     name: `terminal recovery rejects missing output before a ${state} item`,
@@ -464,26 +392,14 @@ const trailingFixtures: ParityFixture[] = [
         },
       ]),
     ],
-    canonical: expected("resp_started_empty", [...textEvents("")], [{ type: "text", text: "" }]),
+    canonical: expected("resp_started_empty", textEvents(""), [{ type: "text", text: "" }]),
   },
   {
     name: "terminal snapshot completes an unfinished streamed message once",
     events: [
       outputItem("added", startedMessage("msg_unfinished_terminal", "final_answer"), 0),
-      {
-        type: "response.content_part.added",
-        output_index: 0,
-        item_id: "msg_unfinished_terminal",
-        content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
-      },
-      {
-        type: "response.output_text.delta",
-        output_index: 0,
-        item_id: "msg_unfinished_terminal",
-        content_index: 0,
-        delta: "Partial",
-      },
+      outputTextPart("msg_unfinished_terminal"),
+      outputTextDelta("msg_unfinished_terminal", "Partial"),
       completed("resp_unfinished_terminal_message", [
         message("msg_unfinished_terminal", "Partial answer", "final_answer"),
       ]),

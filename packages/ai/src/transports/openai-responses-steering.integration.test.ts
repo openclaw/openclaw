@@ -7,19 +7,9 @@ type WireEvent =
   | { type: "message"; message: Record<string, unknown> }
   | { type: "close"; code: number };
 
-const sockets = vi.hoisted(() => ({
-  instances: [] as Array<{
-    requests: Record<string, unknown>[];
-    closed: boolean;
-    streamCalls: number;
-    iteratorReturns: number;
-    emit(message: Record<string, unknown>): void;
-    disconnect(): void;
-  }>,
-}));
-
-vi.mock("openai/resources/responses/ws.js", () => ({
-  ResponsesWS: class {
+const sockets = vi.hoisted(() => {
+  const instances: ResponsesWS[] = [];
+  class ResponsesWS {
     socket = { readyState: 1 };
     requests: Record<string, unknown>[] = [];
     closed = false;
@@ -30,7 +20,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     private stopped = false;
 
     constructor() {
-      sockets.instances.push(this);
+      instances.push(this);
     }
 
     send(request: Record<string, unknown>) {
@@ -46,8 +36,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     }
 
     disconnect() {
-      this.closed = true;
-      this.socket.readyState = 3;
+      this.close();
       this.push({ type: "close", code: 1006 });
     }
 
@@ -78,11 +67,10 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       const iterator: AsyncIterableIterator<WireEvent> = {
         next: () => {
           const event = this.queue.shift();
-          if (event) {
-            return Promise.resolve({ value: event, done: false });
-          }
-          if (this.stopped) {
-            return Promise.resolve({ value: undefined, done: true });
+          if (event || this.stopped) {
+            return Promise.resolve<IteratorResult<WireEvent>>(
+              event ? { value: event, done: false } : { value: undefined, done: true },
+            );
           }
           return new Promise((resolve) => {
             this.waiting.push(resolve);
@@ -100,8 +88,10 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       };
       return iterator;
     }
-  },
-}));
+  }
+  return { instances, ResponsesWS };
+});
+vi.mock("openai/resources/responses/ws.js", () => ({ ResponsesWS: sockets.ResponsesWS }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { cleanupSessionResources } from "../session-resources.js";
@@ -632,34 +622,31 @@ describe("Responses WebSocket steering handoff", () => {
   );
 
   it.each([
-    {
-      name: "pro mode",
-      settings: { reasoning: { mode: "pro", effort: "high" } },
+    ["pro mode", { reasoning: { mode: "pro", effort: "high" } }],
+    ["multi-agent mode", { multi_agent: { enabled: true } }],
+    [
+      "automatic compaction",
+      { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+    ],
+  ] as const)(
+    "rejects required-input history with configuration updates in %s",
+    async (_name, settings) => {
+      const harness = await startRequiredInput(true);
+      const input = [initialUser, harness.toolCall, harness.toolResult, update];
+      let failure: unknown;
+      try {
+        createStream([harness.sentUpdate, ...input], undefined, {
+          reasoning: { effort: "high" },
+          ...settings,
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expectPostDispatchError(failure, /steering continuation changed its request or history/);
+      expect(harness.socket.closed).toBe(true);
+      expect(createRequests(harness.socket)).toHaveLength(1);
     },
-    {
-      name: "multi-agent mode",
-      settings: { multi_agent: { enabled: true } },
-    },
-    {
-      name: "automatic compaction",
-      settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
-    },
-  ])("rejects required-input history with configuration updates in $name", async ({ settings }) => {
-    const harness = await startRequiredInput(true);
-    const input = [initialUser, harness.toolCall, harness.toolResult, update];
-    let failure: unknown;
-    try {
-      createStream([harness.sentUpdate, ...input], undefined, {
-        reasoning: { effort: "high" },
-        ...settings,
-      });
-    } catch (error) {
-      failure = error;
-    }
-    expectPostDispatchError(failure, /steering continuation changed its request or history/);
-    expect(harness.socket.closed).toBe(true);
-    expect(createRequests(harness.socket)).toHaveLength(1);
-  });
+  );
 
   it("rejects unresolved steering on disconnect and closes retained control", async () => {
     const harness = start();
