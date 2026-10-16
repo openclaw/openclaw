@@ -361,7 +361,9 @@ export function PickerContent<Option extends PickerOption>(props: {
     const value = untrack(() => row.option().value);
     let element: HTMLDivElement;
     onCleanup(() => {
-      if (optionElements.get(value) === element) optionElements.delete(value);
+      if (optionElements.get(value) === element) {
+        optionElements.delete(value);
+      }
     });
     return (
       <div
