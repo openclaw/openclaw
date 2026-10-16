@@ -25,7 +25,6 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import { admitUpdateCommandRun } from "./update-command-run.js";
@@ -34,6 +33,13 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-ser
 import * as servicePlan from "./update-command-service-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createCommandResult(
+  overrides: Partial<Awaited<ReturnType<typeof systemdExec.execBusctlUser>>> = {},
+) {
+  return { code: 0, termination: "exit" as const, stdout: "", stderr: "", ...overrides };
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();

@@ -82,6 +82,7 @@ const hoisted = vi.hoisted(() => ({
   state: { cfg: createDefaultSpawnConfig() },
 }));
 
+// mock-isolation: Spawn admission uses the synthetic manager, not a live ACP session.
 vi.mock("../../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({ initializeSession: hoisted.initializeSessionMock }),
 }));
@@ -128,10 +129,13 @@ vi.mock("../../../gateway/session-utils-store-worker.js", async () => {
   return createAcpSpawnStoreMocks(hoisted).workerLookup;
 });
 
+// mock-isolation: This fixture owns its config; do not read operator configuration.
 vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => hoisted.state.cfg }));
 
+// mock-isolation: Capture Gateway calls without connecting to an operator Gateway.
 vi.mock("../../../gateway/call.js", () => ({ callGateway: hoisted.callGatewayMock }));
 
+// mock-isolation: Spawn tests do not start or inspect live heartbeat services.
 vi.mock("../../../infra/heartbeat-wake.js", () => ({
   areHeartbeatsEnabled: () => true,
 }));

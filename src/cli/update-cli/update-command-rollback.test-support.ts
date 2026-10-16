@@ -29,7 +29,7 @@ type SchemaInput = Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0];
 const doctorMetadata = {
   meta: { migrations: { modelPolicyAllowlist: true }, lastTouchedVersion: "2026.9.3" },
   wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
-};
+} satisfies Pick<OpenClawConfig, "meta" | "wizard">;
 
 export async function readRollbackFixtureSchemaVersions(
   input: Pick<SchemaInput, "stateDir" | "config" | "env">,

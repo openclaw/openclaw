@@ -198,7 +198,7 @@ describe("memory search config", () => {
   });
 
   it("normalizes legacy auto provider config to openai", () => {
-    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
+    const resolved = resolveMemorySearchConfig(searchConfig({ provider: "auto" }), "main");
 
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");

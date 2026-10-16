@@ -126,6 +126,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
           deliverySignature: expect.any(String),
         },
       });
+      return undefined;
     });
     http.respondToCall = (call) => {
       if (call.method !== "sendMessage" || call.fields.text !== recoveredAnswer) {

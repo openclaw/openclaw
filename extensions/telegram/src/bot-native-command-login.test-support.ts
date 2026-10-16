@@ -195,7 +195,7 @@ async function exerciseModelAccess(home: string, choice: "all" | "cancel") {
   };
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const first = await registerLoginCommand({ cfg, loginFlow, runtime });
-  const deliveredButtons = (calls: Parameters<typeof first.bot.api.sendMessage>[]) =>
+  const deliveredButtons = (calls: typeof first.sendMessage.mock.calls) =>
     calls.flatMap((call) => {
       const markup = call[2]?.reply_markup;
       return markup && "inline_keyboard" in markup ? markup.inline_keyboard.flat() : [];

@@ -42,6 +42,7 @@ import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
 import { createAcpSpawnSessionBinding } from "./acp-spawn-store.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
+// mock-isolation: Authority tests supply their own registry without loading installed plugins.
 vi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
 }));

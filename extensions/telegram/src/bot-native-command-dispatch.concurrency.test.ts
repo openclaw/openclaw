@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { Message } from "grammy/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
@@ -60,13 +61,13 @@ function bufferedHarness(
     timer.mockRestore();
   });
   let updateId = 5000;
-  const dispatch = (message: ReturnType<typeof groupCommand>, spooled = false) => {
+  const dispatch = (message: Message.TextMessage, spooled = false) => {
     const update = { update_id: ++updateId, message };
     const pending = spooled
       ? runWithTelegramSpooledReplayUpdate(update, () => bot.handleUpdate(update))
       : bot.handleUpdate(update);
     work.push(pending);
-    return pending;
+    return pending.then(() => undefined);
   };
   const buffer = async (text: string, threadId: number) => {
     const update = {

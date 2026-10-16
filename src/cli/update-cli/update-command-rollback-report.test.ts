@@ -48,6 +48,7 @@ function setup() {
     recovery: {
       serviceRestartSafe: true,
       packageRollbackVerified: true,
+      version: "2026.9.2",
       service: "healthy",
     },
   });
@@ -162,7 +163,11 @@ it("keeps signal-cancelled rollback quiet", async () => {
 });
 
 it("keeps ordinary failure actions for an unverified service", async () => {
-  f.result.recovery = { ...f.result.recovery, service: undefined };
+  f.result.recovery = {
+    serviceRestartSafe: true,
+    packageRollbackVerified: true,
+    version: "2026.9.2",
+  };
   await f.run();
   expectOnceContaining("select", { message: "Choose the next action for this failed update" });
   expect(mocks.select.mock.calls[0]?.[0]).not.toHaveProperty("initialValue", "dismiss");

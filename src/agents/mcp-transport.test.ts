@@ -34,9 +34,11 @@ const {
   sseTransportConstructorMock: vi.fn<(url: URL, options?: SseTransportOptions) => void>(),
 }));
 
+// mock-isolation: OAuth fetch is fixture-owned; never read real credentials in transport tests.
 vi.mock("./mcp-oauth-fetch.js", () => ({ withMcpOAuthBearer: oauthBearerMock }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
 
+// mock-isolation: Keep transport requests on the synthetic fetch and agent fixtures.
 vi.mock("../infra/net/undici-runtime.js", () => ({
   createHttp1Agent: (options: unknown) => ({ options }),
   createHttp1EnvHttpProxyAgent: (options: unknown) => ({ options }),
