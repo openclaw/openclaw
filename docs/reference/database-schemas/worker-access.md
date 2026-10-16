@@ -3640,6 +3640,12 @@ opaque SDK lifetime guards run through its existing host grants rather than a na
 fallback. Prepared storage predicates must belong to the selected agent store.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
+Gateway Board operations prepare their physical target once before selecting the memory
+or durable owner. Custom stores resolve registry rows and physical ownership through the
+existing session reader worker; subsequent owner checks consume the captured logical routing
+assertion instead of discovering the target again. Registry write receipts invalidate the
+next operation's preparation. No synchronous target-discovery fallback remains in Board.
+
 Durable Board writes prepare exact session existence in the session reader and carry
 its session and lifecycle identity into one kernel check before mutation. The synchronous
 worker transaction cannot switch sessions between that check and commit. Layout updates

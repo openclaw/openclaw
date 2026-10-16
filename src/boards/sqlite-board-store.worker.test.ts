@@ -484,7 +484,15 @@ it("refuses Board disclosure when its target changes during a read", async () =>
   });
   let sessionKey = target.sessionKey;
   const reader = new SqliteBoardStore({
-    resolveSession: () => ({ ...options, sessionKey }),
+    resolveSession: () => ({
+      ...options,
+      sessionKey,
+      assertCurrent() {
+        if (sessionKey !== target.sessionKey) {
+          throw new BoardValidationError("invalid_operation", "board session changed; retry");
+        }
+      },
+    }),
     env: options.env,
   });
   const create = historyReaders.createSessionHistoryWorkerReaders;
