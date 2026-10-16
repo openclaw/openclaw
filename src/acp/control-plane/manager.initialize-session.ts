@@ -20,6 +20,7 @@ import { assertCurrentAcpActor, createSupersededActorError } from "./manager.uti
 import {
   normalizeRuntimeOptions,
   normalizeText,
+  resolveThinkingProvenance,
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 
@@ -127,6 +128,7 @@ export async function runManagerInitializeSession(params: {
     ...(Object.keys(effectiveRuntimeOptions).length > 0
       ? { runtimeOptions: effectiveRuntimeOptions }
       : {}),
+    ...resolveThinkingProvenance(effectiveRuntimeOptions, input.thinkingExplicit),
     cwd: effectiveCwd,
     state: "idle",
     lastActivityAt: Date.now(),
@@ -134,6 +136,8 @@ export async function runManagerInitializeSession(params: {
 
   let persisted: SessionEntry | null;
   try {
+    // The live pre-ensure resume guard bounds ensure and the metadata commit; no second reread.
+    assertResumeCurrent?.();
     persisted = await params.writeSessionMeta({
       cfg: input.cfg,
       sessionKey,
@@ -141,7 +145,12 @@ export async function runManagerInitializeSession(params: {
       mutate: () => meta,
       isCurrentActor,
       failOnError: true,
-      assertCommitAllowed: input.assertActive,
+      assertCommitAllowed: assertResumeCurrent
+        ? () => {
+            input.assertActive?.();
+            assertResumeCurrent();
+          }
+        : input.assertActive,
     });
     if (!persisted?.acp) {
       throw new AcpRuntimeError(

@@ -81,7 +81,7 @@ The instruction waits for that turn to finish, then runs in the same session
 and context. The command replies after the follow-up completes. To redirect
 work in progress, run `/acp cancel` first, then send the new instruction.
 
-`/acp status` shows the effective runtime options plus runtime-level and
+`/acp status` shows the session runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
 clearly when a backend lacks a capability. Commands that accept target tokens
 (`session-key`, `session-id`, or `session-label`) resolve them through gateway
@@ -108,14 +108,43 @@ remove thinking support; subsequent turns and reconnects use the accepted
 selection instead of replaying the old level. Backend defaults do not become new
 session overrides, and the model reference keeps its OpenClaw provider prefix.
 
+Backends without an advertised `model` config key can still accept `/acp model`
+through ACP `session/set_model` when they advertise it. OpenClaw writes `model`
+through `session/set_config_option` when the backend advertises that key,
+otherwise through `session/set_model`; other options never fall back to
+`session/set_model`, and OpenClaw never retries a rejected model write through the
+other control. A model is recorded as accepted only when the backend reports it in
+a config snapshot or model response, including a snapshot returned by another
+control such as thinking; a native ID reported for the requested `provider/model`
+keeps the provider reference, and any other reported ID is saved as reported. A
+`session/set_model` call that returns no evidence, or a snapshot without a model,
+leaves the model as requested, not accepted. Model commands therefore reply with
+`Requested ACP model`, and every option command lists the saved `Session options`
+rather than claiming backend confirmation.
+
+An explicitly selected thinking level that the backend rejects or cannot set,
+including on backends that advertise only `session/set_model`, fails the turn
+before the prompt is sent. An inherited thinking default, or one stored by an older
+release without its origin, is skipped when the backend reports the thinking control
+as unsupported or rejects its config value, and the turn continues; the skip is
+logged and the level is not reported as applied. Model, owner, and other control
+failures still fail the turn.
+
+The origin is stored as an optional boolean inside the existing ACP runtime options
+JSON, without a schema change, and is read back as session metadata rather than as a
+runtime option. Older releases ignore it, but an older release that rewrites the
+session's ACP metadata can drop it; that session then uses the compatibility behavior
+for thinking without a recorded origin.
+
 With Cursor, model requests can use exact advertised IDs, selectors with one
 advertised variant, or OpenClaw `provider/model` references to either. Unknown or
 ambiguous requests fail visibly. An exact advertised ID that contains `/` takes
 precedence over interpreting it as a provider-qualified reference.
 
 Model overrides are validated before prompt submission, including after reconnect.
-Unsupported inherited defaults dropped during new session initialization are not
-saved as overrides.
+A supplied model, inherited or explicit, is never dropped: if the backend cannot
+select it, session creation fails. Without a supplied model, the harness keeps its
+own default.
 
 `/acp reset-options` also works after a restart when an old working directory or
 model override prevents backend startup. If closing a retained runtime fails,

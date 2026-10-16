@@ -61,4 +61,12 @@ describe("createLazyAcpRuntimeProxy", () => {
     expect(submitted).toBe(true);
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
+
+  it("returns accepted model evidence from the resolved runtime", async () => {
+    const { runtime } = createCompleteRuntime();
+    const accepted = { currentModelId: "canonical-model" };
+    runtime.setModel = vi.fn(async () => accepted);
+    const proxy = createLazyAcpRuntimeProxy(async () => runtime);
+    await expect(proxy.setModel({ handle, model: "provider/alias" })).resolves.toBe(accepted);
+  });
 });

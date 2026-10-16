@@ -130,8 +130,10 @@ function defineRuntimeOptionAction(action: keyof typeof SINGLE_RUNTIME_OPTIONS |
             : action === "timeout"
               ? `${value}s`
               : value;
+        // Model writes may finish without backend evidence; persisted options stay a session setting.
+        const verb = normalizeLowercaseStringOrEmpty(key) === "model" ? "Requested" : "Updated";
         return commandReply(
-          `✅ Updated ACP ${label} for ${target.sessionKey}: ${valueText}. Effective options: ${formatRuntimeOptionsText(options)}`,
+          `✅ ${verb} ACP ${label} for ${target.sessionKey}: ${valueText}. Session options: ${formatRuntimeOptionsText(options)}`,
         );
       },
       fallbackMessage: `Could not update ACP ${single?.label ?? "config option"}.`,

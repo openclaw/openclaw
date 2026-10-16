@@ -14,12 +14,14 @@ export type CompleteAcpRuntimeTurn = AcpRuntimeTurn &
  */
 export type CompleteAcpRuntime = Omit<
   AcpRuntime,
-  "startTurn" | "getStatus" | "prepareFreshSession"
+  "startTurn" | "getStatus" | "setModel" | "prepareFreshSession"
 > &
   Required<Pick<AcpRuntime, "getCapabilities" | "setMode" | "setConfigOption" | "doctor">> & {
     startTurn(input: AcpRuntimeTurnInput): CompleteAcpRuntimeTurn;
     getStatus: UpstreamRuntime["getStatus"];
-    setModel: UpstreamRuntime["setModel"];
+    setModel(
+      input: Parameters<UpstreamRuntime["setModel"]>[0],
+    ): ReturnType<NonNullable<AcpRuntime["setModel"]>>;
     prepareFreshSession(
       input:
         | Parameters<NonNullable<AcpRuntime["prepareFreshSession"]>>[0]

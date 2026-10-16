@@ -43,6 +43,7 @@ import {
   normalizeRuntimeOptions,
   normalizeText,
   resolveRuntimeOptionsFromMeta,
+  resolveThinkingProvenance,
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
@@ -184,10 +185,11 @@ export async function ensureManagerRuntimeHandle(
           agent,
           mode,
           ...(resumeSessionId ? { resumeSessionId } : {}),
-          // Stored options lack caller intent; runtime controls validate the
+          // Stored options lack model intent; runtime controls validate the
           // saved model before submitting any prompt.
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
+          ...resolveThinkingProvenance(runtimeOptions, params.meta.thinkingExplicit),
           cwd,
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -310,6 +312,7 @@ export async function ensureManagerRuntimeHandle(
     ...(nextIdentity ? { identity: nextIdentity } : {}),
     mode: params.meta.mode,
     ...(Object.keys(nextRuntimeOptions).length > 0 ? { runtimeOptions: nextRuntimeOptions } : {}),
+    ...resolveThinkingProvenance(nextRuntimeOptions, previousMeta.thinkingExplicit),
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
     state: previousMeta.state,
     lastActivityAt: now,

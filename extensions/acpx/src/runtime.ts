@@ -26,9 +26,9 @@ import {
   AcpRuntimeError,
   type AcpRuntime,
   type AcpRuntimeCapabilities,
+  type AcpRuntimeConfigOptionResult,
   type AcpRuntimeErrorCode,
 } from "../runtime-api.js";
-import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import {
   isClaudeAcpCommand,
   isCodexAcpCommand,
@@ -39,6 +39,7 @@ import {
 } from "./command-line.js";
 import {
   ensureSessionWithModelRef,
+  isUnadvertisedModelRejection,
   withAcpxSessionOptions,
   withOpenClawModelRef,
 } from "./model-ref.js";
@@ -53,6 +54,17 @@ import {
   cleanupOpenClawOwnedAcpxPendingLease,
   isOpenClawLeaseAwareAcpxProcessCommand,
 } from "./process-reaper.js";
+import {
+  appendCodexAcpConfigOverrides,
+  classifyCodexAcpModelRequest,
+  failUnsupportedCodexAcpModel,
+  normalizeClaudeAcpModelOverride,
+  resolveProviderModelWrite,
+  withAcceptedModelRef,
+  withCodexSessionModel,
+  type AcpxModelResult,
+  type AcpxProviderModelWrite,
+} from "./provider-model.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
 import { AcpxRuntimeProbe } from "./runtime-probe.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
@@ -156,33 +168,6 @@ async function readCodexWrapperStderrTail(params: {
 }
 
 const CODEX_ACP_AGENT_ID = "codex";
-const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
-// Documented OpenClaw provider prefixes the Claude Agent SDK does not understand.
-// Strip only these; a generic first-slash split would corrupt native Bedrock
-// inference-profile ids and ARNs the SDK accepts as-is.
-const CLAUDE_ACP_OPENCLAW_PREFIX = /^(?:anthropic|amazon-bedrock)\//i;
-const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
-  ["off", undefined],
-  ["minimal", "low"],
-  ["low", "low"],
-  ["medium", "medium"],
-  ["high", "high"],
-  ["x-high", "xhigh"],
-  ["x_high", "xhigh"],
-  ["extra-high", "xhigh"],
-  ["extra_high", "xhigh"],
-  ["extra high", "xhigh"],
-  ["xhigh", "xhigh"],
-]);
-
-type CodexAcpModelOverride = {
-  model?: string;
-  reasoningEffort?: string;
-};
-
-type CodexAcpModelClassification =
-  | { kind: "override"; override: CodexAcpModelOverride }
-  | { kind: "unsupported"; thinkingOverride?: CodexAcpModelOverride };
 
 function readAgentFromSessionKey(sessionKey: string | undefined): string | undefined {
   const normalized = sessionKey?.trim();
@@ -198,11 +183,22 @@ function readAgentFromHandle(handle: OpenClawRuntimeHandle): string | undefined 
   return normalizeAgentName(decoded?.agent) ?? readAgentFromSessionKey(handle.sessionKey);
 }
 
-function failUnsupportedCodexAcpModel(rawModel: string): never {
-  throw new AcpRuntimeError(
-    "ACP_INVALID_RUNTIME_OPTION",
-    `Codex ACP model "${rawModel}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
+/** ACPX reports `details.configOptions` only for a recorded snapshot; absent means unreported. */
+function readReportedConfigOptionKeys(status: AcpRuntimeStatus): string[] | undefined {
+  const options = status.details?.configOptions;
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  const keys = options.flatMap((option: unknown) =>
+    option &&
+    typeof option === "object" &&
+    "id" in option &&
+    typeof option.id === "string" &&
+    option.id.trim()
+      ? [option.id]
+      : [],
   );
+  return [...new Set(keys)];
 }
 
 const WIRE_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
@@ -218,116 +214,6 @@ function assertSupportedRuntimeSessionMode(
     "ACP_INVALID_RUNTIME_OPTION",
     `Unsupported ACP runtime session mode ${JSON.stringify(mode)}. Expected one of: persistent, oneshot.`,
   );
-}
-
-function failUnsupportedCodexAcpThinking(rawThinking: string): never {
-  throw new AcpRuntimeError(
-    "ACP_INVALID_RUNTIME_OPTION",
-    `Codex ACP thinking level "${rawThinking}" is not supported. Use off, minimal, low, medium, high, or xhigh.`,
-  );
-}
-
-function normalizeCodexAcpReasoningEffort(rawThinking: string | undefined): string | undefined {
-  const normalized = rawThinking?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (!CODEX_ACP_THINKING_ALIASES.has(normalized)) {
-    failUnsupportedCodexAcpThinking(rawThinking ?? "");
-  }
-  return CODEX_ACP_THINKING_ALIASES.get(normalized);
-}
-
-function isCodexAcpReasoningEffortAlias(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return Boolean(normalized && CODEX_ACP_THINKING_ALIASES.has(normalized));
-}
-
-function classifyCodexAcpModelRequest(
-  rawModel: string | undefined,
-  rawThinking?: string,
-): CodexAcpModelClassification {
-  const raw = rawModel?.trim();
-  const thinkingReasoningEffort = normalizeCodexAcpReasoningEffort(rawThinking);
-  const thinkingOnlyOverride = thinkingReasoningEffort
-    ? { reasoningEffort: thinkingReasoningEffort }
-    : undefined;
-  if (!raw) {
-    return { kind: "override", override: thinkingOnlyOverride ?? {} };
-  }
-
-  let value = raw;
-  let hadOpenAiQualifier = false;
-  if (value.toLowerCase().startsWith(CODEX_ACP_OPENCLAW_PREFIX)) {
-    value = value.slice(CODEX_ACP_OPENCLAW_PREFIX.length);
-    hadOpenAiQualifier = true;
-  }
-
-  let model = value.trim();
-  let modelReasoningEffort: string | undefined;
-  const slashIndex = value.lastIndexOf("/");
-  if (slashIndex >= 0 && isCodexAcpReasoningEffortAlias(value.slice(slashIndex + 1))) {
-    modelReasoningEffort = normalizeCodexAcpReasoningEffort(value.slice(slashIndex + 1));
-    model = value.slice(0, slashIndex).trim();
-  }
-
-  if (hadOpenAiQualifier && (!model || model.includes("/"))) {
-    failUnsupportedCodexAcpModel(raw);
-  }
-  if (!model || model.includes("/")) {
-    return thinkingOnlyOverride
-      ? { kind: "unsupported", thinkingOverride: thinkingOnlyOverride }
-      : { kind: "unsupported" };
-  }
-
-  // Explicit `off` omits the override even when the model carries an effort suffix.
-  const reasoningEffort = rawThinking?.trim() ? thinkingReasoningEffort : modelReasoningEffort;
-  return {
-    kind: "override",
-    override: {
-      model,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    },
-  };
-}
-
-function withCodexSessionModel<T extends { model?: string }>(
-  input: T,
-  override: CodexAcpModelOverride | undefined,
-): T {
-  const next = { ...input };
-  if (override?.model) {
-    next.model = override.model;
-  } else {
-    delete next.model;
-  }
-  return next;
-}
-
-function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
-  const raw = rawModel?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const prefix = raw.match(CLAUDE_ACP_OPENCLAW_PREFIX);
-  if (!prefix) {
-    return raw;
-  }
-  return raw.slice(prefix[0].length).trim() || undefined;
-}
-
-function appendCodexAcpConfigOverrides(
-  command: AcpxAgentCommand,
-  override: CodexAcpModelOverride,
-): AcpxAgentCommand {
-  const config = {
-    ...(override.model ? { model: override.model } : {}),
-    ...(override.reasoningEffort ? { model_reasoning_effort: override.reasoningEffort } : {}),
-  };
-  if (Object.keys(config).length === 0) {
-    return command;
-  }
-  return [...splitCommandParts(command), OPENCLAW_CODEX_CONFIG_ARG, JSON.stringify(config)];
 }
 
 function withManagedToolsMcpSessionEnv(params: {
@@ -944,23 +830,19 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const codexClassification = isCodexAcp
       ? classifyCodexAcpModelRequest(effectiveInput.model, effectiveInput.thinking)
       : undefined;
-    if (codexClassification?.kind === "unsupported" && input.modelExplicit) {
+    if (codexClassification?.kind === "unsupported") {
       failUnsupportedCodexAcpModel(input.model ?? "");
     }
     const classifiedCodexOverride =
-      codexClassification?.kind === "override"
-        ? codexClassification.override
-        : codexClassification?.thinkingOverride;
+      codexClassification?.kind === "override" ? codexClassification.override : undefined;
     const codexModelOverride =
       classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
         ? classifiedCodexOverride
         : undefined;
     const requestedModel = effectiveInput.model?.trim();
     const appliedModel: OpenClawRuntimeHandle["appliedModel"] =
-      isCodexAcp && requestedModel
-        ? codexModelOverride?.model
-          ? { kind: "applied", model: requestedModel }
-          : { kind: "dropped" }
+      isCodexAcp && requestedModel && codexModelOverride?.model
+        ? { kind: "applied", model: requestedModel }
         : undefined;
     const ensureInput = isCodexAcp
       ? withCodexSessionModel(effectiveInput, codexModelOverride)
@@ -1116,14 +998,40 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   async getCapabilities(
     input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
   ): Promise<AcpRuntimeCapabilities> {
-    const capabilities = await this.delegate.getCapabilities(
-      input?.handle ? toAcpxResourceInput({ handle: input.handle }) : input,
-    );
-    return {
-      ...capabilities,
-      // Core exposes model control through config options; native harnesses call setModel directly.
-      controls: capabilities.controls.filter((control) => control !== "session/set_model"),
-    };
+    if (!input?.handle) {
+      const capabilities = await this.delegate.getCapabilities(input);
+      return {
+        ...capabilities,
+        // Without a session there is no model advertisement to select a model protocol from.
+        controls: capabilities.controls.filter((control) => control !== "session/set_model"),
+      };
+    }
+    const handle = input.handle;
+    return await this.runWithOperationSnapshot(handle, async (snapshot) => {
+      const delegate = this.resolveDelegateForOperationSnapshot(handle, snapshot);
+      const resourceHandle = toAcpxResourceInput({ handle }).handle;
+      const { capabilities, status, reportedKeys, configOptionKeys } =
+        await this.readSessionConfigAnnouncement(delegate, resourceHandle, snapshot);
+      // ACPX lists every facade control; promise only the wire controls this session advertised.
+      const hasConfigOptions = (configOptionKeys?.length ?? 0) > 0;
+      const availableModelIds = status.models?.availableModelIds;
+      const hasModels = Array.isArray(availableModelIds) && availableModelIds.length > 0;
+      const { configOptionKeys: _advertisedKeys, ...facade } = capabilities;
+      return {
+        ...facade,
+        // A reported empty list must not reach core, where [] means unconstrained.
+        ...(configOptionKeys && reportedKeys?.length !== 0 ? { configOptionKeys } : {}),
+        controls: capabilities.controls.filter((control) => {
+          if (control === "session/set_config_option") {
+            return hasConfigOptions;
+          }
+          if (control === "session/set_model") {
+            return hasModels;
+          }
+          return true;
+        }),
+      };
+    });
   }
 
   async getStatus(
@@ -1136,14 +1044,123 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     );
   }
 
-  async setModel(input: Parameters<BaseAcpxRuntime["setModel"]>[0]): Promise<void> {
-    await this.runWithOperationSnapshot(input.handle, (snapshot) => {
-      input.signal?.throwIfAborted();
-      input.assertActive?.();
-      return this.resolveDelegateForOperationSnapshot(input.handle, snapshot).setModel(
-        toAcpxResourceInput(input),
+  async setModel(
+    input: Parameters<BaseAcpxRuntime["setModel"]>[0],
+  ): Promise<AcpxModelResult | void> {
+    return await this.runWithOperationSnapshot(input.handle, async (snapshot) => {
+      const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
+      const resourceInput = toAcpxResourceInput(input);
+      const { model: _requested, ...controlInput } = resourceInput;
+      const accepted = await this.writeModelUnlocked<AcpxModelResult>(
+        snapshot,
+        input.model,
+        (model) => {
+          input.signal?.throwIfAborted();
+          input.assertActive?.();
+          return delegate.setModel({ ...resourceInput, model });
+        },
+        (value) => delegate.setConfigOption({ ...controlInput, key: "reasoning_effort", value }),
+        () =>
+          this.assertReasoningEffortAdvertised(
+            delegate,
+            controlInput.handle,
+            snapshot,
+            input.model,
+          ),
+        true,
       );
+      this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+      // ACPX stores the requested set_model id as its current model, so status echoes prove nothing.
+      return accepted;
     });
+  }
+
+  /**
+   * Capabilities and status are distinct loads of the session announcement. Status is read last,
+   * so a reported option list (including a genuine empty one) supersedes the capability keys.
+   */
+  private async readSessionConfigAnnouncement(
+    delegate: BaseAcpxRuntime,
+    handle: Parameters<BaseAcpxRuntime["setModel"]>[0]["handle"],
+    snapshot: AcpxHandleOperationSnapshot,
+  ) {
+    const capabilities = await delegate.getCapabilities({ handle });
+    this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+    const status = await delegate.getStatus({ handle });
+    this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+    const reportedKeys = readReportedConfigOptionKeys(status);
+    return {
+      capabilities,
+      status,
+      reportedKeys,
+      configOptionKeys: reportedKeys ?? capabilities.configOptionKeys,
+    };
+  }
+
+  /** Model discovery does not imply effort support; refuse before any model or effort write. */
+  private async assertReasoningEffortAdvertised(
+    delegate: BaseAcpxRuntime,
+    handle: Parameters<BaseAcpxRuntime["setModel"]>[0]["handle"],
+    snapshot: AcpxHandleOperationSnapshot,
+    requested: string,
+  ): Promise<void> {
+    const { configOptionKeys } = await this.readSessionConfigAnnouncement(
+      delegate,
+      handle,
+      snapshot,
+    );
+    if (!configOptionKeys?.some((key) => key.trim().toLowerCase() === "reasoning_effort")) {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        `This Codex ACP session does not advertise reasoning_effort, so "${requested}" was not applied. Choose the model without a reasoning-effort suffix.`,
+      );
+    }
+  }
+
+  /**
+   * Generic refs try the exact harness id first. Codex and Claude config writes normalize before
+   * the wire; set_model (`exactFirst`) tries the exact id and normalizes only after ACPX's typed
+   * pre-wire unadvertised-model rejection. Other failures are never retried.
+   */
+  private async writeModelUnlocked<T extends Partial<AcpRuntimeConfigOptionResult>>(
+    snapshot: AcpxHandleOperationSnapshot,
+    requested: string,
+    writeModel: (model: string) => Promise<T | void>,
+    writeReasoningEffort: (value: string) => Promise<T | void>,
+    assertReasoningEffortAdvertised: () => Promise<void>,
+    exactFirst = false,
+  ): Promise<T | void> {
+    const write = (model: string) => {
+      this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+      return writeModel(model);
+    };
+    if (!isCodexAcpCommand(snapshot.command) && !isClaudeAcpCommand(snapshot.command)) {
+      return await withOpenClawModelRef(requested, write);
+    }
+    let plan: AcpxProviderModelWrite | undefined;
+    if (exactFirst) {
+      try {
+        return await write(requested);
+      } catch (error) {
+        if (!isUnadvertisedModelRejection(error)) {
+          throw error;
+        }
+        plan = resolveProviderModelWrite(snapshot.command, requested);
+        if (plan?.model === requested.trim() && !plan.reasoningEffort) {
+          throw error;
+        }
+      }
+    }
+    plan ??= resolveProviderModelWrite(snapshot.command, requested) ?? {};
+    if (plan.reasoningEffort) {
+      await assertReasoningEffortAdvertised();
+    }
+    const modelResult = plan.model ? await write(plan.model) : undefined;
+    this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+    return withAcceptedModelRef(
+      plan.reasoningEffort ? await writeReasoningEffort(plan.reasoningEffort) : modelResult,
+      plan,
+    );
   }
 
   async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
@@ -1174,26 +1191,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
       return;
     }
+    if (key === "model") {
+      const modelKey = isCodexAcp ? "model" : input.key;
+      return await this.writeModelUnlocked(
+        snapshot,
+        input.value,
+        (value) => delegate.setConfigOption({ ...input, key: modelKey, value }),
+        (value) => delegate.setConfigOption({ ...input, key: "reasoning_effort", value }),
+        () => this.assertReasoningEffortAdvertised(delegate, input.handle, snapshot, input.value),
+      );
+    }
     if (isCodexAcp) {
-      if (key === "model") {
-        const classification = classifyCodexAcpModelRequest(input.value);
-        if (classification.kind === "unsupported") {
-          failUnsupportedCodexAcpModel(input.value);
-        }
-        const { override } = classification;
-        const modelResult = override.model
-          ? await delegate.setConfigOption({ ...input, key: "model", value: override.model })
-          : undefined;
-        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
-        if (override.reasoningEffort) {
-          return await delegate.setConfigOption({
-            ...input,
-            key: "reasoning_effort",
-            value: override.reasoningEffort,
-          });
-        }
-        return modelResult;
-      }
       if (key === "thinking" || key === "thought_level" || key === "reasoning_effort") {
         const classification = classifyCodexAcpModelRequest(undefined, input.value);
         const reasoningEffort =
@@ -1211,18 +1219,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           value: reasoningEffort,
         });
       }
-    }
-    if (isClaudeAcpCommand(command) && key === "model") {
-      return await delegate.setConfigOption({
-        ...input,
-        value: normalizeClaudeAcpModelOverride(input.value) ?? input.value,
-      });
-    }
-    if (key === "model") {
-      return await withOpenClawModelRef(input.value, (value) => {
-        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
-        return delegate.setConfigOption({ ...input, value });
-      });
     }
     return await delegate.setConfigOption(input);
   }

@@ -287,6 +287,8 @@ export async function runManagerTurn(params: {
         const onModelRevoked = () =>
           params.acceptedTurn.abortController.abort(modelExecution?.signal.reason);
         try {
+          // Ensure facts describe only a fresh handle; later control evidence is persisted.
+          const reusableHandle = params.runtimeHandles.get(params)?.handle;
           const ensured = await params.ensureRuntimeHandle({
             readAcpControl: () => params.acceptedTurn.cancelConstraint,
             assertMetadataCommitAllowed: (locator) => {
@@ -305,11 +307,12 @@ export async function runManagerTurn(params: {
           // Retain the actual handle through policy failure and final identity publication.
           params.acceptedTurn.runtimeHandle = handle;
           meta = ensured.meta;
-          let appliedModel = handle.appliedModel
-            ? handle.appliedModel.kind === "applied"
-              ? handle.appliedModel.model
-              : undefined
-            : meta.runtimeOptions?.model;
+          let appliedModel =
+            handle.appliedModel && handle !== reusableHandle
+              ? handle.appliedModel.kind === "applied"
+                ? handle.appliedModel.model
+                : undefined
+              : meta.runtimeOptions?.model;
           assertModelAllowed(appliedModel);
           activeTurn = {
             requestId: input.requestId,
@@ -330,8 +333,9 @@ export async function runManagerTurn(params: {
               meta,
               isCurrentActor: params.isCurrentActor,
               getCachedRuntimeState: () => params.runtimeHandles.get(params),
-              onModelApplied: (model) => {
-                appliedModel = model;
+              // Without accepted evidence the replayed request stays bound to model policy.
+              onModelSelected: (selection) => {
+                appliedModel = selection.model;
                 assertModelAllowed(appliedModel);
               },
               onOptionsChanged: async (runtimeOptions) => {

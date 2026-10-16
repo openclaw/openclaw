@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
@@ -11,6 +11,7 @@ import {
   installMutableAcpSessionMetaUpsert,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
+import type { WriteManagerSessionMeta } from "./manager.types.js";
 
 const sessionKey = "agent:codex:acp:initialization";
 const target = { cfg: baseCfg, sessionKey };
@@ -58,6 +59,50 @@ describe("AcpSessionManager initializeSession", () => {
     expect(extractRuntimeOptionsFromUpserts()).toEqual([accepted]);
     expect(f.state.currentMeta?.runtimeOptions).toEqual(accepted);
   });
+
+  it.each(["ensure", "commit"] as const)(
+    "reuses the pre-ensure resume guard and refuses metadata when it fails at %s",
+    async (phase) => {
+      const f = fixture();
+      let sourceCurrent = true;
+      const guard = () => {
+        if (!sourceCurrent) {
+          throw new Error("ACP resume source authority changed");
+        }
+      };
+      const revalidateResume = vi.fn(async () => guard);
+      f.ensureSession.mockImplementation(async (ensureInput) => {
+        sourceCurrent = phase !== "ensure";
+        return { sessionKey, backend: "acpx", runtimeSessionName: ensureInput.sessionKey };
+      });
+      if (phase === "commit") {
+        hoisted.upsertAcpSessionMetaMock.mockImplementationOnce(
+          async (params: Parameters<WriteManagerSessionMeta>[0]) => {
+            params.mutate(undefined, undefined);
+            sourceCurrent = false;
+            params.assertCommitAllowed?.();
+            throw new Error("metadata committed without current resume source");
+          },
+        );
+      }
+      await expect(
+        f.manager.initializeSession({
+          ...input,
+          resumeSessionId: "fixture-resume",
+          revalidateResume,
+        }),
+      ).rejects.toThrow("ACP resume source authority changed");
+      expect(revalidateResume).toHaveBeenCalledOnce();
+      expect(f.ensureSession).toHaveBeenCalledOnce();
+      expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(phase === "commit" ? 1 : 0);
+      expect(f.state.currentMeta).toBeUndefined();
+      expect(f.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+      expect(f.close).toHaveBeenCalledWith({
+        handle: expect.objectContaining({ sessionKey }),
+        reason: "init-meta-failed",
+      });
+    },
+  );
 
   it("rolls back ensured runtime sessions when metadata persistence fails", async () => {
     const f = fixture();

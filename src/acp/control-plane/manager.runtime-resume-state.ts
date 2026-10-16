@@ -16,6 +16,7 @@ import type {
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
+import { resolveThinkingProvenance } from "./runtime-options.js";
 
 export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
@@ -161,6 +162,7 @@ async function clearPersistedRuntimeResumeState(params: {
         ...(nextIdentity ? { identity: nextIdentity } : {}),
         mode: current.mode,
         ...(current.runtimeOptions ? { runtimeOptions: current.runtimeOptions } : {}),
+        ...resolveThinkingProvenance(current.runtimeOptions, current.thinkingExplicit),
         ...(current.cwd ? { cwd: current.cwd } : {}),
         state: params.discardPersistentState ? "idle" : current.state,
         lastActivityAt: now,
