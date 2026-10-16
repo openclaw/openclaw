@@ -24,8 +24,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
-// mock-isolation: Synthetic model decisions; admission, queue, dispatch and the managed
-// tool surface (including real filesystem writes) stay real.
+// mock-isolation: Synthetic model decisions; admission, queue and real tool writes stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
 }));
