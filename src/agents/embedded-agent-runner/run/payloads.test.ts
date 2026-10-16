@@ -193,6 +193,32 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     },
   );
 
+  it.each([
+    { parts: ["First part.", "Second part.\nNO_REPLY"], expected: "First part.\nSecond part." },
+    { parts: ["First part.", "Second part.\nNO_", "REPLY"], expected: "First part.\nSecond part." },
+    { parts: ["```text\nNO_REPLY", "```\nNO_REPLY"], expected: "```text\nNO_REPLY\n```" },
+  ])(
+    "preserves earlier segment boundaries after trailing cleanup: $parts",
+    ({ parts, expected }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: parts.map((text) => ({ type: "text", text })),
+      });
+      const current = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Final answer." }],
+      });
+      const payloads = buildPayloads({
+        assistantTexts: [parts.join("\n"), "Final answer."],
+        answerSegments: [
+          { textEnd: 1, messageEnd: 1, finalMessageStart: 1, lastAssistant: earlier },
+        ],
+        lastAssistant: current,
+        currentAssistant: current,
+        assistantMessageIndex: 2,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual([expected, "Final answer."]);
+    },
+  );
+
   it("does not append a presentation failure after confirmed automatic source completion", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAgentAssistantMessage({
