@@ -281,7 +281,6 @@ export {
   loadShortTermPromotionDreamingStats,
   DOCTOR_MEMORY_TARGET_METHODS,
   invokeDoctorMemory,
-  expectRecordFields,
   respondPayload,
   mockCallArg,
   findRecordByField,
