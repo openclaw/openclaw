@@ -95,21 +95,23 @@ let inWorkerGrant = false;
 let workerGrantReads: string[] = [];
 let sqlReads: ReturnType<typeof observeSqliteReadSql> | undefined;
 const authorizations: SessionMutationAuthorization[] = [];
+type Context = GatewayRequestHandlerOptions["context"];
+type Params = GatewayRequestHandlerOptions["params"];
 
 function consultContext(
-  config: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]> = {
+  config: ReturnType<Context["getRuntimeConfig"]> = {
     agents: { defaults: { workspace: path.join(tempDir, "workspace") } },
   },
 ) {
-  const context = createGatewayRequestContext(makeContextParams());
-  context.getRuntimeConfig = () => config;
-  context.getCommittedRuntimeConfig = () => config;
-  return context;
+  return Object.assign(createGatewayRequestContext(makeContextParams()), {
+    getRuntimeConfig: () => config,
+    getCommittedRuntimeConfig: () => config,
+  });
 }
 
 async function authorizeConsult(
-  params: GatewayRequestHandlerOptions["params"],
-  context: GatewayRequestHandlerOptions["context"],
+  params: Params,
+  context: Context,
   client: GatewayRequestHandlerOptions["client"] = null,
   method = "talk.client.toolCall",
 ) {
@@ -119,37 +121,34 @@ async function authorizeConsult(
     context,
     client,
   });
-  if (authorized.authorization) {
-    authorizations.push(authorized.authorization);
-  }
   expect(authorized.error).toBeNull();
-  return authorized;
+  authorizations.push(authorized.authorization!);
+  return authorized.authorization!;
 }
 
 function invokeConsult(
-  params: GatewayRequestHandlerOptions["params"],
-  context: GatewayRequestHandlerOptions["context"],
+  params: Params,
+  context: Context,
   authorization: SessionMutationAuthorization | undefined,
   options: Partial<GatewayRequestHandlerOptions> = {},
 ) {
   const respond = vi.fn();
+  const request = {
+    req: { type: "req", id: "consult-authority", method: "talk.client.toolCall" },
+    params,
+    context,
+    client: null,
+    respond,
+    sessionMutationAuthorization: authorization,
+    ...options,
+  };
   return {
     respond,
-    pending: Promise.resolve(
-      talkClientHandlers["talk.client.toolCall"]!({
-        req: { type: "req", id: "consult-authority", method: "talk.client.toolCall" },
-        params,
-        context,
-        client: null,
-        respond,
-        sessionMutationAuthorization: authorization,
-        ...options,
-      } as never),
-    ),
+    pending: Promise.resolve(talkClientHandlers["talk.client.toolCall"]!(request as never)),
   };
 }
 
-async function createRelay(context: GatewayRequestHandlerOptions["context"], connId: string) {
+async function createRelay(context: Context, connId: string) {
   const cfg = context.getRuntimeConfig();
   const created = createTalkRealtimeRelaySession({
     context,
@@ -165,7 +164,7 @@ async function createRelay(context: GatewayRequestHandlerOptions["context"], con
   return relaySessions.get(created.relaySessionId)!;
 }
 
-function registerAbort(context: GatewayRequestHandlerOptions["context"]) {
+function registerAbort(context: Context) {
   return registerChatAbortController({
     chatAbortControllers: context.chatAbortControllers,
     runId: "queued-consult",
@@ -309,7 +308,7 @@ describe("voice consult registration authority", () => {
             await resume.promise;
           });
         }
-        const call = invokeConsult(params, context, authorized.authorization, {
+        const call = invokeConsult(params, context, authorized, {
           client: client as never,
         });
         const { respond } = call;
@@ -375,7 +374,7 @@ describe("voice consult registration authority", () => {
         voiceSessionId: relay.id,
       });
       const authorized = await authorizeConsult(params, context, client as never);
-      const { respond, pending } = invokeConsult(params, context, authorized.authorization, {
+      const { respond, pending } = invokeConsult(params, context, authorized, {
         client: client as never,
       });
       try {
@@ -405,16 +404,18 @@ describe("voice consult registration authority", () => {
         await pending;
         expect(respond.mock.lastCall?.[0]).toBe(false);
         expect(chat.dispatched).not.toHaveBeenCalled();
+        expect(voiceSessions.resolveClientVoiceRunBinding(runId) !== undefined).toBe(
+          Boolean(current),
+        );
+        expect(registration.controller.signal.aborted).toBe(!current);
         if (current) {
           expect(current.isCurrent()).toBe(true);
-          expect(voiceSessions.resolveClientVoiceRunBinding(runId)).toBeDefined();
-          expect(registration.controller.signal.aborted).toBe(false);
           current.release();
         } else {
-          expect(relay.activeAgentRuns.size).toBe(0);
-          expect(relay.activeAgentToolCalls.size).toBe(0);
-          expect(voiceSessions.resolveClientVoiceRunBinding(runId)).toBeUndefined();
-          expect(registration.controller.signal.aborted).toBe(true);
+          expect(relay).toMatchObject({
+            activeAgentRuns: { size: 0 },
+            activeAgentToolCalls: { size: 0 },
+          });
         }
       } finally {
         resume.resolve();
@@ -442,7 +443,7 @@ describe("voice consult registration authority", () => {
         () => !getOpenClawAgentDatabaseIfOpen(scope),
       );
       let checkedWhileCold = false;
-      const { respond, pending } = invokeConsult(params, context, authorized.authorization, {
+      const { respond, pending } = invokeConsult(params, context, authorized, {
         sessionMutationCommitGuard: sdk
           ? () => {
               expect(inWorkerGrant).toBe(false);
@@ -482,25 +483,20 @@ describe("voice consult registration authority", () => {
         queued.resolve();
         return await pending;
       });
-      const { respond, pending: running } = invokeConsult(
-        params,
-        context,
-        authorized.authorization,
-        {
-          sessionMutationCommitGuard:
-            revoked === "sdk" || revoked === "current"
-              ? () => {
-                  expect(inWorkerGrant).toBe(false);
-                  expect(loadSessionEntry(scope)?.sessionId).toBe("original-consult-session");
-                  nativeSdkCommitObserved ||=
-                    getOpenClawAgentDatabaseIfOpen(scope)?.db.isTransaction === true;
-                  if (!sdkCurrent) {
-                    throw new Error("SDK consult authority was revoked");
-                  }
+      const { respond, pending: running } = invokeConsult(params, context, authorized, {
+        sessionMutationCommitGuard:
+          revoked === "sdk" || revoked === "current"
+            ? () => {
+                expect(inWorkerGrant).toBe(false);
+                expect(loadSessionEntry(scope)?.sessionId).toBe("original-consult-session");
+                nativeSdkCommitObserved ||=
+                  getOpenClawAgentDatabaseIfOpen(scope)?.db.isTransaction === true;
+                if (!sdkCurrent) {
+                  throw new Error("SDK consult authority was revoked");
                 }
-              : undefined,
-        },
-      );
+              }
+            : undefined,
+      });
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -559,7 +555,7 @@ describe("voice consult registration authority", () => {
       }
       const authorized = await authorizeConsult(
         { sessionKey: sourceKey },
-        { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
+        { getRuntimeConfig: () => ({}) } as Context,
         null,
         "talk.client.create",
       );
@@ -573,11 +569,11 @@ describe("voice consult registration authority", () => {
       if (!memorySource) {
         expect(existsSync(targetPath)).toBe(false);
       }
-      const source = authorized.authorization?.talkSessionTarget;
+      const source = authorized.talkSessionTarget;
       if (!source) {
         throw new Error("Expected a prepared Talk source");
       }
-      const authority = observeAuthority(authorized.authorization!, target, !memorySource);
+      const authority = observeAuthority(authorized, target, !memorySource);
       sqlReads?.restore();
       sqlReads = undefined;
       const sql = observeTargetSql(

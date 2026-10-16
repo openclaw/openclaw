@@ -17,9 +17,12 @@ import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { cleanupTalkConnection } from "../session-registry.js";
-import { createBrowserHarness, type EnsureHarness } from "./client-create-ensure.test-support.js";
-import { browserSession, observeTalkVoiceChangeRequest } from "./client-fixtures.test-support.js";
-import { talkVoiceHandlers } from "./voice.js";
+import {
+  createBrowserHarness,
+  requestBrowserVoiceChange,
+  type EnsureHarness,
+} from "./client-create-ensure.test-support.js";
+import { browserSession } from "./client-fixtures.test-support.js";
 
 type SourceAuthorityHarness = Omit<EnsureHarness, "ownVoice"> & {
   ownVoice: (id: string | undefined, key?: string) => void;
@@ -46,9 +49,8 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
       const sourcePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const displacedPath = `${sourcePath}.committed`;
       const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
-      let replaced = false;
       let successorBytes: Buffer | undefined;
-      const ensureSpy = vi
+      using ensureSpy = vi
         .spyOn(voiceWriters, "ensureClientVoiceAgentSessionEntry")
         .mockImplementationOnce(async (params) => {
           const ensuredId = await ensure(params);
@@ -56,21 +58,19 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
           renameSync(sourcePath, displacedPath);
           copyFileSync(displacedPath, sourcePath);
           successorBytes = readFileSync(sourcePath);
-          replaced = true;
           return ensuredId;
         });
       try {
         await fixture.create();
-        expect(replaced).toBe(true);
+        expect(successorBytes).toBeDefined();
         expect(ensureSpy).toHaveBeenCalledOnce();
         expect(fixture.reply?.[0]).toBe(false);
         expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
         await closeOpenClawAgentDatabasesAsync(harness.tempDir());
         expect(readFileSync(sourcePath)).toEqual(successorBytes);
       } finally {
-        ensureSpy.mockRestore();
         await closeOpenClawAgentDatabasesAsync(harness.tempDir());
-        if (replaced) {
+        if (successorBytes) {
           unlinkSync(sourcePath);
           renameSync(displacedPath, sourcePath);
         }
@@ -84,7 +84,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
     let creatingVoice = false;
     let revoked = false;
     const create = voiceSessions.createOrResumeClientVoiceSession;
-    const createSpy = vi
+    using _ = vi
       .spyOn(voiceSessions, "createOrResumeClientVoiceSession")
       .mockImplementation(async (...args) => {
         creatingVoice = true;
@@ -111,7 +111,6 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
       expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeUndefined();
       expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
     } finally {
-      createSpy.mockRestore();
       setObserver(undefined);
     }
   });
@@ -137,6 +136,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         async (request) =>
           replacement ? { ...browserSession, voice: request.voice ?? "cove" } : browserSession,
       );
+      const { context, client, createBrowserSession } = fixture;
       let voiceSessionId: string | undefined = replacement ? undefined : "voice-sdk-guard";
       let nativeCommitGuard = false;
       let inGrant = false;
@@ -145,10 +145,10 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         await fixture.create();
         expect(fixture.reply?.[0]).toBe(true);
         harness.ownVoice(fixture.reply?.[1].voiceSessionId);
-        fixture.createBrowserSession.mock.calls[0]?.[0].gatewayControl?.onReady?.();
+        createBrowserSession.mock.calls[0]?.[0].gatewayControl?.onReady?.();
       }
       const createVoice = voiceSessions.createOrResumeClientVoiceSession;
-      const spy = replacement
+      using _ = replacement
         ? vi
             .spyOn(voiceSessions, "createOrResumeClientVoiceSession")
             .mockImplementation(async (...args) => {
@@ -183,16 +183,12 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         if (!readSdkCurrent()) {
           throw new Error(error);
         }
+        return true;
       };
       const authority =
         guard === "transport"
           ? {
-              hasCurrentClientAuthority: replacement
-                ? () => {
-                    assertSdkCurrent();
-                    return true;
-                  }
-                : readSdkCurrent,
+              hasCurrentClientAuthority: replacement ? assertSdkCurrent : readSdkCurrent,
             }
           : {
               sessionMutationCommitGuard:
@@ -207,26 +203,13 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
       let change: Promise<unknown> | undefined;
       try {
         if (replacement) {
-          const wait = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
-          change = Promise.resolve(
-            talkVoiceHandlers["talk.voice.set"]!({
-              req: { type: "req", id: "sdk-change", method: "talk.voice.set", params: {} },
-              params: {
-                voiceSessionId: fixture.reply?.[1].voiceSessionId,
-                voice: "ember",
-              },
-              respond: vi.fn(),
-              context: fixture.context,
-              client: fixture.client,
-              isWebchatConnect: () => false,
-              ...authority,
-            } as never),
+          const started = requestBrowserVoiceChange(
+            fixture,
+            fixture.reply?.[1].voiceSessionId,
+            (options) => ({ ...options, ...authority }),
           );
-          await wait(change);
-          const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
-            ([event]) => event === "talk.voice.change",
-          )?.[1]?.changeId;
-          expect(changeId).toBeTypeOf("string");
+          change = started.change;
+          const changeId = await started.requested;
           await fixture.create({ voiceChangeId: changeId });
         } else {
           await fixture.create({}, authority);
@@ -247,9 +230,8 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
           expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("open");
         }
       } finally {
-        spy?.mockRestore();
         if (replacement) {
-          cleanupTalkConnection(fixture.client.connId, fixture.context.logGateway);
+          cleanupTalkConnection(client.connId, context.logGateway);
           await change;
         }
       }
