@@ -626,6 +626,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     });
     mutable.startupBinding = startupBindingResolution.binding;
     mutable.startupContextTokens = startupBindingResolution.startupContextTokens;
+    mutable.replacementPredecessor = startupBindingResolution.replacementPredecessor;
     if (mutable.startupBinding?.threadId) {
       return;
     }

@@ -615,7 +615,7 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
-  it("clears native rollouts at Codex's reported model context window", async () => {
+  it("retains the predecessor at Codex's reported model context window", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -646,16 +646,17 @@ describe("Codex app-server startup binding", () => {
         }),
       ].join("\n") + "\n",
     );
-    const binding = await rotateOversizedCodexAppServerStartupBinding({
+    const resolution = await resolveCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: byteLimitConfig("1mb"),
     });
 
-    expect(binding).toBeUndefined();
+    expect(resolution.binding).toBeUndefined();
     const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding).toBeUndefined();
+    expect(savedBinding?.threadId).toBe("thread-existing");
+    expect(resolution.replacementPredecessor).toEqual(savedBinding);
   });
 
   it("uses the native rollout window for rotation despite a smaller legacy context window", async () => {
@@ -716,7 +717,7 @@ describe("Codex app-server startup binding", () => {
       })}\n`,
     );
 
-    const binding = await rotateOversizedCodexAppServerStartupBinding({
+    const resolution = await resolveCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -724,8 +725,9 @@ describe("Codex app-server startup binding", () => {
       projectedTurnTokens: 30_000,
     });
 
-    expect(binding).toBeUndefined();
+    expect(resolution.binding).toBeUndefined();
     const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding).toBeUndefined();
+    expect(savedBinding?.threadId).toBe("thread-existing");
+    expect(resolution.replacementPredecessor).toEqual(savedBinding);
   });
 });

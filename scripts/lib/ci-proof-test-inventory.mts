@@ -406,6 +406,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/app-server/run-attempt.native-followup-custody.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-hook-fallback.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-hook-relay.test.ts",
+  "extensions/codex/src/app-server/run-attempt.native-rotation.test.ts",
   "extensions/codex/src/app-server/run-attempt.plugin-refresh.test.ts",
   "extensions/codex/src/app-server/run-attempt.question-refresh.test.ts",
   "extensions/codex/src/app-server/run-attempt.settlement.test.ts",

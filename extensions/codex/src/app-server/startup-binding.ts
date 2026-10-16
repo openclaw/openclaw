@@ -291,6 +291,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
+  replacementPredecessor?: CodexAppServerThreadBinding;
 }> {
   const binding = params.binding;
   if (!binding?.threadId) {
@@ -395,7 +396,9 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    return await clearBinding();
+    // Keep pending child assignments until the lifecycle commits the successor.
+    params.assertCurrent?.();
+    return { binding: undefined, replacementPredecessor: binding };
   }
   return {
     binding,

@@ -169,7 +169,7 @@ async function fixture() {
   };
 }
 
-describe("native assignment custody across ordinary parent rotation", () => {
+describe("native assignment custody across parent rotation", () => {
   it("keeps imported assignments until the ordinary replacement commits", async () => {
     const f = await fixture();
     const before = f.readState();
@@ -215,9 +215,39 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(await f.readAssignments(replacement.threadId, replacement)).toEqual([]);
   });
 
-  it.each(["start", "revoked", "conflict"] as const)(
-    "preserves authoritative assignments when the successor encounters %s failure",
-    async (failure) => {
+  it.each(["threadId", "clientId"] as const)(
+    "rejects stale token-pressure selection for a different %s",
+    async (field) => {
+      const f = await fixture();
+      const before = f.readState();
+      await expect(
+        f.rotate({ replacementPredecessor: { ...f.parent, [field]: "stale-owner" } }),
+      ).rejects.toThrow("Codex startup binding changed during rotation");
+      expect(f.readState()).toEqual(before);
+      expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
+      expect(f.releasePredecessor).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not carry token-pressure assignments into a different connection", async () => {
+    const f = await fixture();
+    const replacement = await f.rotate({
+      replacementPredecessor: f.parent,
+      appServerRuntimeFingerprint: "connection-B",
+    });
+    expect(replacement.appServerRuntimeFingerprint).toBe("connection-B");
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual([]);
+    expect(f.releasePredecessor).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (["ordinary", "token pressure"] as const).flatMap((rotation) =>
+      (["start", "revoked", "conflict"] as const).map((failure) => ({ rotation, failure })),
+    ),
+  )(
+    "preserves authoritative assignments on $rotation rotation with $failure failure",
+    async ({ rotation, failure }) => {
       const f = await fixture();
       let expected = f.readState();
       assert(expected?.state === "active");
@@ -252,7 +282,9 @@ describe("native assignment custody across ordinary parent rotation", () => {
         }
         return threadStartResult("parent-uncommitted");
       });
-      await expect(f.rotate()).rejects.toThrow(
+      await expect(
+        f.rotate(rotation === "token pressure" ? { replacementPredecessor: f.parent } : {}),
+      ).rejects.toThrow(
         {
           start: "Successor start rejected",
           revoked: "agent harness host capability is no longer active",
@@ -268,11 +300,15 @@ describe("native assignment custody across ordinary parent rotation", () => {
           .filter(([method]) => method === "thread/delete")
           .map(([, params]) => params),
       ).toEqual(failure === "start" ? [] : [{ threadId: "parent-uncommitted" }]);
-      expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
-        f.parent.threadId,
-        undefined,
-        expect.any(Function),
-      );
+      if (rotation === "token pressure") {
+        expect(f.releasePredecessor).not.toHaveBeenCalled();
+      } else {
+        expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
+          f.parent.threadId,
+          undefined,
+          expect.any(Function),
+        );
+      }
     },
   );
 

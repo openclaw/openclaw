@@ -79,6 +79,7 @@ export async function startCodexAttemptThread(params: {
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
+  replacementPredecessor?: Parameters<typeof startOrResumeThread>[0]["replacementPredecessor"];
   runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
@@ -459,6 +460,7 @@ export async function startCodexAttemptThread(params: {
                 client: activeStartupClient,
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
+                replacementPredecessor: params.replacementPredecessor,
                 assertCurrent: params.assertCurrent,
                 authority: params.authority,
                 params: params.buildAttemptParams(),

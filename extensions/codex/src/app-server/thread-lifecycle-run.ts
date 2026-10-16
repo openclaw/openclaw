@@ -68,6 +68,21 @@ export async function startOrResumeThread(
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
+    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
+    if (params.replacementPredecessor) {
+      if (
+        binding?.threadId !== params.replacementPredecessor.threadId ||
+        binding?.clientId !== params.replacementPredecessor.clientId
+      ) {
+        throw new Error(
+          "Codex startup binding changed during rotation; retry with its current owner.",
+        );
+      }
+      assertCodexBindingMayBeReplaced(binding, "rotating a full native context", expectedOwnership);
+      replacementPredecessor = binding;
+      // Child work keeps its native subscription; the existing idle owner retires it.
+      binding = undefined;
+    }
     let selectionBinding = binding;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
@@ -109,7 +124,6 @@ export async function startOrResumeThread(
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
     } = preflight;
-    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
