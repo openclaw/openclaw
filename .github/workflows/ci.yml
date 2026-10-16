@@ -4813,19 +4813,6 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install native asset dependencies
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
-        env:
-          CI: "true"
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline --optional
-          --filter '@openclaw/mermaid-renderer...'
-          --filter '@openclaw/gateway-protocol...'
-          --config.ignore-scripts=false
-          --config.engine-strict=false
-          --config.enable-pre-post-scripts=true
-          --config.side-effects-cache=true
-
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
@@ -4837,7 +4824,10 @@ jobs:
         name: Identify Apple Mermaid inputs
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != '' && env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true'
         id: apple-mermaid-inputs
-        run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          key="$(node scripts/prepare-apple-mermaid.mjs --cache-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - &apple_mermaid_cache_restore
         name: Restore Apple Mermaid assets
@@ -4847,6 +4837,33 @@ jobs:
         with:
           path: apps/shared/mermaid/assets
           key: apple-mermaid-v1-${{ steps.apple-mermaid-inputs.outputs.key }}
+
+      - &apple_mermaid_cache_validation
+        name: Verify Apple Mermaid assets
+        if: steps.apple-mermaid-inputs.outputs.key != ''
+        id: apple-mermaid-cache-validation
+        run: |
+          set -euo pipefail
+          valid="$(node scripts/prepare-apple-mermaid.mjs --cache-valid)"
+          echo "valid=$valid" >> "$GITHUB_OUTPUT"
+
+      - name: Install native asset dependencies
+        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
+        env:
+          CI: "true"
+          MERMAID_ASSET_CACHE_VALID: ${{ steps.apple-mermaid-cache-validation.outputs.valid || 'false' }}
+        run: &install_native_asset_dependencies |
+          set -euo pipefail
+          filters=(--filter '@openclaw/gateway-protocol...')
+          if [[ "$MERMAID_ASSET_CACHE_VALID" != "true" ]]; then
+            filters+=(--filter '@openclaw/mermaid-renderer...')
+          fi
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            "${filters[@]}" \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
 
       - name: Prepare Apple Mermaid assets
         id: macos-native-assets
@@ -5279,10 +5296,27 @@ jobs:
 
       - *select_xcode_step
 
-      - *plain_node_setup_step
+      - name: Setup Node environment
+        id: node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: *cache_mode
+          install-bun: "false"
+          # Historical targets keep their original workspace installation contract.
+          install-deps: ${{ env.HISTORICAL_TARGET == 'true' && 'true' || 'false' }}
 
       - *apple_mermaid_cache_key
       - *apple_mermaid_cache_restore
+
+      - *apple_mermaid_cache_validation
+
+      - name: Install native asset dependencies
+        if: env.HISTORICAL_TARGET != 'true'
+        env:
+          CI: "true"
+          MERMAID_ASSET_CACHE_VALID: ${{ steps.apple-mermaid-cache-validation.outputs.valid || 'false' }}
+        run: *install_native_asset_dependencies
 
       - name: Identify iOS native cache inputs
         id: ios-cache-inputs

@@ -88,6 +88,20 @@ fs.appendFileSync("builds", "built\\n");`,
     expect(key.status, key.stderr).toBe(0);
     expect(key.stdout.trim()).toMatch(/^[a-z0-9-]+-v[\d.]+-[a-f0-9]{64}$/);
     expect(() => readFileSync(path.join(root, "builds"))).toThrow();
+    const cacheValid = () => {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/prepare-apple-mermaid.mjs", "--cache-valid"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    expect(cacheValid()).toBe("false");
+    expect(() => readFileSync(path.join(root, "builds"))).toThrow();
     const run = () => {
       const result = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs"], {
         cwd: root,
@@ -98,6 +112,7 @@ fs.appendFileSync("builds", "built\\n");`,
       return readFileSync(path.join(root, "builds"), "utf8").trim().split("\n").length;
     };
     expect(run()).toBe(1);
+    expect(cacheValid()).toBe("true");
     const resources = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid";
     put(`${resources}/obsolete.js`, "stale resource");
     expect(run()).toBe(1);
@@ -115,11 +130,41 @@ fs.appendFileSync("builds", "built\\n");`,
     put("packages/normalization-core/src/record-coerce.ts", "changed workspace dependency");
     expect(run()).toBe(4);
     put("apps/shared/mermaid/assets/mermaid/native.js", "damaged output");
+    expect(cacheValid()).toBe("false");
     expect(run()).toBe(5);
+    expect(cacheValid()).toBe("true");
     rmSync(path.join(root, "apps/shared/mermaid/assets/mermaid"), { recursive: true });
     expect(run()).toBe(6);
     put("apps/shared/mermaid/assets/apple-build-inputs.json", "invalid receipt");
+    expect(cacheValid()).toBe("false");
     expect(run()).toBe(7);
+  });
+
+  it("installs the protocol graph on every native build and the renderer graph only for unverified assets", () => {
+    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+    for (const jobName of ["macos-swift", "ios-build"]) {
+      const job = workflow.jobs[jobName];
+      const install = job.steps.find(
+        (step: { name?: string }) => step.name === "Install native asset dependencies",
+      );
+      for (const valid of ["true", "false", ""]) {
+        const result = spawnSync(
+          "/bin/bash",
+          ["-c", 'pnpm() { printf "%s\n" "$@"; }\n' + install.run],
+          {
+            encoding: "utf8",
+            env: { ...process.env, MERMAID_ASSET_CACHE_VALID: valid },
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        const args = result.stdout.trim().split("\n");
+        expect(args).toContain("@openclaw/gateway-protocol...");
+        expect(args.includes("@openclaw/mermaid-renderer...")).toBe(valid !== "true");
+        expect(args).toContain("--frozen-lockfile");
+        expect(args).toContain("--optional");
+        expect(args).toContain("--config.ignore-scripts=false");
+      }
+    }
   });
 
   it("reuses Watch slices across new output directories and rebuilds changed inputs or damaged archives", () => {

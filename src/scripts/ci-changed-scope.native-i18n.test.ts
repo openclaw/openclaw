@@ -12,6 +12,12 @@ describe("native i18n changed scope", () => {
     },
   );
 
+  it("keeps store marketing text outside runtime translation checks", () => {
+    const metadata = "apps/ios/fastlane/metadata/en-US/description.txt";
+    expect(shouldRunNativeI18n([metadata])).toBe(false);
+    expect(shouldRunNativeI18n([metadata, "apps/ios/Resources/Localizable.xcstrings"])).toBe(true);
+  });
+
   it("routes Android flavor sources through native i18n", () => {
     expect(
       shouldRunNativeI18n([

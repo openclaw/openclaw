@@ -214,7 +214,7 @@ describe("Periphery scope workflows", () => {
       commit();
       const { script } = scopeWorkflows.get(workflowPath)!;
       const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
-        match[1] ? [match[1]] : [],
+        match[1] ? [match[1].endsWith("/") ? `${match[1]}en-US/description.txt` : match[1]] : [],
       );
       const firstProsePath = prosePaths[0];
       if (!firstProsePath) {
@@ -244,6 +244,17 @@ describe("Periphery scope workflows", () => {
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
     },
   );
+
+  it.each([
+    ".github/workflows/ios-periphery.yml",
+    ".github/workflows/shared-openclawkit-periphery.yml",
+  ])("keeps marketing text outside %s without excluding app resources", async (workflowPath) => {
+    const metadata = "apps/ios/fastlane/metadata/en-US/description.txt";
+    await expect(runScope(workflowPath, { files: [metadata] })).resolves.toBe("false");
+    await expect(
+      runScope(workflowPath, { files: [metadata, "apps/ios/Resources/description.txt"] }),
+    ).resolves.toBe("true");
+  });
 
   it("selects shared scans from native protocol generator inputs", async () => {
     for (const file of [

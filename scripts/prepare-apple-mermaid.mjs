@@ -134,7 +134,12 @@ const cached = await readFile(receipt, "utf8")
   .then(JSON.parse)
   .catch(() => null);
 const outputHash = await hashFiles(["mermaid"], assets).catch(() => null);
-if (cached?.key === key && outputHash && cached.outputHash === outputHash) {
+const cacheValid = Boolean(cached?.key === key && outputHash && cached.outputHash === outputHash);
+if (process.argv.includes("--cache-valid")) {
+  console.log(cacheValid);
+  process.exit(0);
+}
+if (cacheValid) {
   console.log("Apple Mermaid assets: verified cache hit");
 } else {
   const spec = createPnpmRunnerSpawnSpec({

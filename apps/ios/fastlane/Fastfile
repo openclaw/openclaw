@@ -256,14 +256,77 @@ def require_exclusive_screenshot_simulator!(udid, diagnostics)
   UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
-def with_screenshot_simulator(template, diagnostics: nil)
-  require_idle_screenshot_simulators!
-  name = template.fetch("name")
-  udid = screenshot_phase(diagnostics, "create", device: name) do
-    sh("xcrun", "simctl", "create", name, template.fetch("deviceTypeIdentifier"), template.fetch("runtime")).strip
+def report_screenshot_simulator_admission_failure(template)
+  facts = {
+    "device" => template.slice("name", "deviceTypeIdentifier", "runtime").transform_values { |value| value.to_s[0, 160] },
+    "image" => ENV.slice("ImageOS", "ImageVersion", "RUNNER_ARCH").transform_values { |value| value[0, 96] }
+  }
+  begin
+    stdout, _stderr, status = Open3.capture3("xcrun", "simctl", "list", "runtimes", "--json")
+    facts["runtimeInventoryAvailable"] = status.success?
+    if status.success?
+      runtime = JSON.parse(stdout).fetch("runtimes").find { |entry| entry["identifier"] == template.fetch("runtime") }
+      facts["runtime"] = runtime&.slice("identifier", "version", "buildversion", "isAvailable")&.transform_values do |value|
+        value.is_a?(String) ? value[0, 160] : value
+      end
+      if runtime
+        facts["availabilityErrorPresent"] = !runtime["availabilityError"].to_s.empty?
+        facts["supportedArchitectures"] = Array(runtime["supportedArchitectures"]).first(4).map { |value| value.to_s[0, 32] }
+        facts["supportsDeviceType"] = Array(runtime["supportedDeviceTypes"]).any? { |entry| entry["identifier"] == template.fetch("deviceTypeIdentifier") }
+        facts["runtimeBundlePresent"] = File.directory?(runtime["bundlePath"]) if runtime["bundlePath"].is_a?(String)
+      end
+    end
+  rescue StandardError
+    facts["runtimeInventoryAvailable"] = false
   end
-  UI.user_error!("simctl create did not return a simulator UUID.") unless udid.match?(/\A[\da-fA-F]{8}(?:-[\da-fA-F]{4}){3}-[\da-fA-F]{12}\z/)
+  # Paths and unrelated inventory stay on the host; creation stderr retains the failure reason.
+  UI.important("Screenshot simulator admission failed: #{JSON.generate(facts)}")
+end
 
+def with_screenshot_simulators(templates, diagnostics: nil)
+  require_idle_screenshot_simulators!
+  owned = []
+  begin
+    # Device-list availability can outlive the runtime's files. Admit every family
+    # before compiling, then keep these exact private UUIDs shut down until capture.
+    templates.each do |template|
+      begin
+        udid = screenshot_phase(diagnostics, "create", device: template.fetch("name")) do
+          sh("xcrun", "simctl", "create", template.fetch("name"), template.fetch("deviceTypeIdentifier"), template.fetch("runtime")).strip
+        end
+        UI.user_error!("simctl create did not return a simulator UUID.") unless udid.match?(/\A[\da-fA-F]{8}(?:-[\da-fA-F]{4}){3}-[\da-fA-F]{12}\z/)
+        owned << template.merge("udid" => udid)
+      rescue StandardError
+        report_screenshot_simulator_admission_failure(template)
+        raise
+      end
+    end
+    require_idle_screenshot_simulators!
+    yield owned
+  ensure
+    primary_error = $!
+    cleanup_errors = []
+    owned.reverse_each do |device|
+      begin
+        screenshot_phase(diagnostics, "delete", device: device.fetch("name"), udid: device.fetch("udid")) do
+          # A missing runtime can hide an owned UUID from 'devices available'.
+          # Always delete known allocations, including partial admission successes.
+          sh("xcrun", "simctl", "delete", device.fetch("udid"))
+          diagnostics.events.last["activeSimulatorCount"] = available_simulator_devices.count { |entry| entry.fetch("state") != "Shutdown" } if diagnostics
+        end
+      rescue StandardError => error
+        cleanup_errors << error
+        UI.important("Screenshot simulator delete failed for the task-owned #{device.fetch("name")} simulator (#{device.fetch("udid")}).")
+      end
+    end
+    raise cleanup_errors.first if !primary_error && !cleanup_errors.empty?
+  end
+end
+
+def with_screenshot_simulator(device, diagnostics: nil)
+  require_idle_screenshot_simulators!
+  name = device.fetch("name")
+  udid = device.fetch("udid")
   begin
     screenshot_phase(diagnostics, "boot", device: name, udid: udid) do
       sh("xcrun", "simctl", "bootstatus", udid, "-b")
@@ -274,25 +337,16 @@ def with_screenshot_simulator(template, diagnostics: nil)
     result
   ensure
     primary_error = $!
-    cleanup_errors = []
-    ["shutdown", "delete"].each do |operation|
-      begin
-        screenshot_phase(diagnostics, operation, device: name, udid: udid) do
-          current = available_simulator_devices.find { |device| device.fetch("udid") == udid }
-          next unless current
-          next if operation == "shutdown" && current.fetch("state") == "Shutdown"
-
-          sh("xcrun", "simctl", operation, udid)
-          if diagnostics
-            diagnostics.events.last["activeSimulatorCount"] = available_simulator_devices.count { |device| device.fetch("state") != "Shutdown" }
-          end
-        end
-      rescue StandardError => error
-        cleanup_errors << error
-        UI.important("Screenshot simulator #{operation} failed for the task-owned #{name} simulator (#{udid}).")
+    begin
+      screenshot_phase(diagnostics, "shutdown", device: name, udid: udid) do
+        current = available_simulator_devices.find { |entry| entry.fetch("udid") == udid }
+        sh("xcrun", "simctl", "shutdown", udid) unless current && current.fetch("state") == "Shutdown"
+        diagnostics.events.last["activeSimulatorCount"] = available_simulator_devices.count { |entry| entry.fetch("state") != "Shutdown" } if diagnostics
       end
+    rescue StandardError
+      UI.important("Screenshot simulator shutdown failed for the task-owned #{name} simulator (#{udid}).")
+      raise unless primary_error
     end
-    raise cleanup_errors.first if !primary_error && !cleanup_errors.empty?
   end
 end
 
@@ -518,16 +572,11 @@ def build_watch_screenshot_app
   app_path
 end
 
-def capture_watch_screenshot(diagnostics: nil)
-  device = resolve_simulator_device(watch_snapshot_device)
+def capture_watch_screenshot(device, diagnostics: nil)
   device_name = device.fetch("name")
   output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
   output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
 
-  FileUtils.mkdir_p(output_dir)
-  Dir[File.join(output_dir, "Apple Watch*-*.png")].each { |path| FileUtils.rm_f(path) }
-
-  # Clear old evidence before a standalone build can fail.
   app_path = yield
   UI.user_error!("Watch screenshot build did not produce #{app_path}.") unless File.exist?(app_path)
   watch_app_identifier = bundle_identifier_for_product(app_path)
@@ -2359,67 +2408,70 @@ platform :ios do
         Gem::Version.new(device.fetch("runtime").delete_prefix("com.apple.CoreSimulator.SimRuntime.iOS-").tr("-", "."))
       end || UI.user_error!("Screenshot simulator '#{name}' is unavailable.")
     end
-    require_idle_screenshot_simulators!
-    screenshot_phase(diagnostics, "build") do
-      run_screenshot_xcodebuild!(
-        [
-          "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
-          "-derivedDataPath", derived_data_path,
-          "-destination", "generic/platform=iOS Simulator",
-          "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
-          "-allowProvisioningUpdates", "build-for-testing"
-        ],
-        log_path: File.join(log_directory, "build.log")
-      )
-    end
-
-    # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
-    snapshot_cache_directory = File.expand_path("~/Library/Caches/tools.fastlane")
-    FileUtils.mkdir_p(File.join(snapshot_cache_directory, "screenshots"))
-    File.write(File.join(snapshot_cache_directory, "language.txt"), "en-US")
-    File.write(File.join(snapshot_cache_directory, "locale.txt"), "")
-    File.write(File.join(snapshot_cache_directory, "snapshot-launch_arguments.txt"), "--openclaw-screenshot-mode")
+    include_watch = ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] != "1"
+    selected_devices << resolve_simulator_device(watch_snapshot_device) if include_watch
     FileUtils.mkdir_p(File.join(output_directory, "en-US"))
     FileUtils.rm_f(Dir[File.join(output_directory, "*", "*.png")])
+    with_screenshot_simulators(selected_devices, diagnostics: diagnostics) do |admitted_devices|
+      screenshot_phase(diagnostics, "build") do
+        run_screenshot_xcodebuild!(
+          [
+            "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+            "-derivedDataPath", derived_data_path,
+            "-destination", "generic/platform=iOS Simulator",
+            "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
+            "-allowProvisioningUpdates", "build-for-testing"
+          ],
+          log_path: File.join(log_directory, "build.log")
+        )
+      end
 
-    selected_devices.each do |device|
-      with_screenshot_simulator(device, diagnostics: diagnostics) do |device_udid|
-        screenshot_phase(diagnostics, "status-bar", device: device.fetch("name"), udid: device_udid) do
-          sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
-        end
-        RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
-          capture_release_ios_screenshot!(
-            project: project,
-            device: device.fetch("name"),
-            screenshot: screenshot,
-            output_directory: output_directory,
-            result_bundle_path: result_bundle_path,
-            result_bundle_archive_directory: result_bundle_archive_directory,
-            log_directory: log_directory,
-            capture_attempts: capture_attempts,
-            capture_attempts_path: capture_attempts_path,
-            derived_data_path: derived_data_path,
-            device_udid: device_udid,
-            snapshot_cache_directory: snapshot_cache_directory,
-            diagnostics: diagnostics
-          )
+      # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
+      snapshot_cache_directory = File.expand_path("~/Library/Caches/tools.fastlane")
+      FileUtils.mkdir_p(File.join(snapshot_cache_directory, "screenshots"))
+      File.write(File.join(snapshot_cache_directory, "language.txt"), "en-US")
+      File.write(File.join(snapshot_cache_directory, "locale.txt"), "")
+      File.write(File.join(snapshot_cache_directory, "snapshot-launch_arguments.txt"), "--openclaw-screenshot-mode")
+
+      admitted_devices.take(devices.length).each do |device|
+        with_screenshot_simulator(device, diagnostics: diagnostics) do |device_udid|
+          screenshot_phase(diagnostics, "status-bar", device: device.fetch("name"), udid: device_udid) do
+            sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
+          end
+          RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+            capture_release_ios_screenshot!(
+              project: project,
+              device: device.fetch("name"),
+              screenshot: screenshot,
+              output_directory: output_directory,
+              result_bundle_path: result_bundle_path,
+              result_bundle_archive_directory: result_bundle_archive_directory,
+              log_directory: log_directory,
+              capture_attempts: capture_attempts,
+              capture_attempts_path: capture_attempts_path,
+              derived_data_path: derived_data_path,
+              device_udid: device_udid,
+              snapshot_cache_directory: snapshot_cache_directory,
+              diagnostics: diagnostics
+            )
+          end
         end
       end
-    end
-    verify_release_ios_screenshot_manifest!(
-      output_directory: output_directory,
-      devices: devices
-    )
+      verify_release_ios_screenshot_manifest!(
+        output_directory: output_directory,
+        devices: devices
+      )
 
-    # Snapshot fixes its result bundles under the screenshot root. Keep successful
-    # evidence in build/ so Deliver sees only locale directories during validation.
-    FileUtils.rm_rf(File.join(output_directory, "test_output"))
+      # Snapshot fixes its result bundles under the screenshot root. Keep successful
+      # evidence in build/ so Deliver sees only locale directories during validation.
+      FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
-    unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
-      # The fresh OpenClawUITests build also compiles its Watch app dependency.
-      # Keep this product in the same invocation; standalone capture builds separately.
-      capture_watch_screenshot(diagnostics: diagnostics) do
-        File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      if include_watch
+        # The fresh OpenClawUITests build also compiles its Watch app dependency.
+        # Keep this product in the same invocation; standalone capture builds separately.
+        capture_watch_screenshot(admitted_devices.last, diagnostics: diagnostics) do
+          File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+        end
       end
     end
   end
@@ -2427,7 +2479,12 @@ platform :ios do
   desc "Generate repeatable Apple Watch screenshot for App Store metadata"
   lane :watch_screenshot do |options|
     prepare_screenshot_project(options)
-    capture_watch_screenshot { build_watch_screenshot_app }
+    output_directory = File.join(ios_root, "fastlane", "screenshots", "en-US")
+    FileUtils.mkdir_p(output_directory)
+    FileUtils.rm_f(Dir[File.join(output_directory, "Apple Watch*-*.png")])
+    with_screenshot_simulators([resolve_simulator_device(watch_snapshot_device)]) do |devices|
+      capture_watch_screenshot(devices.first) { build_watch_screenshot_app }
+    end
   end
 
   desc "Validate App Store Connect API auth"

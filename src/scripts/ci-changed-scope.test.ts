@@ -131,6 +131,11 @@ describe("detectChangedScope", () => {
     [[".github/actions/setup-android-toolchain/action.yml"], { runNode: true, runAndroid: true }],
     [["apps/macos/Sources/Foo.swift"], { runMacos: true, runMacosNode: true }],
     [["apps/ios/Sources/RootTabs.swift"], { runIosBuild: true }],
+    [["apps/ios/fastlane/metadata/en-US/description.txt"], {}],
+    [
+      ["apps/ios/fastlane/metadata/en-US/description.txt", "apps/ios/Sources/RootTabs.swift"],
+      { runIosBuild: true },
+    ],
     [
       ["apps/shared/OpenClawKit/Sources/Foo.swift"],
       {
@@ -205,6 +210,14 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([file])).toEqual(
       expectedScope({ runNode: true, runIosBuild: enabled }),
     );
+    expect(shouldRunIosScreenshots([file])).toBe(enabled);
+  });
+
+  it.each([
+    ["apps/ios/fastlane/metadata/en-US/description.txt", false],
+    ["apps/ios/Resources/description.txt", true],
+    ["apps/ios/fastlane/metadata-helper.ts", true],
+  ] as const)("keeps native screenshot admission tied to compiled inputs: %s", (file, enabled) => {
     expect(shouldRunIosScreenshots([file])).toBe(enabled);
   });
 

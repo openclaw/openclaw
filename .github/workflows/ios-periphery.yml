@@ -78,6 +78,7 @@ jobs:
               "scripts/lint-swift.sh",
               "scripts/run-swiftlint.mts",
               "scripts/lib/check-limits.mts",
+              ":(exclude)apps/ios/fastlane/metadata/",
               ":(exclude)apps/ios/README.md",
               ":(exclude)apps/ios/AGENTS.md",
               ":(exclude)apps/ios/DESIGN.md",
@@ -117,6 +118,19 @@ jobs:
         with:
           cache-mode: restore
           install-bun: "false"
+          install-deps: "false"
+
+      - name: Install native asset dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --filter '@openclaw/gateway-protocol...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
 
       - name: Install Watch Rust toolchain
         run: |

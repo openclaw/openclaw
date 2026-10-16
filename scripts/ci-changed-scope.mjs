@@ -146,6 +146,8 @@ const MACOS_SCRIPT_SCOPE_RE =
   /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability|desktop-runtime-prune))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
+// Store text and saved screenshots are Fastlane inputs, outside the compiled app graph.
+const IOS_STORE_METADATA_RE = /^apps\/ios\/fastlane\/metadata\//;
 const IOS_BUILD_RE =
   /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|simulator-prepare|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:(?:ios-fastlane|swift-toolchain)\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
 // Tests and WatchTests Swift sources belong only to retained native unit-test targets.
@@ -319,7 +321,7 @@ export function detectChangedScope(changedPaths) {
     const isAppleBuildInput = isAppleSharedBuildInput(path);
     const hasNativeProtocolInput = isNativeProtocolInput(path);
 
-    if (facts.surface === "docs") {
+    if (facts.surface === "docs" || IOS_STORE_METADATA_RE.test(path)) {
       continue;
     }
 
@@ -454,9 +456,10 @@ export function shouldRunIosScreenshots(changedPaths) {
   return changedPaths.some((rawPath) => {
     const { path } = getChangedPathFacts(rawPath);
     return (
-      IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
-      IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
-      isAppleSharedBuildInput(path)
+      !IOS_STORE_METADATA_RE.test(path) &&
+      (IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
+        IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
+        isAppleSharedBuildInput(path))
     );
   });
 }
@@ -775,7 +778,9 @@ export function shouldRunNativeI18n(changedPaths) {
   return (
     !Array.isArray(changedPaths) ||
     changedPaths.length === 0 ||
-    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path))
+    changedPaths.some(
+      (path) => !IOS_STORE_METADATA_RE.test(path) && NATIVE_I18N_SCOPE_RE.test(path),
+    )
   );
 }
 
