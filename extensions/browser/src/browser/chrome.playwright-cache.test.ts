@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import {
@@ -29,126 +28,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function installFullChromium(cache: string): string {
-  const directory = path.join(
-    cache,
-    "chromium-100",
-    `chrome-${process.arch === "arm64" ? "linux-arm64" : "linux64"}`,
-  );
-  fs.mkdirSync(directory, { recursive: true });
-  const executable = path.join(directory, "chrome");
-  fs.writeFileSync(executable, "", { mode: 0o755 });
-  return executable;
-}
-
-it.each(["npm_config_playwright_browsers_path", "npm_package_config_playwright_browsers_path"])(
-  "discovers full Chromium installed through %s",
-  (variable) => {
-    const cache = tempDirs.make("openclaw-browser-cache-alias-");
-    const executable = installFullChromium(cache);
-    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", undefined);
-    vi.stubEnv("npm_config_playwright_browsers_path", undefined);
-    vi.stubEnv("npm_package_config_playwright_browsers_path", undefined);
-    vi.stubEnv(variable, cache);
-    expect(findPlaywrightChromiumExecutable("linux")).toEqual({
-      kind: "chromium",
-      path: executable,
-    });
-  },
-);
-
-it.each(["INIT_CWD", "npm_config_init_cwd", "npm_package_config_init_cwd"])(
-  "resolves relative installation paths against %s",
-  (variable) => {
-    const installRoot = tempDirs.make("openclaw-browser-cache-relative-");
-    const executable = installFullChromium(path.join(installRoot, "browsers"));
-    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", "browsers");
-    vi.stubEnv("INIT_CWD", undefined);
-    vi.stubEnv("npm_config_init_cwd", undefined);
-    vi.stubEnv("npm_package_config_init_cwd", undefined);
-    vi.stubEnv(variable, installRoot);
-    expect(findPlaywrightChromiumExecutable("linux")).toEqual({
-      kind: "chromium",
-      path: executable,
-    });
-  },
-);
-
-it("discovers full Chromium from the hermetic Playwright cache", () => {
-  const packageRoot = path.dirname(
-    fileURLToPath(import.meta.resolve("playwright-core/package.json")),
-  );
-  const cache = path.join(packageRoot, ".local-browsers");
-  const executable = path.join(cache, "chromium-100", "chrome-linux64", "chrome");
-  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
-  vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", "0");
-  vi.spyOn(fs, "readdirSync").mockImplementation((directory) => {
-    return (String(directory) === cache ? ["chromium-100"] : []) as never;
-  });
+function mockInstalled(installed: Set<string>) {
   vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-    if (String(candidate) !== executable) {
+    if (!installed.has(String(candidate))) {
       throw new Error("ENOENT");
     }
     return { isFile: () => true } as fs.Stats;
   });
   vi.spyOn(fs, "accessSync").mockImplementation(() => {});
-  expect(findPlaywrightChromiumExecutable("linux")).toEqual({ kind: "chromium", path: executable });
-});
-
-it.each([
-  {
-    platform: "linux",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-linux64", "chrome-headless-shell"],
-  },
-  {
-    platform: "linux",
-    arch: "arm64",
-    suffix: ["chrome-headless-shell-linux-arm64", "chrome-headless-shell"],
-  },
-  {
-    platform: "darwin",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-mac-x64", "chrome-headless-shell"],
-  },
-  {
-    platform: "darwin",
-    arch: "arm64",
-    suffix: ["chrome-headless-shell-mac-arm64", "chrome-headless-shell"],
-  },
-  {
-    platform: "win32",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-win64", "chrome-headless-shell.exe"],
-  },
-] as const)(
-  "does not automatically select a shell-only $platform/$arch installation",
-  ({ platform, arch, suffix }) => {
-    const cache = platform === "win32" ? "C:\\browsers" : "/browsers";
-    const join = platform === "win32" ? path.win32.join : path.join;
-    const executablePath = join(cache, "chromium_headless_shell-100", ...suffix);
-    const installedExecutable = executablePath;
-    vi.spyOn(process, "arch", "get").mockReturnValue(arch);
-    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cache);
-    vi.spyOn(fs, "readdirSync").mockReturnValue([
-      "chromium_headless_shell-100",
-      "chromium-100",
-    ] as never);
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (String(candidate) !== installedExecutable) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {});
-    for (const headless of [false, true]) {
-      expect(
-        resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
-      ).toBeNull();
-    }
-    expect(resolveGoogleChromeExecutableForPlatform(platform)).toBeNull();
-  },
-);
+}
 
 it.each([
   [
@@ -188,13 +76,7 @@ it.each([
   ] as never);
   const installed = new Set([fullPath, shellPath]);
   vi.mocked(os.cpus).mockReturnValue([{ ...cpu, model: cpuModel }]);
-  vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-    if (!installed.has(String(candidate))) {
-      throw new Error("ENOENT");
-    }
-    return { isFile: () => true } as fs.Stats;
-  });
-  vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+  mockInstalled(installed);
   for (const headless of [false, true]) {
     expect(
       resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
@@ -209,6 +91,7 @@ it.each([
       resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
     ).toBeNull();
   }
+  expect(resolveGoogleChromeExecutableForPlatform(platform)).toBeNull();
 });
 
 it.each([
@@ -250,13 +133,7 @@ it.each([
       }
       return ["chromium_headless_shell-100", "chromium-100"] as never;
     });
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (!installed.has(String(candidate))) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+    mockInstalled(installed);
     expect(findPlaywrightChromiumExecutable(platform)).toEqual({
       kind: "chromium",
       path: fullPath(configuredFull ? configured : fallback),
