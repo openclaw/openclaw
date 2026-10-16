@@ -109,6 +109,44 @@ describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
         cwd: "/tmp/worktree",
       }),
     ).toBe("/tmp/worktree");
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "agent:main:subagent:parent",
+        workspaceDir: "/tmp/ws",
+        cwd: "/home/node-user",
+        execHost: "node",
+        runtimeBackendId: "claude-cli",
+      }),
+    ).toBe("/tmp/ws");
     expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
+  });
+
+  it("does not treat an adopted node-session cwd as a Gateway workspace", () => {
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/home/node-user",
+        execHost: "node",
+        runtimeBackendId: "claude-cli",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a local worktree when node host only routes shell commands", () => {
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/tmp/worktree",
+        execHost: "node",
+        runtimeBackendId: "openai",
+      }),
+    ).toBe("/tmp/worktree");
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/tmp/worktree",
+        execHost: "node",
+      }),
+    ).toBe("/tmp/worktree");
   });
 });
