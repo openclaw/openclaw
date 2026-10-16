@@ -164,7 +164,6 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
 
   return {
-    withPathAdmission,
     getSqliteDatabaseAdmission,
     getOrLoadSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,

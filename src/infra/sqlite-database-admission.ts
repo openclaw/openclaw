@@ -81,19 +81,17 @@ export const useConnectionScopedSqliteDatabaseAdmissionFacts = (): void =>
 
 export function readSqliteDatabaseCleanClose(location: string): boolean {
   const currentIdentity = prepareSqliteDatabaseAdmission(location);
-  return withPathAdmission(
-    location,
-    (record) =>
-      record !== undefined &&
-      record.identity === currentIdentity &&
-      Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent) ===
-        1,
+  const record = pathAdmission(location);
+  return (
+    record !== undefined &&
+    record.identity === currentIdentity &&
+    Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.sealPresent) === 1
   );
 }
 
 /** Maintenance can invalidate restart proof while retaining its freshly checked runtime facts. */
 export function invalidateSqliteDatabaseCleanClose(location: string): void {
-  withPathAdmission(location, (record) => state.seals.invalidate(location, record));
+  state.seals.invalidate(location, pathAdmission(location));
 }
 
 export function readSqliteDatabaseIntegrityVerification(
@@ -132,7 +130,6 @@ const reader = createSqliteDatabaseAdmissionReader({
   },
   release: releaseReference,
 });
-const { withPathAdmission } = reader;
 export const {
   getSqliteDatabaseAdmission,
   getOrLoadSqliteDatabaseAdmissionForPath,
@@ -706,7 +703,7 @@ export function revokeSqliteDatabaseAdmissions(database: DatabaseSync): void {
 }
 
 export function revokeSqliteDatabaseAdmissionsForPath(location: string): void {
-  withPathAdmission(location, (record) => revoke(record, location));
+  revoke(pathAdmission(location), location);
 }
 
 /** Explicit removal or maintenance calls this only after its owner has joined native consumers. */
