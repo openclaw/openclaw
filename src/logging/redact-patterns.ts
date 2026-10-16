@@ -303,6 +303,13 @@ export const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
 ]);
+// HTTP auth-header patterns whose captured value may be an environment/language reference;
+// the complete-value reference exemption applies to these in addition to the assignment family.
+export const AUTH_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
+  AUTHORIZATION_BEARER_REDACT_PATTERN,
+  AUTHORIZATION_BASIC_REDACT_PATTERN,
+  AUTHORIZATION_BOT_REDACT_PATTERN,
+]);
 export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
