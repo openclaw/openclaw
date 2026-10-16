@@ -35,6 +35,8 @@ describe("update run ledger compaction", () => {
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
+      const write = (step: Parameters<typeof recordUpdateRunStep>[1]) =>
+        recordUpdateRunStep(run.runId, step, options);
       const evidence = [
         "candidate-admission",
         "warning:update-admission-unsupported-target",
@@ -71,24 +73,17 @@ describe("update run ledger compaction", () => {
         startedAtMs: 1_000,
         endedAtMs: 2_000,
       }));
+      const refusal = {
+        reason: "refused",
+        message: "Repair is pending.",
+        keys: Array.from({ length: 32 }, (_, index) => `${index}:${"k".repeat(1_020)}`),
+      };
       for (const step of evidence) {
-        recordUpdateRunStep(
-          run.runId,
-          {
-            ...step,
-            detail,
-            ...(step.step === "openclaw doctor"
-              ? {
-                  configWriteRefusal: {
-                    reason: "refused",
-                    message: "Repair is pending.",
-                    keys: Array.from({ length: 32 }, (_, index) => `${index}:${"k".repeat(1_020)}`),
-                  },
-                }
-              : {}),
-          },
-          options,
-        );
+        write({
+          ...step,
+          detail,
+          ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
+        });
       }
       const notices = [
         "notice:ack",
@@ -102,14 +97,10 @@ describe("update run ledger compaction", () => {
         "post-update verification",
       ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
-        recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
+        write({ step, status: "completed", detail });
       }
       for (let index = 0; index < count; index++) {
-        recordUpdateRunStep(
-          run.runId,
-          { step: `warning:diagnostic-${index}`, status: "completed", detail },
-          options,
-        );
+        write({ step: `warning:diagnostic-${index}`, status: "completed", detail });
       }
       closeOpenClawStateDatabaseForTest();
       const persisted = getUpdateRun(run.runId, options)!;
@@ -118,12 +109,12 @@ describe("update run ledger compaction", () => {
           expect.objectContaining(expected),
         ]);
       }
-      const refusal = persisted.steps.find(
+      const retainedRefusal = persisted.steps.find(
         (step) => step.step === "openclaw doctor",
       )?.configWriteRefusal;
-      expect(refusal).toMatchObject({ reason: "refused", message: "Repair is pending." });
-      expect(refusal?.keys).toHaveLength(32);
-      expect(refusal?.keys.every((key) => key.length < 1_020)).toBe(true);
+      expect(retainedRefusal).toMatchObject({ reason: "refused", message: "Repair is pending." });
+      expect(retainedRefusal?.keys).toHaveLength(32);
+      expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
       expect(persisted.steps.map((step) => step.step)).toEqual(
         expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
       );
@@ -136,9 +127,7 @@ describe("update run ledger compaction", () => {
     const options = isolatedOptions();
     const runId = "00000000-0000-4000-8000-000000000098";
     const version = "2026.9.8";
-    // Synthetic persisted fixture using the shared UpdateRunRecordSchema fields in
-    // v2026.9.8 and pre-change origin/main, plus their update-run-vocabulary enums.
-    // No current writer generates this row or adds the new optional timing steps.
+    // v2026.9.8 fixture: bypass today's writer so it cannot add the new timing steps.
     const steps = [
       "requested",
       "staging",
@@ -186,6 +175,7 @@ describe("update run ledger compaction", () => {
     };
     const database = openOpenClawStateDatabase(options);
     database.db.exec(updateRunLedgerSchema);
+    // Record insertion order matches the explicit column order below.
     database.db
       .prepare(
         `INSERT INTO update_runs (
@@ -195,23 +185,9 @@ describe("update run ledger compaction", () => {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        runId,
-        1_000,
-        3_000,
-        "cli",
-        "finished",
-        "succeeded",
-        null,
-        JSON.stringify(oldRecord.origin),
-        JSON.stringify(oldRecord.target),
-        JSON.stringify(oldRecord.before),
-        JSON.stringify(oldRecord.after),
-        JSON.stringify(steps),
-        JSON.stringify(oldRecord.verification),
-        "[]",
-        2_500,
-        3_000,
-        500,
+        ...Object.values(oldRecord).map((value) =>
+          value !== null && typeof value === "object" ? JSON.stringify(value) : value,
+        ),
       );
     closeOpenClawStateDatabaseForTest();
 

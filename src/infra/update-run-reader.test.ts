@@ -34,17 +34,10 @@ function isolatedOptions() {
 
 function snapshotDatabaseFiles(filename: string) {
   const metadata = (pathname: string) => {
-    const stat = fs.lstatSync(pathname, { bigint: true });
-    return {
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      uid: stat.uid,
-      gid: stat.gid,
-      size: stat.size,
-      mtimeNs: stat.mtimeNs,
-      ctimeNs: stat.ctimeNs,
-    };
+    const { dev, ino, mode, uid, gid, size, mtimeNs, ctimeNs } = fs.lstatSync(pathname, {
+      bigint: true,
+    });
+    return { dev, ino, mode, uid, gid, size, mtimeNs, ctimeNs };
   };
   const directory = path.dirname(filename);
   return {
@@ -264,9 +257,7 @@ describe("update run history reads", () => {
       expect(db.isTransaction).toBe(true);
       expect(
         db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
-      ).toEqual({
-        phase: "staging",
-      });
+      ).toEqual({ phase: "staging" });
       db.exec("COMMIT");
     } finally {
       if (db.isTransaction) {

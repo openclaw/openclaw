@@ -70,6 +70,24 @@ function snapshot(root: string): unknown {
       };
     });
 }
+function decode(record: UpdateRecoveryRecord) {
+  return decodeUpdateRecovery(JSON.stringify(record), record.runId);
+}
+type Mutation<K extends keyof UpdateRecoveryRecord> = [
+  string,
+  (value: NonNullable<UpdateRecoveryRecord[K]>) => void,
+];
+function storeRaw(f: ReturnType<typeof setup>, record: { runId: string }) {
+  const raw = JSON.stringify(record, null, 2);
+  openOpenClawStateDatabase(f.options)
+    .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
+    .run(raw, "update.recovery." + record.runId);
+  return raw;
+}
+function closedSnapshot(f: ReturnType<typeof setup>) {
+  closeOpenClawStateDatabaseForTest();
+  return snapshot(f.root);
+}
 function nativeRecord(record: UpdateRecoveryRecord): UpdateRecoveryRecord {
   const preimages = { ...retainedCheckpointBinding(record), boundAtRevision: 0 };
   const next = { ...record, preimages };
@@ -131,7 +149,7 @@ describe("retained recovery read-only compatibility", () => {
       commitRevision: record.revision,
       observedIdentity: record.package.observed.observedIdentity,
     };
-    expect(decodeUpdateRecovery(JSON.stringify(record), record.runId)).toEqual(record);
+    expect(decode(record)).toEqual(record);
 
     const native = record.nativeManager!;
     const stopped = { ...native.original, stopped: true };
@@ -139,81 +157,48 @@ describe("retained recovery read-only compatibility", () => {
       observedNativeEffect("stop", native.original, stopped, 1),
       observedNativeEffect("restore", stopped, native.original, 3),
     ];
-    expect(decodeUpdateRecovery(JSON.stringify(record), record.runId)).toEqual(record);
+    expect(decode(record)).toEqual(record);
 
     const restore = native.effects[1]!;
     restore.state = "intent";
     delete restore.observedRevision;
-    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow(
-      "Preparation settlement cannot carry effects or serving authority",
-    );
+    const settlementError = "Preparation settlement cannot carry effects or serving authority";
+    expect(() => decode(record)).toThrow(settlementError);
     native.effects.pop();
-    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow(
-      "Preparation settlement cannot carry effects or serving authority",
-    );
+    expect(() => decode(record)).toThrow(settlementError);
   });
 
   it("reopens private candidate proof without exposing it in history", () => {
-    const runtime = "candidate";
     const f = setup();
-    const record = retainedReadinessRecord(f.record, runtime);
+    const record = retainedReadinessRecord(f.record, "candidate");
     storeRetainedUpdateRecovery(record, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
+    const before = closedSnapshot(f);
     expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(record);
     expect(snapshot(f.root)).toEqual(before);
     expect(JSON.stringify(getUpdateRun(f.run.runId, f.options))).not.toContain("retained-boot");
   });
 
   it.each([
-    "run",
-    "version",
-    "build",
-    "boot",
-    "runtime",
-    "transaction",
-    "claim",
-    "revision",
-    "effect",
-  ] as const)(
+    ["run", (r) => Object.assign(r.receipt, { runId: randomUUID() })],
+    ["version", (r) => Object.assign(r.receipt.gateway, { version: "3.0.0" })],
+    ["build", (r) => Object.assign(r.receipt.gateway, { buildId: null })],
+    ["boot", (r) => Object.assign(r.receipt.gateway, { bootId: "other-boot" })],
+    ["runtime", (r) => Object.assign(r, { runtime: "previous" })],
+    ["transaction", (r) => Object.assign(r.receipt, { transactionId: randomUUID() })],
+    ["claim", (r) => Object.assign(r.receipt, { claimId: randomUUID() })],
+    ["revision", (r) => Object.assign(r.receipt, { revision: r.receipt.revision + 1 })],
+    ["effect", (r) => Object.assign(r.receipt, { effectId: randomUUID() })],
+  ] satisfies Mutation<"verification">[])(
     "rejects retained readiness from a different %s without changing stored state",
-    (mismatch) => {
+    (_, mutate) => {
       const f = setup();
       const record = retainedReadinessRecord(f.record);
-      const receipt = record.verification!.receipt;
-      if (mismatch === "run") {
-        receipt.runId = randomUUID();
-      }
-      if (mismatch === "version") {
-        receipt.gateway.version = "3.0.0";
-      }
-      if (mismatch === "build") {
-        receipt.gateway.buildId = null;
-      }
-      if (mismatch === "boot") {
-        receipt.gateway.bootId = "other-boot";
-      }
-      if (mismatch === "runtime") {
-        record.verification!.runtime = "previous";
-      }
-      if (mismatch === "transaction") {
-        receipt.transactionId = randomUUID();
-      }
-      if (mismatch === "claim") {
-        receipt.claimId = randomUUID();
-      }
-      if (mismatch === "revision") {
-        receipt.revision++;
-      }
-      if (mismatch === "effect") {
-        receipt.effectId = randomUUID();
-      }
-      expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+      mutate(record.verification!);
+      expect(() => decode(record)).toThrow();
       expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
     },
   );
   it("refuses incomplete retained service evidence", () => {
-    const check = "serviceRunning";
     const f = setup();
     const record = retainedReadinessRecord(f.record);
     for (const value of [false, undefined]) {
@@ -223,7 +208,7 @@ describe("retained recovery read-only compatibility", () => {
           ...record.verification,
           receipt: {
             ...record.verification!.receipt,
-            checks: { ...record.verification!.receipt.checks, [check]: value },
+            checks: { ...record.verification!.receipt.checks, serviceRunning: value },
           },
         },
       };
@@ -235,12 +220,8 @@ describe("retained recovery read-only compatibility", () => {
   it("inspects retained legacy transcript verification without rewriting or admitting work", () => {
     const f = setup();
     const record = retainedReadinessRecord(f.record);
-    const raw = JSON.stringify(legacyRecord(record), null, 2);
-    const db = openOpenClawStateDatabase(f.options).db;
-    const key = "update.recovery." + record.runId;
-    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(raw, key);
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
+    const raw = storeRaw(f, legacyRecord(record));
+    const before = closedSnapshot(f);
     const inspected = inspectUpdateRecoveries(f.options);
     expect(inspected).toEqual([{ format: "legacy-serving", raw, record: JSON.parse(raw) }]);
     expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
@@ -261,20 +242,13 @@ describe("retained recovery read-only compatibility", () => {
     corrupt.verification.receipt = { ...JSON.parse(raw).verification.receipt, kind: "readiness" };
     expect(() => inspectUpdateRecovery(JSON.stringify(corrupt), record.runId)).toThrow();
     expect(() => inspectUpdateRecovery(raw, randomUUID())).toThrow("history run");
-    expect(JSON.stringify(decodeUpdateRecovery(JSON.stringify(f.record), f.record.runId))).toBe(
-      JSON.stringify(f.record),
-    );
+    expect(JSON.stringify(decode(f.record))).toBe(JSON.stringify(f.record));
   });
   it("admits terminal legacy history without granting execution authority", () => {
-    const rollback = false;
     const f = setup();
-    const record = legacyRecord(retainedTerminalRecord(f.record, rollback));
-    const raw = JSON.stringify(record, null, 2);
-    openOpenClawStateDatabase(f.options)
-      .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
-      .run(raw, "update.recovery." + record.runId);
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
+    const record = legacyRecord(retainedTerminalRecord(f.record, false));
+    const raw = storeRaw(f, record);
+    const before = closedSnapshot(f);
     expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
     expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow(/legacy.*readiness/i);
     expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(raw);
@@ -322,12 +296,8 @@ describe("retained recovery read-only compatibility", () => {
           },
         ],
       };
-      const raw = JSON.stringify(record, null, 2);
-      openOpenClawStateDatabase(f.options)
-        .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
-        .run(raw, "update.recovery." + record.runId);
-      closeOpenClawStateDatabaseForTest();
-      const before = snapshot(f.root);
+      const raw = storeRaw(f, record);
+      const before = closedSnapshot(f);
       expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
       expect(inspectUpdateRecoveries(f.options)).toEqual([{ format: "current", raw, record }]);
       expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
@@ -375,8 +345,7 @@ describe("retained recovery read-only compatibility", () => {
       });
     }
     storeRetainedUpdateRecovery(record, f.options);
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
+    const before = closedSnapshot(f);
     if (scenario === "cleanup") {
       expect(() => assertNoPendingUpdateRecovery(f.options)).not.toThrow();
     } else {
@@ -399,40 +368,30 @@ describe("retained recovery read-only compatibility", () => {
         ...record,
         package: { descriptor, observed: { ...record.package!.observed, descriptor } },
       };
-      const raw = JSON.stringify(invalid, null, 2);
-      openOpenClawStateDatabase(f.options)
-        .db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
-        .run(raw, "update.recovery." + record.runId);
-      closeOpenClawStateDatabaseForTest();
-      const before = snapshot(f.root);
+      storeRaw(f, invalid);
+      const before = closedSnapshot(f);
       expect(() => loadUpdateRecovery(record.runId, f.options)).toThrow();
       expect(() => inspectUpdateRecoveries(f.options)).toThrow();
       expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow();
       expect(snapshot(f.root)).toEqual(before);
     },
   );
-  it.each(["run", "state", "config", "profile", "revision"] as const)(
+  it.each([
+    ["run", (n) => Object.assign(n.identity, { runId: randomUUID() })],
+    ["state", (n) => Object.assign(n.identity, { stateDir: n.identity.stateDir + "-different" })],
+    [
+      "config",
+      (n) => Object.assign(n.identity, { configPath: n.identity.configPath + "-different" }),
+    ],
+    ["profile", (n) => Object.assign(n.identity, { profile: "different" })],
+    ["revision", (n) => Object.assign(n, { boundAtRevision: n.boundAtRevision + 1 })],
+  ] satisfies Mutation<"nativeManager">[])(
     "rejects misbound retained native %s facts",
-    (mismatch) => {
+    (_, mutate) => {
       const f = setup();
       const record = nativeRecord(f.record);
-      const native = record.nativeManager!;
-      if (mismatch === "run") {
-        native.identity.runId = randomUUID();
-      }
-      if (mismatch === "state") {
-        native.identity.stateDir += "-different";
-      }
-      if (mismatch === "config") {
-        native.identity.configPath += "-different";
-      }
-      if (mismatch === "profile") {
-        native.identity.profile = "different";
-      }
-      if (mismatch === "revision") {
-        native.boundAtRevision++;
-      }
-      expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+      mutate(record.nativeManager!);
+      expect(() => decode(record)).toThrow();
     },
   );
   it.each([false, true])(
@@ -465,77 +424,61 @@ describe("retained recovery read-only compatibility", () => {
 
 // Retained decoder negatives migrated from the removed journal writer tests.
 it.each([
-  "facts",
-  "revision",
-  "action",
-  "original-after",
-  "missing-marker",
-  "intent-marker",
-  "missing-failure",
-] as const)("rejects corrupt retained suppression reconciliation: %s", (change) => {
-  const f = setup();
-  const record = nativeRecord(f.record);
-  const native = record.nativeManager!;
-  const running = native.original;
-  const stopped = { ...running, stopped: true };
-  const suppressed = { ...running, enabled: false };
-  const restartId = randomUUID();
-  native.effects = [
-    observedNativeEffect("stop", running, stopped, 1),
-    {
-      ...observedNativeEffect("restore", stopped, running, 3),
-      effectId: restartId,
+  ["facts", (e) => Object.assign(e.reconciledStop!.facts, { stopped: false })],
+  ["revision", (e) => Object.assign(e.reconciledStop!, { revision: e.intentRevision })],
+  ["action", (e) => Object.assign(e, { action: "restore" })],
+  ["original-after", (e) => Object.assign(e.after, { loaded: false })],
+  [
+    "missing-marker",
+    (e) => {
+      delete e.reconciledStop;
     },
-    {
-      effectId: randomUUID(),
-      action: "suppress",
-      before: running,
-      after: suppressed,
-      state: "reconciled",
-      intentRevision: 5,
-      reconciledStop: { facts: { ...suppressed, stopped: true }, revision: 6 },
-    },
-  ];
-  record.revision = 6;
-  record.checkpoint = retainedCheckpointBinding(record);
-  record.primaryFailure = { code: "candidate-failed", effectId: restartId };
-  record.effects = [
-    {
-      effectId: restartId,
-      kind: "service-restart",
-      runtime: "candidate",
-      resourceId: "gateway",
-      state: "intent",
-      observedIdentity: null,
-    },
-  ];
-  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
-  const invalid = structuredClone(record);
-  const effect = invalid.nativeManager!.effects.at(-1)!;
-  if (change === "facts") {
-    effect.reconciledStop!.facts.stopped = false;
-  }
-  if (change === "revision") {
-    effect.reconciledStop!.revision = effect.intentRevision;
-  }
-  if (change === "action") {
-    effect.action = "restore";
-  }
-  if (change === "original-after") {
-    effect.after.loaded = false;
-  }
-  if (change === "missing-marker") {
-    effect.state = "reconciled";
-    delete effect.reconciledStop;
-  }
-  if (change === "intent-marker") {
-    effect.state = "intent";
-  }
-  if (change === "missing-failure") {
-    invalid.primaryFailure = null;
-  }
-  expect(() => decodeUpdateRecovery(JSON.stringify(invalid), record.runId)).toThrow();
-});
+  ],
+  ["intent-marker", (e) => Object.assign(e, { state: "intent" })],
+  ["missing-failure", (_, r) => Object.assign(r, { primaryFailure: null })],
+] satisfies [string, (effect: NativeEffect, record: UpdateRecoveryRecord) => void][])(
+  "rejects corrupt retained suppression reconciliation: %s",
+  (_, mutate) => {
+    const f = setup();
+    const record = nativeRecord(f.record);
+    const native = record.nativeManager!;
+    const running = native.original;
+    const stopped = { ...running, stopped: true };
+    const suppressed = { ...running, enabled: false };
+    const restartId = randomUUID();
+    native.effects = [
+      observedNativeEffect("stop", running, stopped, 1),
+      { ...observedNativeEffect("restore", stopped, running, 3), effectId: restartId },
+      {
+        effectId: randomUUID(),
+        action: "suppress",
+        before: running,
+        after: suppressed,
+        state: "reconciled",
+        intentRevision: 5,
+        reconciledStop: { facts: { ...suppressed, stopped: true }, revision: 6 },
+      },
+    ];
+    record.revision = 6;
+    record.checkpoint = retainedCheckpointBinding(record);
+    record.primaryFailure = { code: "candidate-failed", effectId: restartId };
+    record.effects = [
+      {
+        effectId: restartId,
+        kind: "service-restart",
+        runtime: "candidate",
+        resourceId: "gateway",
+        state: "intent",
+        observedIdentity: null,
+      },
+    ];
+    expect(() => decode(record)).not.toThrow();
+    const invalid = structuredClone(record);
+    const effect = invalid.nativeManager!.effects.at(-1)!;
+    mutate(effect, invalid);
+    expect(() => decode(invalid)).toThrow();
+  },
+);
 it("refuses a retained not-applied native effect without failure or with an unchanged target", () => {
   const f = setup();
   const record = nativeRecord(f.record);
@@ -544,60 +487,47 @@ it("refuses a retained not-applied native effect without failure or with an unch
   // Keep the earlier stop and captured running target in the retained history.
   native.effects = [
     observedNativeEffect("stop", native.original, before, 1),
-    {
-      ...observedNativeEffect("restore", before, native.original, 3),
-      state: "not-applied",
-    },
+    { ...observedNativeEffect("restore", before, native.original, 3), state: "not-applied" },
   ];
   record.revision = 4;
   record.primaryFailure = { code: "failed-start", effectId: null };
-  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
-  expect(() =>
-    decodeUpdateRecovery(JSON.stringify({ ...record, primaryFailure: null }), record.runId),
-  ).toThrow();
+  expect(() => decode(record)).not.toThrow();
+  expect(() => decode({ ...record, primaryFailure: null })).toThrow();
   const impossible = structuredClone(record);
   impossible.nativeManager!.effects.at(-1)!.after = { ...before };
-  expect(() => decodeUpdateRecovery(JSON.stringify(impossible), record.runId)).toThrow();
+  expect(() => decode(impossible)).toThrow();
 });
-it.each(["run", "state", "config", "root", "node", "version", "revision"] as const)(
-  "rejects retained preimage misbinding: %s",
-  (field) => {
-    const f = setup();
-    const record = nativeRecord(f.record);
-    delete record.nativeManager;
-    const early = record.preimages!;
-    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();
-    if (field === "run") {
-      early.binding.runId = randomUUID();
-    }
-    if (field === "state") {
-      early.binding.stateDir += "-other";
-    }
-    if (field === "config") {
-      early.binding.configPath += "-other";
-    }
-    if (field === "root") {
-      early.binding.fromRuntime.root += "-other";
-    }
-    if (field === "node") {
-      early.binding.fromRuntime.nodePath += "-other";
-    }
-    if (field === "version") {
-      early.binding.fromRuntime.version = "0.0.0";
-    }
-    if (field === "revision") {
-      early.boundAtRevision++;
-    }
-    expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
-  },
-);
+it.each([
+  ["run", (e) => Object.assign(e.binding, { runId: randomUUID() })],
+  ["state", (e) => Object.assign(e.binding, { stateDir: e.binding.stateDir + "-other" })],
+  ["config", (e) => Object.assign(e.binding, { configPath: e.binding.configPath + "-other" })],
+  [
+    "root",
+    (e) => Object.assign(e.binding.fromRuntime, { root: e.binding.fromRuntime.root + "-other" }),
+  ],
+  [
+    "node",
+    (e) =>
+      Object.assign(e.binding.fromRuntime, { nodePath: e.binding.fromRuntime.nodePath + "-other" }),
+  ],
+  ["version", (e) => Object.assign(e.binding.fromRuntime, { version: "0.0.0" })],
+  ["revision", (e) => Object.assign(e, { boundAtRevision: e.boundAtRevision + 1 })],
+] satisfies Mutation<"preimages">[])("rejects retained preimage misbinding: %s", (_, mutate) => {
+  const f = setup();
+  const record = nativeRecord(f.record);
+  delete record.nativeManager;
+  const early = record.preimages!;
+  expect(() => decode(record)).not.toThrow();
+  mutate(early);
+  expect(() => decode(record)).toThrow();
+});
 it("rejects early-file references reused as a full checkpoint", () => {
   const f = setup();
   const record = nativeRecord(f.record);
   delete record.nativeManager;
   const early = record.preimages!;
   record.checkpoint = { ref: early.ref, binding: early.binding, preimageRef: early.ref };
-  expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).toThrow();
+  expect(() => decode(record)).toThrow();
 });
 it.each(["current", "legacy-serving"] as const)(
   "inspects selected, superseded and unselected %s packages byte-exactly",
@@ -632,15 +562,8 @@ it.each(["current", "legacy-serving"] as const)(
       true,
     );
     const records = format === "legacy-serving" ? [a, b, c].map(legacyRecord) : [a, b, c];
-    const raw = records.map((record) => JSON.stringify(record, null, 2));
-    const db = openOpenClawStateDatabase(f.options).db;
-    records.forEach((record, i) =>
-      db
-        .prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?")
-        .run(raw[i]!, "update.recovery." + record.runId),
-    );
-    closeOpenClawStateDatabaseForTest();
-    const before = snapshot(f.root);
+    const raw = records.map((record) => storeRaw(f, record));
+    const before = closedSnapshot(f);
     const inspected = inspectUpdateRecoveries(f.options);
     expect(inspected).toHaveLength(3);
     records.forEach((record, i) =>

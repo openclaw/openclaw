@@ -40,6 +40,10 @@ function git(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
+const forbidden = (operation: string) => async () => {
+  throw new Error(`A refused fetch or current release must not ${operation}`);
+};
+
 describe("Git updater release tag refresh", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -48,15 +52,17 @@ describe("Git updater release tag refresh", () => {
     const upstream = path.join(directory, "upstream.git");
     const seed = path.join(directory, "seed");
     const root = path.join(directory, "installed");
+    const write = (base: string, file: string, contents: unknown) =>
+      writeFileSync(
+        path.join(base, file),
+        typeof contents === "string" ? contents : JSON.stringify(contents),
+      );
     git(directory, "init", "--bare", "--initial-branch=main", upstream);
     git(directory, "clone", upstream, seed);
     git(seed, "config", "user.name", "OpenClaw Test");
     git(seed, "config", "user.email", "openclaw@example.invalid");
-    writeFileSync(
-      path.join(seed, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
-    );
-    writeFileSync(path.join(seed, ".gitignore"), "dist/\n");
+    write(seed, "package.json", { name: "openclaw", version: "2026.9.1" });
+    write(seed, ".gitignore", "dist/\n");
     git(seed, "add", ".");
     git(seed, "commit", "-m", "original release");
     const oldTag = git(seed, "rev-parse", "HEAD");
@@ -68,15 +74,12 @@ describe("Git updater release tag refresh", () => {
     git(root, "checkout", "--detach");
     const dist = path.join(root, "dist");
     mkdirSync(path.join(dist, "control-ui"), { recursive: true });
-    writeFileSync(path.join(dist, "entry.js"), "export {};\n");
-    writeFileSync(
-      path.join(dist, "build-info.json"),
-      JSON.stringify({ commit: release, buildId: release }),
-    );
+    write(dist, "entry.js", "export {};\n");
+    write(dist, "build-info.json", { commit: release, buildId: release });
     for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
-      writeFileSync(path.join(dist, stamp), JSON.stringify({ head: release }));
+      write(dist, stamp, { head: release });
     }
-    writeFileSync(path.join(dist, "control-ui", "index.html"), "ready");
+    write(dist, "control-ui/index.html", "ready");
     git(root, "tag", "local-only", oldTag);
     if (forkRemote) {
       const fork = path.join(directory, "fork.git");
@@ -133,18 +136,10 @@ describe("Git updater release tag refresh", () => {
       startedAt: Date.now(),
       opts: {
         channel,
-        inspectGitTarget: async () => {
-          throw new Error("A refused fetch or current release must not enter candidate admission");
-        },
-        validateCandidate: async () => {
-          throw new Error("A refused fetch or current release must not validate a candidate");
-        },
-        beforeGitMutation: async () => {
-          throw new Error("A refused fetch or current release must not mutate the checkout");
-        },
-        runGitDoctor: async () => {
-          throw new Error("A refused fetch or current release must not run Doctor");
-        },
+        inspectGitTarget: forbidden("enter candidate admission"),
+        validateCandidate: forbidden("validate a candidate"),
+        beforeGitMutation: forbidden("mutate the checkout"),
+        runGitDoctor: forbidden("run Doctor"),
       },
     });
     return { result, fetches };
