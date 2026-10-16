@@ -124,15 +124,16 @@ async function readExistingModelsFile(pathname: string): Promise<{
   raw: string;
   parsed: unknown;
 }> {
+  const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
+    path.basename(pathname),
+  );
   try {
-    const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
-      path.basename(pathname),
-    );
     return {
       raw: raw ?? "",
       parsed: raw === null ? null : (JSON.parse(raw) as unknown),
     };
   } catch {
+    // Malformed JSON cannot supply usable providers; rebuild it from config.
     return {
       raw: "",
       parsed: null,
