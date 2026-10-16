@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
+  applyProviderAuthConfigPatch,
   type AuthProfileStore,
   buildTokenProfileId,
   listProfilesForProvider,
@@ -17,6 +18,7 @@ import {
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 
@@ -238,28 +240,8 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
   const result = await runAnthropicCliMigration(ctx);
-  const currentDefaults = ctx.config.agents?.defaults;
-  const currentModel = currentDefaults?.model;
-  const currentFallbacks = typeof currentModel === "string" ? undefined : currentModel?.fallbacks;
-  const migratedModel = result.configPatch?.agents?.defaults?.model;
-  const migratedFallbacks =
-    typeof migratedModel === "string" ? undefined : migratedModel?.fallbacks;
-  const nextFallbacks = migratedFallbacks ?? currentFallbacks;
-
-  return {
-    ...ctx.config,
-    ...result.configPatch,
-    agents: {
-      ...ctx.config.agents,
-      ...result.configPatch?.agents,
-      defaults: {
-        ...currentDefaults,
-        ...result.configPatch?.agents?.defaults,
-        model: {
-          ...(nextFallbacks ? { fallbacks: nextFallbacks } : {}),
-          primary: result.defaultModel,
-        },
-      },
-    },
-  };
+  return applyProviderDefaultModel(
+    applyProviderAuthConfigPatch(ctx.config, result.configPatch, result),
+    result.defaultModel,
+  );
 }

@@ -349,6 +349,13 @@ must release it in `finally`.
     });
     ```
 
+    Auth callbacks return an authoring `configPatch` that the host applies.
+    A plugin-owned setup flow that applies its own result should use
+    `applyProviderAuthConfigPatch(config, result.configPatch, result)` from
+    `openclaw/plugin-sdk/provider-auth`. It preserves the host's merge semantics,
+    including individual header deletions and `replaceDefaultModels`; do not
+    shallow-spread an auth patch into runtime config.
+
     `registerModelCatalogProvider` is the newer control-plane catalog surface
     for list/help/picker UI, covering `text`, `voice`, `image_generation`,
     `video_generation`, and `music_generation` rows. Keep vendor endpoint

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { applyProviderAuthConfigPatch as applySdkAuthPatch } from "../plugin-sdk/provider-auth.js";
 import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 import type { ProviderAuthResult } from "./provider-authentication.types.js";
 
@@ -124,11 +125,7 @@ describe("applyProviderAuthConfigPatch", () => {
         },
       },
     };
-    const next = applyProviderAuthConfigPatch(
-      { models: { providers: { fixture: provider } } },
-      patch,
-      { providerConfigNormalizer },
-    );
+    const next = applySdkAuthPatch({ models: { providers: { fixture: provider } } }, patch);
     expect(next.models?.providers?.fixture).toMatchObject({
       headers: { "X-Deployment": "keep" },
       request: { headers: { "X-Route": "keep" } },
