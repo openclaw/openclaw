@@ -61,6 +61,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const collapsed = () =>
     props.panel.onCollapsedChange ? model().collapsed : uncontrolledCollapsed();
   const question = () => model().questions[currentQuestionIndex()];
+  const protectedStore = () => question()?.secretStore?.kind === "secret";
   const draft = () => {
     draftRevision();
     return model().drafts.get(question()?.questionId ?? "");
@@ -313,9 +314,13 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const advanceLabel = () =>
     t(
       pendingKind() === "submit" || model().submitting
-        ? "chat.questions.submitting"
+        ? protectedStore()
+          ? "chat.questions.storeSaving"
+          : "chat.questions.submitting"
         : currentQuestionIndex() === model().questions.length - 1
-          ? "chat.questions.submit"
+          ? protectedStore()
+            ? "chat.questions.storeSave"
+            : "chat.questions.submit"
           : "chat.questions.next",
     );
   return (
@@ -374,7 +379,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   {model().nonBlocking ? (
                     <span class="chat-question-panel__prompt">{item().question}</span>
                   ) : (
-                    <div class="chat-question-panel__title">{model().title}</div>
+                    <div class="chat-question-panel__title">
+                      {protectedStore() && <Icon name="lock" />} {model().title}
+                    </div>
                   )}
                   {requestNavigation()}
                   <span class="chat-question-panel__progress">{progress()}</span>
@@ -418,6 +425,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   </a>
                   <span class="muted">{t("chat.questions.externalStepHint")}</span>
                 </div>
+              )}
+              {protectedStore() && (
+                <p class="chat-question-panel__store-privacy">{t("chat.questions.storePrivacy")}</p>
               )}
               <QuestionOptions
                 question={item()}
@@ -471,27 +481,6 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                           })}
                     </div>
                   )}
-                  {item().secretStore!.kind === "secret" && (
-                    <label class="chat-question-panel__store-hosts">
-                      <span>{t("secretsStore.allowedHosts")}</span>
-                      <input
-                        ref={(element) => (hostsInput = element)}
-                        class="chat-question-panel__other chat-question-panel__hosts"
-                        type="text"
-                        autocomplete="off"
-                        placeholder={t("secretsStore.allowedHostsPlaceholder")}
-                        value={
-                          model().secretStoreAllowedHostsDraft ??
-                          item().secretStore!.allowedHosts?.join(", ") ??
-                          ""
-                        }
-                        disabled={disabled()}
-                        onInput={(event) =>
-                          props.panel.onSecretStoreAllowedHostsChange?.(event.currentTarget.value)
-                        }
-                      />
-                    </label>
-                  )}
                 </div>
               )}
               <QuestionFreeText
@@ -507,6 +496,29 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                 onInput={(value) => setFreeText(item(), value)}
                 inputRef={(element) => (answerControl = element)}
               />
+              {protectedStore() && (
+                <label class="chat-question-panel__store-hosts">
+                  <span>{t("secretsStore.allowedHosts")}</span>
+                  <input
+                    ref={(element) => (hostsInput = element)}
+                    class="chat-question-panel__other chat-question-panel__hosts"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    placeholder={t("secretsStore.allowedHostsPlaceholder")}
+                    value={
+                      model().secretStoreAllowedHostsDraft ??
+                      item().secretStore!.allowedHosts?.join(", ") ??
+                      ""
+                    }
+                    disabled={disabled()}
+                    onInput={(event) =>
+                      props.panel.onSecretStoreAllowedHostsChange?.(event.currentTarget.value)
+                    }
+                  />
+                </label>
+              )}
               {item().resource && (
                 <ChatQuestionResource
                   question={item()}
