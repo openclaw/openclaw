@@ -9,6 +9,7 @@ export type PluginAutoEnableCandidate = { pluginId: string } & (
   | {
       kind:
         | "provider-auth-configured"
+        | "provider-endpoint-configured"
         | "speech-provider-selected"
         | "worker-provider-selected"
         | "storage-provider-selected"
