@@ -241,7 +241,13 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
       );
       if (capture) {
         const dir = createControlUiE2eArtifactDir(`agents-cards-${viewport.name}`);
-        await page.screenshot({ path: `${dir}/cards.png`, animations: "disabled" });
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          agent,
+          [agent.getByRole("heading"), agent.locator(".agents-home__preview")],
+          { animations: "disabled", scrollTo: agent },
+        );
+        await writeFile(`${dir}/cards.png`, frame.png);
       }
       await agent.focus();
       await page.keyboard.press("Tab");
