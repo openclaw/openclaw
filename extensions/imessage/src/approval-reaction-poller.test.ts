@@ -1,26 +1,23 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-// Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
+import { pollPendingIMessageApprovalReactions as poll } from "./approval-reaction-poller.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
-  registerIMessageApprovalReactionTarget as registerIMessageApprovalReactionTargetRaw,
+  registerIMessageApprovalReactionTarget,
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
+import type { IMessagePayload } from "./monitor/types.js";
 
 const resolverMocks = vi.hoisted(() => ({
-  resolveApprovalOverGateway: vi.fn(),
+  resolve: vi.fn(),
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTargetRaw>[0];
-const registerIMessageApprovalReactionTarget = (
-  params: Omit<IMessageTargetParams, "approvalKind">,
-) => registerIMessageApprovalReactionTargetRaw({ ...params, approvalKind: "exec" });
+type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTarget>[0];
 
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
-  resolveApprovalOverGateway: resolverMocks.resolveApprovalOverGateway,
+  resolveApprovalOverGateway: resolverMocks.resolve,
 }));
 vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
@@ -54,39 +51,27 @@ const DEFAULT_CHAT_ID = 42;
 function buildApprovalConfig(approver = APPROVER) {
   return { channels: { imessage: { allowFrom: [approver] } } };
 }
+function expectHistory(request: ReturnType<typeof vi.fn>) {
+  expect(request).toHaveBeenCalledWith(
+    "messages.history",
+    { chat_id: DEFAULT_CHAT_ID, limit: 30 },
+    { timeoutMs: 10_000 },
+  );
+}
 
-function buildReaction(
-  overrides: Partial<{
-    id: number;
-    sender: string;
-    is_from_me: boolean;
-    type: string;
-    emoji: string;
-    created_at: string;
-  }> = {},
-) {
-  return {
-    id: 7,
-    sender: APPROVER,
-    type: "like",
-    emoji: "👍",
-    created_at: "2026-05-27T21:00:00.000Z",
-    ...overrides,
-  };
+const reaction = {
+  id: 7,
+  sender: APPROVER,
+  type: "like",
+  emoji: "👍",
+  created_at: "2026-05-27T21:00:00.000Z",
+};
+function buildReaction(overrides: Partial<typeof reaction> & { is_from_me?: boolean } = {}) {
+  return { ...reaction, ...overrides };
 }
 
 function buildApprovalMessage(
-  overrides: Partial<{
-    guid: string;
-    chat_id: number;
-    chat_guid: string;
-    chat_identifier: string | undefined;
-    is_group: boolean;
-    is_from_me: boolean;
-    sender: string | undefined;
-    text: string;
-    reactions: ReturnType<typeof buildReaction>[];
-  }> = {},
+  overrides: IMessagePayload & { reactions?: ReturnType<typeof buildReaction>[] } = {},
 ) {
   return {
     guid: "msg-1",
@@ -95,12 +80,7 @@ function buildApprovalMessage(
     chat_identifier: APPROVER,
     is_from_me: true,
     sender: APPROVER,
-    text: [
-      "Exec approval required",
-      "ID: exec-1",
-      "",
-      "Reply with: /approve exec-1 allow-once|deny",
-    ].join("\n"),
+    text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
     reactions: [buildReaction({ is_from_me: true })],
     ...overrides,
   };
@@ -108,10 +88,9 @@ function buildApprovalMessage(
 
 function buildGroupApprovalMessage(
   reactions: ReturnType<typeof buildReaction>[] = [
-    buildReaction({ id: 8, sender: "+15551230000", created_at: "2026-05-27T21:01:00.000Z" }),
+    buildReaction({ id: 8, created_at: "2026-05-27T21:01:00.000Z" }),
     buildReaction({
       id: 9,
-      sender: "+15551230000",
       type: "dislike",
       emoji: "👎",
       created_at: "2026-05-27T21:02:00.000Z",
@@ -131,8 +110,29 @@ function buildGroupApprovalMessage(
 describe("iMessage approval reaction poller", () => {
   let accountSequence = 0;
   let accountId = "";
+  const conversation = { chatId: DEFAULT_CHAT_ID, chatGuid: "iMessage;+;chat-guid" };
+  function resolveTarget() {
+    return resolveIMessageApprovalReactionTargetWithPersistence({
+      accountId,
+      conversation,
+      messageId: "msg-1",
+      reactionKey: "👍",
+    });
+  }
+  function expectResolution() {
+    expect(resolverMocks.resolve).toHaveBeenCalledWith({
+      accountId,
+      cfg: buildApprovalConfig(),
+      approvalId: "exec-1",
+      approvalKind: "exec",
+      decision: "allow-once",
+      channel: "imessage",
+      senderId: APPROVER,
+      gatewayUrl: undefined,
+    });
+  }
 
-  type PollParams = Parameters<typeof pollPendingIMessageApprovalReactions>[0];
+  type PollParams = Parameters<typeof poll>[0];
 
   function buildPollParams(
     request: ReturnType<typeof vi.fn>,
@@ -151,10 +151,11 @@ describe("iMessage approval reaction poller", () => {
   ) {
     return registerIMessageApprovalReactionTarget({
       accountId,
-      conversation: { chatId: DEFAULT_CHAT_ID, chatGuid: "iMessage;+;chat-guid" },
+      conversation,
       messageId: "msg-1",
       approvalId: "exec-1",
       allowedDecisions: ["allow-once", "deny"],
+      approvalKind: "exec",
       ...overrides,
     });
   }
@@ -163,8 +164,8 @@ describe("iMessage approval reaction poller", () => {
     clearIMessageApprovalReactionTargetsForTest();
     accountSequence += 1;
     accountId = `test-${accountSequence}`;
-    resolverMocks.resolveApprovalOverGateway.mockReset();
-    resolverMocks.resolveApprovalOverGateway.mockImplementation(
+    resolverMocks.resolve.mockReset();
+    resolverMocks.resolve.mockImplementation(
       async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
         applied: true,
         approval:
@@ -186,64 +187,35 @@ describe("iMessage approval reaction poller", () => {
       return history.promise;
     });
     const controller = new AbortController();
-    const polling = pollPendingIMessageApprovalReactions(
-      buildPollParams(request, {
-        signal: controller.signal,
-      }),
-    );
+    const polling = poll(buildPollParams(request, { signal: controller.signal }));
     await requested.promise;
     controller.abort();
     history.resolve({ messages: [buildGroupApprovalMessage()] });
     await polling;
-    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(resolverMocks.resolve).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
   });
 
   it("discovers typed handle-only targets through recent chat history", async () => {
-    await registerTarget({
-      conversation: { handle: APPROVER },
-    });
+    await registerTarget({ conversation: { handle: APPROVER } });
     const request = createRpcRequest([buildApprovalMessage()], [DEFAULT_CHAT_ID]);
 
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { allowRecentChatDiscovery: true }),
-    );
+    await poll(buildPollParams(request, { allowRecentChatDiscovery: true }));
 
     expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: DEFAULT_CHAT_ID, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
-      accountId,
-      cfg: buildApprovalConfig(),
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "imessage",
-      senderId: APPROVER,
-      gatewayUrl: undefined,
-    });
+    expectHistory(request);
+    expectResolution();
   });
 
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
-    await registerTarget({
-      conversation: { handle: "+15551230000" },
-    });
-    await registerTarget({
-      conversation: { chatId: 42, chatGuid: "SMS;-;+15551230000" },
-    });
+    await registerTarget({ conversation: { handle: APPROVER } });
+    await registerTarget({ conversation: { chatId: 42, chatGuid: `SMS;-;${APPROVER}` } });
     const request = createRpcRequest([]);
 
-    await pollPendingIMessageApprovalReactions(buildPollParams(request));
+    await poll(buildPollParams(request));
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "messages.history",
-      { chat_id: 42, limit: 30 },
-      { timeoutMs: 10_000 },
-    );
+    expectHistory(request);
   });
 
   it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
@@ -257,31 +229,19 @@ describe("iMessage approval reaction poller", () => {
         }),
         buildReaction({
           id: 9,
-          sender: "+15551230000",
           created_at: "2026-05-27T21:02:00.000Z",
         }),
       ]),
     ]);
 
-    await pollPendingIMessageApprovalReactions(
-      buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) }),
-    );
+    await poll(buildPollParams(request));
 
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
-      accountId,
-      cfg: buildApprovalConfig(APPROVER),
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "imessage",
-      senderId: "+15551230000",
-      gatewayUrl: undefined,
-    });
+    expect(resolverMocks.resolve).toHaveBeenCalledTimes(1);
+    expectResolution();
   });
 
   it("stops polling after another surface records the canonical winner", async () => {
-    resolverMocks.resolveApprovalOverGateway.mockResolvedValueOnce({
+    resolverMocks.resolve.mockResolvedValueOnce({
       applied: false,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
@@ -289,14 +249,13 @@ describe("iMessage approval reaction poller", () => {
     const request = createRpcRequest([buildGroupApprovalMessage()]);
     const logVerboseMessage = vi.fn();
     const pollParams = buildPollParams(request, {
-      cfg: buildApprovalConfig(APPROVER),
       logVerboseMessage,
     });
 
-    await pollPendingIMessageApprovalReactions(pollParams);
-    await pollPendingIMessageApprovalReactions(pollParams);
+    await poll(pollParams);
+    await poll(pollParams);
 
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolve).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(1);
     expect(logVerboseMessage).toHaveBeenCalledWith(
       "imessage: approval reaction already resolved id=exec-1 sender=+15551230000 status=denied decision=deny reason=user via messageId=msg-1",
@@ -305,50 +264,23 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("propagates an authorized resolver failure and retries it on the next poll", async () => {
-    resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway down"));
+    resolverMocks.resolve.mockRejectedValueOnce(new Error("gateway down"));
     await registerTarget();
     const request = createRpcRequest([buildGroupApprovalMessage()]);
-    const pollParams = buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) });
+    const pollParams = buildPollParams(request);
 
-    // The transient failure aborts the cycle before the later 👎 is resolved:
-    // first-answer ordering must survive the retry, and the caller
-    // (monitor-provider) logs the throw and re-polls on the next interval.
-    await expect(pollPendingIMessageApprovalReactions(pollParams)).rejects.toThrow("gateway down");
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
-      accountId,
-      cfg: buildApprovalConfig(APPROVER),
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "imessage",
-      senderId: "+15551230000",
-      gatewayUrl: undefined,
-    });
-    // The binding stays registered for the next interval's retry.
-    await expect(
-      resolveIMessageApprovalReactionTargetWithPersistence({
-        accountId,
-        conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
-        messageId: "msg-1",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeTruthy();
+    // Preserve first-answer ordering across the monitor's next-interval retry.
+    await expect(poll(pollParams)).rejects.toThrow("gateway down");
+    expect(resolverMocks.resolve).toHaveBeenCalledTimes(1);
+    expectResolution();
+    await expect(resolveTarget()).resolves.toBeTruthy();
 
-    // Next interval: the retried 👍 resolves first; the later 👎 then finds no
-    // binding and never reaches the resolver.
-    await pollPendingIMessageApprovalReactions(pollParams);
-    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
-    expect(resolverMocks.resolveApprovalOverGateway.mock.calls[1]?.[0]).toEqual(
-      resolverMocks.resolveApprovalOverGateway.mock.calls[0]?.[0],
+    // The later 👎 must never reach the resolver after the retried 👍 wins.
+    await poll(pollParams);
+    expect(resolverMocks.resolve).toHaveBeenCalledTimes(2);
+    expect(resolverMocks.resolve.mock.calls[1]?.[0]).toEqual(
+      resolverMocks.resolve.mock.calls[0]?.[0],
     );
-    await expect(
-      resolveIMessageApprovalReactionTargetWithPersistence({
-        accountId,
-        conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
-        messageId: "msg-1",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
+    await expect(resolveTarget()).resolves.toBeNull();
   });
 });

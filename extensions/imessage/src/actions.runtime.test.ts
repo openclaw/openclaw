@@ -33,6 +33,12 @@ const { imessageActionsRuntime: runtime } = await import("./actions.runtime.js")
 const options = { cliPath: "imsg", dbPath: "/tmp/messages.db" };
 const remote = { cliPath: "/gateway/imsg-ssh", remoteHost: "messages-mac" };
 const file = { filename: "photo.png", buffer: Uint8Array.from([1, 2, 3]) };
+const chat = { chatGuid: "chat-guid", options };
+const message = { ...chat, messageId: "message-guid" };
+const chatArgs = ["--chat", "chat-guid"];
+const messageArgs = [...chatArgs, "--message", "message-guid"];
+const messageFields = { chat_guid: "chat-guid", message_id: "message-guid" };
+const unsupported = { name: "IMessageRemoteUnsupportedError", code: "IMESSAGE_REMOTE_UNSUPPORTED" };
 function rpc(result: Record<string, unknown>) {
   const client = {
     request: vi.fn().mockResolvedValue(result),
@@ -69,10 +75,8 @@ describe("imessage actions runtime", () => {
     };
     const result = runtime
       .editMessage({
-        chatGuid: "chat-guid",
-        messageId: "message-guid",
+        ...message,
         text: "replacement",
-        options,
       })
       .catch((error: unknown) => error);
     await Promise.race([
@@ -123,83 +127,49 @@ describe("imessage actions runtime", () => {
       method: "tapback",
       send: (transport: typeof options | typeof remote) =>
         runtime.sendReaction({
-          chatGuid: "chat-guid",
-          messageId: "message-guid",
+          ...message,
           reaction: "like",
           options: transport,
         }),
       fields: {
-        chat_guid: "chat-guid",
-        message_id: "message-guid",
+        ...messageFields,
         reaction: "like",
         part_index: 0,
       },
-      args: [
-        "tapback",
-        "--chat",
-        "chat-guid",
-        "--message",
-        "message-guid",
-        "--kind",
-        "like",
-        "--part",
-        "0",
-      ],
+      args: ["tapback", ...messageArgs, "--kind", "like", "--part", "0"],
     },
     {
       method: "tapback removal",
       rpcMethod: "tapback",
       send: (transport: typeof options | typeof remote) =>
         runtime.sendReaction({
-          chatGuid: "chat-guid",
-          messageId: "message-guid",
+          ...message,
           reaction: "love",
           remove: true,
           partIndex: 2,
           options: transport,
         }),
       fields: {
-        chat_guid: "chat-guid",
-        message_id: "message-guid",
+        ...messageFields,
         reaction: "love",
         part_index: 2,
         remove: true,
       },
-      args: [
-        "tapback",
-        "--chat",
-        "chat-guid",
-        "--message",
-        "message-guid",
-        "--kind",
-        "love",
-        "--part",
-        "2",
-        "--remove",
-      ],
+      args: ["tapback", ...messageArgs, "--kind", "love", "--part", "2", "--remove"],
     },
     {
       method: "message.unsend",
       send: (transport: typeof options | typeof remote) =>
-        runtime.unsendMessage({
-          chatGuid: "chat-guid",
-          messageId: "message-guid",
-          partIndex: 3,
-          options: transport,
-        }),
-      fields: { chat_guid: "chat-guid", message_id: "message-guid", part_index: 3 },
-      args: ["unsend", "--chat", "chat-guid", "--message", "message-guid", "--part", "3"],
+        runtime.unsendMessage({ ...message, partIndex: 3, options: transport }),
+      fields: { ...messageFields, part_index: 3 },
+      args: ["unsend", ...messageArgs, "--part", "3"],
     },
     {
       method: "group.removeParticipant",
       send: (transport: typeof options | typeof remote) =>
-        runtime.removeParticipant({
-          chatGuid: "chat-guid",
-          address: "+15550000123",
-          options: transport,
-        }),
+        runtime.removeParticipant({ ...chat, address: "+15550000123", options: transport }),
       fields: { chat_guid: "chat-guid", address: "+15550000123" },
-      args: ["chat-remove-member", "--chat", "chat-guid", "--address", "+15550000123"],
+      args: ["chat-remove-member", ...chatArgs, "--address", "+15550000123"],
     },
   ])(
     "preserves local and remote $method wire contracts",
@@ -225,7 +195,7 @@ describe("imessage actions runtime", () => {
     const client = rpc({ guid: "vote-guid", option_text: "Blue" });
     await expect(
       runtime.sendPollVote({
-        chatGuid: "chat-guid",
+        ...chat,
         pollGuid: "poll-guid",
         optionId: "option-blue",
         options: remote,
@@ -233,25 +203,18 @@ describe("imessage actions runtime", () => {
     ).resolves.toEqual({ messageId: "vote-guid", optionText: "Blue" });
     expect(client.request).toHaveBeenCalledWith(
       "poll.vote",
-      {
-        chat_guid: "chat-guid",
-        poll_guid: "poll-guid",
-        option_id: "option-blue",
-      },
+      { chat_guid: "chat-guid", poll_guid: "poll-guid", option_id: "option-blue" },
       { timeoutMs: undefined },
     );
     for (const selector of [{ optionIndex: 2 }, { optionText: "Blue" }]) {
       await expect(
         runtime.sendPollVote({
-          chatGuid: "chat-guid",
+          ...chat,
           pollGuid: "poll-guid",
           ...selector,
           options: remote,
         }),
-      ).rejects.toMatchObject({
-        name: "IMessageRemoteUnsupportedError",
-        code: "IMESSAGE_REMOTE_UNSUPPORTED",
-      });
+      ).rejects.toMatchObject(unsupported);
     }
     expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
   });
@@ -259,17 +222,14 @@ describe("imessage actions runtime", () => {
   it("rejects nonzero attachment reply parts on remote accounts", async () => {
     await expect(
       runtime.sendRichMessage({
-        chatGuid: "chat-guid",
+        ...chat,
         text: "reply",
         replyToMessageId: "message-guid",
         partIndex: 1,
         attachment: { kind: "buffer", ...file },
         options: remote,
       }),
-    ).rejects.toMatchObject({
-      name: "IMessageRemoteUnsupportedError",
-      code: "IMESSAGE_REMOTE_UNSUPPORTED",
-    });
+    ).rejects.toMatchObject(unsupported);
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
     expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
   });
@@ -279,14 +239,14 @@ describe("imessage actions runtime", () => {
     {
       method: "send.attachment",
       send: (actionOptions: Options) =>
-        runtime.sendAttachment({ chatGuid: "chat-guid", ...file, options: actionOptions }),
+        runtime.sendAttachment({ ...chat, ...file, options: actionOptions }),
       fields: {},
     },
     {
       method: "send",
       send: (actionOptions: Options) =>
         runtime.sendRichMessage({
-          chatGuid: "chat-guid",
+          ...chat,
           text: "**caption**",
           replyToMessageId: "message-guid",
           attachment: { kind: "buffer", ...file },
@@ -302,7 +262,7 @@ describe("imessage actions runtime", () => {
     {
       method: "group.setIcon",
       send: (actionOptions: Options) =>
-        runtime.setGroupIcon({ chatGuid: "chat-guid", ...file, options: actionOptions }),
+        runtime.setGroupIcon({ ...chat, ...file, options: actionOptions }),
       fields: {},
     },
   ])(
@@ -316,11 +276,7 @@ describe("imessage actions runtime", () => {
       await send(remote);
       expect(client.request).toHaveBeenCalledWith(
         method,
-        {
-          chat_guid: "chat-guid",
-          file: "/tmp/openclaw-imessage-safe/photo.png",
-          ...fields,
-        },
+        { chat_guid: "chat-guid", file: "/tmp/openclaw-imessage-safe/photo.png", ...fields },
         { timeoutMs: undefined },
       );
       expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
@@ -338,12 +294,11 @@ describe("imessage actions runtime", () => {
       },
     });
     const result = await runtime.sendPoll({
-      chatGuid: "chat-guid",
+      ...chat,
       question: "Approval details",
       choices: ["Allow", "allow"],
       suppressComment: true,
       replyToMessageId: "parent-guid",
-      options,
     });
     expect(runIMessageCliJsonCommandMock).toHaveBeenCalledOnce();
     expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
@@ -352,8 +307,7 @@ describe("imessage actions runtime", () => {
       args: [
         "poll",
         "send",
-        "--chat",
-        "chat-guid",
+        ...chatArgs,
         "--question",
         "Approval details",
         "--option",
@@ -383,23 +337,19 @@ describe("imessage actions runtime", () => {
     const context =
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>PRIVATE_ACTION_RUNTIME<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
     await runtime.editMessage({
-      chatGuid: "chat-guid",
-      messageId: "message-guid",
+      ...message,
       text: reminder + "user:\n**literal edit**\n# assistant:",
       backwardsCompatMessage: previous + "system:\n**literal fallback**",
-      options,
     });
     await runtime.sendPoll({
-      chatGuid: "chat-guid",
+      ...chat,
       question: context + "assistant:\n# literal question",
       choices: [reminder + "system:\n**literal choice**", "_literal second choice_"],
-      options,
     });
     await runtime.sendPollVote({
-      chatGuid: "chat-guid",
+      ...chat,
       pollGuid: "poll-guid",
       optionText: "user:",
-      options,
     });
     const calls = runIMessageCliJsonCommandMock.mock.calls.map(([call]) => call.args as string[]);
     const [edit, poll, vote] = calls;
@@ -421,13 +371,12 @@ describe("imessage actions runtime", () => {
   it("rejects hidden assistant content in raw poll code before imsg", async () => {
     await expect(
       runtime.sendPoll({
-        chatGuid: "chat-guid",
+        ...chat,
         question: "Choose",
         choices: [
           "first",
           "`<relevant_memories>hidden memory</relevant_memories>`\n\n```xml\n<thinking>hidden thought</thinking>\n```",
         ],
-        options,
       }),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
     expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
@@ -444,12 +393,11 @@ describe("imessage actions runtime", () => {
       return { guid: "p:0/sent-message" };
     });
     await runtime.sendRichMessage({
-      chatGuid: "chat-guid",
+      ...chat,
       text: "photo",
       replyToMessageId: "parent-guid",
       effectId: "com.apple.MobileSMS.expressivesend.impact",
       attachment: { kind: "buffer", ...file, filename: "Family photo.png" },
-      options,
     });
     expect(basename(stagedPath)).toBe("Family photo.png");
     await expect(access(dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
@@ -465,11 +413,10 @@ describe("imessage actions runtime", () => {
       return { guid: "p:0/sent-message" };
     });
     await runtime.sendAttachment({
-      chatGuid: "chat-guid",
+      ...chat,
       ...file,
       filename: "../../..\\..\\" + "📎".repeat(120) + ".pdf",
       asVoice: true,
-      options,
     });
     expect(basename(stagedPath)).toMatch(/^📎+\.pdf$/u);
     expect(Buffer.byteLength(basename(stagedPath), "utf8")).toBeLessThanOrEqual(240);
