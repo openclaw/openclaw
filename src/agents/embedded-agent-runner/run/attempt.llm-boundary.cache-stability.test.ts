@@ -60,7 +60,7 @@ import {
 import {
   installRuntimeContextMessageForPrompt,
   installModelPromptProjection,
-  normalizeMessagesForLlmBoundary,
+  normalizeMessagesForLlmBoundary as normalize,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import {
@@ -72,13 +72,14 @@ import {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-99495-boundary-");
 const TS = 1717570800000;
 const options = { timezone: "UTC" };
+const textBlock = (text: string) => ({ type: "text" as const, text });
 const user = (text: string, timestamp = TS): UserMessage => ({
   role: "user",
-  content: [{ type: "text", text }],
+  content: [textBlock(text)],
   timestamp,
 });
 const answer = makeAgentAssistantMessage({
-  content: [{ type: "text", text: "I understand." }],
+  content: [textBlock("I understand.")],
   timestamp: TS + 1,
 });
 const model = makeProviderModelFixture<"openai-completions">({
@@ -92,6 +93,37 @@ const model = makeProviderModelFixture<"openai-completions">({
 
 type TransportApi = "anthropic-messages" | "openai-responses";
 type RequestContext = Parameters<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>[1];
+type BoundaryOptions = NonNullable<Parameters<typeof normalize>[1]>;
+const llmHistory = (messages: AgentMessage[], opts: BoundaryOptions) =>
+  convertToLlm(normalize(messages, opts));
+const providerAnswer = (api: TransportApi | "openai-completions") => ({
+  ...answer,
+  api,
+  provider: api === "anthropic-messages" ? "anthropic" : "openai",
+  model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
+});
+const toolCall = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+const toolResult = (id: string, text: string, timestamp: number): AgentMessage => ({
+  role: "toolResult",
+  toolCallId: id,
+  toolName: "read",
+  content: [textBlock(text)],
+  isError: false,
+  timestamp,
+});
+async function capturePayload(
+  start: (
+    onPayload: (payload: unknown) => void,
+  ) => ReturnType<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>,
+) {
+  let captured: Record<string, unknown> | undefined;
+  const stream = await start((payload) => {
+    captured = payload as Record<string, unknown>;
+    throw new Error("stop after payload capture");
+  });
+  expect((await stream.result()).stopReason).toBe("error");
+  return expectDefined(captured, "captured provider payload");
+}
 async function captureTransport(api: TransportApi, context: RequestContext) {
   if (api === "anthropic-messages") {
     return (
@@ -102,20 +134,12 @@ async function captureTransport(api: TransportApi, context: RequestContext) {
       })
     ).payload;
   }
-  let payload: Record<string, unknown> | undefined;
-  const stream = await createOpenAIResponsesTransportStreamFn()(
-    { ...model, api, reasoning: true },
-    context,
-    {
+  return capturePayload((onPayload) =>
+    createOpenAIResponsesTransportStreamFn()({ ...model, api, reasoning: true }, context, {
       apiKey: "fixture-transport-value",
-      onPayload(value) {
-        payload = value as Record<string, unknown>;
-        throw new Error("stop after payload capture");
-      },
-    },
+      onPayload,
+    }),
   );
-  expect((await stream.result()).stopReason).toBe("error");
-  return expectDefined(payload, "captured native Responses payload");
 }
 const carrier = (content: string, timestamp = TS): AgentMessage => ({
   role: "custom",
@@ -129,52 +153,31 @@ function toolRound(round: number, api: "openai-completions" | "openai-responses"
   const id = `call_${round}`;
   return [
     {
-      ...answer,
-      api,
-      provider: model.provider,
-      model: model.id,
+      ...providerAnswer(api),
       stopReason: "toolUse",
-      content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+      content: [toolCall(id)],
       timestamp: TS + round,
     },
-    {
-      role: "toolResult",
-      toolCallId: id,
-      toolName: "read",
-      content: [{ type: "text", text: `result ${round}` }],
-      isError: false,
-      timestamp: TS + round,
-    },
+    toolResult(id, `result ${round}`, TS + round),
   ];
 }
 async function capture(
   api: "openai-completions" | "openai-responses",
   messages: AgentMessage[],
-  boundaryOptions: NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]> = options,
+  boundaryOptions: BoundaryOptions = options,
 ) {
-  let captured: Record<string, unknown> | undefined;
   const context = {
     systemPrompt: "Stable system prompt",
     messages: convertToLlm(
-      relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(messages, boundaryOptions),
-      ),
+      relocateCurrentRuntimeContextCarrierToTail(normalize(messages, boundaryOptions)),
     ),
   };
-  const streamOptions = {
-    apiKey: ["fixture", "transport", "value"].join("-"),
-    cacheRetention: "none" as const,
-    onPayload(payload: unknown) {
-      captured = payload as Record<string, unknown>;
-      throw new Error("stop after payload capture");
-    },
-  };
-  const stream =
-    api === "openai-completions"
-      ? streamOpenAICompletions({ ...model, api }, context, streamOptions)
-      : streamOpenAIResponses({ ...model, api }, context, streamOptions);
-  expect((await stream.result()).stopReason).toBe("error");
-  return expectDefined(captured, "captured provider payload");
+  return capturePayload((onPayload) => {
+    const opts = { apiKey: "fixture-transport-value", cacheRetention: "none" as const, onPayload };
+    return api === "openai-completions"
+      ? streamOpenAICompletions({ ...model, api }, context, opts)
+      : streamOpenAIResponses({ ...model, api }, context, opts);
+  });
 }
 
 describe("prompt-cache boundary regressions", () => {
@@ -232,12 +235,10 @@ describe("prompt-cache boundary regressions", () => {
             const context = {
               systemPrompt: projection.systemPrompt,
               tools: surface.tools,
-              messages: convertToLlm(
-                normalizeMessagesForLlmBoundary(manager.buildSessionContext().messages, {
-                  inHistorySystemUpdates: true,
-                  includeTimestamp: false,
-                }),
-              ),
+              messages: llmHistory(manager.buildSessionContext().messages, {
+                inHistorySystemUpdates: true,
+                includeTimestamp: false,
+              }),
             };
             requests.push(await captureTransport(api, context));
             clearToolSearchCatalog({ catalogRef });
@@ -245,12 +246,7 @@ describe("prompt-cache boundary regressions", () => {
             await persistSessionSystemPrompt(lease.state, (customType, data) =>
               manager.appendCustomEntry(customType, data),
             );
-            manager.appendMessage({
-              ...answer,
-              api,
-              provider: api === "anthropic-messages" ? "anthropic" : "openai",
-              model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
-            });
+            manager.appendMessage(providerAnswer(api));
           }
           const first = expectDefined(requests[0], "first request");
           const promptKey = api === "anthropic-messages" ? "system" : "instructions";
@@ -283,7 +279,7 @@ describe("prompt-cache boundary regressions", () => {
   });
 
   it("rejects unknown session projection versions before submitting history", () => {
-    expect(() => normalizeMessagesForLlmBoundary([], { sessionVersion: 99 })).toThrow(
+    expect(() => normalize([], { sessionVersion: 99 })).toThrow(
       "Unsupported session prompt projection version",
     );
   });
@@ -305,29 +301,12 @@ describe("prompt-cache boundary regressions", () => {
           timestamp: TS + 3,
         };
         const failed = {
-          ...answer,
-          api,
-          provider: api === "anthropic-messages" ? "anthropic" : "openai",
-          model: api === "anthropic-messages" ? "claude-opus-5" : model.id,
+          ...providerAnswer(api),
           stopReason,
           content: [
-            ...(contentKind === "unfinished-tool-only"
-              ? []
-              : [
-                  {
-                    type: "text" as const,
-                    text: "Incomplete answer",
-                  },
-                ]),
+            ...(contentKind === "unfinished-tool-only" ? [] : [textBlock("Incomplete answer")]),
             ...(contentKind === "completed-tool" || contentKind === "unfinished-tool-only"
-              ? [
-                  {
-                    type: "toolCall" as const,
-                    id: "call_fixture",
-                    name: "read",
-                    arguments: {},
-                  },
-                ]
+              ? [toolCall("call_fixture")]
               : []),
           ],
           errorMessage: "private provider diagnostic",
@@ -337,23 +316,11 @@ describe("prompt-cache boundary regressions", () => {
           user("First question"),
           failed,
           ...(contentKind === "completed-tool"
-            ? [
-                {
-                  role: "toolResult" as const,
-                  toolCallId: "call_fixture",
-                  toolName: "read",
-                  content: [{ type: "text" as const, text: "Read result" }],
-                  isError: false,
-                  timestamp: TS + 1,
-                },
-              ]
+            ? [toolResult("call_fixture", "Read result", TS + 1)]
             : []),
           {
-            ...answer,
-            api,
-            provider: failed.provider,
-            model: failed.model,
-            content: [{ type: "text" as const, text: "Recovered reply." }],
+            ...providerAnswer(api),
+            content: [textBlock("Recovered reply.")],
             __openclaw: { runId: "recovered-run", itemId: "recovered-item" },
           },
           staged,
@@ -368,11 +335,9 @@ describe("prompt-cache boundary regressions", () => {
         const captureRequest = (history: AgentMessage[]) =>
           captureTransport(api, {
             systemPrompt: "Stable system prompt",
-            messages: convertToLlm(normalizeMessagesForLlmBoundary(history, boundaryOptions)),
+            messages: llmHistory(history, boundaryOptions),
           });
-        const firstBoundary = convertToLlm(
-          normalizeMessagesForLlmBoundary(messages, boundaryOptions),
-        );
+        const firstBoundary = llmHistory(messages, boundaryOptions);
         const first = await captureRequest(messages);
         const manager = SessionManager.inMemory();
         for (const message of messages) {
@@ -404,12 +369,9 @@ describe("prompt-cache boundary regressions", () => {
         const replayed = await validateReplayTurns({ messages: sanitized, modelApi: api, policy });
         // Observation uses this sequence before provider encoding, so it must be
         // stable even when the transport omits an empty failed assistant.
-        expect(
-          convertToLlm(normalizeMessagesForLlmBoundary(replayed, boundaryOptions)).slice(
-            0,
-            firstBoundary.length,
-          ),
-        ).toEqual(firstBoundary);
+        expect(llmHistory(replayed, boundaryOptions).slice(0, firstBoundary.length)).toEqual(
+          firstBoundary,
+        );
         const second = await captureRequest(replayed);
         const field = api === "anthropic-messages" ? "messages" : "input";
         const before = first[field] as unknown[];
@@ -455,14 +417,11 @@ describe("prompt-cache boundary regressions", () => {
         sessionVersion === 4
           ? "Quote [[OPENCLAW_INTERNAL_CONTEXT_BEGIN]] and [[OPENCLAW_INTERNAL_CONTEXT_END]] literally."
           : text;
-      const current = normalizeMessagesForLlmBoundary(input, boundaryOptions);
-      const history = normalizeMessagesForLlmBoundary(
-        [...input, user("next", TS + 60000)],
-        boundaryOptions,
-      );
+      const current = normalize(input, boundaryOptions);
+      const history = normalize([...input, user("next", TS + 60000)], boundaryOptions);
       expect(current[0]).toMatchObject({ role: "user", content: expected });
       expect(history[0]).toMatchObject({ role: "user", content: expected });
-      expect(normalizeMessagesForLlmBoundary(current, boundaryOptions)).toEqual(current);
+      expect(normalize(current, boundaryOptions)).toEqual(current);
     }
     expect(input).toEqual([{ role: "user", content: text, timestamp: TS }]);
   });
@@ -497,7 +456,7 @@ describe("prompt-cache boundary regressions", () => {
       runtimeMessage: user(input.text),
       preparedMessage: recorder.message,
     });
-    const sent = normalizeMessagesForLlmBoundary([runtimeMessage], options);
+    const sent = normalize([runtimeMessage], options);
     recorder.markSentToProvider?.();
     const mediaPath = path.join(dir, "image.png");
     media.resolve({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
@@ -505,7 +464,7 @@ describe("prompt-cache boundary regressions", () => {
     const persisted = (await loadTranscriptEvents(target))
       .map((entry) => entry as { message?: AgentMessage })
       .flatMap((entry) => (entry.message ? [entry.message] : []));
-    const next = normalizeMessagesForLlmBoundary(persisted, options);
+    const next = normalize(persisted, options);
     const late = expectDefined(persisted.at(-1), "persisted late-media turn");
     expect(next).toHaveLength(sent.length + 1);
     expect(next.slice(0, sent.length)).toEqual(sent);
@@ -543,23 +502,21 @@ describe("prompt-cache boundary regressions", () => {
   });
 
   it("keeps batched steering context with its owning user through Responses conversion", async () => {
-    const firstSteering = user("first steering user", TS + 60000);
-    attachSteeringRuntimeContext(firstSteering, {
-      text: "first steering context",
-      fragments: [{ kind: "conversation-data", text: "first steering context" }],
-    });
-    const secondSteering = user("second steering user", TS + 120000);
-    attachSteeringRuntimeContext(secondSteering, {
-      text: "second steering context",
-      fragments: [{ kind: "conversation-data", text: "second steering context" }],
+    const steering = ["first", "second"].map((label, index) => {
+      const message = user(`${label} steering user`, TS + (index + 1) * 60000);
+      const text = `${label} steering context`;
+      attachSteeringRuntimeContext(message, {
+        text,
+        fragments: [{ kind: "conversation-data", text }],
+      });
+      return message;
     });
 
     const request = await capture("openai-responses", [
       carrier("original context"),
       user("original question"),
-      { ...answer, api: "openai-responses", provider: model.provider, model: model.id },
-      firstSteering,
-      secondSteering,
+      providerAnswer("openai-responses"),
+      ...steering,
     ]);
     const input = JSON.stringify(request.input);
     const orderedText = [
@@ -589,8 +546,8 @@ describe("prompt-cache boundary regressions", () => {
       ...options,
       userTranscriptContexts: [{ runtimeMessage, transcriptMessage }],
     };
-    const current = normalizeMessagesForLlmBoundary([runtimeMessage], boundaryOptions);
-    const historical = normalizeMessagesForLlmBoundary(
+    const current = normalize([runtimeMessage], boundaryOptions);
+    const historical = normalize(
       [transcriptMessage, answer, user("Who said that?", TS + 60000)],
       options,
     );
@@ -598,7 +555,7 @@ describe("prompt-cache boundary regressions", () => {
     const historicalContent = historical[0]?.role === "user" ? historical[0].content : undefined;
     expect(currentContent).toEqual(historicalContent);
     expect(current[0]).toMatchObject({ content: expect.stringContaining('"name":"Alice"') });
-    expect(normalizeMessagesForLlmBoundary(current, boundaryOptions)).toEqual(current);
+    expect(normalize(current, boundaryOptions)).toEqual(current);
   });
 });
 
@@ -652,28 +609,26 @@ describe("active prompt steering context", () => {
   });
 
   it("keeps steering context through tool use and retires it after a settled answer", () => {
-    const first = steeringUser();
-    attachSteeringRuntimeContext(first, { text: "first quoted context" });
-    const second = { ...steeringUser(), timestamp: 2 };
-    attachSteeringRuntimeContext(second, { text: "second quoted context" });
-    const toolUse = createAssistant(testModel, []);
-    toolUse.stopReason = "toolUse";
+    const quoted = (label: string, timestamp: number) => {
+      const message = { ...steeringUser(), timestamp };
+      attachSteeringRuntimeContext(message, { text: `${label} quoted context` });
+      return message;
+    };
+    const first = quoted("first", 1);
+    const second = quoted("second", 2);
+    const toolUse = createAssistant(testModel, [], "toolUse");
 
-    expect(JSON.stringify(normalizeMessagesForLlmBoundary([first, toolUse]))).toContain(
-      "first quoted context",
-    );
+    expect(JSON.stringify(normalize([first, toolUse]))).toContain("first quoted context");
     for (const stopReason of ["error", "aborted"] as const) {
-      const failed = createAssistant(testModel, []);
-      failed.stopReason = stopReason;
-      const retry = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, failed]));
+      const failed = createAssistant(testModel, [], stopReason);
+      const retry = JSON.stringify(normalize([first, second, failed]));
       expect(retry).toContain("first quoted context");
       expect(retry).toContain("second quoted context");
     }
 
-    const settled = createAssistant(testModel, [{ type: "text", text: "done" }]);
-    const third = { ...steeringUser(), timestamp: 3 };
-    attachSteeringRuntimeContext(third, { text: "third quoted context" });
-    const next = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, settled, third]));
+    const settled = createAssistant(testModel, [textBlock("done")]);
+    const third = quoted("third", 3);
+    const next = JSON.stringify(normalize([first, second, settled, third]));
     expect(next).not.toContain("first quoted context");
     expect(next).not.toContain("second quoted context");
     expect(next).toContain("third quoted context");
@@ -685,12 +640,10 @@ describe("active prompt steering context", () => {
     const requests: string[] = [];
     const agent = new Agent({
       initialState: { model: testModel, messages: manager.buildSessionContext().messages },
-      convertToLlm: (messages) => convertToLlm(normalizeMessagesForLlmBoundary(messages)),
+      convertToLlm: (messages) => convertToLlm(normalize(messages)),
       streamFn: (activeModel, context) => {
         requests.push(JSON.stringify(context.messages));
-        return createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "done" }]),
-        );
+        return createAssistantResultStream(createAssistant(activeModel, [textBlock("done")]));
       },
     });
     const session = {
@@ -746,7 +699,7 @@ describe("active prompt steering context", () => {
         ...(mode === "keyless" ? {} : { idempotencyKey: "canonical-key" }),
       });
       contexts.record(original, persisted.message);
-      normalizeMessagesForLlmBoundary(await session.agent.transformContext(session.messages), {
+      normalize(await session.agent.transformContext(session.messages), {
         userTranscriptContexts: contexts.list(),
       });
       const steering = manager.appendMessageWithTranscriptAnchor(steeringUser());
@@ -754,9 +707,7 @@ describe("active prompt steering context", () => {
       session.agent.state.messages = manager.buildSessionContext().messages;
       await session.agent.continue();
       const retry = session.messages;
-      const projected = normalizeMessagesForLlmBoundary(
-        await session.agent.transformContext(retry),
-      );
+      const projected = normalize(await session.agent.transformContext(retry));
       cleanup();
       cleanupPrompt();
       expect(persisted.message).not.toBe(original);
@@ -805,9 +756,7 @@ describe("active prompt steering context", () => {
       currentUserTimestampOverride: { timestamp: 1717570800000, text: promptText },
     };
     const project = () =>
-      relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(session.messages, boundaryOptions),
-      );
+      relocateCurrentRuntimeContextCarrierToTail(normalize(session.messages, boundaryOptions));
     const prefix = project();
     session.agent.state.messages.push(makeUserMessage("new requirement", 1717570860000));
     const steered = project();

@@ -25,6 +25,7 @@ type Message = Parameters<typeof setSteeringMessageIdentity>[0];
 const terminalError =
   "active session ended before queued steering message was committed to the transcript";
 const timeoutError = "queued steering message was not committed to the transcript before timeout";
+const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
 
 afterEach(() => vi.useRealTimers());
 registerAgentSessionLoopTestLifecycle();
@@ -35,9 +36,12 @@ function message(text: string, identity: string = text): Message {
   return entry;
 }
 
-function fixture(queue: Message[] = [], target = queue[0]) {
+function fixture(queue: Message[] = [], target = queue[0], prepare?: () => Promise<void>) {
   const listeners = new Set<(event: unknown) => void>();
   const retire = vi.fn(() => true);
+  const accepted = vi.fn();
+  const settled = vi.fn();
+  const abort = new AbortController();
   if (target) {
     registerQueuedUserMessageRetirement(target, retire);
   }
@@ -63,148 +67,139 @@ function fixture(queue: Message[] = [], target = queue[0]) {
     queue,
     listeners,
     retire,
+    accepted,
+    settled,
+    abort,
     emit(event: unknown) {
       for (const listener of listeners) {
         listener(event);
       }
     },
     wait(text: string, options: Options = {}) {
-      return steerActiveSessionWithOptionalDeliveryWait(session, text, {
-        deliveryTimeoutMs: 10_000,
-        waitForTranscriptCommit: true,
-        ...options,
-      });
+      return steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        text,
+        {
+          deliveryTimeoutMs: prepare ? undefined : 10_000,
+          waitForTranscriptCommit: true,
+          ...options,
+        },
+        undefined,
+        undefined,
+        undefined,
+        prepare,
+      );
     },
   };
 }
 
+function observe<T>(promise: Promise<T>) {
+  const result: { value?: T; error?: unknown } = {};
+  return {
+    result,
+    isSettled: () => Object.keys(result).length > 0,
+    done: promise.then(
+      (value) => Object.assign(result, { value }),
+      (error: unknown) => Object.assign(result, { error }),
+    ),
+  };
+}
+
+async function admittedFixture(
+  consume: Parameters<typeof bindMessageInjectionAdmission>[1],
+  simulatedEvents = false,
+) {
+  const { session } = await createTestSession();
+  vi.useFakeTimers();
+  const prepare = async () => {};
+  bindMessageInjectionAdmission(prepare, consume);
+  const f = fixture([], undefined, prepare);
+  f.session.agent = session.agent;
+  f.session.steer = session.steer.bind(session);
+  if (!simulatedEvents) {
+    f.session.subscribe = session.subscribe.bind(session);
+  }
+  return { ...f, realSession: session };
+}
+
 describe("embedded OpenClaw queued steering cancellation", () => {
   it("retains real enqueued input when admission cleanup fails", async () => {
-    const { session } = await createTestSession();
-    vi.useFakeTimers();
-    const prepare = async () => {};
-    bindMessageInjectionAdmission(prepare, async (consume) => {
+    const f = await admittedFixture(async (consume) => {
       consume();
       throw new Error("admission cleanup failed");
     });
-    let result: { error: unknown } | undefined;
-    const waiting = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "already owned input",
-      {
-        waitForTranscriptCommit: true,
-      },
-      undefined,
-      undefined,
-      undefined,
-      prepare,
-    ).catch((error: unknown) => {
-      result = { error };
-    });
+    const waiting = observe(f.wait("already owned input"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(session.getSteeringMessages()).toEqual(["already owned input"]);
-    expect(result).toBeDefined();
-    await waiting;
-    expect(result?.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
+    expect(f.realSession.getSteeringMessages()).toEqual(["already owned input"]);
+    expect(waiting.isSettled()).toBe(true);
+    await waiting.done;
+    expect(waiting.result.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
   });
 
   it.each([
     { cause: "abort", admission: "rejected" },
     { cause: "handoff", admission: "fulfilled" },
-  ])(
-    "joins $admission admission cleanup when $cause cannot remove input that left the runtime queue",
-    async ({ cause, admission }) => {
-      const { session } = await createTestSession();
-      vi.useFakeTimers();
-      const installed = deferred();
-      const cleanup = deferred();
-      const prepare = async () => {};
-      bindMessageInjectionAdmission(prepare, async (consume) => {
-        const result = consume();
-        installed.resolve();
-        await cleanup.promise;
-        if (admission === "rejected") {
-          throw new Error("admission cleanup failed after installation");
-        }
-        return result;
-      });
-      const f = fixture();
-      f.session.agent = session.agent;
-      f.session.steer = session.steer.bind(session);
-      const controller = new AbortController();
-      const onQueueAccepted = vi.fn();
-      let result: { value?: unknown; error?: unknown } | undefined;
-      const waiting = steerActiveSessionWithOptionalDeliveryWait(
-        f.session,
-        "input left the queue",
-        { waitForTranscriptCommit: true, abortSignal: controller.signal, onQueueAccepted },
-        undefined,
-        undefined,
-        undefined,
-        prepare,
-      ).then(
-        (value) => {
-          result = { value };
-        },
-        (error: unknown) => {
-          result = { error };
-        },
-      );
-      try {
-        await installed.promise;
-        // Model submission is not exercised: another owner removes the actual
-        // installed message, so this adapter cannot prove it withdrew the input.
-        expect(session.agent.cancelSteeringMessage(() => true)?.role).toBe("user");
-        if (cause === "abort") {
-          controller.abort();
-        } else {
-          f.emit({ type: "agent_handoff" });
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        expect(result).toBeUndefined();
-        expect(onQueueAccepted).not.toHaveBeenCalled();
-        cleanup.resolve();
-        await waiting;
-        expect(result?.value).toMatchObject({ transcriptCommit: "unconfirmed" });
-        expect(onQueueAccepted).not.toHaveBeenCalledWith(false);
-        expect(f.listeners).toHaveLength(0);
-      } finally {
-        cleanup.resolve();
-        await waiting;
+  ])("joins $admission cleanup after $cause loses queue custody", async ({ cause, admission }) => {
+    const installed = deferred();
+    const cleanup = deferred();
+    const f = await admittedFixture(async (consume) => {
+      const result = consume();
+      installed.resolve();
+      await cleanup.promise;
+      if (admission === "rejected") {
+        throw new Error("admission cleanup failed after installation");
       }
-    },
-  );
+      return result;
+    }, true);
+    const waiting = observe(
+      f.wait("input left the queue", {
+        abortSignal: f.abort.signal,
+        onQueueAccepted: f.accepted,
+      }),
+    );
+    try {
+      await installed.promise;
+      expect(f.realSession.agent.cancelSteeringMessage(() => true)?.role).toBe("user");
+      if (cause === "abort") {
+        f.abort.abort();
+      } else {
+        f.emit({ type: "agent_handoff" });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(waiting.isSettled()).toBe(false);
+      expect(f.accepted).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await waiting.done;
+      expect(waiting.result.value).toMatchObject({ transcriptCommit: "unconfirmed" });
+      expect(f.accepted).not.toHaveBeenCalledWith(false);
+      expect(f.listeners).toHaveLength(0);
+    } finally {
+      cleanup.resolve();
+      await waiting.done;
+    }
+  });
 
   it("closes admission on pre-enqueue persistence failure when the observer throws", async () => {
-    const { session } = await createTestSession();
-    vi.useFakeTimers();
     const entered = deferred();
     const release = deferred();
-    const prepare = async () => {};
-    bindMessageInjectionAdmission(prepare, async (consume) => {
+    const f = await admittedFixture(async (consume) => {
       entered.resolve();
       await release.promise;
       return consume();
     });
-    const steering = vi.spyOn(session, "steer");
+    const steering = vi.spyOn(f.session, "steer");
     const queueIdentity = "pre-enqueue-persistence-failure";
     const persistenceError = new Error("input persistence failed before enqueue");
-    const onQueueAccepted = vi.fn();
-    const onQueueSettled = vi.fn(() => {
+    f.settled.mockImplementation(() => {
       throw new Error("settlement observer failed");
     });
-    let outcome: { error: unknown } | undefined;
-    const waiting = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "must not enqueue",
-      { waitForTranscriptCommit: true, queueIdentity, onQueueAccepted, onQueueSettled },
-      undefined,
-      undefined,
-      undefined,
-      prepare,
-    ).catch((error: unknown) => {
-      outcome = { error };
-    });
+    const waiting = observe(
+      f.wait("must not enqueue", {
+        queueIdentity,
+        onQueueAccepted: f.accepted,
+        onQueueSettled: f.settled,
+      }),
+    );
     try {
       await entered.promise;
       reportSteeringMessagePersistenceFailure(
@@ -212,20 +207,23 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         persistenceError,
       );
       await vi.advanceTimersByTimeAsync(0);
-      expect(outcome).toBeUndefined();
-      expect(onQueueAccepted).not.toHaveBeenCalled();
+      expect(waiting.isSettled()).toBe(false);
+      expect(f.accepted).not.toHaveBeenCalled();
       release.resolve();
-      await waiting;
-      expect(outcome?.error).toMatchObject({
+      await waiting.done;
+      expect(waiting.result.error).toMatchObject({
         cause: expect.objectContaining({ message: persistenceError.message }),
       });
-      expect(session.agent.hasQueuedMessages()).toBe(false);
-      expect(session.getSteeringMessages()).toEqual([]);
-      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
-      expect(onQueueSettled).toHaveBeenCalledOnce();
+      expect(f.realSession.agent.hasQueuedMessages()).toBe(false);
+      expect(f.realSession.getSteeringMessages()).toEqual([]);
+      expect(f.accepted).toHaveBeenCalledExactlyOnceWith(false);
+      expect(f.settled).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
-      await Promise.allSettled([waiting, ...steering.mock.results.map((result) => result.value)]);
+      await Promise.allSettled([
+        waiting.done,
+        ...steering.mock.results.map((result) => result.value),
+      ]);
     }
   });
 
@@ -236,21 +234,17 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const target = message("admitted guidance");
       const unrelated = message("unrelated guidance");
       const f = fixture([target, unrelated], target);
-      const sourceAbort = new AbortController();
-      const onQueueAccepted = vi.fn();
-      const onQueueSettled = vi.fn();
       await f.wait("admitted guidance", {
         waitForTranscriptCommit: false,
         deliveryTimeoutMs: 1,
-        abortSignal: sourceAbort.signal,
-        onQueueAccepted,
-        onQueueSettled,
+        abortSignal: f.abort.signal,
+        onQueueAccepted: f.accepted,
+        onQueueSettled: f.settled,
       });
-      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
-      expect(onQueueSettled).not.toHaveBeenCalled();
+      expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(f.settled).not.toHaveBeenCalled();
       expect(f.listeners).toHaveLength(1);
-      // A completed sender no longer owns withdrawal of the admitted message.
-      sourceAbort.abort();
+      f.abort.abort();
       await vi.advanceTimersByTimeAsync(2);
       expect(f.queue).toEqual([target, unrelated]);
       if (terminal === "message_end") {
@@ -262,9 +256,9 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(f.queue).toEqual([unrelated]);
       expect(f.listeners).toHaveLength(0);
-      expect(onQueueSettled).toHaveBeenCalledOnce();
+      expect(f.settled).toHaveBeenCalledOnce();
       expect(f.retire).toHaveBeenCalledTimes(terminal === "message_end" ? 0 : 1);
-      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true);
     },
   );
   it.each(["text", "offloaded", "recorded"] as const)(
@@ -322,14 +316,13 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const failed = message("same text", "failed");
     const surviving = message("same text", "surviving");
     const f = fixture();
-    const controller = new AbortController();
     const failedWait = f.wait("same text", {
       queueIdentity: "failed",
-      abortSignal: controller.signal,
+      abortSignal: f.abort.signal,
     });
     const survivingWait = f.wait("same text", {
       queueIdentity: "surviving",
-      abortSignal: controller.signal,
+      abortSignal: f.abort.signal,
     });
     const rejection = expect(failedWait).rejects.toThrow("SQLite transcript append failed");
     try {
@@ -341,14 +334,13 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await expect(survivingWait).resolves.toBeUndefined();
       expect(f.listeners).toHaveLength(0);
     } finally {
-      controller.abort();
+      f.abort.abort();
       await Promise.allSettled([failedWait, survivingWait, rejection]);
     }
   });
 
   it("removes only the timed-out steer and preserves unrelated rich payloads", async () => {
     vi.useFakeTimers();
-    const image = { type: "image" as const, data: "abc", mimeType: "image/png" };
     const unrelated = { role: "user", content: [image], timestamp: 1 } satisfies Message;
     const target = message("timed-out completion announce");
     const trailing = {
@@ -390,11 +382,9 @@ describe("embedded OpenClaw queued steering cancellation", () => {
           returned.resolve();
         }
       };
-      const controller = new AbortController();
-      const onQueueAccepted = vi.fn();
       const wait = f.wait("delayed steer", {
-        abortSignal: controller.signal,
-        onQueueAccepted,
+        abortSignal: f.abort.signal,
+        onQueueAccepted: f.accepted,
       });
       const rejection = expect(wait).rejects.toThrow(
         cause === "terminal"
@@ -405,13 +395,13 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       if (cause === "terminal") {
         f.emit({ type: "agent_settled" });
       } else {
-        controller.abort();
+        f.abort.abort();
       }
       preparation.resolve();
       await rejection;
       await returned.promise;
       expect(enqueued).toBe(false);
-      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+      expect(f.accepted).toHaveBeenCalledExactlyOnceWith(false);
     },
   );
 
@@ -427,8 +417,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await acceptance.promise;
       returned.resolve();
     };
-    const onQueueAccepted = vi.fn();
-    const wait = f.wait("queued before settlement", { onQueueAccepted });
+    const wait = f.wait("queued before settlement", { onQueueAccepted: f.accepted });
     const rejection = expect(wait).rejects.toThrow(terminalError);
     await enqueued.promise;
     f.emit({ type: "agent_settled" });
@@ -436,12 +425,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(f.queue).toEqual([]);
     expect(f.retire).toHaveBeenCalledOnce();
     expect(f.listeners).toHaveLength(0);
-    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+    expect(f.accepted).toHaveBeenCalledExactlyOnceWith(false);
     acceptance.resolve();
     await returned.promise;
     await Promise.resolve();
     expect(f.queue).toEqual([]);
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
+    expect(f.accepted).toHaveBeenCalledOnce();
   });
 
   it("removes the runtime steer even when display retirement fails", async () => {
@@ -479,13 +468,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const first = message("expanded steering text", "keep-first");
     const second = message("expanded steering text", "cancel-second");
     const f = fixture([first, second], second);
-    const controller = new AbortController();
     const wait = f.wait("/expand same text", {
       queueIdentity: "cancel-second",
-      abortSignal: controller.signal,
+      abortSignal: f.abort.signal,
     });
     await Promise.resolve();
-    controller.abort();
+    f.abort.abort();
     await expect(wait).rejects.toThrow("queued steering message was cancelled before delivery");
     expect(f.queue).toEqual([first]);
     expect(f.retire).toHaveBeenCalledOnce();
@@ -493,7 +481,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
   it("keeps an image steer pending across nonterminal retry and compaction events", async () => {
     vi.useFakeTimers();
-    const image = { type: "image" as const, data: "image-data", mimeType: "image/png" };
     const target = {
       role: "user",
       content: [{ type: "text", text: "" }, image],
