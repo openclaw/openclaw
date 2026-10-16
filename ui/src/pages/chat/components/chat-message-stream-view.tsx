@@ -10,11 +10,7 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
-import {
-  emptyLegacyContent as litNothing,
-  LitContent,
-  type LegacyTemplateResult,
-} from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent as litNothing, LitContent } from "../../../lit/solid-content.tsx";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
@@ -25,11 +21,8 @@ import {
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
-import {
-  renderReplyLine,
-  renderReplyLineConnector,
-  resolveGroupReplyLine,
-} from "./chat-reply-attribution.ts";
+import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
@@ -91,7 +84,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: LegacyTemplateResult;
+  subagentActivity?: unknown;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -271,10 +264,10 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
     >
       <LitContent value={avatar()} />
       <div class="chat-group-messages">
-        <LitContent value={renderReplyLine(replyLine(), props.options)} />
+        <ReplyLineView line={replyLine()} actions={props.options} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
       </div>
-      <LitContent value={renderReplyLineConnector(replyLine(), avatar())} />
+      <ReplyLineConnector line={replyLine()} avatar={avatar()} />
       <Show when={startedAt() !== null}>
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>

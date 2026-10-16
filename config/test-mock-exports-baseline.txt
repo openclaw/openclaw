@@ -7218,7 +7218,6 @@
 ["src/gateway/server-methods/tools-catalog.test.ts","../../config/config.js","c7d7ed4079c8179be1287a8b4950702f0b5cecb2a6b74460559be562451ad37e",1]
 ["src/gateway/server-methods/tools-catalog.test.ts","../../plugins/tools.js","ed728dfc0cd77575b7a01fb5aaf3404195d361278046ad472b99b389f9a663b5",1]
 ["src/gateway/server-methods/tools-effective.test-support.ts","../../agents/tools-effective-inventory.js","97c519dcf69a9fda68ee0af386ca9e087e06f21732a995e6e8248e6258a12e6c",1]
-["src/gateway/server-methods/tools-effective.test.ts","../node-plugin-tool-snapshot.js","27955bd36f247b36708359160f423b23375f9a4c3531e71d8f17aaa503ea072c",1]
 ["src/gateway/server-methods/tools-github.test.ts","../../agents/github-tool-identity.js","0a8ea5d1a0840e2d2dddfbb7303a4359b2c7b0ae549d46f3c253d85b8ca862b1",1]
 ["src/gateway/server-methods/tools-github.test.ts","../../secrets/store/secret-store.js","dc41e0bf4e24b3fe7743f534eb64593521852f697b4b8eca89d6b9cd8cacbc80",1]
 ["src/gateway/server-methods/tools-github.test.ts","../github-tool-identity-config.js","9e411b69ad0431b40d588fa0015bd45ab4d772c3f7d9b0ea1688f843f67cf919",1]

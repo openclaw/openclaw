@@ -249,7 +249,7 @@ const VoiceCallStreamingConfigSchema = z
   })
   .strict();
 
-export const VoiceCallConfigSchema = z
+const VoiceCallConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
 

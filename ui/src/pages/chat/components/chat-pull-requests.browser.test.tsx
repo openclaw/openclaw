@@ -1,20 +1,25 @@
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
-import { renderChatPullRequests } from "./chat-pull-requests.ts";
+import { ChatPullRequests } from "./chat-pull-requests.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
 
 const container = document.createElement("div");
+let mounted: ReturnType<typeof mountSolid> | undefined;
 let originalViewport: { width: number; height: number };
 beforeEach(() => {
   originalViewport = { width: window.innerWidth, height: window.innerHeight };
 });
 afterEach(async () => {
-  render(nothing, container);
+  mounted?.unmount();
+  mounted = undefined;
   container.remove();
   await page.viewport(originalViewport.width, originalViewport.height);
 });
@@ -26,47 +31,63 @@ it.each(["props", "owner", "parked"])(
     document.body.append(container);
     const owner = new EventTarget();
     let isPresented = true;
-    let painted = false;
-    let part: ReturnType<typeof render>;
+    let updatePresented!: (value: boolean) => void;
+    let updateParked!: (value: boolean) => void;
+    let updateDismissed!: (value: boolean) => void;
     const binding = { owner, isPresented: () => isPresented };
+    mounted = mountSolid(
+      () => {
+        const [presented, setPresented] = createSignal(true);
+        const [active, setActive] = createSignal(true);
+        const [dismissed, setDismissed] = createSignal(false);
+        updatePresented = setPresented;
+        updateParked = setActive;
+        updateDismissed = setDismissed;
+        return (
+          <SolidContentPresentation value={active}>
+            <style>
+              {baseStyles}
+              {layoutStyles}
+            </style>
+            <section
+              style={`width: 500px; padding-top: 260px; opacity: ${mode === "props" && !presented() ? 0 : 1}`}
+            >
+              <ChatPullRequests
+                pullRequests={[
+                  {
+                    number: 42,
+                    owner: "example",
+                    repo: "release-planning",
+                    branch: "review",
+                    title: "Review release checklist",
+                    url: "https://github.com/example/release-planning/pull/42",
+                    state: "open",
+                    checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
+                  },
+                ]}
+                status="ready"
+                presented={mode === "props" ? presented() : binding}
+                dismissed={dismissed()}
+                onDismiss={() => {}}
+              />
+            </section>
+          </SolidContentPresentation>
+        );
+      },
+      { container },
+    );
     const draw = (presented: boolean, dismissed = false) => {
+      updateDismissed(dismissed);
       isPresented = presented;
-      if (mode !== "props" && painted) {
+      if (mode === "props") {
+        updatePresented(presented);
+      } else {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
         if (mode === "parked") {
-          part.setConnected(presented);
+          updateParked(presented);
         }
-        return;
       }
-      part = render(
-        html`
-          <style>
-            ${baseStyles}${layoutStyles}
-          </style>
-          <section style="width: 500px; padding-top: 260px; opacity: ${presented ? 1 : 0}">
-            ${renderChatPullRequests({
-              pullRequests: [
-                {
-                  number: 42,
-                  owner: "example",
-                  repo: "release-planning",
-                  branch: "review",
-                  title: "Review release checklist",
-                  url: "https://github.com/example/release-planning/pull/42",
-                  state: "open",
-                  checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-                },
-              ],
-              status: "ready",
-              presented: mode === "props" ? presented : binding,
-              dismissed,
-              onDismiss: () => {},
-            })}
-          </section>
-        `,
-        container,
-      );
-      painted = true;
+      flush();
     };
     draw(true);
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
@@ -114,42 +135,43 @@ it.each([
     const onDismissBranch = vi.fn();
     const branch = sessionBranch({ repo, branch: "openclaw/custom-snooze-date-time" });
     const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
-    render(
-      html`
-        <style>
-          ${baseStyles}${layoutStyles}${detailsStyles}
-        </style>
-        <section class="chat-details" style="position:relative;width:${width}px">
-          ${renderChatPullRequests({
-            pullRequests: [],
-            branch,
-            status: "ready",
-            compact: true,
-            onDismiss: () => {},
-            onDismissBranch,
-            publication: publication({
-              onPublish,
-              onSelect: () => {},
-              options: {
-                shared,
-                personal: {
-                  state: "connected",
-                  generation: "personal",
-                  account: { accountId: 2, login: "alice-tools" },
-                  accessExpiresAtMs: null,
-                  refreshState: "available",
-                  pending: null,
+    mounted = mountSolid(
+      () => (
+        <>
+          <style>{`${baseStyles}${layoutStyles}${detailsStyles}`}</style>
+          <section class="chat-details" style={`position:relative;width:${width}px`}>
+            <ChatPullRequests
+              pullRequests={[]}
+              branch={branch}
+              status="ready"
+              compact
+              onDismiss={() => {}}
+              onDismissBranch={onDismissBranch}
+              publication={publication({
+                onPublish,
+                onSelect: () => {},
+                options: {
+                  shared,
+                  personal: {
+                    state: "connected",
+                    generation: "personal",
+                    account: { accountId: 2, login: "alice-tools" },
+                    accessExpiresAtMs: null,
+                    refreshState: "available",
+                    pending: null,
+                  },
+                  pendingPersonal: null,
+                  latestShared: null,
                 },
-                pendingPersonal: null,
-                latestShared: null,
-              },
-              selection: { source: "shared", expected: shared },
-            }),
-          })}
-        </section>
-      `,
-      container,
+                selection: { source: "shared", expected: shared },
+              })}
+            />
+          </section>
+        </>
+      ),
+      { container },
     );
+    flush();
     const row = container.querySelector<HTMLElement>(".chat-pr")!;
     const identity = row.querySelector<HTMLElement>(".chat-pr__identity")!;
     const repository = row.querySelector<HTMLElement>(".chat-pr__repo")!;
@@ -186,39 +208,42 @@ it.each(["openclaw", "a-very-long-repository-name-that-must-remain-readable"])(
   async (repo) => {
     await page.viewport(1440, 700);
     document.body.append(container);
-    render(
-      html`
-        <style>
-          ${baseStyles}${layoutStyles}${detailsStyles}
-        </style>
-        <section class="chat-details" style="position:relative;width:360px">
-          ${renderChatPullRequests({
-            pullRequests: [
-              {
-                number: 42,
-                owner: "example",
-                repo,
-                branch: "fix/layout",
-                title: "Keep long pull request titles readable in the narrow session Details panel",
-                url: `https://github.com/example/${repo}/pull/42`,
-                state: "open",
-                checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-              },
-            ],
-            status: "ready",
-            compact: true,
-            onDismiss: () => {},
-          })}
-        </section>
-      `,
-      container,
+    mounted = mountSolid(
+      () => (
+        <>
+          <style>{`${baseStyles}${layoutStyles}${detailsStyles}`}</style>
+          <section class="chat-details" style="position:relative;width:360px">
+            <ChatPullRequests
+              pullRequests={[
+                {
+                  number: 42,
+                  owner: "example",
+                  repo,
+                  branch: "fix/layout",
+                  title:
+                    "Keep long pull request titles readable in the narrow session Details panel",
+                  url: `https://github.com/example/${repo}/pull/42`,
+                  state: "open",
+                  checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
+                },
+              ]}
+              status="ready"
+              compact
+              onDismiss={() => {}}
+            />
+          </section>
+        </>
+      ),
+      { container },
     );
+    flush();
     const reference = container.querySelector<HTMLElement>(".chat-pr__number")!;
     expect(reference.textContent).toBe(`example/${repo}#42`);
     expect(reference.scrollWidth).toBeLessThanOrEqual(reference.clientWidth + 1);
     const title = container.querySelector<HTMLElement>(".chat-pr__repo")!;
     const link = container.querySelector<HTMLElement>(".chat-pr__link")!;
     const controls = container.querySelector<HTMLElement>(".chat-pr__meta")!;
+    await expect.element(page.elementLocator(link)).toBeVisible();
     expect(title.getBoundingClientRect().height).toBeGreaterThan(
       Number.parseFloat(getComputedStyle(title).lineHeight) * 2,
     );

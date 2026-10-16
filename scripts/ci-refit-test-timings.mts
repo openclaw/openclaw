@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";
@@ -134,7 +135,7 @@ async function main() {
           JSON.parse(
             await readGh([
               "api",
-              `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+              `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=50&page=${page}`,
             ]),
           ),
         );
@@ -236,11 +237,23 @@ async function main() {
       );
       logs.push(...attemptLogs);
     }
+    const changedUiFiles = logs.some((log) => log.kind === "uiE2e")
+      ? execFileSync("git", ["diff", "--name-only", "-z", run.head_sha, "--", "ui", "extensions"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+          .split("\0")
+          .filter((file) => /\.e2e\.test\.[cm]?[jt]sx?$/u.test(file))
+      : [];
+    if (changedUiFiles.length > 0) {
+      console.log(`UI file samples excluded after source changes: ${changedUiFiles.length}`);
+    }
     return {
       id: run.id,
       createdAt: run.created_at,
       logs,
       completeInventory,
+      changedUiFiles,
       ...(source === "pull-request" ? { pullRequestMergeRef: true } : {}),
     };
   }
