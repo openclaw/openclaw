@@ -1326,6 +1326,9 @@ openclaw-plugins-page
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   line-height: 1.5;
 }

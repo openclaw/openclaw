@@ -63,7 +63,6 @@ export function useSessionMenuEntries(
   host: HTMLElement,
   actions: SessionMenuActions,
   readState: () => MenuState,
-  revision: () => number,
   options: { openInExtra?: () => readonly MenuEntry[] } = {},
 ) {
   const owner = getOwner();
@@ -78,15 +77,9 @@ export function useSessionMenuEntries(
     (kind) => actions.actionDisabled(kind),
     (action) => actions.runAction(action),
   );
-  const details = useSessionMenuDetails(actions, readState, disabled, revision);
-  const multipleOwners = createMemo(() => {
-    revision();
-    return actions.ownerMenu.multipleOwners;
-  });
-  const involvementAvailable = createMemo(() => {
-    revision();
-    return actions.involvementAvailable;
-  });
+  const details = useSessionMenuDetails(actions, readState, disabled);
+  const multipleOwners = actions.ownerMenu.multipleOwners;
+  const involvementAvailable = createMemo(() => actions.involvementAvailable);
   let appearanceContent: JSX.Element;
   let snoozeEntries: ReturnType<typeof useSessionSnoozeEntries> | undefined;
   const icon = (name: IconName) => (
@@ -105,7 +98,7 @@ export function useSessionMenuEntries(
   const item = (entry: ItemOptions): MenuItem => ({
     id: entry.kind,
     label: entry.label,
-    class: `session-menu__item${entry.kind === "delete" ? " session-menu__item--destructive" : ""}`,
+    class: ["session-menu__item", { "session-menu__item--destructive": entry.kind === "delete" }],
     variant: entry.kind === "delete" ? "danger" : undefined,
     disabled: disabled(entry.kind),
     attributes: {
@@ -130,13 +123,11 @@ export function useSessionMenuEntries(
       id: state.compact ? `compact:open-${entry.view}` : `submenu:${entry.view}`,
       label: entry.label,
       labelClass: "session-menu__text",
-      class: [
-        "session-menu__item",
-        !state.compact && entry.view === "assign-owner" ? "people-menu__submenu" : "",
-        !state.compact && entry.view === "advanced" ? "session-menu__advanced" : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
+      class: {
+        "session-menu__item": true,
+        "people-menu__submenu": !state.compact && entry.view === "assign-owner",
+        "session-menu__advanced": !state.compact && entry.view === "advanced",
+      },
       disabled: entry.disabled,
       attributes: {
         title: entry.title,
@@ -154,7 +145,8 @@ export function useSessionMenuEntries(
           ) : undefined}
         </>
       ),
-      children: state.compact ? undefined : body(entry.view),
+      children: state.compact ? undefined : () => body(entry.view),
+      prewarm: entry.view === "assign-owner",
       closeOnSelect: false,
       onBeforeShow: entry.view === "icon" ? appearance.prepare : undefined,
     };
@@ -339,7 +331,7 @@ export function useSessionMenuEntries(
       case "open-in":
         return openOptions();
       case "icon":
-        appearanceContent ??= runWithOwner(owner, () => appearance.render(true));
+        appearanceContent ??= runWithOwner(owner, () => appearance.render());
         return [content("appearance", appearanceContent)];
       case "group":
         return groupOptions();
@@ -449,31 +441,24 @@ export function useSessionMenuEntries(
           ]
         : []),
       ...(state.involvingMeContext ? involvement() : []),
-      ...(!batch()
+      ...(!batch() && !actions.actionExtraDisabled("snooze")
         ? [
-            ...(!actions.actionExtraDisabled("snooze")
-              ? [
-                  isSessionSnoozed(
-                    { snoozedUntil: state.session.snoozedUntil ?? undefined },
-                    Date.now(),
-                  )
-                    ? item({
-                        kind: "wake",
-                        label: `${t("sessionsView.wakeSession")} · ${formatSessionSnoozeWakeTime(state.session.snoozedUntil!)}`,
-                        icon: "clock",
-                      })
-                    : submenu({
-                        view: "snooze",
-                        label: t("sessionsView.snooze"),
-                        icon: "clock",
-                        disabled: actions.actionDisabled("snooze"),
-                        title: state.actionDisabledReasons.snooze,
-                      }),
-                ]
-              : []),
-            archive(),
+            isSessionSnoozed({ snoozedUntil: state.session.snoozedUntil ?? undefined }, Date.now())
+              ? item({
+                  kind: "wake",
+                  label: `${t("sessionsView.wakeSession")} · ${formatSessionSnoozeWakeTime(state.session.snoozedUntil!)}`,
+                  icon: "clock",
+                })
+              : submenu({
+                  view: "snooze",
+                  label: t("sessionsView.snooze"),
+                  icon: "clock",
+                  disabled: actions.actionDisabled("snooze"),
+                  title: state.actionDisabledReasons.snooze,
+                }),
           ]
         : []),
+      ...(!batch() ? [archive()] : []),
     ];
   }
   const advanced = () => [

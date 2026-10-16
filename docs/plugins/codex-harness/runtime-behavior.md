@@ -32,6 +32,8 @@ Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+Strict [`agent exec`](/cli/agent#agent-exec) runs also use OpenClaw's tools so
+their process cleanup stays with the one-shot run owner.
 When native shell remains active and Gateway access is policy-eligible,
 OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
 names so native shell and the OpenClaw-managed environment path cannot be

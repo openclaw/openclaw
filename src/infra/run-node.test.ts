@@ -367,6 +367,10 @@ describe("run-node script", () => {
   it.runIf(process.platform !== "win32").for([false, true])(
     "force-cleans the active child process group after SIGTERM (rebuild: %s)",
     async (rebuild, { tmp }) => {
+      vi.stubEnv("CI", "true");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
       const bunPath = path.join(tmp, "fixture-bun");
       await fs.writeFile(bunPath, "", { mode: 0o755 });
@@ -385,6 +389,7 @@ describe("run-node script", () => {
 
       const exitCodePromise = runNodeCommand(tmp, {
         env: {
+          CI: "",
           OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0",
           OPENCLAW_VITEST_RUNTIME: "bun",
           OPENCLAW_BUN_PATH: bunPath,
@@ -583,7 +588,11 @@ describe("run-node script", () => {
         trackConfig: true,
       });
       const { deps } = await trackProjectWithGit(tmp);
-      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
       await fs.appendFile(resolvePath(tmp, input), "\n");
       writeRuntimePostBuildStamp({
         cwd: tmp,

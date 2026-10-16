@@ -29,7 +29,10 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
+import {
+  storeSidebarSessionOwnerFilter,
+  storeSidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
 
 async function mountSessionRoster(request: GatewayRequestHandler) {
@@ -43,6 +46,81 @@ async function mountSessionRoster(request: GatewayRequestHandler) {
 }
 
 describe("AppSidebar automatic list scope replacement", () => {
+  it("restores identical rows after a filter-menu close renders the pending list", async () => {
+    vi.useFakeTimers();
+    storeSidebarSessionStatusFilter("all");
+    const row: GatewaySessionRow = {
+      key: "agent:main:archived",
+      kind: "direct",
+      displayName: "Archived conversation",
+      archived: true,
+    };
+    const response = sessionsResult([row], 1);
+    const pending = deferred<ReturnType<typeof sessionsResult>>();
+    const { sidebar, context, provider, sessions } = await mountSessionRoster(
+      async (method, raw) => {
+        const params = asOptionalRecord(raw);
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method !== "sessions.list") {
+          return {};
+        }
+        return params?.archived === true
+          ? pending.promise
+          : params?.archived === "all"
+            ? response
+            : sessionsResult([], 0);
+      },
+    );
+    let unsubscribe: (() => void) | undefined;
+    try {
+      sidebar.connected = true;
+      await vi.advanceTimersByTimeAsync(50);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain(row.displayName);
+
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++frameId, callback);
+        return frameId;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+      // Menu dismissal renders the empty pending view before the shared data frame.
+      sidebar.sidebarMenus.closePositionedMenu("sessionSort");
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).not.toContain(row.displayName);
+
+      const published = deferred();
+      unsubscribe = sessions.subscribeList(
+        sidebar.sessionData.sessionListQuery("main"),
+        (snapshot) => {
+          if (!snapshot.loading && snapshot.result) {
+            published.resolve();
+          }
+        },
+      );
+      pending.resolve(response);
+      await published.promise;
+      const pendingFrames = [...frames.values()];
+      frames.clear();
+      for (const callback of pendingFrames) {
+        callback(performance.now());
+      }
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain(row.displayName);
+    } finally {
+      unsubscribe?.();
+      pending.resolve(response);
+      provider.remove();
+      context.connectionBootstrap.reset();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("discovers current child parents after background work was queued", async () => {
     const previousParent: GatewaySessionRow = {
       key: "agent:main:previous-parent",

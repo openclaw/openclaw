@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as databasePathIdentity from "../infra/sqlite-worker-identity.js";
 import { withOpenClawAgentDatabaseWrite } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
@@ -138,6 +139,7 @@ describe("agent database write admission", () => {
         database.db.exec("CREATE TABLE admission_proof (value TEXT NOT NULL) STRICT");
       }
       const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(aliased) : undefined;
+      const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
       const commit = (value: string) => (database: typeof original) => {
         database.db.prepare("INSERT INTO admission_proof VALUES (?)").run(value);
       };
@@ -147,9 +149,9 @@ describe("agent database write admission", () => {
           ? runOpenClawAgentWriteAdmission(aliased, () =>
               commit(value)(openOpenClawAgentDatabase(aliased)),
             )
-          : withOpenClawAgentDatabaseWrite(aliased, commit(value), borrowed?.db);
+          : withOpenClawAgentDatabaseWrite(aliased, commit(value), borrowedDb);
       if (!cold) {
-        await withOpenClawAgentDatabaseWrite(aliased, commit("before"), borrowed?.db);
+        await withOpenClawAgentDatabaseWrite(aliased, commit("before"), borrowedDb);
       }
       const reservation = reserveWorkerOperation();
       await reservation.entered;
@@ -188,7 +190,11 @@ describe("agent database write admission", () => {
       const reservation = reserveWorkerOperation();
       await reservation.entered;
       const mutate = vi.fn();
-      const write = withOpenClawAgentDatabaseWrite(options, mutate, borrowed.db);
+      const write = withOpenClawAgentDatabaseWrite(
+        options,
+        mutate,
+        requireNativeSqliteDatabase(borrowed.db),
+      );
       const rejected = expect(write).rejects.toThrow("Borrowed agent database closed or changed");
       closeOpenClawAgentDatabasesForTest();
       const replacement = replace ? openOpenClawAgentDatabase(options) : undefined;
@@ -208,6 +214,7 @@ describe("agent database write admission", () => {
       const secondDirectory = path.join(firstDirectory, "other-cwd");
       fs.mkdirSync(secondDirectory);
       const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(options) : undefined;
+      const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
       const reservation = reserveWorkerOperation();
       const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
       const mutate = vi.fn(
@@ -219,7 +226,7 @@ describe("agent database write admission", () => {
         write = withOpenClawAgentDatabaseWrite(
           { ...options, path: path.basename(options.path) },
           mutate,
-          borrowed?.db,
+          borrowedDb,
         );
         void write.catch(() => {});
         await setImmediate();

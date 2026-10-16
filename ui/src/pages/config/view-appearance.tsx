@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For } from "solid-js";
+import { createEffect, createMemo, For, onCleanup } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -102,21 +102,10 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
     </span>
   );
 }
-function focusCustomThemeImportInput() {
-  requestAnimationFrame(() => {
-    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
-    if (!input) {
-      return;
-    }
-    input.scrollIntoView({
-      block: "center",
-      behavior: resolveScrollBehavior(),
-    });
-    input.focus();
-    input.select();
-  });
-}
 export function AppearanceSection(props: ConfigProps) {
+  let customThemeImportInput: HTMLInputElement | undefined;
+  let focusFrame = 0;
+  onCleanup(() => cancelAnimationFrame(focusFrame));
   const showCustomThemeImport = createMemo(
     () => props.hasCustomTheme || props.customThemeImportExpanded === true,
   );
@@ -129,7 +118,16 @@ export function AppearanceSection(props: ConfigProps) {
     ({ shown, token, viewState }) => {
       if (shown && token != null && token !== viewState.lastCustomThemeImportFocusToken) {
         viewState.lastCustomThemeImportFocusToken = token;
-        focusCustomThemeImportInput();
+        const input = customThemeImportInput;
+        cancelAnimationFrame(focusFrame);
+        focusFrame = requestAnimationFrame(() => {
+          if (!input?.isConnected) {
+            return;
+          }
+          input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
+          input.focus();
+          input.select();
+        });
       }
     },
   );
@@ -363,6 +361,7 @@ export function AppearanceSection(props: ConfigProps) {
                     {t("configView.appearance.themeLink")}
                   </span>
                   <input
+                    ref={(input) => (customThemeImportInput = input)}
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"

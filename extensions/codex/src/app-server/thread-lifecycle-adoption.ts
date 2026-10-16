@@ -7,7 +7,6 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -157,7 +156,7 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
+  const clientId = params.client.getInstanceId();
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,

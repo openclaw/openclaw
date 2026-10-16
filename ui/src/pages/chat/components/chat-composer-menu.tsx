@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createRenderEffect, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import { revealInScrollRegion } from "../../../components/scroll-state.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 
@@ -18,18 +19,18 @@ export function composerScrollStateRef(revision: () => unknown, trackScroll = tr
     );
   };
   const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
-  createRenderEffect(revision, () => queueMicrotask(sync));
+  let stopScroll: (() => void) | undefined;
+  // Scroll affordances measure the committed menu, outside the render phase.
+  createEffect(revision, () => queueMicrotask(sync));
   onCleanup(() => {
     observer?.disconnect();
-    element?.removeEventListener("scroll", sync);
+    stopScroll?.();
     element = undefined;
   });
   return (node: HTMLElement) => {
     element = node;
     observer?.observe(node);
-    if (trackScroll) {
-      node.addEventListener("scroll", sync);
-    }
+    stopScroll = trackScroll ? listen(node, "scroll", sync) : undefined;
     queueMicrotask(sync);
   };
 }
@@ -44,37 +45,30 @@ export function ComposerMenu(options: {
   revision: unknown;
 }) {
   let region: HTMLDivElement | undefined;
-  let disposed = false;
   const scrollRef = composerScrollStateRef(() => options.revision, options.trackScroll !== false);
-  onCleanup(() => {
-    disposed = true;
-  });
-  const attach = (element: HTMLDivElement) => {
-    region = element;
-    scrollRef(element);
-  };
-  createRenderEffect(
+  createEffect(
     () => options.activeId,
     (activeId) => {
       if (!activeId) {
-        return;
+        return undefined;
       }
-      requestAnimationFrame(() => {
+      const frame = requestAnimationFrame(() => {
         const active = document.getElementById(activeId);
-        if (!disposed && active && region) {
+        if (active && region) {
           revealInScrollRegion(region, active);
         }
       });
+      return () => cancelAnimationFrame(frame);
     },
   );
   return (
     <div
       id={options.id}
-      class={`slash-menu ${options.class ?? ""}`}
+      class={["slash-menu", options.class]}
       role="listbox"
       aria-label={options.label}
     >
-      <div class="slash-menu__scroll" ref={attach}>
+      <div class="slash-menu__scroll" ref={[(node) => (region = node), scrollRef]}>
         {options.children}
       </div>
     </div>
@@ -95,13 +89,13 @@ export function renderComposerMenuOption(options: {
   return (
     <div
       id={options.id}
-      class={`slash-menu-item ${options.active ? "slash-menu-item--active" : ""}`}
+      class={["slash-menu-item", { "slash-menu-item--active": options.active }]}
       role="option"
       aria-selected={options.active ? "true" : "false"}
       onMouseDown={
         options.preserveFocus === false ? undefined : (event: MouseEvent) => event.preventDefault()
       }
-      onClick={options.select}
+      onClick={() => options.select()}
       onPointerMove={(event: PointerEvent) => {
         if (!options.active && event.pointerType !== "touch") {
           options.hover();

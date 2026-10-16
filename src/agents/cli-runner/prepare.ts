@@ -18,7 +18,6 @@ import {
   activateMcpLoopbackClientGrantCapture,
   bindMcpLoopbackClientGrantAdmission,
   deactivateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
@@ -103,6 +102,7 @@ import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-be
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
@@ -136,6 +136,7 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
+import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
@@ -420,9 +421,12 @@ async function prepareCliRunContextWithinReadFence(
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
-    throw new Error(
+    const refusal = new Error(
       "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
     );
+    // Another model would only bypass the operator's account choice.
+    recordModelFallbackStop(refusal);
+    throw refusal;
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -939,9 +943,9 @@ async function prepareCliRunContextWithinReadFence(
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
-    const mcpClientGrant =
+    const mcpClient =
       mcpLoopbackRuntime && mcpGrant
-        ? mintMcpLoopbackClientGrant({
+        ? await mintCliMcpClientGrant({ ...params, config: runConfig }, sessionAgentId, {
             ...mcpGrant,
             sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
@@ -951,6 +955,10 @@ async function prepareCliRunContextWithinReadFence(
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
+    const mcpClientGrant = mcpClient?.grant;
+    // The grant's cleanup also releases the memory audience leased for this turn.
+    const cleanupMcpClientGrant = mcpClient?.cleanup;
+    cleanupPreparedResources = cleanupMcpClientGrant;
     const bindMcpClientGrantAdmission = (
       admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
     ) => {
@@ -1047,17 +1055,6 @@ async function prepareCliRunContextWithinReadFence(
             };
           })()
         : undefined;
-    let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
-          }
-          mcpClientGrantRevoked = true;
-          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
-        }
-      : undefined;
-    cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
       ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined;
@@ -1409,6 +1406,7 @@ async function prepareCliRunContextWithinReadFence(
           ? undefined
           : (params.messageChannel ?? params.messageProvider),
         accountId: params.agentAccountId,
+        requester: params,
       });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation

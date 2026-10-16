@@ -2328,7 +2328,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
-    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const { closeAndWait, events, retireSpy } = installCleanupTrackingClient();
     const abortController = new AbortController();
     const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
     const params = createParams(sessionFile, workspaceDir);
@@ -2342,9 +2342,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledTimes(2);
     expect(events).toContain("request:thread/start");
     expect(events).not.toContain("request:turn/start");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
@@ -2387,10 +2386,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(bindingCleanupFailures).toBe(1);
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(events).toContain("request:turn/start");
-    expect(events).toContain("closeAndWait");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(events).not.toContain("closeAndWait");
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
   });
@@ -2496,12 +2494,11 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
       expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
+      expect(inputText).not.toContain("[content omitted]");
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
-        expect(inputText).not.toContain("[content omitted]");
       } else {
         expect(inputText).not.toContain("COBALT-ORCHID-7429");
-        expect(inputText).toContain("[content omitted]");
       }
     },
   );
@@ -4181,6 +4178,33 @@ describe("runCodexAppServerAttempt", () => {
       }
     },
   );
+
+  it("preserves on-request approval policy for native plugin threads and turns", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(
+      createGoogleCalendarRequest((method) =>
+        codexAppInventoryResponse(method, [googleCalendarAppInfo(true)]),
+      ),
+    );
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        ...GOOGLE_CALENDAR_PLUGIN_CONFIG,
+        appServer: { approvalPolicy: "on-request" },
+      },
+    });
+    await completeStartedRun(run, waitForMethod, completeTurn);
+
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({
+      approvalPolicy: "on-request",
+      config: { apps: { "google-calendar-app": { enabled: true } } },
+    });
+    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: "on-request",
+    });
+  });
 
   it.each([
     {

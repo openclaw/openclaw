@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import bunPin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import {
   buildTestLiveEnv,
   buildTestLiveVitestArgs,
@@ -319,6 +320,10 @@ function writeFakeBun(filePath: string): void {
     filePath,
     [
       "#!/usr/bin/env node",
+      'if (process.argv[2] === "--revision") {',
+      `  process.stdout.write(${JSON.stringify(`${bunPin.revision}\n`)});`,
+      "  process.exit(0);",
+      "}",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
       'fs.writeFileSync(require("node:path").join(__dirname, "invocation.json"), JSON.stringify({',

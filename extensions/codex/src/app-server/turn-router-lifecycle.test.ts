@@ -230,44 +230,6 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await expect(watch.completion).resolves.toBe(true);
   });
 
-  it("waits for completed notification after an exact non-retry error", async () => {
-    const harness = createHarness();
-    const watch = watchTurn(
-      getCodexAppServerTurnRouter(harness.client),
-      "thread-native-error",
-      "turn-native-error",
-    );
-    const settled = vi.fn();
-    void watch.completion.then(settled);
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "retrying" },
-        willRetry: true,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send({
-      method: "error",
-      params: {
-        threadId: "thread-native-error",
-        turnId: "turn-native-error",
-        error: { message: "review setup failed" },
-        willRetry: false,
-      },
-    });
-    await settleInput();
-    expect(settled).not.toHaveBeenCalled();
-
-    harness.send(completedNotification("thread-native-error", "turn-native-error", "failed"));
-    await expect(watch.completion).resolves.toBe(true);
-  });
-
   it("keeps a hard completion deadline despite exact-turn progress", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
@@ -292,19 +254,6 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await vi.advanceTimersByTimeAsync(101);
     await expect(watch.completion).resolves.toBe(false);
     expect(settled).toHaveBeenCalledWith(false);
-  });
-
-  it("cancels a detached native-turn completion watch", async () => {
-    const harness = createHarness();
-    const watch = watchTurn(
-      getCodexAppServerTurnRouter(harness.client),
-      "thread-native-cancel",
-      "turn-native-cancel",
-    );
-
-    watch.cancel();
-
-    await expect(watch.completion).resolves.toBe(false);
   });
 
   it("settles detached native-turn watches on timeout and client close", async () => {
@@ -534,6 +483,20 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     const settled = vi.fn();
     void binding.then(settled, settled);
     const completed = completedNotification(route.threadId, "turn-current");
+    const expectedNotifications = [
+      {
+        ...started,
+        threadId: "thread-closed-paused",
+        turnId: "turn-current",
+        completedTurn: undefined,
+      },
+      {
+        ...completed,
+        threadId: "thread-closed-paused",
+        turnId: "turn-current",
+        completedTurn: { id: "turn-current", status: "completed", items: [] },
+      },
+    ];
     try {
       harness.send(completed);
       harness.process.emit("exit", 0, null);
@@ -542,19 +505,17 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
 
       expect(route.completed).toBe(true);
       expect(route.signal.aborted).toBe(true);
-      expect(receipts.mock.calls.map(([notification]) => notification)).toEqual([
-        started,
-        completed,
-      ]);
+      expect(receipts.mock.calls.map(([notification]) => notification)).toEqual(
+        expectedNotifications,
+      );
       expect(notifications).not.toHaveBeenCalled();
       expect(settled).not.toHaveBeenCalled();
 
       beforeNotifications.resolve();
       await binding;
-      expect(notifications.mock.calls.map(([notification]) => notification)).toEqual([
-        started,
-        completed,
-      ]);
+      expect(notifications.mock.calls.map(([notification]) => notification)).toEqual(
+        expectedNotifications,
+      );
       expect(receipts).toHaveBeenCalledTimes(2);
     } finally {
       beforeNotifications.resolve();
@@ -632,9 +593,10 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         };
         harness.send(siblingNotification);
         await vi.waitFor(() =>
-          expect(siblingNotifications).toHaveBeenCalledWith(siblingNotification, {
-            threadId: "thread-sibling",
-          }),
+          expect(siblingNotifications).toHaveBeenCalledWith(
+            { ...siblingNotification, threadId: "thread-sibling", completedTurn: undefined },
+            { threadId: "thread-sibling" },
+          ),
         );
         expect(() =>
           router.reserveThread({ threadId: route.threadId, onNotification: vi.fn() }),

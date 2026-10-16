@@ -3,7 +3,7 @@ export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
 // The CLI loads this package-root supervisor by URL instead of bundling it.
-export const vitestWorkerRuntimeAssets = ["node-host-launcher.mjs"];
+export const vitestWorkerRuntimeAssets = ["cli-invocation.mjs", "node-host-launcher.mjs"];
 
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
@@ -11,8 +11,6 @@ export const runtimeProcessDeclarationEntries = {
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/document-extract/document-extractor-worker-entrypoint":
     "extensions/document-extract/document-extractor-worker-entrypoint.ts",
-  "extensions/memory-core/manager-search-knn-entrypoint":
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
   "infra/postgres-sync/locks-runtime.test-support":
@@ -161,6 +159,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "infra/database-engine/update-preflight.runtime.test-support":
+    "src/infra/database-engine/update-preflight.runtime.test-support.ts",
   "plugins/runtime-retention-entrypoint.test-support":
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":

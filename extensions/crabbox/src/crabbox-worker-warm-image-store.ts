@@ -119,7 +119,7 @@ export async function assertCrabboxWarmImageMigrationReady(state: CrabboxState):
   }
 }
 
-function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
+export function admitCrabboxWarmImageProfile(record: WarmProfileRecord | undefined) {
   if (record && record.version !== 3) {
     throw new Error(
       "Crabbox warm-image state requires migration; run openclaw doctor --fix before provisioning workers.",
@@ -312,16 +312,16 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
     deleteIf(key: string, predicate: (current: WarmProfileRecord) => boolean) {
       return compareProfile(store, key, (current) => ({
         operation: "delete",
-        action: current && predicate(requireCanonicalProfile(current)!) ? "delete" : "keep",
+        action: current && predicate(admitCrabboxWarmImageProfile(current)!) ? "delete" : "keep",
       }));
     },
     async lookup(key: string) {
-      return requireCanonicalProfile(await store.lookup(key));
+      return admitCrabboxWarmImageProfile(await store.lookup(key));
     },
     async entries() {
       const entries = await store.entries();
       for (const entry of entries) {
-        entry.value = requireCanonicalProfile(entry.value)!;
+        entry.value = admitCrabboxWarmImageProfile(entry.value)!;
       }
       return entries;
     },
@@ -330,7 +330,7 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
       return compareProfile(store, key, (current) => {
-        const value = update(requireCanonicalProfile(current));
+        const value = update(admitCrabboxWarmImageProfile(current));
         return value === undefined
           ? { operation: "update", action: "keep" }
           : { operation: "update", action: "set", value };
@@ -608,8 +608,7 @@ export async function listCrabboxWarmImages(state: CrabboxState, env?: NodeJS.Pr
   );
 }
 
-export function projectCrabboxWarmImage(key: string, record: WarmProfileRecord) {
-  const value = requireCanonicalProfile(record)!;
+export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
   return {
     profileKey: key,
     profileId: value.profileId,

@@ -6,6 +6,7 @@ import {
 import {
   appendTextDeltaToAssistantMessage,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
@@ -13,6 +14,8 @@ import type {
   Context,
   ToolResultMessage,
 } from "@openclaw/llm-core";
+import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
 import {
@@ -172,10 +175,13 @@ export async function streamAgentResponse(
   const executionSignal = signal
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
+  const modelAbort = new AbortController();
+  const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
+      message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
     ) {
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
@@ -264,7 +270,7 @@ export async function streamAgentResponse(
     const stream = streamFunction(config.model, llmContext, {
       ...config,
       apiKey: resolvedApiKey,
-      signal: executionSignal,
+      signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
       asyncToolExecution: true,
     });
@@ -273,6 +279,9 @@ export async function streamAgentResponse(
       stream,
       async () => {
         const response = await stream;
+        const repetitionGuard = config.repetitionGuard?.(config.model)
+          ? new AssistantRepetitionGuard()
+          : undefined;
         let partialMessage: AssistantMessage | null = null;
         let partialIndex: number | undefined;
         let committedContentCount = 0;
@@ -324,6 +333,15 @@ export async function streamAgentResponse(
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;
+                }
+                const stopped = repetitionGuard?.check(
+                  message,
+                  committedContentCount,
+                  event.type === "toolcall_end" ? undefined : event.contentIndex,
+                );
+                if (stopped) {
+                  modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+                  return await finalizeAssistantMessage(stopped);
                 }
                 const fragment = remainingFragment(message);
                 if (partialIndex === undefined) {
@@ -392,9 +410,22 @@ export async function streamAgentResponse(
         return await finalizeAssistantMessage();
 
         async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-          // Output-limit recovery drains admitted tools; other failures fence queued starts.
-          abortFailedResponse(terminal);
-          const result = await response.result();
+          const stoppedTerminal =
+            terminal?.errorCode === REPETITIVE_OUTPUT_ERROR_CODE
+              ? terminal
+              : terminal && repetitionGuard?.check(terminal, committedContentCount);
+          if (stoppedTerminal) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          // Classify first: repetition drains admitted tools even in a provider error snapshot.
+          abortFailedResponse(stoppedTerminal ?? terminal);
+          const providerResult = await response.result();
+          const stopped =
+            stoppedTerminal ?? repetitionGuard?.check(providerResult, committedContentCount);
+          if (stopped) {
+            modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));
+          }
+          const result = stopped ? { ...stopped, usage: providerResult.usage } : providerResult;
           abortFailedResponse(result);
           const outputLimit = isResponsesOutputLimitToolCallError(result);
           if (outputLimit) {

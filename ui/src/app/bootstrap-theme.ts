@@ -68,7 +68,7 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedMode;
   const branding = themeBranding(settings, catalogTheme);
-  syncThemeBackgroundArtwork(root, branding, resolvedMode);
+  syncThemeBackgroundArtwork(root, branding, resolvedMode, settings.background?.visibility);
   root.dataset.themeMascot = branding.mascot;
   if (branding.avatarHat) {
     root.dataset.themeAvatarHat = branding.avatarHat;
@@ -78,8 +78,6 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
-  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
-  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   const typefaces = resolveTypefaces(effectiveTheme, settings.fontUi, settings.fontChat);

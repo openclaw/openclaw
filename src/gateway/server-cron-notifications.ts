@@ -404,32 +404,27 @@ export async function sendGatewayCronWebhook(params: {
   }
 }
 
-/** Detached sends outlive cron ticks; own roots block mid-delivery suspension snapshots. */
-function dispatchDetachedCronNotification(params: {
-  jobId: string;
-  logger: CronLogger;
-  deliver: () => Promise<void>;
-}): void {
-  void runWithGatewayIndependentRootWorkContinuation(
-    params.deliver,
-    "cron:notification-delivery",
-  ).catch((err: unknown) => {
-    params.logger.warn(
-      { jobId: params.jobId, err: formatErrorMessage(err) },
-      "cron: detached notification delivery failed",
-    );
-  });
-}
-
 /** Transports a scheduler-authorized cron failure alert. */
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
+  let enteredAdmission = false;
   await runWithGatewayIndependentRootWorkContinuation(async () => {
+    enteredAdmission = true;
     const settled = await sendGatewayCronFailureAlertUnderAdmission(params);
     await params.onDeliverySettled(settled.outcome);
     if (settled.kind === "failed") {
       throw settled.error;
     }
-  }, "cron:failure-alert");
+  }, "cron:failure-alert").catch(async (error: unknown) => {
+    // Refused admission proves no send ran; admitted transports own their outcomes.
+    if (!enteredAdmission) {
+      await params.onDeliverySettled({
+        delivered: false,
+        status: "not-delivered",
+        error: formatErrorMessage(error),
+      });
+    }
+    throw error;
+  });
 }
 
 type FailureAlertTransportResult =
@@ -581,14 +576,12 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     );
   }
 
-  // Script notify is carried as the completion summary, so its absence uses
-  // the same silent-summary suppression path as NO_REPLY output.
+  // Script notify is carried as the prepared completion summary.
   if (completionWebhookUrl && (completionSummary || params.evt.completionStatus === "failed")) {
     const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
-    dispatchDetachedCronNotification({
-      jobId: params.evt.jobId,
-      logger: params.logger,
-      deliver: () =>
+    // Detached sends own roots so suspension cannot snapshot mid-delivery.
+    void runWithGatewayIndependentRootWorkContinuation(
+      () =>
         postCronWebhook({
           webhookUrl: completionWebhookUrl,
           webhookToken,
@@ -597,6 +590,12 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           jobId: params.evt.jobId,
           logger: params.logger,
         }),
+      "cron:notification-delivery",
+    ).catch((err: unknown) => {
+      params.logger.warn(
+        { jobId: params.evt.jobId, err: formatErrorMessage(err) },
+        "cron: detached notification delivery failed",
+      );
     });
   }
 }

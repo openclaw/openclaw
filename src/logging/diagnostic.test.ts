@@ -292,7 +292,10 @@ describe("stuck session diagnostics threshold", () => {
     expectRecoveryCall(recoverStuckSession, { ...session, sessionFile, queueDepth: 0 });
   });
 
-  it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
+  it.each([
+    { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
+    { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
+  ])("preserves the remaining abort budget after $name", ({ progressAt, tickAt, warns }) => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -301,46 +304,22 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(20_000);
+    vi.advanceTimersByTime(progressAt);
     markDiagnosticSessionProgress(session);
     markDiagnosticRunProgress({
       ...session,
       reason: "embedded_run:progress",
     });
-    vi.advanceTimersByTime(10_000);
+    vi.advanceTimersByTime(30_000 - progressAt);
 
-    vi.setSystemTime(35_000);
+    vi.setSystemTime(tickAt);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(30_000);
-
-    expectRecoveryCall(recoverStuckSession, { ...session, queueDepth: 0, allowActiveAbort: true });
-  });
-
-  it("does not let ordinary heartbeat jitter consume the remaining abort budget", () => {
-    const recoverStuckSession = vi.fn();
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-
-    vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-    logSessionStateChange({ ...session, state: "processing" });
-    markDiagnosticEmbeddedRunStarted(session);
-
-    vi.advanceTimersByTime(15_500);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({
-      ...session,
-      reason: "embedded_run:progress",
-    });
-    vi.advanceTimersByTime(14_500);
-
-    vi.setSystemTime(30_999);
-    vi.advanceTimersByTime(30_000);
-
-    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    if (warns) {
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    } else {
+      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    }
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);

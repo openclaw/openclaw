@@ -57,7 +57,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const account = resolveZalouserAccountSync({ cfg, accountId });
           const friends = await listZaloFriendsMatching(account.profile, query);
           const rows = friends.map(mapZalouserDirectoryUser);
-          return typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
+          return limit != null && limit > 0 ? rows.slice(0, limit) : rows;
         },
         listGroups: async ({ cfg, accountId, query, limit }) => {
           const { listZaloGroupsMatching } = await loadZalouserChannelRuntime();
@@ -66,10 +66,10 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const rows = groups.map((group) => ({
             kind: "group" as const,
             id: `group:${group.groupId}`,
-            name: group.name ?? undefined,
+            name: group.name,
             raw: group,
           }));
-          return typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
+          return limit != null && limit > 0 ? rows.slice(0, limit) : rows;
         },
         listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
           const { listZaloGroupMembers } = await loadZalouserChannelRuntime();
@@ -141,6 +141,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             profile,
             force: params.force,
             timeoutMs: params.timeoutMs,
+            assertCredentialPersistenceCurrent: params.assertCredentialPersistenceCurrent,
           });
         },
         loginWithQrWait: async (params) => {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
@@ -150,6 +151,23 @@ function createConsultClient() {
   return client;
 }
 
+function createAudioAppendClient(client = createClient()) {
+  const sent: Array<{ id: string }> = [];
+  const pending = new GatewayPendingRequests({ createRequestId: () => "audio", nowMs: Date.now });
+  const request = vi.mocked(client["request"]).getMockImplementation()!;
+  vi.mocked(client["request"]).mockImplementation((method, params, options) =>
+    method === "talk.session.appendAudio"
+      ? pending.request({ send: (frame) => sent.push(JSON.parse(frame)) }, method, params, options)
+      : request(method, params, options),
+  );
+  return {
+    client,
+    respond: (index: number) => {
+      pending.handleResponse({ type: "res", id: sent[index]!.id, ok: true, payload: {} });
+    },
+  };
+}
+
 async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
   return new GatewayRelayRealtimeTalkTransport(createSession(), {
     input: await prepareRealtimeTalkTestInput(),
@@ -256,31 +274,42 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     ]);
   });
 
-  it("detaches on append timeout before status cleanup", async () => {
+  it("detaches with a clear error after 30 seconds without an audio acknowledgment", async () => {
+    vi.useFakeTimers();
     const onStatus = vi.fn();
-    const append = createDeferred();
-    const failed = createDeferred();
-    const client = createConsultClient();
-    const request = vi.mocked(client["request"]).getMockImplementation()!;
-    vi.mocked(client["request"]).mockImplementation((method, params, options) =>
-      method === "talk.session.appendAudio" ? append.promise : request(method, params, options),
-    );
+    const { client } = createAudioAppendClient(createConsultClient());
     const transport = await createTransport({ client, callbacks: { onStatus } });
     await startTransport(transport);
-    await emitConsultAndWait(client);
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "toolCall",
+      callId: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "status?" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1);
+    onStatus.mockClear();
     onStatus.mockImplementation(() => {
       void transport.stop();
-      failed.resolve();
     });
     pumpMicrophone(new Float32Array(4096));
-    append.reject(new Error("Request timed out: talk.session.appendAudio"));
-    await failed.promise;
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    pumpMicrophone(new Float32Array(4096));
     await transport.stop();
     expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
-    expect(onStatus).toHaveBeenCalledWith("error", "Request timed out: talk.session.appendAudio");
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith(
+      "error",
+      "Talk ended because the Gateway has not acknowledged microphone audio for 30 seconds. Check the connection and start Talk again.",
+    );
+    expect(requestCallsFor(client, "talk.session.appendAudio")).toHaveLength(1);
     expect(requestCallsFor(client, "talk.session.close")).toEqual([
       ["talk.session.close", { sessionId: "relay-1", disposition: "detach" }, { timeoutMs: 8_000 }],
     ]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("detaches when audio playback throws", async () => {
@@ -778,24 +807,19 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
-  it("reports dropped microphone frames and recovery without ending the call", async () => {
+  it("recovers from a 10-second append stall with bounded audio and repeat guidance", async () => {
+    vi.useFakeTimers();
+    const onStatus = vi.fn();
     const onInputNotice = vi.fn();
-    const client = createClient();
-    const resolvers: Array<() => void> = [];
-    vi.mocked(client["request"]).mockImplementation((method) =>
-      method === "talk.session.appendAudio"
-        ? new Promise<unknown>((resolve) => {
-            resolvers.push(() => resolve({}));
-          })
-        : Promise.resolve(defaultRelayResponse(method)),
-    );
-    const transport = await createTransport({ callbacks: { onInputNotice }, client });
+    const { client, respond } = createAudioAppendClient();
+    const transport = await createTransport({ callbacks: { onStatus, onInputNotice }, client });
     await startTransport(transport);
     // 4096 samples at 24 kHz is ~171 ms; a 3 s budget admits 17 in-flight frames.
     const samples = new Float32Array(4096);
     for (let index = 0; index < 40; index += 1) {
       pumpMicrophone(samples);
     }
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(requestCallsFor(client, "talk.session.appendAudio")).toHaveLength(17);
     expect(onInputNotice).toHaveBeenCalledWith(
@@ -807,17 +831,41 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       ),
     ).toHaveLength(1);
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
+    expect(onStatus).not.toHaveBeenCalled();
 
-    for (const resolve of resolvers.splice(0)) {
-      resolve();
+    for (let index = 0; index < 17; index += 1) {
+      respond(index);
     }
-    for (let tick = 0; tick < 4; tick += 1) {
-      await Promise.resolve();
-    }
+    await vi.advanceTimersByTimeAsync(0);
     expect(onInputNotice).toHaveBeenCalledWith("Microphone input recovered; repeat the last part");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onStatus).not.toHaveBeenCalled();
     pumpMicrophone(samples);
     expect(requestCallsFor(client, "talk.session.appendAudio")).toHaveLength(18);
-    void transport.stop();
+    await transport.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("renews liveness on audio acknowledgments while an older append is still pending", async () => {
+    vi.useFakeTimers();
+    const onStatus = vi.fn();
+    const { client, respond } = createAudioAppendClient();
+    const transport = await createTransport({ callbacks: { onStatus }, client });
+    await startTransport(transport);
+    pumpMicrophone(new Float32Array(4096));
+    pumpMicrophone(new Float32Array(4096));
+    await vi.advanceTimersByTimeAsync(20_000);
+    respond(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
+    respond(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onStatus).not.toHaveBeenCalled();
+    await transport.stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("preserves accepted microphone frame order", async () => {

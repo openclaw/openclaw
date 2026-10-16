@@ -1,14 +1,12 @@
-import { createEffect, createMemo, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveUiSelectedGlobalAgentId } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
-import {
-  prepareWelcomeRecentSessions,
-  renderWelcomeState,
-} from "../chat/components/chat-welcome.ts";
+import { prepareWelcomeRecentSessions } from "../chat/components/chat-welcome.ts";
+import { ChatWelcome, type ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
 
 type WelcomeSessions = {
   readonly state: { readonly result: SessionsListResult | null };
@@ -17,15 +15,17 @@ type WelcomeSessions = {
 
 export function DraftWelcome(props: {
   sessions: WelcomeSessions | undefined;
-  options: Parameters<typeof renderWelcomeState>[0];
+  options: Omit<ChatWelcomeProps, "composer">;
+  composer?: JSX.Element;
 }) {
   const source = createMemo(() => props.sessions);
-  const sessions = projectSource(untrack(source), {
-    read: (owner) => owner?.state.result,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  createEffect(source, (next) => sessions.replaceSource(next));
+  const sessions = createMemo(() =>
+    projectSource(source(), {
+      read: (owner) => owner?.state.result,
+      subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
+      equality: "revision",
+    }),
+  );
   // Legacy render props can publish in-place edits; only selected fields gate work.
   const options = createMemo(() => props.options, { equals: false });
   const scope = createMemo(
@@ -49,10 +49,10 @@ export function DraftWelcome(props: {
     i18nRevision();
     const selected = scope();
     return prepareWelcomeRecentSessions(
-      sessions.read(),
+      sessions().read(),
       selected.sessionKey,
       selected.defaultAgentId,
     );
   }, presented);
-  return <LitContent value={renderWelcomeState(options(), recents())} />;
+  return <ChatWelcome {...options()} composer={props.composer} preparedRecents={recents()} />;
 }

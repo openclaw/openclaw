@@ -15,7 +15,7 @@ const INTERVAL_MICROS = 10_000;
 const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
 
-function sanitizeProfile(
+export function sanitizeDiagnosticCpuProfile(
   profile: Profiler.Profile,
   packageRoot: string | null,
   { startBlockedMs }: { startBlockedMs: number },
@@ -79,6 +79,6 @@ export function captureDiagnosticCpuProfile(options: {
             disable: (session) => session.post("Profiler.disable"),
           })
         : createNativeCpuProfileCapture(INTERVAL_MICROS),
-    sanitize: sanitizeProfile,
+    sanitize: sanitizeDiagnosticCpuProfile,
   });
 }

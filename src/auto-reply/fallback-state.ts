@@ -59,7 +59,7 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   const code = attempt.code?.trim();
   return (
     code ||
-    (typeof attempt.status === "number"
+    (attempt.status !== undefined
       ? `HTTP ${attempt.status}`
       : truncateFallbackReasonPart(attempt.error || "error"))
   );

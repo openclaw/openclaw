@@ -243,16 +243,14 @@ describe("agent event handler", () => {
 
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
 
-  it.each(["silent", "heartbeat"])("does not revive widgets from a %s turn", async (mode) => {
+  it("does not revive widgets from a hidden heartbeat turn", async () => {
     const h = createHarness();
     h.registerNamed("widgets");
-    if (mode === "heartbeat") {
-      registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    }
+    registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
     await h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
-      ["assistant", { text: mode === "silent" ? "NO_REPLY" : "" }],
-      ["lifecycle", { phase: "end" }],
+      ["assistant", { text: "" }],
+      ["lifecycle", { phase: "end", terminalReply: { disposition: "empty" } }],
     ]);
     expect(h.chat().at(-1)?.[1].message).toBeUndefined();
     await h.handler.dispose();
@@ -1027,30 +1025,23 @@ describe("agent event handler", () => {
   });
 
   it.each([
-    { data: { text: "MEDIA:./image.png", delta: "", mediaUrls: ["./image.png"] }, held: false },
-    { data: { text: "The selected size is\nM" }, held: false },
-    { data: { text: "No" }, held: true },
-  ])("preserves ordinary control-like text at completion: $data.text", async ({ data, held }) => {
+    { text: "MEDIA:./image.png", delta: "", mediaUrls: ["./image.png"] },
+    { text: "The selected size is\nM" },
+    { text: "No" },
+  ])("preserves ordinary control-like text at completion: $text", async (data) => {
     const h = createHarness({ now: 1_000 });
     h.registerNamed("ordinary-media");
     await h.emit("run-ordinary-media", "assistant", data);
-    if (held) {
-      expect(h.chat()).toHaveLength(0);
-    }
     await h.end("run-ordinary-media", 2);
     expect(h.chat().at(-1)?.[1]).toMatchObject({
       state: "final",
       message: { content: [{ text: data.text }] },
     });
-    if (held) {
-      expect(h.chat()).toHaveLength(1);
-      expect(h.nodeChat()).toHaveLength(1);
-    }
     h.nowSpy?.mockRestore();
   });
 
-  it("retracts a visible item replaced by NO_REPLY with a 0 ms flush", async () => {
-    const { token, flushMs } = { token: "NO_REPLY", flushMs: 0 };
+  it("retracts a visible item with a producer-prepared empty replacement", async () => {
+    const flushMs = 0;
 
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -1066,7 +1057,7 @@ describe("agent event handler", () => {
       "assistant",
       {
         itemId: "answer-1",
-        text: token,
+        text: "",
       },
       { seq: 2 },
     );
@@ -1085,7 +1076,21 @@ describe("agent event handler", () => {
     h.chatRunState.clear();
   });
 
-  it("strips a glued leading NO_REPLY token from cumulative chat snapshots", async () => {
+  it("forwards a prepared short reply immediately", async () => {
+    const h = createHarness({ now: 2_200 });
+    h.registerNamed("4");
+    await h.emit("run-4", "assistant", { text: "No" });
+    await h.end("run-4");
+    expect(h.chat()).toHaveLength(2);
+    expect(h.chat().at(-1)?.[1]).toMatchObject({
+      state: "final",
+      message: { content: [{ text: "No" }] },
+    });
+    expect(h.nodeChat()).toHaveLength(2);
+    h.nowSpy?.mockRestore();
+  });
+
+  it("preserves a glued leading NO_REPLY literal in cumulative chat snapshots", async () => {
     const h = createHarness({
       now: 2_250,
     });
@@ -1103,14 +1108,10 @@ describe("agent event handler", () => {
       state?: string;
     };
     expect(finalPayload.state).toBe("final");
-    expect(finalPayload.message?.content?.[0]?.text).toBe("The user is saying hello");
-    expect(
-      chatCalls.every(([, payload]) => {
-        const text = (payload as { message?: { content?: Array<{ text?: string }> } }).message
-          ?.content?.[0]?.text;
-        return !text || !text.includes("NO_REPLY");
-      }),
-    ).toBe(true);
+    expect(finalPayload.message?.content?.[0]?.text).toBe("NO_REPLYThe user is saying hello");
+    expect(chatCalls[0]?.[1]).toMatchObject({
+      message: { content: [{ text: "NO_REPLYThe user" }] },
+    });
     expect(h.nodeChat()).toHaveLength(chatCalls.length);
     h.nowSpy?.mockRestore();
   });

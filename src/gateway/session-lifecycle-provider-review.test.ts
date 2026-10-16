@@ -116,8 +116,8 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const patchEntry = sessionEntries.patchSessionEntryTarget;
-      vi.spyOn(sessionEntries, "patchSessionEntryTarget").mockImplementationOnce(
+      const patchEntry = sessionEntries.applySessionEntryTargetOperation;
+      vi.spyOn(sessionEntries, "applySessionEntryTargetOperation").mockImplementationOnce(
         async (...args) => {
           entered.resolve();
           await release.promise;

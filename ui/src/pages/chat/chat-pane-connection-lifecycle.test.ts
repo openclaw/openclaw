@@ -1,5 +1,4 @@
 // Keep the registered pane class on this file's module graph.
-import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
@@ -9,7 +8,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -25,7 +23,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
-import { renderMessageGroup } from "./components/chat-message-group.test-support.ts";
+import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./components/chat-message.test-support.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import {
@@ -126,21 +124,17 @@ describe("chat pane connection lifecycle", () => {
       setChatRunOwner(state, "pairing-run");
       const runBefore = getChatSessionProjection(state).runs["pairing-run"];
       const view = document.createElement("div");
-      onTestFinished(() => {
-        render(null, view);
-      });
+      const messageView = createMessageGroupHarness(view);
+      onTestFinished(() => messageView.unmount());
       const renderReply = () => {
-        render(
-          renderMessageGroup(
-            createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
-            {
-              showReasoning: false,
-              showToolCalls: false,
-              assistantName: "OpenClaw",
-              assistantAvatar: null,
-            },
-          ),
-          view,
+        messageView.render(
+          createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
+          {
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: "OpenClaw",
+            assistantAvatar: null,
+          },
         );
         flush();
       };
@@ -231,8 +225,9 @@ describe("chat pane connection lifecycle", () => {
       readonly conversationPresented: boolean;
     };
     lifecycle.render = () => ({
-      layout: html`${emptyLegacyContent}`,
+      layout: null,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     });
     const shell = document.createElement("openclaw-app-shell");
     const presentations: Array<{ paneCount: number; conversationPresented: boolean }> = [];
@@ -264,8 +259,9 @@ describe("chat pane connection lifecycle", () => {
     });
     const lifecycle = pane;
     lifecycle.render = () => ({
-      layout: html`${emptyLegacyContent}`,
+      layout: null,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     });
     connectPaneTestView(lifecycle);
     await lifecycle.updateComplete;

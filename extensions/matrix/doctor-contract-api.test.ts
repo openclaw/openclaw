@@ -779,6 +779,39 @@ describe("matrix doctor contract state migrations", () => {
     },
   );
 
+  it("retains credential sources when an absent-only import is refused", async () => {
+    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+    const filePath = path.join(stateDir, "credentials", "matrix", "credentials-ops.json");
+    const source = JSON.stringify({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "synthetic-token",
+      createdAt: "2026-07-01T12:00:00.000Z",
+    });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, source);
+    const params = createMigrationParams(stateDir);
+    const context = params.context;
+    params.context = {
+      ...context,
+      openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+        const store = context.openPluginStateKeyedStore<T>(options);
+        return { ...store, registerIfAbsent: async () => false };
+      },
+    };
+
+    const result = await migrationById(
+      "matrix-credentials-json-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Failed importing Matrix credentials for account ops"),
+    ]);
+    expect(fs.readFileSync(filePath, "utf8")).toBe(source);
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+  });
+
   it("archives legacy credentials without restoring an explicitly cleared account", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const credentialsDir = path.join(stateDir, "credentials", "matrix");

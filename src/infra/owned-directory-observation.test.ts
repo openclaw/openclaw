@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
@@ -13,6 +13,11 @@ const { observeOwnedDirectory } = await runInDetachedAsyncContext(() =>
 );
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// These cases drive in-process watchers; directory-watch-host.test.ts covers the macOS host.
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+});
 const subscriptions: Array<{ close(): void }> = [];
 afterEach(() => {
   for (const subscription of subscriptions.splice(0)) {
@@ -20,6 +25,7 @@ afterEach(() => {
   }
   vi.restoreAllMocks();
   vi.useRealTimers();
+  Object.defineProperty(process, "platform", platform);
 });
 
 describe("process-owned directory observation", () => {

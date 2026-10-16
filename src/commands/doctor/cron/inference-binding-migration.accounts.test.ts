@@ -48,7 +48,7 @@ function job(id: string, model?: string): CronStoredJob {
   };
 }
 
-it("preserves explicit selections while refusing ambiguity, missing accounts and direct keys instead of pinning a previous fallback", async () => {
+it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withOpenClawTestState(
     {
       label: "cron-inference-account-selection",
@@ -133,7 +133,8 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
       });
       await updateAuthProfileStoreWithLock({
         updater(store) {
-          store.usageStats = { "openai:b": { cooldownUntil: Date.now() + 60_000 } };
+          // The usual first account is rate-limited while Doctor runs; that must not move the job.
+          store.usageStats = { "openai:a": { cooldownUntil: Date.now() + 60_000 } };
           return true;
         },
       });
@@ -233,11 +234,15 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
         const warnings = result.warnings.join("\n");
         expect(warnings).toContain("malformed");
         expect(warnings).toContain("invalid cron sessionTarget session id");
-        expect(warnings).toContain("ambiguous");
-        expect(warnings).toContain("More than one inference account");
+        // Several eligible accounts: the run's first planned account is recorded, not refused.
+        expect(warnings).not.toContain("More than one inference account");
+        expect(result.changes.join("\n")).toContain(
+          "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
+        );
+        expect(result.changes.join("\n")).toContain("Also eligible: openai:b");
         expect(warnings).toContain("openai:missing");
-        expect(warnings).toContain("previous-fallback");
-        expect(warnings).toContain("direct");
+        // A provider-config key needs no adoption: the job keeps running on it unbound.
+        expect(warnings).not.toContain("Automation direct (direct)");
         expect(warnings).toContain("deleted-agent");
         expect(warnings).toContain("unavailable-model");
         expect(warnings).toContain("modelPolicy.allow");
@@ -255,6 +260,15 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
           profileId: "openai:b",
           source: "user",
         });
+        expect(saved.find((j) => j.id === "ambiguous")?.inferenceBinding).toMatchObject({
+          profileId: "openai:a",
+          source: "auto",
+        });
+        // A previous auto fallback is not the job's account: it keeps the default's first account.
+        expect(saved.find((j) => j.id === "previous-fallback")?.inferenceBinding).toMatchObject({
+          provider: "openai",
+          profileId: "openai:a",
+        });
         expect(saved.find((j) => j.id === "provider-account")?.inferenceBinding).toMatchObject({
           provider: "synthetic",
           profileId: "synthetic:stored",
@@ -268,9 +282,7 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
           ),
         ).toEqual(malformedBefore);
         for (const id of [
-          "ambiguous",
           "missing",
-          "previous-fallback",
           "direct",
           "local",
           "deleted-agent",
@@ -282,6 +294,56 @@ it("preserves explicit selections while refusing ambiguity, missing accounts and
           expect(saved.find((j) => j.id === id)).toEqual(original.find((j) => j.id === id));
         }
         expect(loadSessionEntry(sessionScope)).toEqual(selectedSession);
+      });
+    },
+  );
+});
+
+it("never records a personal account that the unattended planner does not select", async () => {
+  await withOpenClawTestState(
+    {
+      label: "cron-inference-personal-first",
+      env: { OPENAI_API_KEY: undefined, OPENAI_OAUTH_TOKEN: undefined },
+    },
+    async (state) => {
+      const personalId =
+        "personal:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222";
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+          defaults: { model: "openai/gpt-5.5" },
+        },
+        auth: { order: { openai: [personalId, "openai:shared"] } },
+        plugins: { allow: ["openai"], slots: { memory: "none" } },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      vi.spyOn(globalThis, "fetch").mockRejectedValue(
+        new Error("No external I/O in offline migration"),
+      );
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: personalId,
+            credential: { type: "api_key", provider: "openai", key: "synthetic-personal" },
+          },
+          {
+            profileId: "openai:shared",
+            credential: { type: "api_key", provider: "openai", key: "synthetic-shared" },
+          },
+        ],
+      });
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, { version: 1, jobs: [job("personal-first")] });
+      await withDoctorConfigMaintenance(async () => {
+        const result = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: true });
+        // Personal accounts are owner-scoped, so an unattended run never plans one even when
+        // auth.order lists it first; Doctor records the shared account the run would use.
+        expect(result.changes.join("\n")).toContain("retain openai:shared");
+        expect(result.changes.join("\n")).not.toContain(personalId);
+        expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toMatchObject({
+          profileId: "openai:shared",
+        });
       });
     },
   );

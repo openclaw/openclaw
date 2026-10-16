@@ -151,3 +151,24 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
   ).rejects.toMatchObject({ capacity: { reason: "snapshot-capacity-insufficient" } });
   expect(await databaseHashes(f.files)).toEqual(before);
 });
+
+it("keeps the larger allowance for PostgreSQL portable exports", async () => {
+  const f = await fixture();
+  await materializeUpdateCandidateStateWorker(f.root);
+  const before = await databaseHashes(f.files);
+  availableSpace(100 * 1024 ** 2);
+  await expect(
+    prepareUpdateCandidateRehearsal({
+      config: {
+        database: {
+          engine: "postgres",
+          postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
+        },
+      },
+      stateDir: f.stateDir,
+      candidateRoot: f.root,
+      env: {},
+    }),
+  ).rejects.toMatchObject({ capacity: { reason: "snapshot-capacity-insufficient" } });
+  expect(await databaseHashes(f.files)).toEqual(before);
+});

@@ -964,3 +964,85 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expectRequestInputTextContains(harness, params.prompt);
   });
 });
+
+describe("Codex configured context budget", () => {
+  function createBudgetProbeEngine() {
+    const assemble = vi.fn<ContextEngine["assemble"]>(async ({ messages, prompt }) => ({
+      messages: [...messages, userMessage(prompt ?? "", 10)],
+      estimatedTokens: 42,
+      systemPromptAddition: "context-engine system",
+    }));
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    return { contextEngine: createContextEngine({ assemble, bootstrap }), assemble, bootstrap };
+  }
+
+  it.each([false, true])(
+    "reserves current input and native overhead before assembly (images: %s)",
+    async (withImages) => {
+      const { contextEngine, assemble, bootstrap } = createBudgetProbeEngine();
+      const harness = createStartedThreadHarness();
+      const sessionFile = path.join(tempDir, "context-budget.jsonl");
+      const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+        sessionId: "session-1",
+      });
+      sessionManager.appendMessage(userMessage("PRIOR_BUDGET_CONTEXT", 10));
+      const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+      params.contextEngine = contextEngine;
+      params.authoredContextTokenCap = 600_000;
+      params.contextTokenBudget = 500_000;
+      params.prompt = `CURRENT_REQUEST ${"current ".repeat(1_000).trimEnd()}`;
+      params.currentInboundContext = { text: "CURRENT_INBOUND_REFERENCE" };
+      if (withImages) {
+        params.images = [
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+          },
+        ];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      await harness.completeTurn();
+      await run;
+
+      const assembly = assemble.mock.calls[0]?.[0];
+      expect(assembly?.tokenBudget).toBeGreaterThan(0);
+      expect(assembly?.tokenBudget).toBeLessThan(480_000);
+      expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(assembly?.tokenBudget);
+      expect(assembly?.runtimeSettings?.limits.maxOutputTokens).toBe(20_000);
+      if (!contextEngine.bootstrap) {
+        throw new Error("expected bootstrap hook");
+      }
+      const bootstrapCall = bootstrap.mock.calls[0]?.[0];
+      expect(bootstrapCall?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
+      expect(getRequestInputText(harness)).toContain(params.prompt);
+      expect(getRequestInputText(harness)).toContain("CURRENT_INBOUND_REFERENCE");
+      expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
+    },
+  );
+
+  it("keeps the caller allowance unchanged without an authored exact-model cap", async () => {
+    const { contextEngine, assemble } = createBudgetProbeEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "unconfigured-budget.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 500_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await harness.completeTurn();
+    await run;
+
+    const assembly = assemble.mock.calls[0]?.[0];
+    expect(assembly?.tokenBudget).toBe(500_000);
+    expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
+    expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
+  });
+});

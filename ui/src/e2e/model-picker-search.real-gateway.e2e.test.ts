@@ -40,7 +40,7 @@ const suite = createControlUiE2eSuite({
   async startServer() {
     owner = await createOpenClawTestInstance({
       name: "model-picker-search",
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined, NODE_ENV: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
         plugins: { enabled: false },
@@ -117,15 +117,31 @@ suite.define(() => {
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const publish = (nextModels: typeof models) =>
-      cli([
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(nextModels),
-        "--strict-json",
-        "--replace",
-      ]);
+    const rpc = async (method: string, params: Record<string, unknown> = {}) =>
+      record(
+        JSON.parse(
+          await cli([
+            "gateway",
+            "call",
+            method,
+            "--port",
+            String(owner.port),
+            "--params",
+            JSON.stringify(params),
+            "--json",
+          ]),
+        ),
+      );
+    const publish = async (nextModels: typeof models) => {
+      const current = await rpc("config.get");
+      expect(typeof current.hash).toBe("string");
+      await rpc("config.patch", {
+        raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
+        baseHash: current.hash,
+        replacePaths: ["models.providers.fixture.models"],
+        response: "summary",
+      });
+    };
     const handoff = record(JSON.parse(await cli(["dashboard", "--json"])));
     if (typeof handoff.browserUrl !== "string") {
       throw new Error("Dashboard browser handoff missing");
@@ -270,8 +286,8 @@ suite.define(() => {
           await page.locator('[data-test-id="cron-new-task"]').click();
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           const trigger = picker.locator(".picker-select__trigger");
-          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await trigger.click();
+          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await picker.getByRole("listbox").waitFor({ state: "visible" });
           const compact = await capture("compact-desktop", picker);
           expect(compact.query).toBeUndefined();
@@ -286,6 +302,7 @@ suite.define(() => {
           expect(await pickerValue(picker)).toBe("");
 
           await publish(models);
+          await trigger.click();
           await expect
             .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
             .toBe(1);
@@ -293,6 +310,7 @@ suite.define(() => {
             .locator("[role=option]:not([hidden])")
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
           expect(inventory.length).toBeGreaterThan(8);
+          await trigger.click();
           await page.locator("#cron-name").fill("Keep this draft");
           await page.locator("#cron-payload-text").fill("Do not submit this automation");
           const writesBeforeSearch = mutations.length;

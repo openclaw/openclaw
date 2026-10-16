@@ -255,12 +255,20 @@ describe("CronPage lifecycle", () => {
       } else {
         page.remove();
       }
-      const expected = change === "detach" ? [] : ["current-model"];
+      const readsBeforeCompletion = reads;
       oldError.reject(new Error("Retired catalog error"));
       await Promise.allSettled([oldError.promise]);
-      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
-      await page.settle();
-      expect(page.cronModelSuggestions).toEqual(expected);
+      if (change === "detach") {
+        // Disposal releases the view; its last signal value is not a new blank owner.
+        await page.settle();
+        expect(page.isConnected).toBe(false);
+        expect(page.childElementCount).toBe(0);
+        expect(reads).toBe(readsBeforeCompletion);
+      } else {
+        await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["current-model"]));
+        await page.settle();
+        expect(page.cronModelSuggestions).toEqual(["current-model"]);
+      }
       expect(page.textContent).not.toContain("Retired catalog error");
     },
   );
@@ -522,10 +530,16 @@ describe("CronPage lifecycle", () => {
         });
         await page.settle();
         expect(request).toHaveBeenCalledTimes(count);
-        expect(page.cron.cronError).toBeNull();
-        expect(page.cron.cronStatus?.jobs).not.toBe(99);
-        expect(page.cron.cronJobs.some((job) => job.id === "retired-job")).toBe(false);
-        expect(page.cron.cronRuns.some((run) => run.jobId === "retired-job")).toBe(false);
+        if (change === "unmount") {
+          // Retired domain reads may finish, but cannot recreate a view or queue more work.
+          expect(page.isConnected).toBe(false);
+          expect(page.childElementCount).toBe(0);
+        } else {
+          expect(page.cron.cronError).toBeNull();
+          expect(page.cron.cronStatus?.jobs).not.toBe(99);
+          expect(page.cron.cronJobs.some((job) => job.id === "retired-job")).toBe(false);
+          expect(page.cron.cronRuns.some((run) => run.jobId === "retired-job")).toBe(false);
+        }
       } finally {
         page.remove();
         held.resolve();

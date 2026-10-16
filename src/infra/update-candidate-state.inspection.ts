@@ -90,6 +90,7 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                includeLocalStoreVersions: true,
                 env: {
                   HOME: params.sourceEnv.HOME,
                   OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,

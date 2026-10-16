@@ -11,6 +11,7 @@ import {
 } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
@@ -459,8 +460,8 @@ export function collectCoreConfigAssignments(params: {
       "connection",
       "database.postgres.connection",
       {
-        active: database.engine === "postgres",
-        inactiveReason: "database.engine is not postgres.",
+        active: Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres"),
+        inactiveReason: "No database family selects postgres.",
         owner: {
           ownerKind: "gateway",
           ownerId: "database",

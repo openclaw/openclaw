@@ -50,6 +50,12 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Direct child-result delivery records its transcript mirror after work already
+queued on the requester session. The send settles without waiting for that
+append, so a requester waiting on its child can resume. These tagged mirrors
+record history without closing an open keyed input; ordinary final replies still
+close the turn. Mirrors remain best-effort bookkeeping after a successful send.
+
 Blocked completion warnings identify the child run and retain the concrete delivery
 error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
@@ -138,7 +144,11 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer.
+child session does not replace that run's answer. Once cleanup and requester obligations
+have settled, the in-memory registry keeps a short task preview and lifecycle
+metadata. Full task and result text remain in SQLite and are loaded for selected
+reads or later mutations. Pending delivery, suspended delivery, cancellation, and
+yielded work keep their payloads until those obligations settle.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first

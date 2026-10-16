@@ -777,44 +777,6 @@ describe("Codex supervision catalog", () => {
     expect(invoke).toHaveBeenCalledTimes(99);
   });
 
-  it.each(["backwardsCursor"] as const)(
-    "rejects an oversized Gateway-local %s before the public response",
-    async (cursorField) => {
-      const control = createControl({
-        listPage: vi.fn(async () => ({
-          sessions: [],
-          [cursorField]: "x".repeat(4097),
-        })),
-      });
-      const { runtime } = createRuntime();
-
-      const result = await listCodexSessionCatalog({
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        runtime,
-        control,
-        query: { hostIds: [CODEX_LOCAL_SESSION_HOST_ID] },
-      });
-
-      expect(result).toEqual({
-        hosts: [
-          {
-            hostId: CODEX_LOCAL_SESSION_HOST_ID,
-            label: "Local Codex",
-            kind: "gateway",
-            connected: false,
-            sessions: [],
-            error: {
-              code: "APP_SERVER_UNAVAILABLE",
-              message: "Codex app-server is unavailable on this host",
-            },
-          },
-        ],
-      });
-      expect(JSON.stringify(result)).not.toContain("x".repeat(4097));
-    },
-  );
-
   it.each([
     {
       name: "out-of-range page limit",

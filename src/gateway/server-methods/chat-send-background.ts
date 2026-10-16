@@ -8,7 +8,7 @@ import {
 } from "../dashboard-session-title.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import { emitSessionTitleChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type DashboardSessionTitleRequest = {
@@ -63,7 +63,7 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    const updated = await maybeGenerateDashboardSessionTitle({
+    await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionId: params.admittedSessionId,
@@ -76,14 +76,13 @@ export function scheduleChatDashboardSessionTitle(
         params.context.logGateway.warn(
           "dashboard session title generation exhausted; using a crustacean fallback name",
         ),
+      onTitleStateChanged: () =>
+        emitSessionTitleChanged(params.context, {
+          sessionKey: params.sessionKey,
+          sessionId: params.admittedSessionId,
+          agentId: params.agentId,
+        }),
     });
-    if (updated) {
-      emitSessionsChanged(params.context, {
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        reason: "chat.title",
-      });
-    }
   }, "chat-send:background").catch((err: unknown) => {
     params.context.logGateway.warn(
       `dashboard session title generation failed: ${formatForLog(err)}`,

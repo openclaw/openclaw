@@ -383,6 +383,7 @@ export class BoardWidgetSandboxHost {
     options.onFrameUrl(sourceUrl.href);
     const response = await fetch(sourceUrl.href, { cache: "no-store", signal });
     if (!response.ok) {
+      // Body disposal is best effort; the HTTP status below owns the visible failure.
       void response.body?.cancel().catch(() => undefined);
       if (response.status === 401) {
         throw new WidgetDocumentError("unauthorized", "widget content request failed (401)");
@@ -392,18 +393,10 @@ export class BoardWidgetSandboxHost {
         `widget content request failed (${response.status})`,
       );
     }
-    const tooLargeMessage = "widget HTML exceeds 10 MiB; regenerate a smaller widget";
-    try {
-      return await readResponseTextWithLimit(response, {
-        maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
-        tooLargeMessage,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === tooLargeMessage) {
-        throw new WidgetDocumentError("rejected", error.message);
-      }
-      throw error;
-    }
+    return await readResponseTextWithLimit(response, {
+      maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
+      tooLargeMessage: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
+    });
   }
 
   private postResponse(id: string, ok: boolean, result?: unknown, error?: string): void {

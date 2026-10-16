@@ -195,6 +195,7 @@ describe("createFollowupRunner", () => {
           : {
               visibleReplySent: false,
               failed,
+              completed: !failed,
               ...(kind === "pending" ? { transportPending: true } : {}),
             },
       );
@@ -528,6 +529,7 @@ describe("createFollowupRunner", () => {
     expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
       visibleReplySent: false,
       failed: true,
+      completed: false,
     });
   });
 
@@ -570,6 +572,7 @@ describe("createFollowupRunner", () => {
       expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
+        completed: false,
       });
     },
   );
@@ -916,6 +919,7 @@ describe("createFollowupRunner", () => {
       expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: visible,
         failed: false,
+        completed: true,
       });
     },
   );

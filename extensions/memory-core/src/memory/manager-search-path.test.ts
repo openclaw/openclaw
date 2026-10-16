@@ -1,5 +1,5 @@
 // Real SQLite path search, exact-file precedence, and candidate budgets.
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bm25RankToScore } from "./keyword-query.js";
 import { searchPathKeyword } from "./manager-search.js";
@@ -90,18 +90,36 @@ describe("searchPathKeyword", () => {
         const statement = prepare(
           sql.replaceAll("candidate.start_line", "observe_path_chunk_line(candidate.start_line)"),
         );
+        const observePlan = (values: SQLInputValue[]) => {
+          for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
+            queryPlans.push(String(row.detail));
+          }
+        };
+        const observeRow = (row: ReturnType<typeof statement.all>[number]) => {
+          if (typeof row.text === "string") {
+            fetchedTextBytes += Buffer.byteLength(row.text);
+          }
+        };
         statement.all = new Proxy(statement.all.bind(statement), {
-          apply(all, _receiver, values) {
-            for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
-              queryPlans.push(String(row.detail));
-            }
+          apply(all, _receiver, values: SQLInputValue[]) {
+            observePlan(values);
             const rows = all(...values);
             for (const row of rows) {
-              if (typeof row.text === "string") {
-                fetchedTextBytes += Buffer.byteLength(row.text);
-              }
+              observeRow(row);
             }
             return rows;
+          },
+        });
+        statement.iterate = new Proxy(statement.iterate.bind(statement), {
+          apply(iterate, _receiver, values: SQLInputValue[]): ReturnType<typeof statement.iterate> {
+            return (function* () {
+              observePlan(values);
+              for (const row of iterate(...values)) {
+                observeRow(row);
+                yield row;
+              }
+              return undefined;
+            })();
           },
         });
         return statement;

@@ -128,7 +128,7 @@ export async function prepareGitHubPublicationFact(
 const log = createSubsystemLogger("gateway/worker-github");
 
 /** Discovery prepared the account off the turn path; admission binds only local live authority. */
-export async function prepareWorkerGitHubBindingGrant(
+async function prepareWorkerGitHubBindingGrant(
   params: PublicationSessionIdentity & {
     github: WorkerGitHubLaunchBinding;
     identity: PreparedGitHubPublicationIdentity;

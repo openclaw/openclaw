@@ -30,138 +30,152 @@ const model: Model = {
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["cron", "event"] as const)(
-  "keeps configured direct credentials on the correct %s auth boundary",
+  "keeps a configured direct credential on the %s auth boundary",
   async (trigger) => {
     await withOpenClawTestState(
       { label: "immediate-event-auth", env: { OPENAI_API_KEY: undefined } },
       async (state) => {
         await state.writeAuthProfiles({ version: 1, profiles: {} });
         const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-        const materialize = vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+        vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
           ...stores,
           model,
           logicalRef: { provider: model.provider, model: model.id },
         });
-        const prepare = () =>
-          withPluginRuntimeGenerationScope(
-            { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-            () =>
-              prepareEmbeddedRunAuthPlan({
-                assertCurrent() {},
-                runParams: {
-                  sessionId: "immediate-event",
-                  runId: "immediate-event",
-                  workspaceDir: state.workspaceDir,
-                  prompt: "Synthetic immediate event",
-                  timeoutMs: 1_000,
-                  trigger,
-                  config: {
-                    models: {
-                      providers: {
-                        openai: {
-                          api: "openai-responses",
-                          apiKey: "synthetic-configured-event-key",
-                          baseUrl: model.baseUrl,
-                          models: [],
-                        },
+        const prepared = await withPluginRuntimeGenerationScope(
+          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+          () =>
+            prepareEmbeddedRunAuthPlan({
+              assertCurrent() {},
+              runParams: {
+                sessionId: "immediate-event",
+                runId: "immediate-event",
+                workspaceDir: state.workspaceDir,
+                prompt: "Synthetic immediate event",
+                timeoutMs: 1_000,
+                trigger,
+                config: {
+                  models: {
+                    providers: {
+                      openai: {
+                        api: "openai-responses",
+                        apiKey: "synthetic-configured-event-key",
+                        baseUrl: model.baseUrl,
+                        models: [],
                       },
                     },
                   },
                 },
-                provider: model.provider,
-                modelId: model.id,
-                model,
-                agentDir: state.agentDir(),
-                workspaceDir: state.workspaceDir,
-                nativeModelOwned: false,
-                ...stores,
-                getAgentHarness: () => harness,
-                setAgentHarness() {},
-                getRuntimeModel: () => model,
-                getEffectiveModel: () => model,
-                applyResolvedRuntimeModel() {},
-                selectHarnessForPreparedAttempts: () => harness,
-              }),
-          );
-
-        if (trigger === "cron") {
-          await expect(prepare()).rejects.toThrow("Automation has no recorded inference account");
-          expect(materialize).not.toHaveBeenCalled();
-        } else {
-          const prepared = await prepare();
-          expect(prepared.preparedAuthAttempts).toMatchObject([
-            {
-              kind: "direct",
-              plan: { credentialSource: { kind: "direct", evidence: "provider-config" } },
-            },
-          ]);
-          expect(prepared.lockedProfileId).toBeUndefined();
-        }
+              },
+              provider: model.provider,
+              modelId: model.id,
+              model,
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              nativeModelOwned: false,
+              ...stores,
+              getAgentHarness: () => harness,
+              setAgentHarness() {},
+              getRuntimeModel: () => model,
+              getEffectiveModel: () => model,
+              applyResolvedRuntimeModel() {},
+              selectHarnessForPreparedAttempts: () => harness,
+            }),
+        );
+        expect(prepared.preparedAuthAttempts).toMatchObject([
+          {
+            kind: "direct",
+            plan: { credentialSource: { kind: "direct", evidence: "provider-config" } },
+          },
+        ]);
+        expect(prepared.lockedProfileId).toBeUndefined();
       },
     );
   },
 );
 
-it.each(["profile", "environment"] as const)(
-  "refuses legacy adoption from current %s credentials at the auth boundary",
-  async (source) => {
-    await withOpenClawTestState(
-      {
-        label: "cron-unbound-auth",
-        env: { OPENAI_API_KEY: source === "environment" ? "synthetic-env-key" : undefined },
+const bedrockModel: Model = {
+  ...model,
+  id: "anthropic.claude-sonnet",
+  provider: "amazon-bedrock",
+  api: "bedrock-converse-stream",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+};
+
+const awsSdkConfig = {
+  models: {
+    providers: {
+      "amazon-bedrock": {
+        api: "bedrock-converse-stream" as const,
+        auth: "aws-sdk" as const,
+        baseUrl: bedrockModel.baseUrl,
+        models: [],
       },
-      async (state) => {
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles:
-            source === "profile"
-              ? {
-                  "openai:current": {
-                    type: "api_key",
-                    provider: "openai",
-                    key: "synthetic-current-key",
-                  },
-                }
-              : {},
-        });
-        const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
-        const stores = modelRuntime.createEmptyAgentDiscoveryStores();
-        await expect(
-          withPluginRuntimeGenerationScope(
-            { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-            () =>
-              prepareEmbeddedRunAuthPlan({
-                assertCurrent() {},
-                runParams: {
-                  sessionId: "fresh-legacy-fire",
-                  runId: "legacy-fire",
-                  workspaceDir: state.workspaceDir,
-                  prompt: "Synthetic scheduled work",
-                  timeoutMs: 1_000,
-                  trigger: "cron",
-                  config: {},
-                },
-                provider: model.provider,
-                modelId: model.id,
-                model,
-                agentDir: state.agentDir(),
-                workspaceDir: state.workspaceDir,
-                nativeModelOwned: false,
-                ...stores,
-                getAgentHarness: () => harness,
-                setAgentHarness() {},
-                getRuntimeModel: () => model,
-                getEffectiveModel: () => model,
-                applyResolvedRuntimeModel() {},
-                selectHarnessForPreparedAttempts: () => harness,
-              }),
-          ),
-        ).rejects.toThrow("Automation has no recorded inference account");
-        expect(materialize).not.toHaveBeenCalled();
-      },
-    );
+    },
   },
-);
+};
+
+it.each([
+  { source: "a current stored account", model, storedProfile: true, config: {} },
+  {
+    source: "ambient AWS SDK credentials",
+    model: bedrockModel,
+    storedProfile: false,
+    config: awsSdkConfig,
+  },
+])("refuses legacy adoption from $source at the auth boundary", async (testCase) => {
+  await withOpenClawTestState(
+    { label: "cron-unbound-auth", env: { OPENAI_API_KEY: undefined } },
+    async (state) => {
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: testCase.storedProfile
+          ? {
+              "openai:current": {
+                type: "api_key",
+                provider: "openai",
+                key: "synthetic-current-key",
+              },
+            }
+          : {},
+      });
+      const materialize = vi.spyOn(modelRuntime, "resolveModelAsync");
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      await expect(
+        withPluginRuntimeGenerationScope(
+          { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+          () =>
+            prepareEmbeddedRunAuthPlan({
+              assertCurrent() {},
+              runParams: {
+                sessionId: "fresh-legacy-fire",
+                runId: "legacy-fire",
+                workspaceDir: state.workspaceDir,
+                prompt: "Synthetic scheduled work",
+                timeoutMs: 1_000,
+                trigger: "cron",
+                config: testCase.config,
+              },
+              provider: testCase.model.provider,
+              modelId: testCase.model.id,
+              model: testCase.model,
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              nativeModelOwned: false,
+              ...stores,
+              getAgentHarness: () => harness,
+              setAgentHarness() {},
+              getRuntimeModel: () => testCase.model,
+              getEffectiveModel: () => testCase.model,
+              applyResolvedRuntimeModel() {},
+              selectHarnessForPreparedAttempts: () => harness,
+            }),
+        ),
+      ).rejects.toThrow("Automation has no recorded inference account");
+      expect(materialize).not.toHaveBeenCalled();
+    },
+  );
+});
 
 it.each(["native", "credentialless", "synthetic-marker"] as const)(
   "keeps %s execution without adopting an ambient host account",

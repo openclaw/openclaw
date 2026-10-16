@@ -22,7 +22,10 @@ import {
   resolvePreferredNodePath,
   resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
-import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePinForInstall,
+} from "../../daemon/runtime-pin-state.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
@@ -214,10 +217,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
   let pinSnapshot;
   try {
-    pinSnapshot = readDaemonRuntimePinForInstall(
-      { kind: "gateway", env: installEnv },
-      existingServiceCommand,
-      opts.runtime !== undefined || opts.runtimePath !== undefined,
+    pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
+      readDaemonRuntimePinForInstall(
+        { kind: "gateway", env: installEnv },
+        existingServiceCommand,
+        opts.runtime !== undefined || opts.runtimePath !== undefined,
+      ),
     );
   } catch (error) {
     fail(`Runtime pin inspection failed: ${String(error)}`);

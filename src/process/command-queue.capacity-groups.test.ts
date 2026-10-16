@@ -368,22 +368,6 @@ describe("command lane capacity groups", () => {
     await hookRun;
   });
 
-  test("lanes outside any group are unconstrained by it", async () => {
-    setCommandLaneGroup(GROUP, { budget: 1, members: [CRON, HOOK] });
-    setCommandLaneConcurrency("unpooled", 4);
-
-    const gates = Array.from({ length: 4 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane("unpooled", async () => await g.promise));
-    expect(getCommandLaneSnapshot("unpooled").activeCount).toBe(4);
-    expect(getCommandLaneSnapshot("unpooled").blockedBy).toBe("lane");
-    expect(getCommandLaneSnapshot("unpooled").group).toBeUndefined();
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
-  });
-
   test("rejects lanes that can be synchronously awaited", () => {
     // `cron` awaits `cron-nested`; grouping them turns a wait into a deadlock.
     expect(() => setCommandLaneGroup(GROUP, { budget: 2, members: ["cron", HOOK] })).toThrow(

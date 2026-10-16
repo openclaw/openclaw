@@ -9,7 +9,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import { readUserProfileSnapshotSync } from "../../state/user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "../../state/user-profile-list-item.test-support.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,

@@ -25,6 +25,7 @@ import {
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
 import {
+  hasStreamingMarkdownHtml,
   repairStreamingMarkdownTail,
   splitStableStreamingMarkdown,
   streamingMarkdownState,
@@ -678,16 +679,21 @@ export function toStreamingMarkdownParts(
   const state = streamingMarkdownState(streamKey);
   const previous = state?.rendered;
   const renderKey = markdownRenderKey(renderOptions);
+  const append = previous && stableMarkdown.startsWith(previous.markdown);
+  // Literal code cannot acquire HTML ownership after its block is complete.
+  const hasHtml = append
+    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
+    : hasStreamingMarkdownHtml(stableMarkdown);
   // Containers and block-art classification can outlive a completed boundary.
   // The message parse guard also keeps applying to the complete prefix.
   const incremental =
     previous?.options === renderKey &&
-    stableMarkdown.startsWith(previous.markdown) &&
+    append &&
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
         !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
-        !stableMarkdown.includes("<") &&
+        !hasHtml &&
         !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
@@ -705,7 +711,7 @@ export function toStreamingMarkdownParts(
         : stableHtml + appendedHtml;
   }
   if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml };
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
   }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];

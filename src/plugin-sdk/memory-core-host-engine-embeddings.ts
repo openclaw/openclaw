@@ -60,6 +60,10 @@ export type {
   RemoteEmbeddingRequestAuth,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-provider-runtime.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { fetchRemoteEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
 export type {
   MemoryEmbeddingBatchChunk,

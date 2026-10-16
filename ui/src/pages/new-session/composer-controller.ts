@@ -6,254 +6,148 @@ import {
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
-import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
+import { createComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import { createHumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
 import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.types.ts";
-import {
-  createSkillMenuState,
-  resetSkillMenuState,
-} from "../chat/components/chat-composer-skill-menu.tsx";
-import {
-  createSlashMenuState,
-  resetSlashMenuState,
-} from "../chat/components/chat-composer-slash-menu.tsx";
+import { createSkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
+import { createSlashMenu } from "../chat/components/chat-composer-slash-menu.tsx";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 
-export class NewSessionComposerTextareaController {
-  // An opening gets one cast; typing and async picker updates never reroll it.
-  readonly critterVisit = Math.random();
-  private textarea: HTMLTextAreaElement | null = null;
-  private placeholderFrame: number | null = null;
-  private placeholderRequestUpdate: (() => void) | null = null;
-  private placeholderStartedAt: number | null = null;
-  private placeholderText = "";
-  private placeholderTarget = "";
-  private placeholderEntered = false;
-  private capturedSelection: { start: number; end: number; value: string } | null = null;
-  private skillCommandClient: GatewayBrowserClient | null = null;
-  private skillCommandAgentId = "";
-  private skillCommandDraftOwnerKey = "";
-  readonly skillMenuState = createSkillMenuState();
-  readonly slashMenuState = createSlashMenuState();
-  readonly mentionMenu = new HumanMentionMenu();
-  readonly emojiMenu = new ComposerEmojiMenu();
-  composing = false;
-  mentionInput?: HumanMentionInput;
-  capabilityMenuOpen = false;
-  capabilityMenuView: ChatComposerPlusMenuView = "root";
+export type NewSessionComposerTextarea = ReturnType<typeof createNewSessionComposerTextarea>;
 
-  readonly ref = (element?: Element) => {
-    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-    if (this.textarea && this.textarea !== nextTextarea) {
-      disconnectTextareaOverflowObserver(this.textarea);
-    }
-    if (this.textarea && !nextTextarea) {
-      this.resetPlaceholder();
-    }
-    this.textarea = nextTextarea;
-    if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea);
-      scheduleTextareaHeightAdjustment(nextTextarea);
-      this.startPlaceholder();
-    }
-  };
-
-  syncDraft(message: string) {
-    // The stable ref measures attachment only. Programmatic restores and
-    // resets still need a post-render measurement after Lit commits .value.
-    if (this.textarea?.isConnected && this.textarea.value !== message) {
-      scheduleTextareaHeightAdjustment(this.textarea);
-    }
-  }
-
-  getPlaceholder(target: string, message: string, requestUpdate: () => void) {
-    this.placeholderRequestUpdate = requestUpdate;
-    if (message.length > 0 || this.placeholderEntered) {
-      this.placeholderEntered = true;
-      if (this.placeholderFrame !== null) {
-        globalThis.cancelAnimationFrame?.(this.placeholderFrame);
-        this.placeholderFrame = null;
+/** Caret and menu mutations stay synchronous for dictation and keyboard handlers. */
+export function createNewSessionComposerTextarea() {
+  let textarea: HTMLTextAreaElement | null = null;
+  let capturedSelection: { start: number; end: number; value: string } | null = null;
+  let skillCommandClient: GatewayBrowserClient | null = null;
+  let skillCommandAgentId = "";
+  let skillCommandDraftOwnerKey = "";
+  const control = {
+    // An opening gets one cast; typing and async picker updates never reroll it.
+    critterVisit: Math.random(),
+    skillMenu: createSkillMenu(),
+    slashMenu: createSlashMenu(),
+    mentionMenu: createHumanMentionMenu(),
+    emojiMenu: createComposerEmojiMenu(),
+    composing: false,
+    // SAFETY: Beforeinput fills this optional selection snapshot.
+    mentionInput: undefined as HumanMentionInput | undefined,
+    capabilityMenuOpen: false,
+    // SAFETY: The closed menu starts at its root; navigation keeps this union.
+    capabilityMenuView: "root" as ChatComposerPlusMenuView,
+    ref(element?: Element) {
+      const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+      if (textarea && textarea !== nextTextarea) {
+        disconnectTextareaOverflowObserver(textarea);
       }
-      return target;
-    }
-    if (this.placeholderTarget !== target) {
-      this.resetPlaceholder();
-      this.placeholderTarget = target;
-    }
-    if (
-      !globalThis.requestAnimationFrame ||
-      (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false)
-    ) {
-      this.placeholderText = target;
-      this.placeholderEntered = true;
-      return target;
-    }
-    this.startPlaceholder();
-    return this.placeholderText;
-  }
-
-  private startPlaceholder() {
-    // Rendering can finish after disconnection; the live textarea owns animation.
-    if (!this.textarea?.isConnected || this.placeholderEntered || !this.placeholderTarget) {
-      return;
-    }
-    const target = this.placeholderTarget;
-    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
-    if (!requestFrame) {
-      return;
-    }
-    if (this.placeholderFrame === null) {
-      const step = (timestamp: number) => {
-        if (!this.textarea?.isConnected) {
-          this.resetPlaceholder();
-          return;
-        }
-        this.placeholderStartedAt ??= timestamp;
-        const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 180);
-        const length = Math.min(target.length, Math.floor(elapsed / 26));
-        if (length !== this.placeholderText.length) {
-          this.placeholderText = target.slice(0, length);
-          this.placeholderRequestUpdate?.();
-        }
-        if (length < target.length) {
-          this.placeholderFrame = requestFrame(step);
-          return;
-        }
-        this.placeholderFrame = null;
-        this.placeholderEntered = true;
+      textarea = nextTextarea;
+      if (nextTextarea) {
+        observeTextareaOverflow(nextTextarea);
+        scheduleTextareaHeightAdjustment(nextTextarea);
+      }
+    },
+    syncDraft(message: string) {
+      // Programmatic restores need a measurement after the controlled value commits.
+      if (textarea?.isConnected && textarea.value !== message) {
+        scheduleTextareaHeightAdjustment(textarea);
+      }
+    },
+    /** Keep the pre-preview draft so partial dictation does not compound insertions. */
+    captureSelection() {
+      capturedSelection = textarea
+        ? { start: textarea.selectionStart, end: textarea.selectionEnd, value: textarea.value }
+        : null;
+    },
+    previewTranscript(transcript: string): string | undefined {
+      if (!textarea) {
+        return undefined;
+      }
+      const selection = capturedSelection ?? {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd,
+        value: textarea.value,
       };
-      this.placeholderFrame = requestFrame(step);
-    }
-  }
-
-  private resetPlaceholder() {
-    if (this.placeholderFrame !== null) {
-      globalThis.cancelAnimationFrame?.(this.placeholderFrame);
-      this.placeholderFrame = null;
-    }
-    this.placeholderStartedAt = null;
-    this.placeholderText = "";
-    this.placeholderTarget = "";
-    this.placeholderEntered = false;
-  }
-
-  /**
-   * Remembers the live draft and caret before another control takes focus.
-   * Partial previews rewrite the textarea, so commit must keep using this base
-   * snapshot or each successive transcript would be inserted into the last preview.
-   */
-  captureSelection() {
-    const target = this.textarea;
-    this.capturedSelection = target
-      ? { start: target.selectionStart, end: target.selectionEnd, value: target.value }
-      : null;
-  }
-
-  previewTranscript(transcript: string): string | undefined {
-    const target = this.textarea;
-    if (!target) {
-      return undefined;
-    }
-    const selection = this.capturedSelection ?? {
-      start: target.selectionStart,
-      end: target.selectionEnd,
-      value: target.value,
-    };
-    return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
-      .value;
-  }
-
-  /**
-   * The captured element value includes keystrokes not yet committed upward.
-   * Writing the final insertion directly grows the box before the next render
-   * commits that same value into the page-owned draft.
-   */
-  insertTranscript(transcript: string, late?: true): string | null {
-    const target = this.textarea;
-    if (!target) {
-      return null;
-    }
-    const captured = this.capturedSelection;
-    // Delayed finals must not replace edits made after Stop unlocked this draft.
-    const selection =
-      captured && (!late || captured.value === target.value)
-        ? captured
-        : {
-            start: late ? target.selectionStart : target.value.length,
-            end: late ? target.selectionEnd : target.value.length,
-            value: target.value,
-          };
-    this.capturedSelection = null;
-    const insertion = insertComposerDictation(
-      selection.value,
-      transcript,
-      selection.start,
-      selection.end,
-    );
-    if (insertion.value === selection.value) {
-      return null;
-    }
-    target.value = insertion.value;
-    adjustTextareaHeight(target);
-    queueMicrotask(() => {
-      if (!target.isConnected) {
+      return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
+        .value;
+    },
+    /** Commit live keystrokes before the page-owned draft rerenders. */
+    insertTranscript(transcript: string, late?: true): string | null {
+      const target = textarea;
+      if (!target) {
+        return null;
+      }
+      // Delayed finals must not replace edits made after Stop unlocked this draft.
+      const selection =
+        capturedSelection && (!late || capturedSelection.value === target.value)
+          ? capturedSelection
+          : {
+              start: late ? target.selectionStart : target.value.length,
+              end: late ? target.selectionEnd : target.value.length,
+              value: target.value,
+            };
+      capturedSelection = null;
+      const insertion = insertComposerDictation(
+        selection.value,
+        transcript,
+        selection.start,
+        selection.end,
+      );
+      if (insertion.value === selection.value) {
+        return null;
+      }
+      target.value = insertion.value;
+      adjustTextareaHeight(target);
+      queueMicrotask(() => {
+        if (target.isConnected) {
+          target.focus({ preventScroll: true });
+          target.selectionStart = insertion.caret;
+          target.selectionEnd = insertion.caret;
+        }
+      });
+      return insertion.value;
+    },
+    getTextarea: () => textarea,
+    syncSkillCommandOwner(
+      client: GatewayBrowserClient | null,
+      agentId: string,
+      draftOwnerKey: string,
+    ) {
+      const normalizedAgentId = agentId.trim();
+      if (control.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
         return;
       }
-      target.focus({ preventScroll: true });
-      target.selectionStart = insertion.caret;
-      target.selectionEnd = insertion.caret;
-    });
-    return insertion.value;
-  }
-
-  readonly getTextarea = () => this.textarea;
-
-  syncSkillCommandOwner(
-    client: GatewayBrowserClient | null,
-    agentId: string,
-    draftOwnerKey: string,
-  ) {
-    const normalizedAgentId = agentId.trim();
-    if (this.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
-      return;
-    }
-    // The controller survives route, agent, and Gateway changes. Invalidate its
-    // menu generation so a prior owner cannot publish into the next draft.
-    this.skillCommandClient = client;
-    this.skillCommandAgentId = normalizedAgentId;
-    this.skillCommandDraftOwnerKey = draftOwnerKey;
-    this.emojiMenu.close();
-    resetSkillMenuState(this.skillMenuState);
-  }
-
-  ownsSkillCommands(
-    client: GatewayBrowserClient | null,
-    agentId: string,
-    draftOwnerKey: string,
-  ): boolean {
-    return (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === agentId.trim() &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    );
-  }
-
-  disconnect() {
-    this.emojiMenu.close();
-    this.composing = false;
-    this.mentionMenu.dispose();
-    this.resetPlaceholder();
-    this.placeholderRequestUpdate = null;
-    this.skillCommandClient = null;
-    this.skillCommandAgentId = "";
-    this.skillCommandDraftOwnerKey = "";
-    resetSkillMenuState(this.skillMenuState);
-    resetSlashMenuState(this.slashMenuState);
-    this.capabilityMenuOpen = false;
-    this.capabilityMenuView = "root";
-    if (this.textarea) {
-      disconnectTextareaOverflowObserver(this.textarea);
-      this.textarea = null;
-    }
-  }
+      // Route, agent, or Gateway replacement retires prior async menu results.
+      skillCommandClient = client;
+      skillCommandAgentId = normalizedAgentId;
+      skillCommandDraftOwnerKey = draftOwnerKey;
+      control.emojiMenu.close();
+      control.skillMenu.reset();
+      control.slashMenu.reset();
+    },
+    ownsSkillCommands(
+      client: GatewayBrowserClient | null,
+      agentId: string,
+      draftOwnerKey: string,
+    ): boolean {
+      return (
+        skillCommandClient === client &&
+        skillCommandAgentId === agentId.trim() &&
+        skillCommandDraftOwnerKey === draftOwnerKey
+      );
+    },
+    disconnect() {
+      control.skillMenu.dispose();
+      control.slashMenu.dispose();
+      control.emojiMenu.dispose();
+      control.composing = false;
+      control.mentionMenu.dispose();
+      skillCommandClient = null;
+      skillCommandAgentId = "";
+      skillCommandDraftOwnerKey = "";
+      control.capabilityMenuOpen = false;
+      control.capabilityMenuView = "root";
+      control.ref();
+    },
+  };
+  return control;
 }

@@ -318,25 +318,13 @@ suite.define(() => {
           expect(menuScrollbar?.thumbBackground).not.toBe("rgba(0, 0, 0, 0)");
           await captureUiProof(page, `capability-menu-native-${colorScheme}.png`);
 
-          // Genericity guard, not a second sample of the menu above: base.css
-          // reaches these parts through bare wa-dropdown/wa-select/wa-popover
-          // selectors, so every Web Awesome scroll part rendered on this page
-          // must report the canonical width -- including the ones no stylesheet
-          // names. A class allowlist would leave some at the platform default.
+          // Sample every native popover, including surfaces without a named
+          // scrollbar rule, to verify the shared light-DOM profile.
           const menuScrollbarWidths = await page.evaluate(() => {
-            // One part per host tag, matching the base.css rule exactly: sampling
-            // whichever part came first would read a part that rule never targets.
-            const partSelectorByTag: Record<string, string> = {
-              "WA-DROPDOWN": '[part~="menu"]',
-              "WA-POPOVER": '[part~="body"]',
-              "WA-SELECT": '[part~="listbox"]',
-            };
-            const hosts = document.querySelectorAll("wa-dropdown, wa-select, wa-popover");
-            return Array.from(hosts, (host) => {
-              const partSelector = partSelectorByTag[host.tagName];
-              const part = partSelector ? host.shadowRoot?.querySelector(partSelector) : null;
-              return part ? getComputedStyle(part, "::-webkit-scrollbar").width : null;
-            }).filter((width): width is string => width !== null);
+            return Array.from(
+              document.querySelectorAll("[popover]"),
+              (surface) => getComputedStyle(surface, "::-webkit-scrollbar").width,
+            );
           });
           expect(menuScrollbarWidths.length).toBeGreaterThan(1);
           expect([...new Set(menuScrollbarWidths)]).toEqual(["12px"]);

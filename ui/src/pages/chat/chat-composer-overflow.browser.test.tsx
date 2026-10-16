@@ -2,8 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import type { SessionGoal } from "../../api/types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { SolidContentPresentation } from "../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -47,18 +46,18 @@ describe("composer overflow presentation", () => {
 
   function ComposerFixture(props: ComposerFixtureProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         {props.thread ? <div class="chat-thread" /> : null}
         <ChatComposer {...props.input} renderRevision={props.revision} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     );
   }
 
   function AttachmentFixture(props: ChatAttachmentControlsProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         <AttachmentPreview {...props} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     );
   }
 
@@ -370,7 +369,7 @@ describe("composer overflow presentation", () => {
         { profileId: "morgan", start: 15, end: 31 },
       ],
     });
-    const part = drawComposer(props);
+    drawComposer(props);
     let strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
@@ -407,9 +406,11 @@ describe("composer overflow presentation", () => {
     expect(more.textContent).toBe("+1");
     expect(more.title).toBe("@Morgan Williams");
     expect(strip.getBoundingClientRect().height).toBeCloseTo(41, 0);
-    part.setConnected(false);
+    container.remove();
     container.style.width = "760px";
-    part.setConnected(true);
+    await afterLayout();
+    expect(visibleNames()).toEqual(["@Jordan Rivera"]);
+    document.body.append(container);
     strip = container.querySelector<HTMLElement>('[role="status"]')!;
     more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);

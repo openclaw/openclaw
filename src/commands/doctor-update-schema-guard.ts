@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -592,31 +593,26 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
     runtime.log(JSON.stringify(admitted.fact));
     admitted.assertPrepared();
     writerStarted = true;
-    const result = await runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        entry,
-        "doctor",
-        "--fix",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
-      {
-        cwd: root,
-        baseEnv: env,
-        timeoutMs: resolveSqliteInspectionBudget(
-          "legacy update schema rehearsal",
-          rehearsal.stateDir,
-          rehearsal.snapshotCapacity.sqliteBytes,
-        ).timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        // Doctor's exit owns validation; verbose diagnostics must not turn a
-        // successful migration into an update refusal on a large agent fleet.
-        outputCapture: { stdout: "discard", stderr: "tail" },
-        maxOutputBytes: { stderr: 20_000 },
-      },
-    );
+    const invocation = resolveOpenClawCliInvocation({
+      entryPath: entry,
+      execArgv: [],
+      args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+    });
+    const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      baseEnv: env,
+      timeoutMs: resolveSqliteInspectionBudget(
+        "legacy update schema rehearsal",
+        rehearsal.stateDir,
+        rehearsal.snapshotCapacity.sqliteBytes,
+      ).timeoutMs,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      // Doctor's exit owns validation; verbose diagnostics must not turn a
+      // successful migration into an update refusal on a large agent fleet.
+      outputCapture: { stdout: "discard", stderr: "tail" },
+      maxOutputBytes: { stderr: 20_000 },
+    });
     settled = result.cleanup === "normal";
     if (!settled) {
       throw new Error(

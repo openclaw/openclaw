@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
@@ -10,7 +9,6 @@ import type { FenceScanState } from "../../packages/markdown-core/src/fences.js"
 import {
   addReplyPayloadMediaFailures,
   appendReplyMediaFailures,
-  setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -406,9 +404,6 @@ export function createStreamRendering({
           messagingToolSentTextsNormalized,
         ));
     if (isMessagingDuplicate) {
-      log.debug(
-        `Skipping block reply - already sent via messaging tool: ${truncateUtf16Safe(chunk, 50)}...`,
-      );
       if (prefixReplayCandidate) {
         markBlockReplyTextHandled();
       }
@@ -483,7 +478,6 @@ export function createStreamRendering({
     let splitResult: ReplyDirectiveParseResult = {
       text: chunk,
       replyToTag: false,
-      isSilent: false,
     };
     if (options?.finalReply) {
       let pendingText = splitResult.text;
@@ -528,9 +522,6 @@ export function createStreamRendering({
       replyToCurrent,
     };
     addReplyPayloadMediaFailures(payload, mediaFailures);
-    if (splitResult.isSilent) {
-      setReplyPayloadMetadata(payload, { silentReply: true });
-    }
     const emittedBlockSourceRange =
       chunk === text.trimEnd() &&
       cleanedText === chunk &&
@@ -721,6 +712,7 @@ export function createStreamRendering({
 
   return {
     consumePartialReplyDirectives,
+    getPartialReplySourceText: () => partialReplyDirectiveAccumulator.sourceText,
     resetPartialReplyDirectives,
     emitBlockChunk,
     emitReasoningStream,

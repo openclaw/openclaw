@@ -18,8 +18,8 @@ export const QUEUED_EDIT_RETENTION_CHANGE_EVENT = "openclaw:queued-edit-retentio
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 
-type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
+  invalidate: () => void;
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
   routeHref: () => string;
@@ -38,7 +38,7 @@ export class ChatPageRetainedSessions {
   private previewTimer: number | undefined;
 
   constructor(
-    private readonly host: RetentionHost,
+    private readonly host: HTMLElement,
     private readonly bindings: RetentionBindings,
   ) {}
 
@@ -104,7 +104,7 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly refreshRetention = () => {
-    this.host.requestUpdate();
+    this.bindings.invalidate();
   };
 
   suspend(): void {
@@ -217,7 +217,7 @@ export class ChatPageRetainedSessions {
   ): void => {
     const context = this.bindings.context();
     if (context && readDeletedSessionStartup(context, sessionKey)) {
-      this.host.requestUpdate();
+      this.bindings.invalidate();
       return;
     }
     const deletedPane = this.findPane(paneId, sessionKey);
@@ -243,7 +243,7 @@ export class ChatPageRetainedSessions {
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
     } else {
-      this.host.requestUpdate();
+      this.bindings.invalidate();
     }
   };
 

@@ -16,12 +16,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "agent-identity": () =>
     import("./agent-identity.js").then((module) => module.agentIdentityHandlers),
   agents: () => import("./agents.js").then((module) => module.agentsHandlers),
-  "claws-monitors": () =>
-    import("./claws-monitors.js").then((module) => module.clawsMonitorHandlers),
-  "claws-packages": () =>
-    import("./claws-packages.js").then((module) => module.clawsPackageHandlers),
-  "claws-removal-journal": () =>
-    import("./claws-removal-journal.js").then((module) => module.clawsRemovalJournalHandlers),
+  claws: () => import("./claws.js").then((module) => module.clawsHandlers),
+  "claws-add": () => import("./claws-add.js").then((module) => module.clawsAddHandlers),
   "agents-workspace": () =>
     import("./agents-workspace.js").then((module) => module.agentsWorkspaceHandlers),
   artifacts: () => import("./artifacts.js").then((module) => module.artifactsHandlers),

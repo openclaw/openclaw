@@ -3,6 +3,9 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */
 export function extractFirstTextBlock(message: unknown): string | undefined {
@@ -197,4 +200,87 @@ export function extractAssistantTranscriptSourceText(message: unknown): string |
   const commentary = extractAssistantTextForPhase(message, { phase: "commentary" });
   const reply = extractAssistantPhaseText(message);
   return commentary && reply ? `${commentary}\n${reply}` : (commentary ?? reply);
+}
+
+export function readTerminalSourceReplyDeliveryMirror(
+  message: unknown,
+): { sourceTurnId: string; toolCallId?: string } | undefined {
+  const delivery = asOptionalObjectRecord(asOptionalObjectRecord(message)?.openclawDeliveryMirror);
+  if (!delivery) {
+    return undefined;
+  }
+  const sourceTurnId =
+    typeof delivery.sourceTurnId === "string" ? delivery.sourceTurnId.trim() : "";
+  if (delivery.kind !== "message-tool-source-reply" || delivery.final !== true || !sourceTurnId) {
+    return undefined;
+  }
+  const toolCallId = typeof delivery.toolCallId === "string" ? delivery.toolCallId.trim() : "";
+  return { sourceTurnId, ...(toolCallId ? { toolCallId } : {}) };
+}
+
+/** Classifies raw assistant rows after their persisted visibility facts. */
+export function isSilentAssistantTranscriptMessage(message: unknown): boolean {
+  const record = asOptionalObjectRecord(message);
+  if (record?.role !== "assistant") {
+    return false;
+  }
+  if (record.display === false) {
+    return true;
+  }
+  if (
+    record.display === true ||
+    readTerminalSourceReplyDeliveryMirror(message) ||
+    hasPersistedMedia(message) ||
+    hasNonEmptyStringArray(asOptionalRecord(record.openclawDelivery)?.mediaUrls)
+  ) {
+    return false;
+  }
+  const inlineText = typeof record.text === "string" ? record.text : record.content;
+  if (typeof inlineText === "string") {
+    return isSilentReplyText(inlineText);
+  }
+  if (!Array.isArray(record.content)) {
+    return false;
+  }
+  const text: string[] = [];
+  for (const block of record.content) {
+    const part = asOptionalRecord(block);
+    if (
+      part?.type === "thinking" ||
+      part?.type === "reasoning" ||
+      part?.type === "redacted_thinking"
+    ) {
+      continue;
+    }
+    if (
+      !["text", "input_text", "output_text"].includes(String(part?.type)) ||
+      typeof part?.text !== "string"
+    ) {
+      return false;
+    }
+    text.push(part.text);
+  }
+  const finalBlocks = readAssistantTextBlocksForPhase(message, "final_answer");
+  return isSilentReplyText(
+    finalBlocks.length ? finalBlocks.map((block) => block.text).join("") : text.join(""),
+  );
+}
+
+/** Applies raw stored-row visibility before preparing one leading silence line. */
+export function prepareAssistantTranscriptText(
+  message: unknown,
+  text: string | undefined,
+): string | undefined {
+  const record = asOptionalObjectRecord(message);
+  if (record?.role !== "assistant") {
+    return text;
+  }
+  if (isSilentAssistantTranscriptMessage(message)) {
+    return undefined;
+  }
+  return record.display !== true &&
+    !readTerminalSourceReplyDeliveryMirror(message) &&
+    text?.startsWith("NO_REPLY\n")
+    ? text.slice("NO_REPLY\n".length)
+    : text;
 }

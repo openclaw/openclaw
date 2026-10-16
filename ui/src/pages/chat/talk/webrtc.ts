@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
-import { RealtimeTalkCameraController } from "./camera-controller.ts";
+import { RealtimeTalkCameraOwner } from "./camera-owner.ts";
 import {
   type RealtimeTalkWebRtcSdpSessionResult,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -50,7 +50,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   );
   private readonly completedToolCallIds = new Set<string>();
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
-  private readonly camera: RealtimeTalkCameraController;
+  private readonly camera: RealtimeTalkCameraOwner;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly controlAbortController = new AbortController();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
@@ -67,7 +67,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         emitTalkEvent(event);
       }
     };
-    this.camera = new RealtimeTalkCameraController({
+    this.camera = new RealtimeTalkCameraOwner({
       getDeviceId: () => this.ctx.videoDeviceId,
       setDeviceId: (deviceId) => (this.ctx.videoDeviceId = deviceId),
       isClosed: () => this.closed,

@@ -296,7 +296,7 @@ describe("Codex app-server startup retry", () => {
   it.skipIf(process.platform === "win32").each([
     ["shared", getLeasedSharedCodexAppServerClient],
     ["isolated", createIsolatedCodexAppServerClient],
-  ] as const)("preserves cancellation during %s registration", async (_mode, factory) => {
+  ] as const)("preserves cancellation during %s registration", async (mode, factory) => {
     const fixture = await createStartupFailureFixture("refusal");
     const controller = new AbortController();
     const spawn = childProcess.spawn;
@@ -325,20 +325,29 @@ describe("Codex app-server startup retry", () => {
         return command;
       });
     try {
-      await expect(
-        factory({
-          startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig })
-            .start,
-          agentDir: path.join(fixture.root, "agent"),
-          authProfileStore: { version: 1, profiles: {} },
-          abandonSignal: controller.signal,
-        }),
-      ).rejects.toMatchObject({ code: "CODEX_APP_SERVER_STARTUP_CANCELLED", reason: "aborted" });
+      const options = {
+        startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig })
+          .start,
+        agentDir: path.join(fixture.root, "agent"),
+        authProfileStore: { version: 1 as const, profiles: {} },
+      };
+      await expect(factory({ ...options, abandonSignal: controller.signal })).rejects.toMatchObject(
+        { code: "CODEX_APP_SERVER_STARTUP_CANCELLED", reason: "aborted" },
+      );
+      if (mode === "shared") {
+        const client = await getLeasedSharedCodexAppServerClient(options);
+        expect(child?.exitCode).toBeNull();
+        expect(await fs.readFile(fixture.requestLogPath, "utf8")).toContain("initialize\n");
+        releaseLeasedSharedCodexAppServerClient(client);
+        await clearSharedCodexAppServerClientAndWait();
+      }
       await closed;
       expect(child?.exitCode).toBe(0);
       expect(child?.signalCode).toBeNull();
       expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
-      await expect(fs.access(fixture.requestLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+      if (mode === "isolated") {
+        await expect(fs.access(fixture.requestLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
     } finally {
       spawnSpy.mockRestore();
       commandSpy.mockRestore();
@@ -382,7 +391,7 @@ describe("Codex app-server startup retry", () => {
   });
 
   it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
-    const fixture = await createStartupFailureFixture("overload");
+    const fixture = { ...(await createStartupFailureFixture("overload")), disableTools: false };
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
     const identity = {

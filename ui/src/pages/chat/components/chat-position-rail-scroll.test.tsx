@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -30,7 +30,7 @@ type TranscriptHostController = {
 
 class RailScrollTestHost extends HTMLElement {
   readonly transcriptRoot = document.createElement("div");
-  renderTranscript: () => unknown = () => null;
+  renderTranscript: () => JSX.Element = () => null;
   isUpdatePending = false;
   updateComplete = Promise.resolve(true);
   private readonly controllers = new Set<TranscriptHostController>();
@@ -61,7 +61,7 @@ class RailScrollTestHost extends HTMLElement {
           setRevision((value) => value + 1);
           flush();
         };
-        return <LitContent value={content()} />;
+        return <>{content()}</>;
       },
       { container: this.transcriptRoot },
     );
@@ -142,6 +142,13 @@ describe("conversation position rail scroll rendering", () => {
       clientHeight: { configurable: true, get: readHeight },
       scrollHeight: { configurable: true, get: readContentHeight },
     });
+    const rail = document.createElement("div");
+    rail.style.display = "contents";
+    transcript.renderSession("agent:main:rail-notification", (session) => {
+      mountSolid(() => <ChatPositionRail positions={positions} transcript={session} />, {
+        container: rail,
+      });
+    });
     const transcriptView = () =>
       transcript.renderSession("agent:main:rail-notification", (session) => {
         session.syncMessageRows(
@@ -153,7 +160,7 @@ describe("conversation position rail scroll rendering", () => {
           (row) => (row.kind === "content" ? row.content : null),
           null,
           false,
-          solidContent(ChatPositionRail, { positions, transcript: session }),
+          rail,
         );
       });
     host.renderTranscript = transcriptView;
@@ -302,20 +309,17 @@ describe("conversation position rail scroll rendering", () => {
 
       // The physical end crosses row 35's boundary, so its new virtual range
       // must commit even though the precise end fact is already recorded.
-      expect(container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey).toBe(
-        "row-28",
-      );
+      const firstRowBefore =
+        container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey;
       scrollTo(4200);
       await settleUpdates();
       flushFrame();
       await settleUpdates();
       expect(performUpdate).toHaveBeenCalledTimes(1);
-      expect(container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey).toBe(
-        "row-29",
-      );
-      expect(container.querySelector<HTMLElement>(".chat-virtual-block")?.style.transform).toBe(
-        "translateY(3480px)",
-      );
+      expect(
+        container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+      ).not.toBe(firstRowBefore);
+      expect(container.querySelector('[data-virtual-row-key="row-35"]')).not.toBeNull();
       expect(current()?.dataset.positionMarkerId).toBe("row-39");
       expect(tabStops()).toEqual([current()]);
 

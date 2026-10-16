@@ -7,7 +7,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
-import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
+import { replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   collaborativeSessionsList,
   draftSessionsList,
@@ -442,42 +442,6 @@ suite.define(() => {
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 
-  it("renders zero ownership chrome for a single owner", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    await installMockGateway(currentPage, {
-      sessionKey: "agent:main:ada",
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
-    });
-
-    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
-    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
-    await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
-    await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    const ownerMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(ownerMenu.locator("#sidebar-sessions-group")).toBeVisible();
-    await ownerMenu.locator("#sidebar-sessions-group").click();
-    await expectBrowser(
-      ownerMenu.getByRole("listbox", { name: "Group by", exact: true }),
-    ).toBeVisible();
-    expect(await ownerMenu.getByRole("option", { name: "Person", exact: true }).count()).toBe(0);
-    await currentPage.keyboard.press("Escape");
-    await ownerMenu.locator("#sidebar-sessions-sort").click();
-    expect(await ownerMenu.getByRole("option", { name: "Owners", exact: true }).count()).toBe(0);
-    await currentPage.keyboard.press("Escape");
-    expect(await ownerMenu.locator("#sidebar-sessions-owner").count()).toBe(0);
-    await captureUiProof(
-      suite,
-      ownerMenu.locator(".sidebar-session-filter-panel"),
-      "00-people-sort-hidden.png",
-      [ownerMenu.getByRole("radio", { name: "Active", exact: true })],
-    );
-    expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
-  });
-
   it("keeps global session actions accessible to keyboard users", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
@@ -500,6 +464,12 @@ suite.define(() => {
     const menu = currentPage.locator(".sidebar-session-sort-menu");
     await menu.getByRole("dialog").waitFor();
     expect(await menu.locator("#sidebar-sessions-owner").count()).toBe(0);
+    await menu.locator("#sidebar-sessions-group").click();
+    expect(await menu.getByRole("option", { name: "Person", exact: true }).count()).toBe(0);
+    await currentPage.keyboard.press("Escape");
+    await menu.locator("#sidebar-sessions-sort").click();
+    expect(await menu.getByRole("option", { name: "Owners", exact: true }).count()).toBe(0);
+    await currentPage.keyboard.press("Escape");
     await chooseSidebarMenuOption(menu.page(), "Group by", "None");
     await closeSidebarMenu(currentPage);
 
@@ -590,66 +560,6 @@ suite.define(() => {
       message: "work privately first",
       visibility: "draft",
     });
-  });
-
-  it("publishes a draft through the header sharing menu", async () => {
-    const context = await createSessionOwnershipProofContext(suite, "drafts-ux");
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const sessions = draftSessionsList();
-    const ownerSession = sessions.sessions[0];
-    if (!ownerSession) {
-      throw new Error("expected owner draft fixture");
-    }
-    Object.assign(ownerSession, { sharingRole: "owner" });
-    const gateway = await installMockGateway(currentPage, {
-      sessionKey: "agent:main:ada",
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "session.visibility.set",
-        "session.members.listEvidence",
-        "session.members.add",
-        "session.members.remove",
-      ],
-      operatorScopes: ["operator.write"],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: {
-        "sessions.list": sessions,
-        "session.members.listEvidence": {
-          sessionKey: "agent:main:ada",
-          members: [],
-          identities: [],
-          role: "owner",
-          allowedVisibilities: ["shared", "draft"],
-        },
-        "session.visibility.set": {
-          ok: true,
-          sessionKey: "agent:main:ada",
-          visibility: "shared",
-        },
-      },
-    });
-
-    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
-    await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
-    const publish = currentPage.getByText("Publish draft", { exact: true });
-    await publish.waitFor();
-    await captureUiProof(
-      suite,
-      currentPage.locator(".chat-pane__sharing-panel"),
-      "04-publish-draft-action.png",
-      [publish],
-    );
-    await publish.click();
-
-    const request = await gateway.waitForRequest("session.visibility.set");
-    expect(request.params).toMatchObject({
-      sessionKey: "agent:main:ada",
-      visibility: "shared",
-    });
-    expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
   });
 
   it("keeps rejected visibility-only sharing changes visible after the menu closes", async () => {
@@ -990,18 +900,49 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("keeps create-as-draft dormant for one owner", async () => {
+  it("aligns the Share trigger with the neighboring Layout trigger", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
+    const sessions = sessionsList(["profile-ada", "profile-bob"]);
+    const activeSession = sessions.sessions[0];
+    if (!activeSession) {
+      throw new Error("expected active session fixture");
+    }
+    Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
     await installMockGateway(currentPage, {
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: false,
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
+      sessionKey: "agent:main:ada",
+      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      operatorScopes: ["operator.write"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessions },
     });
 
-    await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const menu = await openNewSessionPlusMenu(currentPage);
-    expect(await menu.getByRole("menuitemcheckbox", { name: "Draft" }).count()).toBe(0);
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    const share = currentPage.locator(".chat-pane__sharing-trigger");
+    const layout = currentPage.locator(".chat-pane__layout-trigger");
+    await share.waitFor();
+    await layout.waitFor();
+    const measure = (trigger: typeof share) =>
+      trigger.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        const icon = button.querySelector("svg")!.getBoundingClientRect();
+        const range = document.createRange();
+        const label = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, (node) =>
+          node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+        );
+        range.selectNodeContents(label.nextNode()!);
+        const text = range.getBoundingClientRect();
+        return {
+          height: bounds.height,
+          gap: text.left - icon.right,
+          iconOffset: icon.top + icon.height / 2 - (bounds.top + bounds.height / 2),
+        };
+      });
+    const [shareMetrics, layoutMetrics] = await Promise.all([measure(share), measure(layout)]);
+    expect(shareMetrics.height).toBeCloseTo(layoutMetrics.height, 1);
+    expect(shareMetrics.gap).toBeCloseTo(layoutMetrics.gap, 1);
+    expect(shareMetrics.iconOffset).toBeCloseTo(layoutMetrics.iconOffset, 1);
   });
 });

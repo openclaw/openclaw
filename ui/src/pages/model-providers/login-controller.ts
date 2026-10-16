@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -6,7 +7,7 @@ import type {
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { WizardLoginController } from "../../components/wizard-login-controller.tsx";
+import { createWizardLogin } from "../../components/wizard-login-controller.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
@@ -15,20 +16,17 @@ import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
-import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
-import type {
-  ModelSetupWizardRunner,
-  ModelSetupWizardCompletion,
-} from "../model-setup/wizard-runner.ts";
+import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { buildLoginProviders } from "./login-providers.ts";
 import "../../styles/model-providers.css";
-registerSettingsEnglish();
+registerEnglishCatalog(registerSettingsEnglish);
 
-type LoginControllerOptions = {
+type LoginOptions = {
   getScope: () => {
     context: ApplicationContext;
     agentId: string | null;
@@ -43,12 +41,14 @@ type LoginControllerOptions = {
   onManualProvider?: (authChoice: string) => void;
 };
 
-export class ModelProviderLoginController {
-  private picker:
+export function createModelProviderLogin(options: LoginOptions) {
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  const [query, setQuery] = createSignal("");
+  const [providerSelection, setProvider] = createSignal("");
+  let currentPicker:
     | ({
         providers?: string[];
-        providerId: string;
-        query: string;
         allowSetup: boolean;
         isCurrent: () => boolean;
       } & (
@@ -57,89 +57,95 @@ export class ModelProviderLoginController {
         | { phase: "error"; message: string }
       ))
     | null = null;
-  private inventoryRequest: AbortController | undefined;
-  private searchInput: HTMLInputElement | undefined;
-  private methodChoices: HTMLElement | undefined;
-  private focusPicker: "search" | "method" | null = null;
-  private generation = 0;
-  private mutationActive = false;
-  private refreshWarning: string | null = null;
-  private message: ModelProviderRowMessage | undefined;
-  private mode: "auth" | "activate" | "access" = "auth";
-  private providerId: string | undefined;
-  private completionModel: ModelCatalogEntry | undefined;
-  private verifiedModelRef: string | undefined;
-  private startingChat = false;
-  private readonly runner: ModelSetupWizardRunner;
-  private readonly wizard: WizardLoginController;
-  private readonly completionCatalog: ModelCatalogReader;
+  let inventoryRequest: AbortController | undefined;
+  let searchInput: HTMLInputElement | undefined;
+  let methodChoice: HTMLButtonElement | undefined;
+  let focusPicker: "search" | "method" | null = null;
+  let generation = 0;
+  let mutationActive = false;
+  let refreshWarning: string | null = null;
+  let message: ModelProviderRowMessage | undefined;
+  let loginMode: "auth" | "activate" | "access" = "auth";
+  let authProviderId: string | undefined;
+  let completionModel: ModelCatalogEntry | undefined;
+  let verifiedModelRef: string | undefined;
+  let startingChat = false;
 
-  constructor(
-    private readonly host: ControllerHost,
-    private readonly options: LoginControllerOptions,
-  ) {
-    host.addController(this);
-    this.wizard = new WizardLoginController(host, {
-      getClient: () => options.getScope().context.gateway.snapshot.client,
-      getAgentId: () => options.getScope().agentId,
-      onClose: () => this.reset(),
-      onAnswer: (value, includeValue) =>
-        void this.run(() => this.runner.answer(value, includeValue)),
-      onBackgroundCompletion: (completion) => this.run(() => Promise.resolve(completion), true),
-      requestFailedMessage: () => t("modelProviders.requestFailed"),
-      sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
-    });
-    this.runner = this.wizard.runner;
-    this.completionCatalog = new ModelCatalogReader(() => host.requestUpdate(), {
-      onResult: (catalog) => {
-        const available = (model: ModelCatalogEntry) =>
-          canonicalModelAuthProviderId(model.provider) === this.providerId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false;
-        const selected = this.completionModel;
-        this.completionModel = selected
-          ? (catalog.models.find(
-              (model) => model.provider === selected.provider && model.id === selected.id,
-            ) ?? selected)
-          : (catalog.models.find((model) => available(model) && model.recommended === true) ??
-            catalog.models.find(
-              (model) =>
-                available(model) && `${model.provider}/${model.id}` === this.verifiedModelRef,
-            ));
-        host.requestUpdate();
-      },
-    });
-  }
+  const wizard = createWizardLogin({
+    getClient: () => options.getScope().context.gateway.snapshot.client,
+    getAgentId: () => options.getScope().agentId,
+    onClose: () => reset(),
+    onAnswer: (value, includeValue) => void run(() => runner.answer(value, includeValue)),
+    onBackgroundCompletion: (completion) => run(() => Promise.resolve(completion), true),
+    requestFailedMessage: () => t("modelProviders.requestFailed"),
+    sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
+  });
+  const runner = wizard.runner;
+  const completionCatalog = new ModelCatalogReader(notify, {
+    onResult: (catalog) => {
+      const available = (model: ModelCatalogEntry) =>
+        canonicalModelAuthProviderId(model.provider) === authProviderId &&
+        model.available === true &&
+        model.manualSelectionAllowed !== false;
+      const selected = completionModel;
+      completionModel = selected
+        ? (catalog.models.find(
+            (model) => model.provider === selected.provider && model.id === selected.id,
+          ) ?? selected)
+        : (catalog.models.find((model) => available(model) && model.recommended === true) ??
+          catalog.models.find(
+            (model) => available(model) && `${model.provider}/${model.id}` === verifiedModelRef,
+          ));
+      notify();
+    },
+  });
+  const view = projectSource(null, {
+    read: () => ({
+      picker: currentPicker,
+      mutationActive,
+      refreshWarning,
+      message,
+      loginMode,
+      completionModel,
+      startingChat,
+    }),
+    subscribe: (_, listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    equality: "revision",
+  });
 
-  get busy(): boolean {
+  function busy(): boolean {
+    view.read();
+    wizard.state();
     return (
-      this.picker !== null ||
-      this.mutationActive ||
-      this.wizard.cancelling ||
-      this.runner.state.phase !== "idle"
+      currentPicker !== null || mutationActive || wizard.cancelling || runner.state.phase !== "idle"
     );
   }
 
-  get providerActions() {
+  function providerActions() {
+    view.read();
     return {
-      canMutate: this.options.canStart(),
-      loginBusy: this.busy,
-      onConnect: (card: ModelProviderCard) => this.open([card.id, ...card.credentialProviderIds]),
+      canMutate: options.canStart(),
+      loginBusy: busy(),
+      onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
       canConnect: (card: ModelProviderCard) =>
-        this.loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+        loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
     };
   }
 
-  get pageActions() {
+  function pageActions() {
+    view.read();
     return {
-      onConnect: () => this.open(),
-      connectDisabled: !this.options.canStart() || this.busy,
-      loginMessage: this.message,
+      onConnect: () => open(),
+      connectDisabled: !options.canStart() || busy(),
+      loginMessage: message,
     };
   }
 
-  private selectedModel() {
-    const { context, agentId } = this.options.getScope();
+  function selectedModel() {
+    const { context, agentId } = options.getScope();
     const { entry, defaults } = resolveAgentConfig(
       currentConfigObject(context.runtimeConfig.state),
       agentId ?? "",
@@ -147,9 +153,9 @@ export class ModelProviderLoginController {
     return resolveModelPrimary(entry?.model) ?? resolveModelPrimary(defaults?.model);
   }
 
-  private missingSelection() {
-    const modelRef = this.selectedModel();
-    const { authStatus } = this.options.getScope();
+  function missingSelection() {
+    const modelRef = selectedModel();
+    const { authStatus } = options.getScope();
     if (!modelRef || !authStatus?.ts || authStatus.unavailable) {
       return null;
     }
@@ -172,9 +178,10 @@ export class ModelProviderLoginController {
     return { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider };
   }
 
-  recoveryView() {
-    const selection = this.missingSelection();
-    const providers = this.options
+  function recoveryView() {
+    view.read();
+    const selection = missingSelection();
+    const providers = options
       .getScope()
       .authStatus?.providerCapabilities?.filter(
         (capability) => canonicalModelAuthProviderId(capability.provider) === selection?.provider,
@@ -183,90 +190,86 @@ export class ModelProviderLoginController {
     return selection
       ? {
           model: selection.model,
-          disabled: !this.options.canStart() || this.busy,
-          onChoose: () => void this.open(providers),
+          disabled: !options.canStart() || busy(),
+          onChoose: () => void open(providers),
         }
       : null;
   }
 
-  private async activateSavedProfile(profileId: string, modelRef: string): Promise<void> {
-    const selectedModel = this.selectedModel();
-    if (
-      !this.options.canStart() ||
-      this.mutationActive ||
-      this.missingSelection()?.model !== modelRef
-    ) {
+  async function activateSavedProfile(profileId: string, modelRef: string): Promise<void> {
+    const previousModel = selectedModel();
+    if (!options.canStart() || mutationActive || missingSelection()?.model !== modelRef) {
       return;
     }
     // Keep the unavailable pin until the existing activation owner verifies and
     // commits the explicit replacement; clearing it could select another account.
-    this.picker = null;
-    this.mode = "activate";
-    this.message = undefined;
-    this.refreshWarning = null;
+    currentPicker = null;
+    loginMode = "activate";
+    message = undefined;
+    refreshWarning = null;
     const kind = `saved-auth:${encodeURIComponent(profileId)}` as const;
-    await this.run(() => {
+    await run(() => {
       // Config writes may settle while activation waits for the mutation owner.
       // Do not restore a selection that changed after the operator clicked Use.
-      if (this.selectedModel() !== selectedModel) {
+      if (selectedModel() !== previousModel) {
         throw new Error(t("modelProviders.login.selectionChanged"));
       }
-      return this.runner.activate({ kind, modelRef }, profileId);
+      return runner.activate({ kind, modelRef }, profileId);
     });
   }
 
-  private loginProviders(
+  function loginProviders(
     providers?: string[],
-    authStatus = this.options.getScope().authStatus,
+    authStatus = options.getScope().authStatus,
     allowSetup = false,
   ) {
     return buildLoginProviders({
       providers,
       authStatus,
-      allowQuickApiKey: Boolean(this.options.onApiKey),
+      allowQuickApiKey: Boolean(options.onApiKey),
       manualProviders:
-        allowSetup && this.options.onManualProvider
-          ? this.options.getManualProviders?.()
-          : undefined,
+        allowSetup && options.onManualProvider ? options.getManualProviders?.() : undefined,
     });
   }
 
-  connectProvider(models: ModelCatalogEntry[]): Promise<void> {
-    return this.open(undefined, {
+  function connectProvider(models: ModelCatalogEntry[]): Promise<void> {
+    return open(undefined, {
       allowSetup: !models.some((model) => model.available !== false),
     });
   }
 
-  async open(
+  async function open(
     providers?: string[],
-    { allowSetup = Boolean(this.options.onManualProvider) }: { allowSetup?: boolean } = {},
+    { allowSetup = Boolean(options.onManualProvider) }: { allowSetup?: boolean } = {},
   ): Promise<void> {
-    if (!this.options.canStart() || this.busy) {
+    if (!options.canStart() || busy()) {
       return;
     }
-    const scope = this.options.getScope();
+    const scope = options.getScope();
     const { client, hello } = scope.context.gateway.snapshot;
     if (!client || !scope.agentId) {
       return;
     }
-    const generation = ++this.generation;
+    const currentGeneration = ++generation;
     const controller = new AbortController();
-    this.inventoryRequest = controller;
+    inventoryRequest = controller;
     const isCurrent = () => {
-      const current = this.options.getScope();
+      const current = options.getScope();
       return (
-        generation === this.generation &&
+        currentGeneration === generation &&
         current.context.gateway.snapshot.client === client &&
         current.context.gateway.snapshot.hello === hello &&
         current.agentId === scope.agentId &&
-        this.options.canContinue()
+        options.canContinue()
       );
     };
-    const picker = { providers, providerId: "", query: "", isCurrent, allowSetup };
-    this.picker = { ...picker, phase: "loading" };
-    this.focusPicker = null;
-    this.message = undefined;
-    this.host.requestUpdate();
+    const picker = { providers, isCurrent, allowSetup };
+    setQuery("");
+    setProvider("");
+    currentPicker = { ...picker, phase: "loading" };
+    focusPicker = null;
+    message = undefined;
+    notify();
     try {
       const authStatus =
         scope.authStatus ??
@@ -275,116 +278,125 @@ export class ModelProviderLoginController {
           signal: controller.signal,
         }));
       if (isCurrent()) {
-        const available = this.loginProviders(providers, authStatus, allowSetup);
+        const available = loginProviders(providers, authStatus, allowSetup);
         const provider = providers && available.length === 1 ? available[0] : undefined;
-        this.picker = {
+        currentPicker = {
           ...picker,
           phase: "ready",
           authStatus,
-          providerId: provider?.id ?? "",
         };
+        setProvider(provider?.id ?? "");
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
-          this.focusPicker = provider ? "method" : "search";
+          focusPicker = provider ? "method" : "search";
         }
       }
     } catch (error) {
       if (isCurrent()) {
-        this.picker = {
+        currentPicker = {
           ...picker,
           phase: "error",
           message: formatUiError(error, t("modelProviders.requestFailed")),
         };
       }
     } finally {
-      if (generation === this.generation) {
-        this.inventoryRequest = undefined;
+      if (currentGeneration === generation) {
+        inventoryRequest = undefined;
         if (!isCurrent()) {
-          this.picker = null;
+          currentPicker = null;
         }
-        this.host.requestUpdate();
+        notify();
       }
     }
   }
 
-  reset(): void {
-    this.generation += 1;
-    this.inventoryRequest?.abort();
-    this.inventoryRequest = undefined;
-    this.picker = null;
-    this.focusPicker = null;
-    this.mutationActive = false;
-    this.refreshWarning = null;
-    this.message = undefined;
-    this.mode = "auth";
-    this.providerId = undefined;
-    this.completionModel = undefined;
-    this.verifiedModelRef = undefined;
-    this.startingChat = false;
-    this.completionCatalog.clear();
+  function reset(): void {
+    generation += 1;
+    inventoryRequest?.abort();
+    inventoryRequest = undefined;
+    currentPicker = null;
+    focusPicker = null;
+    searchInput = undefined;
+    methodChoice = undefined;
+    mutationActive = false;
+    refreshWarning = null;
+    message = undefined;
+    loginMode = "auth";
+    authProviderId = undefined;
+    completionModel = undefined;
+    verifiedModelRef = undefined;
+    startingChat = false;
+    completionCatalog.clear();
     // Cleanup addresses the original connection and wizard only. Late replies
     // cannot publish credentials or errors into another agent's view.
-    this.wizard.reset();
+    wizard.reset();
+    notify();
   }
 
-  hostDisconnected(): void {
-    this.reset();
-  }
-
-  hostUpdated(): void {
-    if (!this.focusPicker || !this.picker) {
-      return;
+  function focusPickerTarget() {
+    if (focusPicker && currentPicker) {
+      const target = focusPicker === "search" ? searchInput : methodChoice;
+      if (target) {
+        focusPicker = null;
+        target.focus({ preventScroll: true });
+      }
     }
-    const choices = this.methodChoices;
-    const target =
-      this.focusPicker === "search"
-        ? this.searchInput
-        : (choices?.querySelector<HTMLElement>("button") ?? choices);
-    this.focusPicker = null;
-    target?.focus({ preventScroll: true });
+  }
+  createEffect(
+    () => ({ revision: view.revision(), provider: providerSelection() }),
+    focusPickerTarget,
+  );
+  onCleanup(() => {
+    listeners.clear();
+    generation += 1;
+    inventoryRequest?.abort();
+    completionCatalog.clear();
+  });
+
+  function setSearchInput(element: HTMLInputElement): void {
+    searchInput = element;
   }
 
-  setSearchInput(element: HTMLInputElement): void {
-    this.searchInput = element;
+  function setMethodChoice(element: HTMLButtonElement): void {
+    methodChoice = element;
+    focusPickerTarget();
   }
 
-  setMethodChoices(element: HTMLElement): void {
-    this.methodChoices = element;
-  }
-
-  get wizardViewProps() {
-    return this.wizard.viewProps({
-      mode: this.mode === "access" ? "auth" : this.mode,
-      busy: this.mutationActive,
-      refreshWarning: this.refreshWarning,
-      doneMessage: this.runner.state.authLabel
-        ? t("modelSetup.providerConnected", { provider: this.runner.state.authLabel })
+  function wizardViewProps() {
+    view.read();
+    return wizard.viewProps({
+      mode: loginMode === "access" ? "auth" : loginMode,
+      busy: mutationActive,
+      refreshWarning,
+      doneMessage: runner.state.authLabel
+        ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
         : t("modelSetup.wizard.connected"),
-      doneDescription: this.completionModel
-        ? t("modelProviders.login.modelReady", { model: this.completionModel.name })
+      doneDescription: completionModel
+        ? t("modelProviders.login.modelReady", { model: completionModel.name })
         : undefined,
-      doneAction: this.completionModel
+      doneAction: completionModel
         ? {
-            label: t("modelProviders.login.startChat", { model: this.completionModel.name }),
-            disabled: this.startingChat,
-            onClick: () => void this.startChat(),
+            label: t("modelProviders.login.startChat", { model: completionModel.name }),
+            disabled: startingChat,
+            onClick: () => void startChat(),
           }
         : undefined,
     });
   }
 
-  pickerView() {
-    const picker = this.picker;
+  function pickerView() {
+    view.read();
+    const picker = currentPicker;
     if (!picker) {
       return null;
     }
     const canSelect = () =>
-      this.picker === picker && picker.phase === "ready" && picker.isCurrent();
+      currentPicker === picker && picker.phase === "ready" && picker.isCurrent();
     const groups =
       picker.phase === "ready"
-        ? this.loginProviders(picker.providers, picker.authStatus, picker.allowSetup)
+        ? loginProviders(picker.providers, picker.authStatus, picker.allowSetup)
         : [];
-    const provider = groups.find((group) => group.id === picker.providerId);
+    const provider = groups.find((group) => group.id === providerSelection());
     const accounts =
       provider && picker.phase === "ready"
         ? buildModelProviderCards({
@@ -399,32 +411,32 @@ export class ModelProviderLoginController {
     const docsUrl =
       provider?.choices.find((choice) => choice.docsUrl)?.docsUrl ??
       "https://docs.openclaw.ai/concepts/model-providers";
-    const missing = this.missingSelection();
+    const missing = missingSelection();
     const recovery =
       missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-    const query = picker.query.trim().toLocaleLowerCase();
+    const search = query().trim().toLocaleLowerCase();
     const matches = groups.filter((group) =>
       [
         group.id,
         group.label,
         ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
         ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-      ].some((text) => text.toLocaleLowerCase().includes(query)),
+      ].some((text) => text.toLocaleLowerCase().includes(search)),
     );
 
     return {
       phase: picker.phase,
       error: picker.phase === "error" ? picker.message : undefined,
       unavailable: picker.phase === "ready" ? picker.authStatus.unavailable : undefined,
-      query: picker.query,
+      query: query(),
       provider,
       accounts,
       recovery,
       docsUrl,
       matches,
       disabled: picker.phase !== "ready" || !picker.isCurrent(),
-      canStart: this.options.canStart(),
-      showDiscover: !picker.providers && Boolean(this.options.onDiscover),
+      canStart: options.canStart(),
+      showDiscover: !picker.providers && Boolean(options.onDiscover),
       discoverDisabled: !picker.isCurrent(),
       description: recovery
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
@@ -433,36 +445,36 @@ export class ModelProviderLoginController {
           : provider?.choices.some((choice) => choice.requiresSetup)
             ? t("modelProviders.login.nativeDescription")
             : t("modelProviders.login.description"),
-      onClose: () => this.reset(),
+      onClose: () => reset(),
       onQuery: (value: string) => {
-        picker.query = value;
-        this.host.requestUpdate();
+        setQuery(value);
       },
       onProvider: (providerId: string) => {
         if (!canSelect()) {
           return;
         }
-        picker.providerId = providerId;
-        this.focusPicker = "method";
-        this.host.requestUpdate();
+        methodChoice = undefined;
+        setProvider(providerId);
+        focusPicker = "method";
+        notify();
       },
       onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
         if (!canSelect()) {
           return;
         }
         if (selected.kind === "setup-secret") {
-          this.reset();
-          this.options.onManualProvider?.(selected.id);
+          reset();
+          options.onManualProvider?.(selected.id);
           return;
         }
-        this.providerId = canonicalModelAuthProviderId(selected.authProvider);
-        this.picker = null;
+        authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+        currentPicker = null;
         const selectingModel = picker.allowSetup && selected.requiresSetup;
-        this.mode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
-        this.refreshWarning = null;
-        this.runner.prepareSignIn(selected.kind, selected.label);
-        void this.run(() =>
-          this.runner.start(
+        loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
+        refreshWarning = null;
+        runner.prepareSignIn(selected.kind, selected.label);
+        void run(() =>
+          runner.start(
             selected.id,
             "models.authLogin",
             selectingModel ? { selectModel: true } : {},
@@ -473,86 +485,86 @@ export class ModelProviderLoginController {
         if (!canSelect() || !provider?.apiKeyProvider) {
           return;
         }
-        this.reset();
-        this.options.onApiKey?.(provider.apiKeyProvider);
+        reset();
+        options.onApiKey?.(provider.apiKeyProvider);
       },
       onUseProfile: (profileId: string) => {
-        if (recovery && this.picker === picker && picker.isCurrent()) {
-          void this.activateSavedProfile(profileId, recovery.model);
+        if (recovery && currentPicker === picker && picker.isCurrent()) {
+          void activateSavedProfile(profileId, recovery.model);
         }
       },
       onDiscover: () => {
-        if (this.picker !== picker || !picker.isCurrent()) {
+        if (currentPicker !== picker || !picker.isCurrent()) {
           return;
         }
-        this.reset();
-        this.options.onDiscover?.();
+        reset();
+        options.onDiscover?.();
       },
       onBack: () => {
         if (!canSelect()) {
           return;
         }
         picker.providers = undefined;
-        picker.providerId = "";
-        this.focusPicker = "search";
-        this.host.requestUpdate();
+        setProvider("");
+        focusPicker = "search";
+        notify();
       },
     };
   }
 
-  private showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
+  function showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
     const modelRef = completion.modelActivation?.modelRef;
     if (!modelRef) {
       return;
     }
-    const { context, agentId } = this.options.getScope();
+    const { context, agentId } = options.getScope();
     const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
     const slash = modelRef.indexOf("/");
     const provider = modelRef.slice(0, slash);
     const id = modelRef.slice(slash + 1);
     const known = catalog.models.find((model) => model.provider === provider && model.id === id);
-    this.verifiedModelRef = modelRef;
+    verifiedModelRef = modelRef;
     const recommended =
       !catalog.retired &&
       catalog.models.find(
         (model) =>
-          canonicalModelAuthProviderId(model.provider) === this.providerId &&
+          canonicalModelAuthProviderId(model.provider) === authProviderId &&
           model.available === true &&
           model.manualSelectionAllowed !== false &&
           model.recommended === true,
       );
     const name = completion.modelActivation?.modelName ?? known?.name;
-    this.completionModel = recommended
+    completionModel = recommended
       ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
       : name
         ? { provider, id, name }
         : undefined;
-    this.host.requestUpdate();
+    notify();
   }
 
-  private async complete(completion: ModelSetupWizardCompletion): Promise<void> {
-    const { context, agentId } = this.options.getScope();
+  async function complete(completion: ModelSetupWizardCompletion): Promise<void> {
+    const { context, agentId } = options.getScope();
     const client = context.gateway.snapshot.client;
-    const generation = this.generation;
-    const providerId = this.providerId;
-    const activating = this.mode === "activate";
+    const currentGeneration = generation;
+    const providerId = authProviderId;
+    const activating = loginMode === "activate";
     if (activating && !completion.modelActivation) {
-      this.runner.fail(t("modelSetup.errors.activationFailed"));
+      runner.fail(t("modelSetup.errors.activationFailed"));
       return;
     }
-    this.verifiedModelRef = completion.modelActivation?.modelRef;
-    const label = this.runner.state.authLabel;
-    if (activating && !this.providerId) {
-      this.runner.close();
+    verifiedModelRef = completion.modelActivation?.modelRef;
+    const label = runner.state.authLabel;
+    if (activating && !authProviderId) {
+      runner.close();
     }
-    this.message = {
+    message = {
       kind: "success",
       text: activating
         ? t("modelProviders.login.activated")
         : [
             label,
             t(
-              this.mode === "access"
+              loginMode === "access"
                 ? "modelProviders.login.nativeDone"
                 : "modelProviders.login.done",
             ),
@@ -562,79 +574,79 @@ export class ModelProviderLoginController {
       warning:
         [
           completion.modelActivation?.gatewayRestartRequired ? t("labsPage.restartRequired") : null,
-          this.refreshWarning,
+          refreshWarning,
         ]
           .filter(Boolean)
           .join("\n") || undefined,
     };
-    this.host.requestUpdate();
+    notify();
     try {
-      await this.options.refresh(providerId);
+      await options.refresh(providerId);
     } catch (error) {
-      if (generation === this.generation) {
-        this.refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
-        this.host.requestUpdate();
+      if (currentGeneration === generation) {
+        refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
+        notify();
       }
     }
-    if (generation !== this.generation || context.gateway.snapshot.client !== client) {
+    if (currentGeneration !== generation || context.gateway.snapshot.client !== client) {
       return;
     }
     if (client && agentId && providerId) {
-      this.completionCatalog.bind(context.gateway, { agentId });
-      void this.completionCatalog.read();
+      completionCatalog.bind(context.gateway, { agentId });
+      void completionCatalog.read();
     }
   }
 
-  private async startChat(): Promise<void> {
-    const model = this.completionModel;
-    const { context, agentId } = this.options.getScope();
-    if (!model || !agentId || this.startingChat || !this.options.canContinue()) {
+  async function startChat(): Promise<void> {
+    const model = completionModel;
+    const { context, agentId } = options.getScope();
+    if (!model || !agentId || startingChat || !options.canContinue()) {
       return;
     }
-    const generation = this.generation;
+    const currentGeneration = generation;
     const client = context.gateway.snapshot.client;
-    this.startingChat = true;
-    this.host.requestUpdate();
+    startingChat = true;
+    notify();
     try {
       const key = await context.sessions.create({
         agentId,
         model: `${model.provider}/${model.id}`,
         ...(model.agentRuntime ? { agentRuntime: model.agentRuntime.id } : {}),
       });
-      if (generation !== this.generation || context.gateway.snapshot.client !== client) {
+      if (currentGeneration !== generation || context.gateway.snapshot.client !== client) {
         return;
       }
       if (key) {
-        this.reset();
+        reset();
         openPreferredApplicationSession(context, key, agentId);
       } else {
-        this.refreshWarning = context.sessions.state.error ?? t("modelProviders.requestFailed");
+        refreshWarning = context.sessions.state.error ?? t("modelProviders.requestFailed");
       }
     } catch (error) {
-      if (generation === this.generation) {
-        this.refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
+      if (currentGeneration === generation) {
+        refreshWarning = formatUiError(error, t("modelProviders.requestFailed"));
       }
     } finally {
-      if (generation === this.generation) {
-        this.startingChat = false;
-        this.host.requestUpdate();
+      if (currentGeneration === generation) {
+        startingChat = false;
+        notify();
       }
     }
   }
 
-  private async run(
+  async function run(
     task: () => Promise<ModelSetupWizardCompletion | null>,
     settling = false,
   ): Promise<void> {
-    const client = this.options.getScope().context.gateway.snapshot.client;
-    if (!client || (this.mutationActive && !settling) || !this.options.canContinue()) {
+    const client = options.getScope().context.gateway.snapshot.client;
+    if (!client || (mutationActive && !settling) || !options.canContinue()) {
       return;
     }
-    const generation = ++this.generation;
-    this.mutationActive = true;
-    this.host.requestUpdate();
+    const currentGeneration = ++generation;
+    mutationActive = true;
+    notify();
     try {
-      const mutation = await this.options.getScope().context.runtimeConfig.runExternalMutation(
+      const mutation = await options.getScope().context.runtimeConfig.runExternalMutation(
         async (mutationClient) => {
           if (mutationClient !== client) {
             throw new Error(t("modelProviders.requestFailed"));
@@ -643,43 +655,66 @@ export class ModelProviderLoginController {
           if (completion) {
             invalidateModelAuthStatusRequests(mutationClient);
             if (
-              generation === this.generation &&
-              this.options.getScope().context.gateway.snapshot.client === mutationClient &&
+              currentGeneration === generation &&
+              options.getScope().context.gateway.snapshot.client === mutationClient &&
               completion.isCurrent?.() !== false
             ) {
-              this.showVerifiedStarter(completion);
+              showVerifiedStarter(completion);
             }
           }
           return completion;
         },
         {
           canDispatch: () =>
-            generation === this.generation &&
-            this.options.getScope().context.gateway.snapshot.client === client &&
-            this.options.canContinue(),
+            currentGeneration === generation &&
+            options.getScope().context.gateway.snapshot.client === client &&
+            options.canContinue(),
           dispatchError: t("modelProviders.requestFailed"),
         },
       );
-      if (generation !== this.generation) {
+      if (currentGeneration !== generation) {
         return;
       }
       if (!mutation.ok) {
-        this.runner.fail(mutation.error);
+        runner.fail(mutation.error);
         return;
       }
-      this.refreshWarning = mutation.refresh.ok ? null : mutation.refresh.error;
+      refreshWarning = mutation.refresh.ok ? null : mutation.refresh.error;
       if (mutation.value && mutation.value.isCurrent?.() !== false) {
-        await this.complete(mutation.value);
+        await complete(mutation.value);
       }
     } catch (error) {
-      if (generation === this.generation) {
-        this.runner.fail(formatUiError(error, t("modelProviders.requestFailed")));
+      if (currentGeneration === generation) {
+        runner.fail(formatUiError(error, t("modelProviders.requestFailed")));
       }
     } finally {
-      if (generation === this.generation) {
-        this.mutationActive = false;
-        this.host.requestUpdate();
+      if (currentGeneration === generation) {
+        mutationActive = false;
+        notify();
       }
     }
   }
+  return {
+    get busy() {
+      return busy();
+    },
+    get providerActions() {
+      return providerActions();
+    },
+    get pageActions() {
+      return pageActions();
+    },
+    get wizardViewProps() {
+      return wizardViewProps();
+    },
+    recoveryView,
+    pickerView,
+    setSearchInput,
+    setMethodChoice,
+    connectProvider,
+    open,
+    reset,
+  };
 }
+
+export type ModelProviderLogin = ReturnType<typeof createModelProviderLogin>;

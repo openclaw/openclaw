@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { expectObjectFields } from "../test-utils/mock-call-assertions.js";
 import {
   getCurrentPluginMetadataSnapshot,
   setGatewayPluginMetadataSnapshot,
@@ -85,9 +86,7 @@ function expectPluginFields(
   if (!plugin) {
     throw new Error(`Missing plugin ${pluginId}`);
   }
-  for (const [key, value] of Object.entries(expected)) {
-    expect(plugin[key as keyof typeof plugin], key).toEqual(value);
-  }
+  expectObjectFields(plugin, expected);
 }
 
 function expectInstallRecord(
@@ -99,9 +98,7 @@ function expectInstallRecord(
   if (!record) {
     throw new Error(`Missing install record ${pluginId}`);
   }
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key as keyof typeof record], key).toEqual(value);
-  }
+  expectObjectFields(record, expected);
 }
 
 function dropStartupConfigPaths(

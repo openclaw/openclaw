@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
@@ -62,6 +63,10 @@ export function readSessionTranscriptJsonlBytesInDatabase(
 }
 
 export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgentDatabase): void {
+  if (isPostgresSqlConnection(database.db)) {
+    // PostgreSQL's server owns planner statistics and native page maintenance.
+    return;
+  }
   // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
   const row = database.db.prepare("PRAGMA analysis_limit").get() as
     | { analysis_limit?: unknown }

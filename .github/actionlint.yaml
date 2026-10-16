@@ -81,6 +81,9 @@ paths:
   .github/workflows/ci-check-focused-testbox.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ci-android-focused-testbox.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/ci-check-routine-testbox.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

@@ -36,6 +36,7 @@ async function mountFailure(lastError: string, lastErrorCode: string | null, sec
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");
@@ -48,6 +49,39 @@ describe("login gate failure recovery", () => {
       bootstrapToken: "synthetic-bootstrap-token",
     }),
   ).replace(/=+$/g, "");
+
+  it("pauses the busy countdown while hidden and catches up on return and reconnect", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const element = await mountFailure("Gateway busy", "GATEWAY_BUSY");
+    element.props = { ...element.props, reconnectPending: true, reconnectAt: Date.now() + 5_000 };
+    await element.updateComplete;
+    const countdown = () => element.querySelector(".login-gate__retry")?.textContent;
+    expect(countdown()).toBe("Retrying in 5s…");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(countdown()).toBe("Retrying in 4s…");
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(countdown()).toBe("Retrying in 4s…");
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await element.updateComplete;
+    expect(countdown()).toBe("Retrying in 2s…");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(countdown()).toBe("Retrying now…");
+
+    element.props = { ...element.props, reconnectAt: Date.now() + 5_000 };
+    await element.updateComplete;
+    expect(countdown()).toBe("Retrying in 5s…");
+    element.remove();
+    await vi.advanceTimersByTimeAsync(1_000);
+    document.body.append(element);
+    await element.updateComplete;
+    expect(countdown()).toBe("Retrying in 4s…");
+  });
 
   it("drags only the empty native background and preserves login recovery controls", async () => {
     const postMessage = vi.fn();

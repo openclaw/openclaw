@@ -8,7 +8,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
 import "./keyboard-shortcuts-dialog.css";

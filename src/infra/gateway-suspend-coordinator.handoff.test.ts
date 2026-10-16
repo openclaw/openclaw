@@ -20,7 +20,7 @@ import {
 } from "./gateway-suspend-coordinator.js";
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 
-const SUSPEND_TTL_MS = 2 * 60_000;
+const SUSPEND_TTL_MS = 45_000;
 
 beforeEach(() => {
   resetProcessRegistryForTests();
@@ -105,7 +105,7 @@ describe("gateway suspend coordinator", () => {
         const fixture = setup(draining);
         expect(fixture.commit()).toEqual({
           ok: true,
-          value: { status: "committed", suspensionId: "external-lease", expiresAtMs: 121_000 },
+          value: { status: "committed", suspensionId: "external-lease", expiresAtMs: 46_000 },
         });
         expect(fixture.commitStop).toHaveBeenCalledOnce();
         expect(resumeGatewaySuspend("external-lease")).toEqual({
@@ -178,11 +178,11 @@ describe("gateway suspend coordinator", () => {
       expect(fixture.consume()).toEqual({ ok: true, value: false });
       expect(fixture.arm()).toEqual({
         ok: true,
-        value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 121_000 },
+        value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 46_000 },
       });
       fixture.advance(30_000);
-      expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
-      expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 121_000 } });
+      expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 46_000 });
+      expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 46_000 } });
       expect(fixture.consume()).toEqual({ ok: true, value: true });
       expect(fixture.consume()).toEqual({ ok: true, value: false });
       expect(isGatewayWorkAdmissionClosed()).toBe(true);

@@ -26,7 +26,7 @@ env:
 jobs:
   actionlint:
     if: (github.event_name != 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
@@ -249,7 +249,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Node environment

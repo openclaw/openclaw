@@ -2,6 +2,7 @@ name: Linux App
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "apps/linux/**"
       - "scripts/lib/openclaw-bun.json"
@@ -14,7 +15,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: linux-app-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # Passive draft events must not cancel useful validation; conversion intentionally does.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('linux-app-{0}-{1}', github.workflow, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -25,6 +30,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
@@ -315,7 +321,7 @@ jobs:
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
             --require-fuse \
             --shell-container \
-              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+              "archlinux@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd"
 
       - name: Upload packaged runtime failure evidence
         if: github.event_name == 'workflow_dispatch' && failure() && steps.packaged-runtime.outcome == 'failure'
@@ -338,6 +344,7 @@ jobs:
             apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage
 
   test-macos:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Test macOS companion
     # This app also ships macOS desktop-test bundles, but the only job that
     # compiles them (linux-app-release.yml build_macos) runs behind a manual
@@ -392,6 +399,7 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Test Windows desktop
     # Match the regular Windows installer build runner.
     runs-on: windows-2022
@@ -421,9 +429,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+            ${{ runner.temp }}/openclaw-desktop-npm-cache/_cacache
+          key: windows-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock', 'pnpm-lock.yaml') }}
           restore-keys: |
-            windows-app-${{ runner.os }}-
+            windows-app-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
@@ -438,6 +447,7 @@ jobs:
       - name: Build Windows installer without publishing
         working-directory: apps/linux/src-tauri
         env:
+          npm_config_cache: ${{ runner.temp }}/openclaw-desktop-npm-cache
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'

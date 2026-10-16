@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { writeConfigFile } from "../config/io.js";
@@ -17,10 +16,11 @@ import {
   DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
-import type { PortVerification } from "../infra/database-engine/port.worker.js";
-import type { DatabaseEngineId } from "../infra/database-engine/registry.js";
 import {
-  archiveDatabasePortManifest,
+  resolveDatabaseFamilyEngines,
+  type DatabaseEngineId,
+} from "../infra/database-engine/registry.js";
+import {
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
   prepareDatabasePortDirectory,
@@ -30,23 +30,21 @@ import {
   type DatabasePortManifest,
 } from "../infra/database-port-recovery.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import {
-  createVerifiedSqliteSnapshot,
-  prepareVerifiedSqliteFile,
-} from "../infra/sqlite-snapshot.js";
+import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   assertDatabaseArtifact,
   captureDatabaseArtifact,
   capturePostgresBackup,
-  preparePostgresRestore,
   readBackupEngine,
 } from "../snapshot/database-backup.js";
 import {
+  assertPortSelection,
   capacity,
   configInputs,
   type Context,
   digest,
+  finalize,
   inputsSchema,
   livePath,
   manifest,
@@ -60,6 +58,19 @@ import {
   storeAt,
   storeDirectory,
 } from "./doctor-database-port-context.js";
+import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
+import {
+  assertOriginal,
+  loadDatabasePortStateReceipt,
+  prepareStores,
+  publishStores,
+  withDatabasePortConfigStateReceipt,
+} from "./doctor-database-port-publication.js";
+import {
+  prepareSharedStatePortSource,
+  selectDatabasePortEngine,
+  withDatabasePortStateOwner,
+} from "./doctor-database-port-state.js";
 
 export type DatabasePortOptions = {
   to?: DatabaseEngineId;
@@ -67,6 +78,7 @@ export type DatabasePortOptions = {
   resume?: string;
   rollback?: string;
 };
+
 async function preflight(ctx: Context, options: DatabasePortOptions) {
   ctx.phase = "preflight";
   const captured = await configInputs(ctx),
@@ -75,13 +87,23 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     await assertDatabaseArtifact(input);
   }
   const config = current.snapshot.config;
-  const from = config.database?.engine ?? "sqlite",
+  assertPortSelection(config, options.to);
+  const from = resolveDatabaseFamilyEngines(config).state,
     to = options.to!;
+  await assertDatabasePortPluginMigrationsComplete({
+    config,
+    env: ctx.env,
+    stateDir: ctx.stateDir,
+    to,
+  });
+  await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
   const context = { stateDir: ctx.stateDir, config, env: ctx.env };
   const plugins = resolvePluginMetadataSnapshot(context);
-  const roots = databasePortProviders.flatMap((provider) =>
-    provider.resolveRoots({ ...context, plugins }),
-  );
+  const roots = (
+    await Promise.all(
+      databasePortProviders.map(async (provider) => provider.resolveRoots({ ...context, plugins })),
+    )
+  ).flat();
   privatePaths(ctx, roots);
   const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
   const stores = all.filter((file) =>
@@ -301,71 +323,6 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
   current.artifacts.push(await captureDatabaseArtifact(stagePath(ctx, index)));
   await record(ctx, path.join(storeDirectory(ctx, index), "verification.json"), proof);
 }
-async function verify(
-  ctx: Context,
-  index: number,
-  config: OpenClawConfig,
-  original = false,
-  sourcePath?: string,
-) {
-  ctx.phase = "verify";
-  const current = manifest(ctx),
-    { target } = storeAt(ctx, index);
-  ctx.target = livePath(target);
-  const proofFile = path.join(
-    storeDirectory(ctx, index),
-    original && target.original.engine === "postgres"
-      ? "postgres/manifest.json"
-      : "verification.json",
-  );
-  const parsed = JSON.parse(fs.readFileSync(proofFile, "utf8"));
-  const proof: PortVerification =
-    original && target.original.engine === "postgres" ? parsed.verification : parsed;
-  const location =
-    sourcePath && original && current.direction.from === "postgres"
-      ? readBackupEngine(sourcePath)
-      : original
-        ? target.original
-        : target.intended;
-  await runDatabasePortTask(
-    {
-      operation: "verify",
-      sourcePath: sourcePath ?? (original ? target.originalCapture.path : stagePath(ctx, index)),
-      engine: original ? current.direction.from : current.direction.to,
-      storeId: target.storeId,
-      namespace: location.engine === "postgres" ? location.namespace : "",
-      verification: proof,
-      config: postgresConfig(config),
-    },
-    ctx,
-  );
-}
-
-async function assertOriginal(ctx: Context, index: number, config: OpenClawConfig) {
-  const { target, input: store } = storeAt(ctx, index);
-  ctx.target = store.original.path;
-  privatePaths(ctx, [store.original.path]);
-  const stat = fs.lstatSync(store.original.path, { bigint: true });
-  if (String(stat.dev) !== store.dev || String(stat.ino) !== store.ino) {
-    refuse(ctx, "changed source identity", "captured device and inode");
-  }
-  if (target.original.engine === "postgres") {
-    await verify(ctx, index, config, true);
-    return;
-  }
-  const copy = path.join(storeDirectory(ctx, index), `source-check-${randomUUID()}.sqlite`);
-  await createVerifiedSqliteSnapshot({
-    sourcePath: store.original.path,
-    targetPath: copy,
-    preserveRowIds: true,
-  });
-  if (
-    (await captureDatabaseArtifact(copy)).sha256 !==
-    (await captureDatabaseArtifact(store.image)).sha256
-  ) {
-    refuse(ctx, "changed source data", "captured original SQLite image");
-  }
-}
 async function classifyConfig(ctx: Context) {
   const current = await readDatabasePortConfigSnapshot(ctx),
     files = await configInputs(ctx),
@@ -394,87 +351,6 @@ async function classifyConfig(ctx: Context) {
   return refuse(ctx, "unrecognized config contents", "recorded old or prepared new config");
 }
 
-async function prepareStores(ctx: Context, config: OpenClawConfig, restoring: boolean) {
-  ctx.phase = restoring ? "rollback" : "prepare stores";
-  const current = manifest(ctx);
-  for (const [index, target] of current.targets.entries()) {
-    ctx.target = livePath(target);
-    privatePaths(ctx, [ctx.target]);
-    const actual = await captureDatabaseArtifact(ctx.target);
-    const staged = current.artifacts.find((file) => file.path === stagePath(ctx, index));
-    const restored =
-      actual.sha256 === target.originalCapture.sha256 ||
-      current.artifacts.some(
-        (file) => path.basename(file.path).startsWith("rollback-") && file.sha256 === actual.sha256,
-      );
-    const fresh = staged && actual.sha256 === staged.sha256;
-    if (!fresh && !(restoring && restored)) {
-      if (restoring && target.original.engine === "postgres") {
-        await assertDatabaseArtifact(storeAt(ctx, index).input.original);
-      } else {
-        await assertOriginal(ctx, index, config);
-      }
-    }
-    if (!restoring && fresh) {
-      await verify(ctx, index, config);
-      continue;
-    }
-    let source = restoring ? target.originalCapture.path : stagePath(ctx, index);
-    if (restoring && target.original.engine === "postgres") {
-      try {
-        await verify(ctx, index, config, true, !fresh ? ctx.target : undefined);
-      } catch {
-        source = path.join(storeDirectory(ctx, index), `rollback-${randomUUID()}.sqlite`);
-        await preparePostgresRestore({
-          directory: path.dirname(target.originalCapture.path),
-          anchorPath: source,
-          profile: "exact",
-          config: postgresConfig(config),
-          expectedSource: { storeId: target.storeId, namespace: target.original.namespace },
-          assertCurrent: ctx.assertCurrent,
-        });
-        current.artifacts.push(await captureDatabaseArtifact(source));
-        revise(ctx);
-      }
-    }
-    if (restoring && (restored || !fresh) && source === target.originalCapture.path) {
-      continue;
-    }
-    if (!restoring) {
-      await verify(ctx, index, config);
-    }
-    ctx.phase = restoring ? "rollback" : "publish stores";
-    await runDatabasePortTask({ operation: "checkpoint", sourcePath: ctx.target }, ctx);
-    const settled = await captureDatabaseArtifact(ctx.target),
-      bytes = await captureDatabaseArtifact(source);
-    const image = await prepareVerifiedSqliteFile({
-      sourcePath: source,
-      sourceIdentity: fs.lstatSync(source, { bigint: true }),
-      targetPath: ctx.target,
-      expectedContent: { sha256: bytes.sha256, sizeBytes: bytes.size },
-      replaceExisting: {
-        expectedIdentity: fs.lstatSync(ctx.target, { bigint: true }),
-        expectedContent: { sha256: settled.sha256, sizeBytes: settled.size },
-        assertCustody: ctx.assertCurrent,
-      },
-    });
-    ctx.prepared.push([ctx.target, image]);
-  }
-}
-async function publishStores(ctx: Context) {
-  ctx.phase = "publish stores";
-  const current = manifest(ctx);
-  ctx.target = ctx.prepared[0]?.[0] ?? ctx.configPath;
-  if (current.state === "preparing") {
-    current.state = "publishing";
-    revise(ctx);
-  }
-  for (const [target, image] of ctx.prepared) {
-    ctx.target = target;
-    await image.publish();
-  }
-}
-
 async function switchConfig(ctx: Context, restoring: boolean) {
   ctx.phase = "switch config";
   ctx.target = ctx.configPath;
@@ -488,28 +364,32 @@ async function switchConfig(ctx: Context, restoring: boolean) {
     );
     const unsetEngine = value === undefined;
     setConfigValueAtPath(candidate, ["database", "engine"], value);
-    const result = await writeConfigFile(candidate, {
-      ...current.writeOptions,
-      baseSnapshot: current.snapshot,
-      inputBase: "source",
-      explicitSetPaths: unsetEngine ? [] : [["database", "engine"]],
-      unsetPaths: unsetEngine ? [["database", "engine"]] : undefined,
-      assertCurrent: ctx.assertCurrent,
-      observe: false,
-      skipOutputLogs: true,
-      skipRuntimeSnapshotRefresh: true,
-      beforeCommit: async () => {
-        await publishStores(ctx);
-        ctx.phase = "switch config";
-        ctx.target = ctx.configPath;
-      },
-      preCommitRuntimePreflight: async (source) => {
-        await record(ctx, path.join(ctx.directory, `config-intent-${randomUUID()}.json`), {
-          hash: digest(source),
-          engine: wanted,
-        });
-      },
-    });
+    const result = await withDatabasePortConfigStateReceipt(ctx, current.snapshot.config, () =>
+      writeConfigFile(candidate, {
+        ...current.writeOptions,
+        baseSnapshot: current.snapshot,
+        inputBase: "source",
+        explicitSetPaths: unsetEngine ? [] : [["database", "engine"]],
+        unsetPaths: unsetEngine ? [["database", "engine"]] : undefined,
+        assertCurrent: ctx.assertCurrent,
+        observe: false,
+        skipOutputLogs: true,
+        skipRuntimeSnapshotRefresh: true,
+        beforeCommit: async () => {
+          await publishStores(ctx);
+          // Source reads are finished; every config publication effect now belongs to the target.
+          await selectDatabasePortEngine(ctx, current.snapshot.config, wanted);
+          ctx.phase = "switch config";
+          ctx.target = ctx.configPath;
+        },
+        preCommitRuntimePreflight: async (source) => {
+          await record(ctx, path.join(ctx.directory, `config-intent-${randomUUID()}.json`), {
+            hash: digest(source),
+            engine: wanted,
+          });
+        },
+      }),
+    );
     if (!(await configInputs(ctx)).some((file) => file.sha256 === result.persistedHash)) {
       refuse(ctx, "config receipt hash mismatch", "writer's persisted hash");
     }
@@ -522,33 +402,10 @@ async function switchConfig(ctx: Context, restoring: boolean) {
     syncDatabasePortPath(path.dirname(file.path));
   }
 }
-function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
-  ctx.phase = "finalize/archive";
-  const current = manifest(ctx);
-  if (current.state !== "complete") {
-    current.state = "complete";
-    current.outcome = outcome;
-    revise(ctx);
-  }
-  const archived = archiveDatabasePortManifest(
-    ctx.stateDir,
-    current.operationId,
-    ctx.assertCurrent,
-  );
-  return {
-    phase: "complete",
-    engine: outcome === "ported" ? current.direction.to : current.direction.from,
-    stores: current.targets.map(livePath),
-    backup: ctx.directory,
-    remainingSqlite: ctx.inputs?.remainingSqlite ?? [],
-    manifest: archived,
-    serverCapacity: "unknown; former PostgreSQL namespaces retained",
-    restart: "Start the Gateway through its service owner.",
-  };
-}
 async function resume(ctx: Context) {
   const current = manifest(ctx),
     config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
+  assertPortSelection(config, current.direction.to);
   if (current.state === "preparing") {
     for (const input of current.originalConfig) {
       await assertDatabaseArtifact(input);
@@ -567,6 +424,10 @@ async function rollback(ctx: Context) {
   return await finishPort(ctx, (await readDatabasePortConfigSnapshot(ctx)).snapshot.config, true);
 }
 async function finishPort(ctx: Context, config: OpenClawConfig, restoring: boolean) {
+  assertPortSelection(
+    config,
+    restoring ? manifest(ctx).direction.from : manifest(ctx).direction.to,
+  );
   try {
     const preparingRollback = restoring && manifest(ctx).state === "preparing";
     if (preparingRollback) {
@@ -619,11 +480,14 @@ async function loadRecovery(ctx: Context) {
     ctx.inputs.stores.length !== saved.targets.length ||
     saved.targets.some((target, index) => {
       const file = ctx.inputs?.stores[index]?.original.path;
-      return !file?.startsWith(`${ctx.stateDir}${path.sep}`) || file !== livePath(target);
+      // Configured and retained agents can live outside the state root. The
+      // verified private input must still name its manifest-bound target.
+      return !file || file !== livePath(target);
     })
   ) {
     refuse(ctx, "mismatched target set", "complete captured store set");
   }
+  loadDatabasePortStateReceipt(ctx);
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
@@ -633,6 +497,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
     stateDir,
     configPath,
     env: process.env,
+    engineSelection: { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     assertCurrent: () => {},
     phase: "preflight",
     target: stateDir,
@@ -641,6 +506,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
   };
   try {
     privatePaths(ctx, [stateDir, configPath]);
+    assertPortSelection((await readDatabasePortConfigSnapshot(ctx)).snapshot.config);
     if (hasActiveGatewayStateOwner(path.join(stateDir, "state", "openclaw.sqlite"))) {
       refuse(ctx, "hosted Gateway owner", "exclusive offline custody");
     }
@@ -654,40 +520,32 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           action: options.rollback ? ("rollback" as const) : ("resume" as const),
         }
       : undefined;
-    return await runWithLocalStateOwner({
-      method: "database.port",
-      params: {},
-      target: stateDir,
-      onForeignOwner: "refuse",
-      databasePortRecovery: recovery,
-      runLocal: async ({ env, assertCurrent, signal }) => {
-        Object.assign(ctx, { env, assertCurrent, signal });
-        if (recovery) {
-          ctx.manifest = assertDatabasePortRecoveryAllowed(stateDir, recovery);
-          await loadRecovery(ctx);
-          if (ctx.manifest.state === "complete") {
-            return finalize(ctx, ctx.manifest.outcome!);
-          }
-          return recovery.action === "resume" ? await resume(ctx) : await rollback(ctx);
+    return await withDatabasePortStateOwner(ctx, recovery, async () => {
+      if (recovery) {
+        ctx.manifest = assertDatabasePortRecoveryAllowed(stateDir, recovery);
+        await loadRecovery(ctx);
+        if (ctx.manifest.state === "complete") {
+          return finalize(ctx, ctx.manifest.outcome!);
         }
-        const facts = await preflight(ctx, options);
-        if (options.dryRun || facts.from === facts.to || !facts.stores.length) {
-          return {
-            phase: options.dryRun ? "preflight" : "complete",
-            engine: facts.from,
-            to: facts.to,
-            stores: facts.stores,
-            migrations: facts.migrations,
-            remainingSqlite: facts.remainingSqlite,
-            verification: options.dryRun
-              ? `${facts.migrations.length} stores need private migration; copy and privilege probe not performed`
-              : "verified no-op",
-            serverCapacity: "unknown",
-          };
-        }
-        await captureOriginals(ctx, facts);
-        return await resume(ctx);
-      },
+        return recovery.action === "resume" ? await resume(ctx) : await rollback(ctx);
+      }
+      const facts = await preflight(ctx, options);
+      if (options.dryRun || facts.from === facts.to || !facts.stores.length) {
+        return {
+          phase: options.dryRun ? "preflight" : "complete",
+          engine: facts.from,
+          to: facts.to,
+          stores: facts.stores,
+          migrations: facts.migrations,
+          remainingSqlite: facts.remainingSqlite,
+          verification: options.dryRun
+            ? `${facts.migrations.length} stores need private migration; copy and privilege probe not performed`
+            : "verified no-op",
+          serverCapacity: "unknown",
+        };
+      }
+      await captureOriginals(ctx, facts);
+      return await resume(ctx);
     });
   } catch (error) {
     if (error instanceof DatabasePortError) {

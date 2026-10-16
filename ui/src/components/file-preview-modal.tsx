@@ -3,7 +3,7 @@ import { createEffect, createMemo, For, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CopyButton } from "./solid/copy-button.tsx";

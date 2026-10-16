@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { inspectMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import {
   getAgentEventLifecycleGeneration,
   type AgentEventPayload,
@@ -35,6 +36,11 @@ export function createAgentEventAdmission({
     event: AgentEventPayload,
     previous?: Promise<void>,
   ): Promise<{ suppress: boolean; assertCurrent?: () => void }> => {
+    const memory = captureMemoryExactSessionReader({ sessionKey, agentId });
+    if (memory) {
+      // Incognito state cannot survive a restart; only its live memory owner applies.
+      return { suppress: false, assertCurrent: () => memory.assertCurrent() };
+    }
     const cfg = getRuntimeConfig();
     const read = () =>
       loadGatewaySessionEntryReadOnlyInWorker({

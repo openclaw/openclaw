@@ -95,20 +95,6 @@ export function resolveEmbeddedRunEffectiveModel(
               baseUrl: params.runtimeModel.baseUrl,
             }),
         });
-  const resolved = resolveEmbeddedRuntimeModelPolicy({
-    cfg: params.runParams.config,
-    provider: params.provider,
-    contextConfigProvider,
-    modelId: params.modelId,
-    runtimeModel: params.runtimeModel,
-    nativeModelOwned: params.nativeModelOwned,
-    requestExtraParams,
-    requestServiceTiers,
-    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
-    ...(params.runParams.contextTokenBudget === undefined
-      ? {}
-      : { contextTokenBudget: params.runParams.contextTokenBudget }),
-  });
   const authoredContextTokenCap =
     params.pinnedHarnessId || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
       ? undefined
@@ -117,6 +103,21 @@ export function resolveEmbeddedRunEffectiveModel(
           provider: contextConfigProvider,
           model: params.modelId,
         });
+  const resolved = resolveEmbeddedRuntimeModelPolicy({
+    cfg: params.runParams.config,
+    provider: params.provider,
+    contextConfigProvider,
+    modelId: params.modelId,
+    runtimeModel: params.runtimeModel,
+    nativeModelOwned: params.nativeModelOwned,
+    authoredContextTokenCap,
+    requestExtraParams,
+    requestServiceTiers,
+    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
+    ...(params.runParams.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: params.runParams.contextTokenBudget }),
+  });
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),

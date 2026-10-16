@@ -572,6 +572,25 @@ describe("docker sandbox backend manager", () => {
     await expect(backend.finalizeExec?.(finalization)).resolves.toBeUndefined();
   });
 
+  it("admits explicit piped input without enabling a PTY", async () => {
+    const backend = await createDockerExecBackend();
+    const spec = await backend.buildExecSpec({
+      command: "cat",
+      env: {},
+      usePty: false,
+      stdin: true,
+    });
+    expect(spec.stdinMode).toBe("pipe-open");
+    expect(spec.argv).toContain("-i");
+    expect(spec.argv).not.toContain("-t");
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: spec.finalizeToken,
+    });
+  });
+
   it.skipIf(process.platform === "win32").each([
     { engine: "docker", host: "github.com" },
     { engine: "podman", host: "ghe.example.test" },

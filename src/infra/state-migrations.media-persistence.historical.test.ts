@@ -25,8 +25,8 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   completeGatewayBootLifecycle,
-  inspectGatewayCrashLoopBreaker,
-  recordGatewayBootStart,
+  inspectGatewayCrashLoopBreakerAsync,
+  beginGatewayBootLifecycle,
 } from "./gateway-boot-lifecycle.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -612,7 +612,7 @@ describe("media persistence gateway lifecycle recovery", () => {
 
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {
-      const bootId = recordGatewayBootStart(env, nowMs + index);
+      const bootId = (await beginGatewayBootLifecycle(env, nowMs + index)).id;
       await completeGatewayBootLifecycle(
         bootId,
         {
@@ -624,7 +624,7 @@ describe("media persistence gateway lifecycle recovery", () => {
         nowMs + index + 1,
       );
     }
-    expect(inspectGatewayCrashLoopBreaker(env, nowMs + 4).tripped).toBe(false);
+    expect((await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 4)).tripped).toBe(false);
 
     const result = await migrateLegacyMediaPersistence({ env });
 
@@ -636,7 +636,7 @@ describe("media persistence gateway lifecycle recovery", () => {
         )
         .get(),
     ).toMatchObject({ count: 3 });
-    expect(inspectGatewayCrashLoopBreaker(env, nowMs + 5)).toMatchObject({
+    expect(await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 5)).toMatchObject({
       tripped: false,
       uncleanBoots: 0,
     });

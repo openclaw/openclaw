@@ -1,5 +1,5 @@
-import { render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -10,8 +10,9 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -106,8 +107,6 @@ it.each(["agent:work:current", "global"])(
           onModelSetup: vi.fn(),
         });
       const container = document.createElement("div");
-      const drawPermission = () =>
-        render(solidContent(ChatPermissionPicker, controls().permissionPicker), container);
       permissionReadbackUnavailable = true;
       await controls().permissionPicker.onSelect("full");
       expect(request).toHaveBeenCalledWith(
@@ -119,7 +118,15 @@ it.each(["agent:work:current", "global"])(
         }),
       );
       expect(state.chatError).toContain("Failed to update permissions");
-      drawPermission();
+      const [currentPicker, setCurrentPicker] = createSignal(controls().permissionPicker);
+      const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
+        container,
+      });
+      onTestFinished(view.unmount);
+      const drawPermission = () => {
+        setCurrentPicker(controls().permissionPicker);
+        flush();
+      };
       const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
       expect(picker.getAttribute("aria-label")).toContain(
         t("chat.permissionControls.modes.full.label"),

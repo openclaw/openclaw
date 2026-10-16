@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -10,7 +11,7 @@ import {
 } from "../../lib/chat/commands.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import {
   composerContext,
   renderComposer,
@@ -38,6 +39,42 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("new-session placeholder animation", () => {
+  it("preserves animation progress through draft refreshes and cancels it with the input", () => {
+    let nextFrame = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const view = renderComposer();
+    document.body.append(view.container);
+    const textarea = composerTextarea(view.composer);
+    const target = textarea.getAttribute("aria-label")!;
+    const advance = (timestamp: number) => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      for (const callback of callbacks) {
+        callback(timestamp);
+      }
+      flush();
+    };
+
+    advance(0);
+    advance(206);
+    expect(textarea.placeholder).toBe(target.slice(0, 1));
+    view.rerender();
+    advance(232);
+    expect(textarea.placeholder).toBe(target.slice(0, 2));
+    expect(view.container.querySelector("textarea")).toBe(textarea);
+
+    view.unmount();
+    expect(frames.size).toBe(0);
+    view.container.remove();
+  });
 });
 
 describe("new-session submission preview", () => {
@@ -86,6 +123,7 @@ describe("new-session composer keyboard submission", () => {
     textarea.value = "/";
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
 
     expect(composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent).toContain(
       "/test-command",
@@ -128,9 +166,11 @@ describe("new-session composer keyboard submission", () => {
           new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
         );
       } else {
+        flush();
         composer.querySelector<HTMLElement>(".slash-menu-item")?.click();
       }
 
+      flush();
       expect(onInput).toHaveBeenLastCalledWith("/mode ");
       const fastOption = Array.from(
         composer.querySelectorAll<HTMLElement>(".slash-menu-item"),
@@ -184,7 +224,7 @@ describe("new-session composer keyboard submission", () => {
       ],
     });
     await waitForFast(() => {
-      expect(textareaController.skillMenuState.skillCommandRefreshPending).toBe(false);
+      expect(textareaController.skillMenu.state.skillCommandRefreshPending).toBe(false);
     });
     expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain("writer_only");
     expect(getSkillCommandCompletions("writer_only")).toEqual([]);
@@ -232,7 +272,7 @@ describe("new-session composer keyboard submission", () => {
       ],
     });
     await waitForFast(() => {
-      expect(textareaController.skillMenuState.skillCommandRefreshPending).toBe(false);
+      expect(textareaController.skillMenu.state.skillCommandRefreshPending).toBe(false);
     });
     expect(composer.querySelector(".skill-menu")?.textContent ?? "").not.toContain(
       "previous_client_only",
@@ -261,6 +301,7 @@ describe("new-session composer keyboard submission", () => {
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
 
     expect(composer.querySelector(".skill-menu")?.textContent).toContain("release_notes");
     textarea.dispatchEvent(
@@ -286,9 +327,11 @@ describe("new-session composer keyboard submission", () => {
     textarea.value = "$";
     textarea.setSelectionRange(1, 1);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
     expect(composer.querySelector(".skill-menu")).not.toBeNull();
 
     rerenderForDraftRoute("draft:two", "replacement task");
+    flush();
     expect(composer.querySelector(".skill-menu")).toBeNull();
 
     textarea.dispatchEvent(
@@ -325,11 +368,13 @@ describe("new-session composer keyboard submission", () => {
     textarea.value = "Use /release_ and /office_";
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
     expect(composer.querySelector(".slash-menu")?.textContent).toContain("/office_hours");
 
     const firstTokenCaret = "Use /release_".length;
     textarea.setSelectionRange(firstTokenCaret, firstTokenCaret);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
     expect(composer.querySelector(".slash-menu")?.textContent).toContain("/release_notes");
     textarea.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
@@ -528,7 +573,7 @@ describe("new-session composer start control", () => {
 
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
     expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
-    expect(composer.querySelector("[data-value='start-terminal']")).toBeNull();
+    expect(composer.querySelector("button[aria-label='Start in terminal']")).toBeNull();
   });
 
   it("marks the Start button busy while the session is starting", () => {
@@ -598,7 +643,7 @@ describe("new-session composer sizing lifecycle", () => {
       disconnect = disconnect;
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
-    const textareaController = new NewSessionComposerTextareaController();
+    const textareaController = createNewSessionComposerTextarea();
     const onInput = vi.fn();
     const first = renderComposer({ textareaController, onInput });
     document.body.append(first.container);

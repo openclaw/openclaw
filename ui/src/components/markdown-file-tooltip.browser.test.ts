@@ -35,18 +35,18 @@ const waitForReopen = (tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) =>
 
 describe("file path tooltip", () => {
   it("keeps the popup reachable and copies the exact path without opening the file", async () => {
-    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const copied = Promise.withResolvers<void>();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(copied.promise);
     const open = vi.fn();
     anchor().addEventListener("click", open);
     await page.elementLocator(anchor()).hover();
     await expect.element(copyButton()).toBeVisible();
     expect(card()?.textContent?.trim()).toBe(filePath);
     await copyButton().hover();
-    await Promise.all([
-      expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!"),
-      copyButton().click(),
-    ]);
+    await copyButton().click();
     expect(write).toHaveBeenCalledWith(filePath);
+    copied.resolve();
+    await expect.poll(() => card()?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
     expect(open).not.toHaveBeenCalled();
     expect(card()?.textContent).toContain(filePath);
     expect(document.querySelectorAll("openclaw-tooltip[open]")).toHaveLength(1);

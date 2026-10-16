@@ -706,11 +706,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-pane__header chat-pane__header--closable">
               <div class="chat-pane__crumbs">
                 <div class="chat-pane__project-row">
-                  <wa-dropdown class="chat-pane__workspace-menu">
-                    <button class="chat-pane__workspace-chip" type="button">
-                      ${iconSvg()}<span>openclaw</span>
+                  <div class="chat-pane__workspace-menu">
+                    <button class="oc-menu-trigger chat-pane__workspace-chip" type="button">
+                      <span class="oc-menu-item__label">${iconSvg()}<span>openclaw</span></span>
                     </button>
-                  </wa-dropdown>
+                    <div class="oc-overlay oc-menu" popover="manual" role="menu"></div>
+                  </div>
                 </div>
                 <div class="chat-pane__session-trail">
                   <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>

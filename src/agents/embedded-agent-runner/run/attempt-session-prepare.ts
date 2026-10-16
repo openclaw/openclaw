@@ -4,10 +4,6 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import {
-  attachRuntimePromptMediaFacts,
-  readPersistedMediaFacts,
-} from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -636,20 +632,12 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       latestPersistedUserMessage = message;
       latestRuntimeUserMessage = runtimeMessage;
       if (runtimeMessage) {
-        const media = readPersistedMediaFacts(message);
-        if (media?.length) {
-          attachRuntimePromptMediaFacts(runtimeMessage, media);
-        }
         userTranscriptContextRegistry.record(runtimeMessage, message);
       }
       attempt.onUserMessagePersisted?.(message);
     },
     onUserMessagePersistenceSuppressed: (message, runtimeMessage) => {
       latestRuntimeUserMessage = runtimeMessage;
-      const media = runtimeMessage ? readPersistedMediaFacts(message) : undefined;
-      if (runtimeMessage && media?.length) {
-        attachRuntimePromptMediaFacts(runtimeMessage, media);
-      }
       // Replay suppresses the append of a user that is already durable. Report it
       // like an adopted append so retries and fallbacks do not append it again;
       // after compaction that append would adopt a row outside the current turn.
@@ -688,6 +676,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       sessionManager,
+      tokenBudget: attempt.contextTokenBudget,
       // The admitted user turn is already persisted above. Fence bootstrap like
       // assemble is fenced; otherwise the engine imports the pending turn from
       // the transcript, the host appends it again, and the next run drops one

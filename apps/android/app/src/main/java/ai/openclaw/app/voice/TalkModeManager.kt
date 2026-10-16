@@ -854,9 +854,6 @@ class TalkModeManager internal constructor(
       "talk.event" -> return handleRealtimeTalkEvent(payloadJson)
       "talk.voice.change" -> return handleRealtimeVoiceChange(payloadJson)
     }
-    if (ttsOnAllResponses) {
-      Log.d(tag, "gateway event: $event")
-    }
     if (event != "chat") return
     val obj = parseJsonParamsObject(payloadJson) ?: return
     val runId = obj["runId"].asJsonStringOrNull() ?: return
@@ -908,7 +905,6 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
       when (state) {
         "final" -> true
@@ -2403,10 +2399,8 @@ class TalkModeManager internal constructor(
         return
       }
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=$mainSessionKey chars=${transcript.length}")
       val ack = sendChat(transcript)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
-      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
         setStatus(if (ack.normalizedStatus == "error") nativeText("Chat error") else nativeText("Aborted"))
         return
@@ -2427,7 +2421,6 @@ class TalkModeManager internal constructor(
         Log.w(tag, "assistant text timeout runId=$runId")
         return
       }
-      Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = cancelActivePlayback()
       // Muting owns only this reply's audio. Stopping capture still cancels the
       // parent turn and must never restart listening over a replacement PTT hold.
@@ -2707,7 +2700,7 @@ class TalkModeManager internal constructor(
       onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
       val parsed = TalkDirectiveParser.parse(text)
-      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: ${parsed.unknownKeys}")
+      if (parsed.unknownKeys.isNotEmpty()) Log.w(tag, "Unknown talk directive keys: count=${parsed.unknownKeys.size}")
       val directive = parsed.directive
       val cleaned = parsed.stripped.trim()
       if (cleaned.isEmpty()) return
@@ -2717,13 +2710,11 @@ class TalkModeManager internal constructor(
         setStatus(nativeText("Generating voice…"), awaitingAgent = true)
       }
       try {
-        val started = SystemClock.elapsedRealtime()
         when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
           is TalkSpeakResult.Success -> {
             markAudioPlaybackStarting(playbackToken)
             talkAudioPlayer.play(result.audio)
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.FallbackToLocal -> {
@@ -2736,7 +2727,6 @@ class TalkModeManager internal constructor(
               beforeSpeak = { markAudioPlaybackStarting(playbackToken) },
             )
             ensurePlaybackActive(playbackToken)
-            Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
 
           is TalkSpeakResult.Failure -> {

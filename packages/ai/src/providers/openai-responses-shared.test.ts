@@ -12,6 +12,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
@@ -111,7 +112,7 @@ function startLifecycle(
     model: nativeOpenAIModel,
     output,
     stream,
-    buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+    buildParams: () => replayRequest([]),
     ...params,
     createClient: () => ({
       responses: {
@@ -135,6 +136,20 @@ async function collectResponses(input: readonly unknown[]) {
   const { stream, events } = createCapturedAssistantMessageEventStream();
   await processResponsesStream(streamResponsesEvents(input), output, stream, nativeOpenAIModel);
   return { output, events };
+}
+
+function messageItem(id: string, text: string) {
+  return { type: "message" as const, id, content: [{ type: "output_text" as const, text }] };
+}
+
+function wireReasoning(id: string, text?: string, encrypted_content?: string) {
+  return {
+    type: "reasoning" as const,
+    id,
+    summary: [],
+    ...(text === undefined ? {} : { content: [{ type: "reasoning_text" as const, text }] }),
+    ...(encrypted_content === undefined ? {} : { encrypted_content }),
+  };
 }
 
 function argumentsDelta(delta: string, outputIndex?: number, itemId?: string) {
@@ -170,6 +185,14 @@ function toolItem(id: string, args = "", name = "computer") {
     name,
     arguments: args,
   };
+}
+
+function toolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { type: "toolCall" as const, id: `call_${id}|fc_${id}`, name, arguments: args };
+}
+
+function replayRequest(input: OpenAIResponsesRequestParams["input"]): OpenAIResponsesRequestParams {
+  return { model: nativeOpenAIModel.id, stream: true, input };
 }
 
 function createAssistantOutput(): AssistantMessage {
@@ -324,43 +347,26 @@ describe("Responses temperature support", () => {
 });
 
 describe("Responses reasoning effort", () => {
-  it("passes max through for GPT-5.6 Sol", () => {
-    expect(resolveOpenAISimpleReasoningEffort(gpt56SolModel, "max")).toBe("max");
-
-    const params = {} as never;
-    applyCommonResponsesParams(
-      params,
-      gpt56SolModel,
-      { messages: [] },
-      {
-        reasoningEffort: "max",
-      },
-    );
-    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
-  });
-
-  it.each<{
-    model: Model<"openai-responses">;
-    reasoning: "minimal" | "high";
-    expected: string;
-  }>([
+  it.each([
+    { model: gpt56SolModel, reasoning: "max", resolvedEffort: "max", expected: "max" },
     {
       model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
       reasoning: "high",
+      resolvedEffort: "high",
       expected: "ProviderHigh",
     },
-  ])(
+  ] satisfies Array<{
+    model: Model<"openai-responses">;
+    reasoning: "max" | "high";
+    resolvedEffort: string;
+    expected: string;
+  }>)(
     "normalizes $reasoning to $expected at the request boundary",
-    ({ model, reasoning, expected }) => {
+    ({ model, reasoning, resolvedEffort, expected }) => {
+      const effort = resolveOpenAISimpleReasoningEffort(model, reasoning);
+      expect(effort).toBe(resolvedEffort);
       const params = {} as ResponseCreateParamsStreaming;
-      applyCommonResponsesParams(
-        params,
-        model,
-        { messages: [] },
-        {
-          reasoningEffort: resolveOpenAISimpleReasoningEffort(model, reasoning),
-        },
-      );
+      applyCommonResponsesParams(params, model, { messages: [] }, { reasoningEffort: effort });
       expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
     },
   );
@@ -713,6 +719,93 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it.each([
+    {
+      name: "rejects reuse of an active Responses tool-call output index",
+      input: [
+        itemEvent("added", toolItem("first_index_owner", ""), 0),
+        itemEvent("added", toolItem("second_index_owner", ""), 0),
+      ],
+      error: "Responses stream reused active tool-call output index 0",
+      events: ["toolcall_start"],
+    },
+    {
+      name: "rejects indexed Responses completions when call ids change",
+      input: [
+        itemEvent(
+          "added",
+          {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read_a",
+            name: "read",
+            arguments: "",
+          },
+          0,
+        ),
+        argumentsDelta('{"path":"README.md"}', 0, "encrypted_delta"),
+        itemEvent(
+          "done",
+          {
+            type: "function_call",
+            id: "fc_read_done",
+            call_id: "call_read_b",
+            name: "read",
+            arguments: '{"path":"README.md"}',
+          },
+          0,
+        ),
+        completed("resp_read"),
+      ],
+      error: "Responses stream changed output item identity",
+      events: ["toolcall_start", "toolcall_delta"],
+    },
+    {
+      name: "fails closed on ambiguous unindexed parallel argument events",
+      input: [
+        itemEvent("added", toolItem("ambiguous_first", "")),
+        itemEvent("added", toolItem("ambiguous_second", "")),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", {
+          type: "function_call",
+          id: "fc_ambiguous_first",
+          call_id: "call_ambiguous_first",
+          name: "computer",
+        }),
+        itemEvent("done", {
+          type: "function_call",
+          id: "fc_ambiguous_second",
+          call_id: "call_ambiguous_second",
+          name: "computer",
+        }),
+        completed("resp_ambiguous_unindexed"),
+      ],
+      error: "Responses stream completed with unresolved tool calls",
+      events: ["toolcall_start", "toolcall_start"],
+    },
+    {
+      name: "rejects a completed Responses tool call whose function name changed",
+      input: [
+        itemEvent("added", toolItem("name_conflict", "", "read"), 0),
+        itemEvent("done", toolItem("name_conflict", "{}", "write"), 0),
+      ],
+      error: "Responses stream changed tool-call function name from read to write",
+      events: ["toolcall_start"],
+    },
+  ])("$name", async ({ input, error, events: expectedEvents }) => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    await expect(
+      processResponsesStream(
+        streamResponsesEvents<(typeof input)[number]>(input),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow(error);
+    expect(events.map((event) => event.type)).toEqual(expectedEvents);
+  });
+
   it.each([["Could not decrypt encrypted_content metadata for the OAuth sidecar.", 400, false]])(
     "classifies encrypted replay rejection: %s",
     (message, status, expected) => {
@@ -793,19 +886,11 @@ describe("processResponsesStream", () => {
           })();
         },
         {
-          buildParams: () => ({
-            model: nativeOpenAIModel.id,
-            stream: true,
-            input: [
-              {
-                type: "reasoning",
-                id: "rs_replay",
-                encrypted_content: "stale-reasoning",
-                summary: [],
-              },
+          buildParams: () =>
+            replayRequest([
+              wireReasoning("rs_replay", undefined, "stale-reasoning"),
               { type: "compaction", id: "cmp_keep", encrypted_content: "valid-compaction" },
-            ],
-          }),
+            ]),
         },
       );
       await done;
@@ -832,11 +917,7 @@ describe("processResponsesStream", () => {
     });
     const { output, requests, done } = startLifecycle(() => streamResponsesEvents([]), {
       options: { onResponse },
-      buildParams: () => ({
-        model: nativeOpenAIModel.id,
-        stream: true,
-        input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
-      }),
+      buildParams: () => replayRequest([wireReasoning("rs_replay", undefined, "stale")]),
     });
     await done;
     expect(requests).toHaveLength(1);
@@ -857,11 +938,7 @@ describe("processResponsesStream", () => {
           throw new Error("400 The encrypted content could not be verified.");
         })(),
       {
-        buildParams: () => ({
-          model: nativeOpenAIModel.id,
-          stream: true,
-          input: [{ type: "reasoning", id: "rs_replay", encrypted_content: "stale", summary: [] }],
-        }),
+        buildParams: () => replayRequest([wireReasoning("rs_replay", undefined, "stale")]),
       },
     );
     await done;
@@ -913,19 +990,13 @@ describe("processResponsesStream", () => {
       },
       {
         options: { ...replayIdentity, onCompactionRejected, onPayload },
-        buildParams: (_model, replayMode) => ({
-          model: nativeOpenAIModel.id,
-          input: convertResponsesMessages(
-            nativeOpenAIModel,
-            context,
-            testAllowedToolCallProviders,
-            {
+        buildParams: (_model, replayMode) =>
+          replayRequest(
+            convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
               ...replayIdentity,
               replayMode,
-            },
+            }),
           ),
-          stream: true,
-        }),
       },
     );
 
@@ -968,40 +1039,12 @@ describe("processResponsesStream", () => {
 
   it("keeps interleaved reasoning items bound to their output indices", async () => {
     const { output, events } = await collectResponses([
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { type: "reasoning", id: "rs_first", summary: [] },
-      },
-      {
-        type: "response.output_item.added",
-        output_index: 1,
-        item: { type: "reasoning", id: "rs_second", summary: [] },
-      },
+      itemEvent("added", wireReasoning("rs_first"), 0),
+      itemEvent("added", wireReasoning("rs_second"), 1),
       { type: "response.reasoning_text.delta", output_index: 0, delta: "first" },
       { type: "response.reasoning_text.delta", output_index: 1, delta: "second" },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: {
-          type: "reasoning",
-          id: "rs_second",
-          summary: [],
-          content: [{ type: "reasoning_text", text: "second" }],
-          encrypted_content: "cipher-second",
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          type: "reasoning",
-          id: "rs_first",
-          summary: [],
-          content: [{ type: "reasoning_text", text: "first" }],
-          encrypted_content: "cipher-first",
-        },
-      },
+      itemEvent("done", wireReasoning("rs_second", "second", "cipher-second"), 1),
+      itemEvent("done", wireReasoning("rs_first", "first", "cipher-first"), 0),
       completed("resp_reasoning"),
     ]);
 
@@ -1032,58 +1075,13 @@ describe("processResponsesStream", () => {
 
   it("keeps deferred text before an interleaved output item", async () => {
     const { output, events } = await collectResponses([
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: {
-          type: "message",
-          id: "msg_first",
-          content: [{ type: "output_text", text: "" }],
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          type: "message",
-          id: "msg_first",
-          content: [{ type: "output_text", text: "first" }],
-        },
-      },
-      {
-        type: "response.output_item.added",
-        output_index: 1,
-        item: {
-          type: "message",
-          id: "msg_second",
-          content: [{ type: "output_text", text: "" }],
-        },
-      },
+      itemEvent("added", messageItem("msg_first", ""), 0),
+      itemEvent("done", messageItem("msg_first", "first"), 0),
+      itemEvent("added", messageItem("msg_second", ""), 1),
       { type: "response.output_text.delta", output_index: 1, delta: "first extended" },
-      {
-        type: "response.output_item.added",
-        output_index: 2,
-        item: { type: "reasoning", id: "rs_after", summary: [] },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 2,
-        item: {
-          type: "reasoning",
-          id: "rs_after",
-          summary: [],
-          content: [{ type: "reasoning_text", text: "thought" }],
-        },
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 1,
-        item: {
-          type: "message",
-          id: "msg_second",
-          content: [{ type: "output_text", text: "first extended" }],
-        },
-      },
+      itemEvent("added", wireReasoning("rs_after"), 2),
+      itemEvent("done", wireReasoning("rs_after", "thought"), 2),
+      itemEvent("done", messageItem("msg_second", "first extended"), 1),
       completed("resp_order"),
     ]);
 
@@ -1223,53 +1221,29 @@ describe("processResponsesStream", () => {
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
   ])("preserves streamed tool-call arguments when done %s", async (_label, doneArguments) => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: Array<Record<string, unknown>> = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event as unknown as Record<string, unknown>);
-      }
-    })();
-
-    await processResponsesStream(
-      streamResponsesEvents([
-        itemEvent("added", toolItem("read", "", "read")),
-        argumentsDelta('{"path":"docs/gateway/local-models.md"}'),
-        {
-          type: "response.function_call_arguments.done",
-          ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
-          item_id: "fc_read",
-          name: "read",
-          output_index: 0,
-          sequence_number: 3,
-        },
-        {
-          type: "response.output_item.done",
-          item: {
-            type: "function_call",
-            id: "fc_read",
-            call_id: "call_read",
-            name: "read",
-          },
-        },
-        completed("resp_1"),
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
+    const { output, events } = await collectResponses([
+      itemEvent("added", toolItem("read", "", "read")),
+      argumentsDelta('{"path":"docs/gateway/local-models.md"}'),
+      {
+        type: "response.function_call_arguments.done",
+        ...(doneArguments === undefined ? {} : { arguments: doneArguments }),
+        item_id: "fc_read",
+        name: "read",
+        output_index: 0,
+        sequence_number: 3,
+      },
+      itemEvent("done", {
+        type: "function_call",
+        id: "fc_read",
+        call_id: "call_read",
+        name: "read",
+      }),
+      completed("resp_1"),
+    ]);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_read|fc_read",
-        name: "read",
-        arguments: { path: "docs/gateway/local-models.md" },
-      },
+      toolCall("read", "read", { path: "docs/gateway/local-models.md" }),
     ]);
     expect(events.map((event) => event.type)).toEqual([
       "toolcall_start",
@@ -1280,26 +1254,11 @@ describe("processResponsesStream", () => {
 
   it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
     const runOnce = async () => {
-      const output = createAssistantOutput();
-      const { stream, events } = createCapturedAssistantMessageEventStream();
-      await processResponsesStream(
-        streamResponsesEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { type: "function_call", name: "computer", arguments: "" },
-          },
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: { type: "function_call", name: "computer", arguments: "{}" },
-          },
-          completed("resp_idless"),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      );
+      const { output, events } = await collectResponses([
+        itemEvent("added", { type: "function_call", name: "computer", arguments: "" }, 0),
+        itemEvent("done", { type: "function_call", name: "computer", arguments: "{}" }, 0),
+        completed("resp_idless"),
+      ]);
       const block = output.content.find((entry) => entry.type === "toolCall");
       const end = events.find((event) => event.type === "toolcall_end");
       if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
@@ -1369,14 +1328,7 @@ describe("processResponsesStream", () => {
     );
 
     expect(startedId).toBe("call_weather");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_weather|fc_weather",
-        name: "weather",
-        arguments: { city: "Seattle" },
-      },
-    ]);
+    expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
     expect(
       events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
     ).toEqual([
@@ -1409,25 +1361,6 @@ describe("processResponsesStream", () => {
     });
   });
 
-  it("rejects reuse of an active Responses tool-call output index", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          itemEvent("added", toolItem("first_index_owner", ""), 0),
-          itemEvent("added", toolItem("second_index_owner", ""), 0),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream reused active tool-call output index 0");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
-  });
-
   it("routes indexed Responses tool arguments when item ids rotate", async () => {
     const output = createResponsesAssistantOutput(gpt56SolModel);
     const { stream, events } = createCapturedAssistantMessageEventStream();
@@ -1451,14 +1384,7 @@ describe("processResponsesStream", () => {
       gpt56SolModel,
     );
 
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_read|fc_read",
-        name: "read",
-        arguments: { path: "README.md" },
-      },
-    ]);
+    expect(output.content).toEqual([toolCall("read", "read", { path: "README.md" })]);
     expect(events.map((event) => event.type)).toEqual([
       "toolcall_start",
       "toolcall_delta",
@@ -1467,49 +1393,7 @@ describe("processResponsesStream", () => {
     ]);
   });
 
-  it("rejects indexed Responses completions when call ids change", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read",
-              call_id: "call_read_a",
-              name: "read",
-              arguments: "",
-            },
-          },
-          argumentsDelta('{"path":"README.md"}', 0, "encrypted_delta"),
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_read_done",
-              call_id: "call_read_b",
-              name: "read",
-              arguments: '{"path":"README.md"}',
-            },
-          },
-          completed("resp_read"),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed output item identity");
-    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
-  });
-
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
     const firstItem = {
       type: "function_call",
       id: "fc_first_unindexed",
@@ -1527,57 +1411,36 @@ describe("processResponsesStream", () => {
       status: "completed",
     };
 
-    await processResponsesStream(
-      streamResponsesEvents([
-        {
-          type: "response.output_item.added",
-          item: { ...firstItem, arguments: "", status: "in_progress" },
+    const { output, events } = await collectResponses([
+      itemEvent("added", { ...firstItem, arguments: "", status: "in_progress" }),
+      itemEvent("added", { ...secondItem, arguments: "", status: "in_progress" }),
+      argumentsDelta(secondItem.arguments, undefined, secondItem.id),
+      argumentsDelta(firstItem.arguments, undefined, firstItem.id),
+      {
+        type: "response.function_call_arguments.done",
+        item_id: firstItem.id,
+        arguments: firstItem.arguments,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        item_id: secondItem.id,
+        arguments: secondItem.arguments,
+      },
+      itemEvent("done", firstItem),
+      itemEvent("done", secondItem),
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_parallel_unindexed",
+          status: "completed",
+          output: [firstItem, secondItem],
         },
-        {
-          type: "response.output_item.added",
-          item: { ...secondItem, arguments: "", status: "in_progress" },
-        },
-        argumentsDelta(secondItem.arguments, undefined, secondItem.id),
-        argumentsDelta(firstItem.arguments, undefined, firstItem.id),
-        {
-          type: "response.function_call_arguments.done",
-          item_id: firstItem.id,
-          arguments: firstItem.arguments,
-        },
-        {
-          type: "response.function_call_arguments.done",
-          item_id: secondItem.id,
-          arguments: secondItem.arguments,
-        },
-        { type: "response.output_item.done", item: firstItem },
-        { type: "response.output_item.done", item: secondItem },
-        {
-          type: "response.completed",
-          response: {
-            id: "resp_parallel_unindexed",
-            status: "completed",
-            output: [firstItem, secondItem],
-          },
-        },
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
+      },
+    ]);
 
     expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_first_unindexed|fc_first_unindexed",
-        name: "computer",
-        arguments: { slot: 1 },
-      },
-      {
-        type: "toolCall",
-        id: "call_second_unindexed|fc_second_unindexed",
-        name: "computer",
-        arguments: { slot: 2 },
-      },
+      toolCall("first_unindexed", "computer", { slot: 1 }),
+      toolCall("second_unindexed", "computer", { slot: 2 }),
     ]);
     expect(
       events
@@ -1594,64 +1457,12 @@ describe("processResponsesStream", () => {
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
   });
 
-  it("fails closed on ambiguous unindexed parallel argument events", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    const firstItem = {
-      type: "function_call",
-      id: "fc_ambiguous_first",
-      call_id: "call_ambiguous_first",
-      name: "computer",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_ambiguous_second",
-      call_id: "call_ambiguous_second",
-      name: "computer",
-    };
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          { type: "response.output_item.added", item: { ...firstItem, arguments: "" } },
-          { type: "response.output_item.added", item: { ...secondItem, arguments: "" } },
-          { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-          { type: "response.output_item.done", item: firstItem },
-          { type: "response.output_item.done", item: secondItem },
-          completed("resp_ambiguous_unindexed"),
-        ]),
-        output,
-        stream,
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
-  });
-
   it("recovers parallel arguments from authoritative done events and preserves opening names", async () => {
-    const output = createAssistantOutput();
-    const { stream, events } = createCapturedAssistantMessageEventStream();
-    await processResponsesStream(
-      streamResponsesEvents(createResponsesDoneArgumentEvents()),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
+    const { output, events } = await collectResponses(createResponsesDoneArgumentEvents());
 
     expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: "call_recovered_first|fc_recovered_first",
-        name: "read",
-        arguments: { path: "README.md" },
-      },
-      {
-        type: "toolCall",
-        id: "call_recovered_second|fc_recovered_second",
-        name: "write",
-        arguments: { path: "README.md", text: "ok" },
-      },
+      toolCall("recovered_first", "read", { path: "README.md" }),
+      toolCall("recovered_second", "write", { path: "README.md", text: "ok" }),
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
@@ -1689,94 +1500,70 @@ describe("processResponsesStream", () => {
       );
       expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
       expect(output.content).toEqual([
-        {
-          type: "toolCall",
-          id: "call_alias|fc_alias",
-          name: "dispatch_action",
-          arguments: { id: "sessions_spawn", args: {} },
-        },
+        toolCall("alias", "dispatch_action", { id: "sessions_spawn", args: {} }),
       ]);
     },
   );
 
-  it("rejects a completed Responses tool call whose function name changed", async () => {
-    const output = createAssistantOutput();
-
-    await expect(
-      processResponsesStream(
-        streamResponsesEvents([
-          itemEvent("added", toolItem("name_conflict", "", "read"), 0),
-          itemEvent("done", toolItem("name_conflict", "{}", "write"), 0),
-        ]),
-        output,
-        new AssistantMessageEventStream(),
-        nativeOpenAIModel,
-      ),
-    ).rejects.toThrow("Responses stream changed tool-call function name from read to write");
-  });
-
-  it("routes omitted-index parallel arguments and completions without duplicates", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 0),
-      itemEvent("added", toolItem("second", ""), 1),
-      argumentsDelta('{"slot":', 0, "fc_first"),
-      argumentsDelta("0}", undefined, "fc_first"),
-      argumentsDelta('{"slot":', 1),
-      itemEvent("done", toolItem("second", '{"slot":1}')),
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      completed("resp_suffix"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
+  it.each([
+    {
+      name: "routes omitted-index parallel arguments and completions without duplicates",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        itemEvent("added", toolItem("second", ""), 1),
+        argumentsDelta('{"slot":', 0, "fc_first"),
+        argumentsDelta("0}", undefined, "fc_first"),
+        argumentsDelta('{"slot":', 1),
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_suffix"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 0, 1],
+      calls: 2,
+    },
+    {
+      name: "rejects omitted-index events whose identity mismatches the sole indexed call",
+      input: [
+        itemEvent("added", toolItem("first", ""), 0),
+        argumentsDelta('{"wrong":true}', undefined, "fc_other"),
+        itemEvent("done", toolItem("other", '{"wrong":true}')),
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        completed("resp_identity_mismatch"),
+      ],
+      content: [{ type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } }],
+      deltas: [],
+      calls: 1,
+    },
+    {
+      name: "keeps sequential omitted-index Responses calls unambiguous",
+      input: [
+        itemEvent("added", toolItem("first", ""), 7),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
+        itemEvent("done", toolItem("first", '{"slot":0}')),
+        itemEvent("added", toolItem("second", ""), 8),
+        { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
+        itemEvent("done", toolItem("second", '{"slot":1}')),
+        completed("resp_sequential"),
+      ],
+      content: [
+        { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
+        { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
+      ],
+      deltas: [0, 1],
+      calls: 2,
+    },
+  ])("$name", async ({ input, content, deltas, calls }) => {
+    const { output, events } = await collectResponses(input);
+    expect(output.content).toMatchObject(content);
     expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 0, 1]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
-  });
-
-  it("rejects omitted-index events whose identity mismatches the sole indexed call", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 0),
-      argumentsDelta('{"wrong":true}', undefined, "fc_other"),
-      itemEvent("done", toolItem("other", '{"wrong":true}')),
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      completed("resp_identity_mismatch"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-    ]);
-    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "toolcall_delta")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
-  });
-
-  it("keeps sequential omitted-index Responses calls unambiguous", async () => {
-    const { output, events } = await collectResponses([
-      itemEvent("added", toolItem("first", ""), 7),
-      { type: "response.function_call_arguments.delta", delta: '{"slot":0}' },
-      itemEvent("done", toolItem("first", '{"slot":0}')),
-      itemEvent("added", toolItem("second", ""), 8),
-      { type: "response.function_call_arguments.delta", delta: '{"slot":1}' },
-      itemEvent("done", toolItem("second", '{"slot":1}')),
-      completed("resp_sequential"),
-    ]);
-
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_first|fc_first", arguments: { slot: 0 } },
-      { type: "toolCall", id: "call_second|fc_second", arguments: { slot: 1 } },
-    ]);
-    expect(
-      events
-        .filter((event) => event.type === "toolcall_delta")
-        .map((event) => ("contentIndex" in event ? event.contentIndex : undefined)),
-    ).toEqual([0, 1]);
+      events.filter((event) => event.type === "toolcall_delta").map((event) => event.contentIndex),
+    ).toEqual(deltas);
+    expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(calls);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(calls);
   });
 
   it("pairs an item-only tool call with one generated call id", async () => {

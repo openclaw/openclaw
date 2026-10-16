@@ -88,7 +88,7 @@ openclaw-chat-session-rail {
   color: var(--text);
 }
 
-/* strokeIcon already inlines fill/stroke/stroke-width on the svg. */
+/* Icons inline fill, stroke, and stroke-width on the SVG. */
 .chat-session-rail__starter svg {
   width: 12px;
   height: 12px;

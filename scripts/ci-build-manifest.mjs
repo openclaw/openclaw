@@ -685,13 +685,15 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
-  "ui/src/lit/presentation-binding.ts",
+  "ui/src/lib/solid-bridge.ts",
+  "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -953,6 +955,9 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "src/state/openclaw-agent-*",
+  "src/config/sessions/**",
+  "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
@@ -986,6 +991,8 @@ const postgresConformancePaths = [
   "src/infra/kysely-sync*.ts",
   "src/infra/sqlite-transaction.ts",
   "extensions/workboard/**",
+  "extensions/memory-core/src/memory/**",
+  "extensions/memory-core/src/memory-session-tombstones.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
 ];
@@ -1154,15 +1161,31 @@ const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
 const testRuntimePolicy = existsSync(testRuntimePolicyPath)
   ? await importTargetPlan(testRuntimePolicyPath)
   : null;
+const trialRuntimePolicy =
+  workflowEventName === "workflow_dispatch"
+    ? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim()
+    : "";
+if (trialRuntimePolicy && !["bun-all", "dual-all"].includes(trialRuntimePolicy)) {
+  throw new Error("test_runtime_policy must be empty, bun-all, or dual-all");
+}
+if (trialRuntimePolicy && !testRuntimePolicy?.resolveCiTestRuntimePolicy) {
+  throw new Error("The selected checkout does not support test_runtime_policy trials");
+}
+if (trialRuntimePolicy) {
+  testRuntimePolicy.resolveCiTestRuntimePolicy({
+    OPENCLAW_CI_TEST_RUNTIME_POLICY: trialRuntimePolicy,
+  });
+}
 const testRuntimeMode = testRuntimePolicy
-  ? eventName === "pull_request" || releaseGate
-    ? "bun-compatible"
-    : eventName === "workflow_dispatch" && !mainValidation
-      ? "dual"
-      : "node"
+  ? trialRuntimePolicy ||
+    (eventName === "pull_request" || releaseGate
+      ? "bun-compatible"
+      : eventName === "workflow_dispatch" && !mainValidation
+        ? "dual"
+        : "node")
   : "node";
 const uiTestRuntimePolicy =
-  !compatibilityTarget &&
+  (!compatibilityTarget || Boolean(trialRuntimePolicy)) &&
   testRuntimePolicy?.ciTestShardRequiresBun(
     {
       configs: ["ui/vitest.config.ts"],
@@ -1199,6 +1222,7 @@ const shardRequiresTests = (shard, tests, fallback) =>
       : fallback(plan);
   });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
+const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1223,10 +1247,11 @@ const nodeTestShards = targetNodeTestShards
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const row = {
       check_name: shard.checkName,
-      test_runtime_policy: testRuntimeMode,
+      test_runtime_policy: trialRuntimePolicy && shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(trialRuntimePolicy) ||
+          Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1237,7 +1262,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
-      timeout_minutes: shard.timeoutMinutes,
+      timeout_minutes:
+        !shard.requiresDist && testRuntimeMode === "dual-all"
+          ? 2 * (shard.timeoutMinutes ?? 60)
+          : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
@@ -1300,8 +1328,51 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    if (packedGroups) {
+      packedNodeTestRows.push({ row, groups });
+    }
     return row;
   });
+const nodeTestGroupPools = {};
+if (
+  typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
+  packedNodeTestRows.reduce((size, { row }) => size + row.groups_gzip_base64.length, 0) > 128_000
+) {
+  // Compress repeated paths across rows, without changing the runner's per-row contract.
+  // Each pool stays below Linux's per-environment-string limit, including base64 overhead.
+  let pool = [];
+  let rows = [];
+  const flush = () => {
+    const poolKey = `pool-${Object.keys(nodeTestGroupPools).length + 1}`;
+    nodeTestGroupPools[poolKey] = encodeNodeTestGroups(pool);
+    rows.forEach((row, index) => {
+      row.groups_pool = poolKey;
+      row.groups_index = index;
+      delete row.groups_gzip_base64;
+    });
+    pool = [];
+    rows = [];
+  };
+  for (const { row, groups } of packedNodeTestRows) {
+    // Oversized individual descriptors retain their existing standalone transport.
+    if (row.groups_gzip_base64.length > 60_000) {
+      continue;
+    }
+    if (encodeNodeTestGroups([...pool, groups]).length > 60_000) {
+      if (pool.length) {
+        flush();
+      }
+      if (encodeNodeTestGroups([groups]).length > 60_000) {
+        continue;
+      }
+    }
+    pool.push(groups);
+    rows.push(row);
+  }
+  if (pool.length) {
+    flush();
+  }
+}
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
@@ -1529,6 +1600,7 @@ const manifest = {
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
+  node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
   // Older scope owners retain these guards rather than silently dropping coverage.
@@ -1626,8 +1698,8 @@ const manifest = {
   run_macos_node: runMacosNode,
   macos_node_matrix: createMatrix(
     runMacosNode
-      ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-        ? [1, 2, 3].map((part) => ({
+      ? [1, 2].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+        ? (hasPackageScript("test:macos:ci:3") ? [1, 2, 3] : [1, 2]).map((part) => ({
             check_name: `macos-node-${part}`,
             runtime: "node",
             task: `test-${part}`,
@@ -1728,16 +1800,26 @@ if (hybridHostedEligible) {
     hostedPlanner ||
     (workflowEventName === "pull_request" &&
       process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
+  const hostedHybridControls =
+    process.env.OPENCLAW_CI_RUNNER_BACKEND === "hybrid" &&
+    workflowEventName !== "workflow_dispatch" &&
+    (workflowEventName !== "pull_request" ||
+      process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY);
   // Include control jobs, every emitted matrix row and native hosted jobs.
   // Narrow PRs reserve full lint/type templates; only hybrid moves critical controls.
   // The guard independently expands the workflow to catch inventory drift.
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
-    preflight: count(ciQualification),
-    "check-plan": count(hostedPlanner && runCheckPlan),
+    preflight: count(ciQualification || hostedHybridControls),
+    "ci-gate": count(hostedHybridControls),
+    "check-plan": count(
+      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
+        runCheckPlan,
+    ),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
+        (hostedHybridControls ||
+          process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
@@ -1776,7 +1858,7 @@ if (hybridHostedEligible) {
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
+    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),

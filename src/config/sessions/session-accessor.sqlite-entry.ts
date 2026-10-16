@@ -376,6 +376,7 @@ async function patchSqliteSessionEntrySnapshot(
     assertCapturedSource,
     assertCurrent,
   } = captureSessionEntryPatchSource(params);
+  let lifecycleEffects: SessionEntryPatchCommitted["lifecycleEffects"];
   const prepare = async (prepared: SqliteLifecycleTargetSnapshot) => {
     const existing = prepared[0]?.entry;
     if (
@@ -398,6 +399,9 @@ async function patchSqliteSessionEntrySnapshot(
             writeBase,
             sessionKey,
             operation: params.update,
+            onLifecycleProjection: (effects) => {
+              lifecycleEffects = effects;
+            },
           })
         : mergeSessionEntryPatch({
             ...options,
@@ -597,7 +601,9 @@ async function patchSqliteSessionEntrySnapshot(
             );
             try {
               if (next && result) {
-                if (transcriptPredicate) {
+                if (lifecycleEffects) {
+                  options.onCommitted?.(result, transcriptPredicate, lifecycleEffects);
+                } else if (transcriptPredicate) {
                   options.onCommitted?.(result, transcriptPredicate);
                 } else {
                   options.onCommitted?.(result);
@@ -637,13 +643,13 @@ async function patchSqliteSessionEntrySnapshot(
       skipMaintenance: options.skipMaintenance,
       storePath: params.storePath,
     });
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      env: resolved.env,
+      storePath: params.storePath,
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
   }
-  kickSessionHistoryDiskBudgetMaintenance({
-    ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
-    env: resolved.env,
-    storePath: params.storePath,
-    ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
-  });
   return committed;
 }
 

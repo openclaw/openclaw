@@ -108,6 +108,7 @@ export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
 const resumedRuns = new Set<object>();
 const resumeReader = createSubagentResumeReader({
   resumedRuns,
+  runBackgroundWork: (entry, run) => subagentLifecycleController.runBackgroundWork(entry, run),
   getGatewayContextResolver: () => activeGatewayContextResolver,
   resume: resumeCheckedSubagentRun,
   retryAfterDrain: (runId, entry, stateContext) => {
@@ -208,7 +209,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
 ) {
   const stateContext = captureOpenClawStateWorkerContext();
   const resumeKey = getSubagentRunRuntimeKey(entry);
-  void runWithGatewayDetachedWorkAdmission(async () => {
+  const finalize = async () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     if (!isSameSubagentRunOwner(subagentRuns.get(runId), entry)) {
       resumedRuns.delete(resumeKey);
@@ -218,7 +219,11 @@ function finalizeResumedAnnounceGiveUpInBackground(
     if (current) {
       await finalizeResumedAnnounceGiveUp({ entry: current, reason, stateContext });
     }
-  }, "subagents:delivery-finalize").catch((error: unknown) => {
+  };
+  void runWithGatewayDetachedWorkAdmission(
+    () => subagentLifecycleController.runBackgroundWork(entry, finalize),
+    "subagents:delivery-finalize",
+  ).catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     try {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -512,6 +517,10 @@ function retireSupersededSubagentRun(
       assertCurrent?.();
       return isRequesterRetirementCustodyCurrent(current, entry);
     },
+  }).then(() => {
+    if (!subagentRuns.has(runId)) {
+      subagentLifecycleController.resumeAncestorCleanup(entry);
+    }
   });
 }
 

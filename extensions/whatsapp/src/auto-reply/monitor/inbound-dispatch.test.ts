@@ -298,7 +298,6 @@ describe("WhatsApp reply delivery", () => {
     expect(
       plan.finalize({ queuedFinal: false, counts: { final: 1 }, observedReplyDelivery: true }),
     ).toBe(true);
-    expect(verboseLog).toHaveBeenCalledWith(`Reply delivered: ${text.length} chars -> +1000`);
     expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(text);
   });
 

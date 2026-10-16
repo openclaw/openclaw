@@ -102,7 +102,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const state = f.state();
 
       expect(state.mainProofDelayedAt, result.output).toBe(proofSeconds ? 2 : null);
-      expect(state.settlementSleeps).toEqual([2]);
+      expect(state.settlementSleeps[0]).toBe(2);
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(
+        known ? 2 : 60,
+      );
       expect(result.status, result.output).toBe(admitted ? 0 : 1);
       expect(state.mutations).toBe(admitted ? 1 : 0);
       if (admitted) {

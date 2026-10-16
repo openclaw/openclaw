@@ -618,7 +618,9 @@ describe("hosted model pricing", () => {
       readStoredCatalog,
     });
     await prepareRemoteModelCatalogStartupSnapshot();
-    const fingerprint = resolveModelCostConfigFingerprint(configFor("https://api.openai.com/v1"));
+    const config = configFor("https://api.openai.com/v1");
+    const fingerprint = resolveModelCostConfigFingerprint(config);
+    const contextFingerprint = resolveModelPricingContext(config).fingerprint;
     const withoutHostedPricing = configFor("https://api.openai.com/v1");
     withoutHostedPricing.models = {
       ...withoutHostedPricing.models,
@@ -626,6 +628,10 @@ describe("hosted model pricing", () => {
     };
 
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    expect(contextFingerprint.length).toBe(64);
+    expect(contextFingerprint).not.toBe(
+      resolveModelPricingContext(withoutHostedPricing).fingerprint,
+    );
     expect(fingerprint).not.toBe(resolveModelCostConfigFingerprint(withoutHostedPricing));
   });
 });

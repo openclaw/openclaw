@@ -7,6 +7,8 @@ import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { SessionPicker } from "./picker.tsx";
+// Suggestions live in the native popover island; keyboard events update its
+// selection synchronously so consecutive keys need no reactive flush.
 function clearActiveBranchSuggestion(field: Element | null) {
   field?.querySelector("input")?.removeAttribute("aria-activedescendant");
   for (const suggestion of field?.querySelectorAll("[data-worktree-suggestion]") ?? []) {
@@ -54,6 +56,7 @@ function WorktreeFields(props: {
 }) {
   const [suggestionsOpen, setSuggestionsOpen] = createSignal(false);
   let baseRef!: HTMLInputElement;
+  let nameInput!: HTMLInputElement;
   const closeSuggestions = () => {
     setSuggestionsOpen(false);
     clearActiveBranchSuggestion(baseRef.closest(".new-session-page__branch-field"));
@@ -74,14 +77,10 @@ function WorktreeFields(props: {
       props.onClose();
       return;
     }
-    const popover = target.closest(".new-session-page__checkout-popover");
-    const liveWorktreeName =
-      popover?.querySelector<HTMLInputElement>("input[data-worktree-name]")?.value ??
-      props.params.worktreeName;
     if (
       event.key !== "Enter" ||
       event.isComposing ||
-      (!props.params.repository && !isWorktreeNameValid(liveWorktreeName))
+      (!props.params.repository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;
     }
@@ -205,7 +204,7 @@ function WorktreeFields(props: {
                   props.params.onWorktreeNameInput(event.currentTarget.value);
                 }
               }}
-              ref={nativeListener("keydown", handleFieldKeydown)}
+              ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
             />
           </label>
           <div class="new-session-page__menu-note">

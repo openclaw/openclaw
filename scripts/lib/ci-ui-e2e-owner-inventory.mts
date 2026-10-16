@@ -1849,7 +1849,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-progress-hovercard.e2e.test.ts",
     ["activity", "chat", "profile"],
     [
-      "ui/src/components/channel-avatar.ts",
+      "ui/src/components/solid/channel-avatar.tsx",
       "ui/src/components/session-menu.ts",
       "ui/src/components/viewer-facepile.ts",
       "ui/src/lib/session-pull-requests.ts",

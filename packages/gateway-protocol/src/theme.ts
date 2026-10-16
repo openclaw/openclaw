@@ -1,3 +1,6 @@
+import type { Static } from "typebox";
+import type { SchemaContract } from "./schema-contract.js";
+import type { ThemeDefinitionSchema } from "./schema/themes.js";
 import type { ThemeId } from "./theme-ids.ts";
 export {
   BUILTIN_THEME_IDS,
@@ -62,21 +65,7 @@ export const THEME_TOKEN_MAX_LENGTH = 120;
 
 export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
   Partial<Record<(typeof THEME_FONT_KEYS)[number], string>>;
-export type ThemeDefinition = {
-  name: string;
-  description: string;
-  mascot?: ThemeMascot;
-  brandName?: string;
-  brandIcon?: string;
-  workingIndicator?: ThemeWorkingIndicator;
-  lobsterdex?: boolean;
-  communityLinks?: boolean;
-  workingPhrases?: string[];
-  critters?: string[];
-  avatarHat?: string;
-  light?: ThemePalette;
-  dark?: ThemePalette;
-};
+export type ThemeDefinition = SchemaContract<Static<typeof ThemeDefinitionSchema>>;
 export type ThemeArtwork = {
   icons?: Record<string, { url: string }>;
   hats?: Record<string, { url: string }>;

@@ -78,6 +78,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     );
   }
 
+  protected toggleConversationPanel(layout: SidebarLayout): void {
+    const changeSlot = isSidebarSlotVisible(layout, "conversation") ? closeSlot : openSlot;
+    const nextLayout = changeSlot(layout, "conversation");
+    this.commitSidebarLayout(nextLayout, { dashboardPresentation: "personal" });
+    if (layout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
+    }
+  }
+
   protected requestSessionRail(intent: "open" | "toggle"): void {
     const state = this.state;
     if (!state) {

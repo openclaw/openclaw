@@ -115,7 +115,7 @@ export const finalizeSubagentCleanup = async (
       finalizeDelivery,
     });
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
-    await commit((draft) => {
+    const finalizeDelivery = (draft: SubagentRunRecord) => {
       const intentionalNonDelivery = draft.delivery?.disposition === "intentional_non_delivery";
       clearSubagentPendingDelivery(draft);
       if (skipRequesterDelivery) {
@@ -126,8 +126,8 @@ export const finalizeSubagentCleanup = async (
         draft.suppressCompletionDelivery = undefined;
       }
       draft.wakeOnDescendantSettle = undefined;
-    });
-    await finishCleanup(skipRequesterDelivery);
+    };
+    await finishCleanup(skipRequesterDelivery, undefined, finalizeDelivery);
     return;
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {

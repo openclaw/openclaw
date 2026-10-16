@@ -1,5 +1,5 @@
 import { ImapFlow, type FetchMessageObject } from "imapflow";
-import { simpleParser } from "mailparser";
+import { simpleParser, type ParsedMail } from "mailparser";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
@@ -331,8 +331,16 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
     }
-    // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
-    const mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
+    let mail: ParsedMail;
+    try {
+      // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
+      mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
+    } catch {
+      // Parsing runs before sender admission and fails identically on every retry of
+      // the same bytes, so skip it instead of stalling every later UID behind it.
+      await this.recordSkip(message.uid, undefined, "message-parse-failed");
+      return true;
+    }
     const verdict = await evaluateImapSender({
       mail,
       raw: message.source,

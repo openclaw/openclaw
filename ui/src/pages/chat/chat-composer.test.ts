@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps as props,
@@ -190,7 +191,7 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
     openMicrophoneMock,
   );
 });
@@ -516,10 +517,8 @@ describe("renderChatComposer controls", () => {
     const microphone = button(container, t("chat.composer.startVoiceInput"));
     microphone.dispatchEvent(dictationPointer("pointerdown", 10));
     await vi.advanceTimersByTimeAsync(801);
-    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
-      "wa-dropdown.chat-talk-input-picker",
-    );
-    expect(dropdown?.open).toBe(true);
+    const dropdown = container.querySelector<HTMLElement>(".chat-talk-input-picker");
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     await vi.waitFor(() =>
       expect(
         container.querySelector(
@@ -530,7 +529,7 @@ describe("renderChatComposer controls", () => {
 
     document.dispatchEvent(dictationPointer("pointerup", 10));
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(dropdown?.open).toBe(true);
+    expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
 
     microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -580,27 +579,25 @@ describe("renderChatComposer controls", () => {
 describe("renderChatComposer status", () => {
   it("keeps every concurrent gateway question reachable", async () => {
     const container = createComposerContainer();
-    const onRequestUpdate = vi.fn();
     const composerProps = props({
       sessionKey: "queue-test",
       gatewayQuestionPrompts: [
         questionPrompt("question-1", "First prompt"),
         questionPrompt("question-2", "Second prompt"),
       ],
-      onRequestUpdate,
     });
 
     renderComposerInto(container, composerProps);
-    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    const panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
     panel.props!.onNextRequest?.();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-    renderComposerInto(container, composerProps);
-    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    await waitForSolid(() => {
+      const nextPanel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+      expect(nextPanel.props!.model.questions[0]?.question).toBe("Second prompt");
+      expect(nextPanel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    });
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

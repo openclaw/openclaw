@@ -330,6 +330,8 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+      evaluateV2: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecisionV2(...args),
     },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,

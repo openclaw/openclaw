@@ -4,7 +4,7 @@ import type { PluginCredentialInspection } from "../../../../packages/gateway-pr
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   PluginCredentialEditor,
@@ -35,7 +35,7 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     connected: true,
     capture: () => scope,
     isCurrent: (candidate: unknown) => candidate === scope,
-  } as unknown as GatewayPageController;
+  } as unknown as GatewayPageBinding;
   const context: PluginCredentialEditorContext = {
     pluginId: "example",
     baseHash: "revision",
@@ -237,7 +237,7 @@ describe("plugin credential authoring controls", () => {
           connected: false,
           capture: () => null,
           isCurrent: () => false,
-        } as unknown as GatewayPageController;
+        } as unknown as GatewayPageBinding;
       }
       await update();
       pending.resolve({
@@ -368,7 +368,7 @@ describe("plugin credential authoring controls", () => {
       connected: false,
       capture: () => null,
       isCurrent: () => false,
-    } as unknown as GatewayPageController;
+    } as unknown as GatewayPageBinding;
     await update();
     expect(editor.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(context.onCommit).not.toHaveBeenCalled();

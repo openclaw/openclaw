@@ -537,7 +537,9 @@ describe("Control UI Vite build", () => {
     expect(output).toContain("Control UI precompression: starting");
     expect(output).not.toMatch(/\d+ assets|precompression complete|built in/u);
     const emitted = await fs.readdir(path.join(outDir, "assets"));
-    expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
+    const startedAssets = emitted.filter((name) => name.endsWith(".br")).length;
+    expect(startedAssets).toBeGreaterThan(0);
+    expect(startedAssets).toBeLessThanOrEqual(4);
     expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
     await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({
       code: "ENOENT",

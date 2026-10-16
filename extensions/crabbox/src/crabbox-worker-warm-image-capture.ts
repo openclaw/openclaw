@@ -20,7 +20,7 @@ import {
   CrabboxCheckpointCreateError,
   parseCreatedCheckpoint,
   type CheckpointContext,
-  type createCheckpointCommands,
+  checkpointCommand,
   type parseCheckpointAvailability,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
@@ -55,7 +55,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
   held: (record: WarmProfileRecord, checkpointId: string) => boolean;
   deleteImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
   retireImage: (context: LeaseContext, key: string, record: WarmProfileRecord) => Promise<void>;
-  checkpointCommand: ReturnType<typeof createCheckpointCommands>["checkpointCommand"];
   prepareCapture: (
     context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
   ) => Promise<void>;
@@ -70,7 +69,6 @@ export function createCrabboxWarmImageCapture(dependencies: {
     held,
     deleteImage,
     retireImage,
-    checkpointCommand,
   } = dependencies;
   const warnUnsupported = (message: string) =>
     warnOnce(
@@ -409,7 +407,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
               cacheKey: owner.cacheKey,
               purpose: owner.purpose,
               lastDemandAtMs: owner.purpose === "session" ? null : owner.demandAtMs,
-              runtimeIdentity: structuredClone(owner.runtimeIdentity),
+              runtimeIdentity: owner.runtimeIdentity,
               ...(owner.baseCommit ? { baseCommit: owner.baseCommit } : {}),
             },
             ...(retiredCheckpointId

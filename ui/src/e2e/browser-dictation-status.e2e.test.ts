@@ -427,12 +427,17 @@ suite.define(() => {
 
       const voice = page.getByRole("button", { name: "Start voice input" });
       await voice.hover();
-      await page.getByRole("button", { name: "Microphone input" }).click();
-      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      const trigger = page.getByRole("button", { name: "Microphone input" });
+      await trigger.click();
+      const picker = page.locator(".chat-talk-input-picker");
       const selectedDevice = picker.getByRole("menuitemradio", { name: "USB Audio Interface" });
       await selectedDevice.click();
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(false);
       await voice.hover();
-      await page.getByRole("button", { name: "Microphone input" }).click();
+      await trigger.click();
       const toggle = picker.getByRole("menuitemcheckbox", { name: "Hold to start dictation" });
       await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
       await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
@@ -452,6 +457,18 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(suite.artifactDir, "voice-controls/microphone-picker-hold-toggle-full.png"),
       });
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      await trigger.click();
+      await selectedDevice.click();
+      await expect.poll(() => picker.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => trigger.evaluate((element) => document.activeElement === element))
+        .toBe(false);
     });
   });
 
@@ -483,7 +500,7 @@ suite.define(() => {
       await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
       const unavailable = page.locator('[data-status="unavailable"]');
       await expect.poll(() => unavailable.count()).toBe(2);
-      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      const picker = page.locator(".chat-talk-input-picker");
       await expect.poll(() => picker.getByRole("menuitem", { name: /Configure/ }).count()).toBe(2);
       await captureComposerProof(suite, page, "microphone-picker-capability-gating.png");
       await page.screenshot({

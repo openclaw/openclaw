@@ -140,6 +140,14 @@ openclaw-chat-details-progress {
 .chat-details__toolbar button {
   color: var(--muted);
 }
+@media (hover: hover) {
+  .chat-details__row .chat-copy-btn {
+    opacity: 0;
+  }
+  .chat-details__row:is(:hover, :focus-within) .chat-copy-btn {
+    opacity: 1;
+  }
+}
 .chat-details__toolbar svg,
 .chat-details__row .chat-copy-btn svg {
   width: 14px;
@@ -150,7 +158,7 @@ openclaw-chat-details-progress {
   align-items: center;
   gap: 5px;
   min-height: 28px;
-  padding: 3px 0;
+  padding: 3px 8px;
   list-style: none;
   color: var(--text);
   font-size: 13px;
@@ -186,11 +194,11 @@ openclaw-chat-details-progress {
   display: flex;
   align-items: center;
   gap: 9px;
-  min-height: 32px;
+  min-height: 36px;
   width: 100%;
-  padding: 4px 0;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -536,11 +544,11 @@ openclaw-chat-details-progress {
 }
 .chat-details__meter::-webkit-meter-optimum-value {
   border-radius: 4px;
-  background: var(--accent);
+  background: currentColor;
 }
 .chat-details__meter::-moz-meter-bar {
   border-radius: 4px;
-  background: var(--accent);
+  background: currentColor;
 }
 .chat-details__context-budget {
   display: flex;

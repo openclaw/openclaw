@@ -20,14 +20,12 @@ import {
   prepareUpdateCandidatePlugins,
 } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
   materializeUpdateCandidateStateWorker,
   runUpdateCandidateSnapshotWorker,
 } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -223,6 +221,13 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   const stateDir = path.join(root, "state-owner");
   const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
   expect(before.every((entry) => entry.userVersion === null)).toBe(true);
+  const daemon = path.join(stateDir, "control", "services.sqlite");
+  const legacy = before.filter((entry) => entry.path !== daemon);
+  expect(
+    updateStateSchemaVersionsMatch(legacy, before, {
+      sharedPath: path.join(stateDir, "state", "openclaw.sqlite"),
+    }),
+  ).toBe(true);
   const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   await createDatabase(main);
   const after = await readUpdateStateSchemaVersions({ stateDir, config: {} });
@@ -239,6 +244,17 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   ).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, before, candidate)).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, after.toReversed(), candidate)).toBe(true);
+  await createDatabase(daemon, "PRAGMA user_version = 1;");
+  const withDaemon = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(
+    updateStateSchemaVersionsMatch(
+      after.filter((entry) => entry.path !== daemon),
+      withDaemon,
+      { sharedPath },
+    ),
+  ).toBe(false);
+  expect(updateStateSchemaVersionsMatch(after, withDaemon, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withDaemon, after, candidate)).toBe(false);
 });
 
 it.runIf(process.platform !== "win32")(

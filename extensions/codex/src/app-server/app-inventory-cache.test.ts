@@ -12,6 +12,26 @@ import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } fro
 type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 
 describe("Codex app inventory cache", () => {
+  it.each([false, true, undefined])(
+    "preserves cold-cache refresh intent %s across independent thread keys",
+    async (forceRefetch) => {
+      const cache = new CodexAppInventoryCache();
+      const apps = [app("app-1")];
+      const request = vi.fn(async (method, params) =>
+        codexAppInventoryResponse(method, apps, params),
+      );
+
+      for (const key of ["thread-a", "thread-b"]) {
+        const snapshot = await cache.refreshNow({ key, request, forceRefetch });
+        expect(snapshot.apps).toEqual(apps);
+      }
+      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
+        ["app/installed", { forceRefresh: forceRefetch !== false }],
+        ["app/installed", { forceRefresh: forceRefetch !== false }],
+      ]);
+    },
+  );
+
   it("coalesces native metadata and installed runtime facts without fabricating app/list fields", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 100 });
     const apps = [

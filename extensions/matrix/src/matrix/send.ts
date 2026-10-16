@@ -133,7 +133,7 @@ export async function sendMessageMatrix(
             wireEventType: wireEventType!,
           })
         : null;
-      let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
+      let plannedEvents: readonly MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
         const preparedText = chunkMatrixText(messageText, {
           cfg,

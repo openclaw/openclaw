@@ -32,6 +32,15 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
 - Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution. The response reader remains open until the result arrives.
 
+The exec response deadline includes the requested command `timeoutMs`, the
+companion's 15-second approval window, and 5 seconds for transport overhead.
+An omitted timeout keeps the 20-second default; `timeoutMs: 0` disables the
+response deadline while preserving cancellation. After submission, a response
+deadline reports `TIMEOUT` and a lost or oversized reply reports `UNKNOWN`.
+Both mean the execution outcome is unknown; the command is never replayed
+locally. `COMPANION_APP_UNAVAILABLE` is reserved for requests that could not be
+submitted to the companion.
+
 Diagram (SCI):
 
 ```text

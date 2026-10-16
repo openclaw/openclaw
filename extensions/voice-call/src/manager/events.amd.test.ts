@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import { createEventManagerHarness } from "../manager.test-harness.js";
 import { CallRecordSchema, type CallRecord } from "../types.js";
 import { processEvent } from "./events.js";
@@ -97,7 +97,7 @@ describe("carrier answering machine flow", () => {
           playMessageAndHangup: carrier,
           hangupCall: hangup,
         }),
-        config: VoiceCallConfigSchema.parse({ voicemail }),
+        config: normalizeVoiceCallConfig({ voicemail }),
       });
       ctx.activeCalls.set(call.callId, call);
       await processEvent(ctx, detection("machine_end_beep"));
@@ -143,7 +143,7 @@ describe("carrier answering machine flow", () => {
         work.push(item);
       },
       provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-      config: VoiceCallConfigSchema.parse({ voicemail }),
+      config: normalizeVoiceCallConfig({ voicemail }),
     });
     ctx.activeCalls.set(call.callId, call);
     await processEvent(ctx, detection("machine_end_beep"));
@@ -186,7 +186,7 @@ describe("carrier answering machine flow", () => {
           work.push(item);
         },
         provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-        config: VoiceCallConfigSchema.parse({ voicemail }),
+        config: normalizeVoiceCallConfig({ voicemail }),
       });
       const call = callRecord();
       ctx.activeCalls.set(call.callId, call);
@@ -212,7 +212,7 @@ describe("carrier answering machine flow", () => {
           work.push(item);
         },
         provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-        config: VoiceCallConfigSchema.parse({ voicemail }),
+        config: normalizeVoiceCallConfig({ voicemail }),
       });
       const call = callRecord({
         mode: "notify",
@@ -253,7 +253,7 @@ describe("carrier answering machine flow", () => {
         work.push(item);
       },
       provider: createProvider({ name: "twilio", playMessageAndHangup, hangupCall: hangup }),
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         voicemail: { detection: mode === "off" ? "off" : "twilio", onMachine: "hang-up" },
       }),
     });

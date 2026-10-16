@@ -202,12 +202,14 @@ it("retains resident session facts across usage cache writes and reloads actual 
       expect(await usage.acquire()).toBe(true);
       unchanged();
       expect(
-        await usage.writeRollup({
-          rollupId: "synthetic-rollup",
-          valueJson: new TextEncoder().encode("{}"),
-          blob: null,
-          updatedAt: 2,
-        }),
+        await usage.writeRollup([
+          {
+            rollupId: "synthetic-rollup",
+            valueJson: new TextEncoder().encode("{}"),
+            blob: null,
+            updatedAt: 2,
+          },
+        ]),
       ).toBe(true);
       unchanged();
       await usage.pruneRows([{ key: "synthetic-rollup", valueJson: "{}", updatedAt: 2 }]);

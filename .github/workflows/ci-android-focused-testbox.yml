@@ -56,6 +56,7 @@ jobs:
     if: ${{ !cancelled() && needs.admission.result == 'success' }}
     concurrency:
       group: ${{ needs.admission.outputs.group }}
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read

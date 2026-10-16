@@ -344,7 +344,7 @@ export type PluginRuntimeCore = {
   version: string;
   /** Optional host behavior guarantees; absent capabilities remain unsupported on older hosts. */
   readonly capabilities?: readonly string[];
-  decisions: import("../../decisions/types.js").DecisionRuntimeV1;
+  decisions: import("../../decisions/types-v2.js").DecisionRuntimeV2;
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: {
@@ -566,7 +566,7 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
     openBlobStore: <TMetadata>(
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
-    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStoreWithReceipts<TMetadata>;
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;

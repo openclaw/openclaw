@@ -593,31 +593,33 @@ function dispatchAgentEvent(
   const deliveries = new Map<AgentEventRegistration, () => boolean>();
   // Capture registrations before callbacks can replace them. New subscriptions
   // during this emission have no captured delivery authority until the next event.
-  notifyListeners(
-    registrations.map((registration) => () => {
+  for (const registration of registrations) {
+    try {
       if (registration.captureDelivery) {
         deliveries.set(registration, registration.captureDelivery(enriched));
       }
-    }),
-    enriched,
-  );
-  notifyListeners(
-    registrations.map((registration) => (deliveredEvent: AgentEventRuntimePayload) => {
+    } catch {
+      // A failed capture must not prevent delivery to other registrations.
+    }
+  }
+  for (const registration of registrations) {
+    try {
       if (
         state.listeners.get(registration.listener) !== registration &&
         runListeners?.get(registration.listener) !== registration
       ) {
-        return;
+        continue;
       }
       const isDeliveryCurrent = deliveries.get(registration);
       if (!registration.captureDelivery) {
-        registration.listener(deliveredEvent);
+        registration.listener(enriched);
       } else if (isDeliveryCurrent?.()) {
-        registration.listener(deliveredEvent, isDeliveryCurrent);
+        registration.listener(enriched, isDeliveryCurrent);
       }
-    }),
-    enriched,
-  );
+    } catch {
+      // Match ordinary listener delivery: isolate each subscriber's failure.
+    }
+  }
   return true;
 }
 

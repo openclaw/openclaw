@@ -163,7 +163,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
   );
 
   it.each(["openai"])(
-    "freezes source selection and the exact settled branch (provider: %s)",
+    "captures source selection and the exact settled branch (provider: %s)",
     async (modelProvider) => {
       const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
       const settledMessages = settledTurn();
@@ -196,10 +196,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         modelProvider,
         authProfileId: "openai:captured",
       });
-      expect(Object.isFrozen(context)).toBe(true);
-      expect(Object.isFrozen(context?.data)).toBe(true);
-      expect(Object.isFrozen(context?.data[0])).toBe(true);
-      expect(Object.isFrozen(context?.selection)).toBe(true);
     },
   );
 

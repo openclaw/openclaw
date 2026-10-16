@@ -105,7 +105,6 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
-  let handedOff = false;
   try {
     await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
     assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
@@ -119,12 +118,10 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
       createReleaseError: () => new Error("Fish Audio TTS stream released"),
       cleanup: release,
     });
-    handedOff = true;
     return { audioStream: bounded.stream, release: bounded.release };
-  } finally {
-    if (!handedOff) {
-      await release();
-    }
+  } catch (error) {
+    await release();
+    throw error;
   }
 }
 

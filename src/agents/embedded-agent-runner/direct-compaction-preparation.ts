@@ -6,6 +6,10 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../plugins/provider-auth-authority.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -26,10 +30,7 @@ import {
 import { resolveSandboxContext } from "../sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
-import {
-  classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
-} from "./compact-reasons.js";
+import { classifyCompactionReason } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
@@ -111,16 +112,17 @@ export async function prepareDirectCompactionAttempt(
     workspaceDir: resolvedWorkspace,
     pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
-  const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
-    const failureReason = classifyCompactionReason(reason);
+  const fail = (
+    reason: string,
+    err?: unknown,
+    explicitReasonClass?: "compaction_model_unresolved",
+  ): EmbeddedAgentCompactResult => {
+    const failureReason = explicitReasonClass ?? classifyCompactionReason(reason);
     const failure = err ? describeFailoverError(err) : undefined;
-    const detail =
-      failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
-    const detailSuffix = detail ? ` detail=${detail}` : "";
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${failureReason}${detailSuffix} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${failureReason} ` +
         `durationMs=${Date.now() - startedAt}`,
     );
     return {
@@ -152,7 +154,10 @@ export async function prepareDirectCompactionAttempt(
   const { model, error, authStorage, modelRegistry } = modelResolution;
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
-    return { ok: false as const, result: fail(reason) };
+    return {
+      ok: false as const,
+      result: fail(reason, undefined, "compaction_model_unresolved"),
+    };
   }
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
@@ -235,8 +240,12 @@ export async function prepareDirectCompactionAttempt(
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
-  let runtimeModel: ProviderRuntimeModel = resolvedAuthAttempt.model;
   const apiKeyInfo = resolvedAuthAttempt.auth;
+  let runtimeModel: ProviderRuntimeModel = attachProviderAuthAuthority(
+    resolvedAuthAttempt.model,
+    getProviderAuthAuthority(apiKeyInfo),
+  );
+  let runtimeApiKey = apiKeyInfo.apiKey;
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
   try {
@@ -268,7 +277,7 @@ export async function prepareDirectCompactionAttempt(
         preparedAuth: runtimeAuth,
       });
       runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
-      const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
+      runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
@@ -370,6 +379,7 @@ export async function prepareDirectCompactionAttempt(
         modelRegistry,
         runtimeModel,
         apiKeyInfo,
+        runtimeApiKey,
         resolvedRuntimeAuthPlan,
         hasRuntimeAuthExchange,
         resolvedWorkspace,

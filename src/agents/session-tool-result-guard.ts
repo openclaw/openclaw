@@ -328,16 +328,23 @@ export function installSessionToolResultGuard(
     if (viewWasSuperseded) {
       transcriptSeqByEntryId.clear();
     }
-    const persistedEntry = sessionManager.getEntry(entryId);
+    const committedMessageSeq =
+      anchor && !viewWasSuperseded ? anchor.activeMessagePosition + 1 : undefined;
+    const persistedEntry =
+      committedMessageSeq === undefined ? sessionManager.getEntry(entryId) : undefined;
     const messageSeq =
       appended && sessionTarget && (!viewWasSuperseded || persistedEntry)
-        ? resolveAppendedMessageSeq({
+        ? (committedMessageSeq ??
+          resolveAppendedMessageSeq({
             sessionManager,
             entryId,
             parentEntryId: persistedEntry ? persistedEntry.parentId : parentEntryId,
             seqByEntryId: transcriptSeqByEntryId,
-          })
+          }))
         : undefined;
+    if (committedMessageSeq !== undefined) {
+      transcriptSeqByEntryId.set(entryId, committedMessageSeq);
+    }
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
@@ -443,13 +450,16 @@ export function installSessionToolResultGuard(
     callerOptions?: AppendMessageOptions,
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
+    // Publish the owning run before storage clones the message or hooks project it.
+    // Already-admitted immutable replay messages retain their recorded envelope.
+    if (
+      (message.role === "assistant" || message.role === "toolResult") &&
+      !Object.isFrozen(message)
+    ) {
+      Object.assign(message, attachSessionTranscriptRunId(message, transcriptRunId));
+    }
     let nextMessage = message;
     if (message.role === "assistant") {
-      // Publish the owning run before storage clones the message or hooks project it.
-      // Already-admitted immutable replay messages retain their recorded envelope.
-      if (!Object.isFrozen(message)) {
-        Object.assign(message, attachSessionTranscriptRunId(message, transcriptRunId));
-      }
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
@@ -568,7 +578,7 @@ export function installSessionToolResultGuard(
       void publishTranscriptUpdate(sessionTarget, {
         lifecycleRevision,
         message: persistedMessage,
-        messageId: typeof result === "string" ? result : undefined,
+        messageId: result,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...(runId ? { runId } : {}),
       });

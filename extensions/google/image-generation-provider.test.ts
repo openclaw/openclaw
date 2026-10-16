@@ -162,21 +162,16 @@ describe("Google image-generation provider", () => {
 
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockGoogleApiKeyAuth();
-    const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-      response: Response.json(
-        googleImagePayload([
-          {
-            inlineData: {
-              mimeType: "image/png",
-              data: Buffer.from("png-data").toString("base64"),
-            },
+    const postJsonRequest = vi.spyOn(providerHttp, "postJsonResponse").mockResolvedValue(
+      googleImagePayload([
+        {
+          inlineData: {
+            mimeType: "image/png",
+            data: Buffer.from("png-data").toString("base64"),
           },
-        ]),
-      ),
-      finalUrl:
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
-      release: async () => {},
-    });
+        },
+      ]),
+    );
 
     await generateImage({ ssrfPolicy: { allowRfc2544BenchmarkRange: true } });
 
@@ -391,7 +386,7 @@ describe("Google image-generation provider", () => {
   it("honors configured private-network opt-in for Google image generation", async () => {
     mockGoogleApiKeyAuth();
     installGoogleFetchMock();
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonResponse");
 
     await generateImage({
       prompt: "draw a fox",

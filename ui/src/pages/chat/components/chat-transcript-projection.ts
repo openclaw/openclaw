@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import type { JSX } from "@solidjs/web";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
@@ -8,7 +8,6 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -24,18 +23,17 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { buildChatArchiveNotice, renderChatDivider, renderChatNotice } from "./chat-divider.ts";
+import { buildChatArchiveNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
 import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
-import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -52,6 +50,7 @@ import {
 import { pruneTranscriptExpansions } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
+  type NativeTranscriptView,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptReplyDependencies,
@@ -59,10 +58,7 @@ import {
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
-import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
-import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
@@ -337,12 +333,12 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
     subagentActivity: subagents.activity.length
-      ? html`<openclaw-chat-subagent-activity
-          .rows=${subagents.activity}
-          .turnStartedAt=${subagents.wait ? workingIndicator?.request?.askedAt : undefined}
-          .onOpenSubagent=${props.onOpenSubagent}
-          .onOpenSession=${props.onOpenSession}
-        ></openclaw-chat-subagent-activity>`
+      ? {
+          rows: subagents.activity,
+          turnStartedAt: subagents.wait ? workingIndicator?.request?.askedAt : undefined,
+          onOpenSubagent: props.onOpenSubagent,
+          onOpenSession: props.onOpenSession,
+        }
       : undefined,
     onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
@@ -500,14 +496,16 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
           },
         };
       }
-      return undefined;
-    },
-    (item) => {
       if (item.kind === "divider") {
-        return () => renderChatDivider(item);
+        return { kind: "divider", item };
       }
       if (item.kind === "notice") {
-        return () => renderChatNotice(item, props.onPermissionRetry, props);
+        return {
+          kind: "notice",
+          item,
+          onPermissionRetry: props.onPermissionRetry,
+          recovery: props,
+        };
       }
       return undefined;
     },
@@ -515,45 +513,41 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   const transcriptRows: TranscriptRow<ChatRenderItem>[] = workPreviews.size ? [] : rows.slice();
-  const appendContent = (key: string, content: unknown) =>
-    transcriptRows.push({ kind: "content", key, content });
+  const appendContent = (key: string, content: NativeTranscriptView) =>
+    transcriptRows.push({
+      kind: "content",
+      key,
+      content: new GuardedTranscriptItem([content], content),
+    });
   for (const row of workPreviews.size ? rows : []) {
     transcriptRows.push(row);
     const previews = workPreviews.get(row.key);
     if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
-      appendContent(
-        `work-previews:${row.key}`,
-        html`<div class="chat-group tool chat-group--turn-block">
-          <div class="chat-group-messages">${solidContent(BrowserTabPreviews, { previews })}</div>
-        </div>`,
-      );
+      appendContent(`work-previews:${row.key}`, { kind: "work-previews", previews });
     }
   }
-  const realtimeConversation = renderRealtimeTalkConversation(props);
-  if (realtimeConversation !== nothing) {
-    appendContent("realtime-talk", realtimeConversation);
+  const realtimeConversation = projectRealtimeTalkConversation(props);
+  if (realtimeConversation) {
+    appendContent("realtime-talk", { kind: "realtime", ...realtimeConversation });
   }
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
-    appendContent("turn-recap", solidContent(TurnRecapRow, { recap: turnRecap }));
+    appendContent("turn-recap", { kind: "recap", recap: turnRecap });
   }
   if (subagents.wait && !subagents.placedWait && !searchFiltering) {
-    appendContent(
-      "waiting-subagents",
-      new GuardedTranscriptItem([subagents.wait, streamGroupOptions], {
-        kind: "wait",
-        sessionKey: props.sessionKey,
-        wait: subagents.wait,
-        options: streamGroupOptions,
-      }),
-    );
+    appendContent("waiting-subagents", {
+      kind: "wait",
+      sessionKey: props.sessionKey,
+      wait: subagents.wait,
+      options: streamGroupOptions,
+    });
   }
-  const typingIndicator = renderChatTypingIndicator(
-    props.typingActors,
-    avatarPlacement,
-    props.typingOverflow,
-  );
-  if (typingIndicator) {
-    appendContent("presence:typing", typingIndicator);
+  if (props.typingActors?.length) {
+    appendContent("presence:typing", {
+      kind: "typing",
+      actors: props.typingActors,
+      avatarPlacement,
+      overflow: props.typingOverflow,
+    });
   }
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
@@ -713,7 +707,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,
-    renderRows: (overlay: unknown = nothing, header: TranscriptHeader | null = null) =>
+    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),

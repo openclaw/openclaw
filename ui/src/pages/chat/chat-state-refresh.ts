@@ -63,6 +63,7 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  catalogResult?: ModelCatalogResult;
   // Only a reply received by this pane binding can suppress the informational hint.
   requiredWorkerInferenceProfileId?: string;
   sessionRefreshPending?: boolean;
@@ -476,6 +477,7 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
   const fresh = peekModelCatalog(binding.client, binding.scope);
   const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result && binding.isCurrent() && isModelCatalogRetired(binding.client, binding.scope)) {
+    binding.catalogResult = undefined;
     applyChatModelCatalog(host);
     host.chatModelCatalogRetired = true;
     host.requestUpdate?.();
@@ -487,6 +489,10 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
     binding.catalogRequest?.controller.abort();
     binding.catalogRequest = undefined;
   }
+  if (binding.catalogResult === result && !host.chatModelsLoading && !host.chatModelCatalogError) {
+    return Boolean(fresh);
+  }
+  binding.catalogResult = result;
   const previousError = host.chatModelCatalogError;
   const previousLoading = host.chatModelsLoading;
   applyChatModelCatalog(host, result);

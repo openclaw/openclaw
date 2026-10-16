@@ -17,7 +17,7 @@ import type {
 import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import type { RealtimeTalkInputController } from "./input.ts";
+import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -95,7 +95,7 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
+  input: Pick<RealtimeTalkInputOwner, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
 };
 

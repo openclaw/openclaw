@@ -1,6 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing, type TemplateResult } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
@@ -9,30 +7,23 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
-import { renderLazyViewError } from "../../components/lazy-view-error.ts";
-import { t } from "../../i18n/index.ts";
+import type { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import type { SidebarRegionParams } from "./chat-pane-sidebar-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
-import type {
-  SidebarPanelDefinition,
-  SidebarRegionCallbacks,
-} from "./components/chat-sidebar-region-types.ts";
-import type { LinkFaviconFetcher } from "./link-favicon-cache.ts";
+import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import {
   activatePanel,
   toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
-  SIDEBAR_NARROW_BREAKPOINT_PX,
   openSlot,
   reorderPanel,
-  sidebarDock,
-  sidebarMainPanel,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
@@ -40,7 +31,7 @@ import {
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 type LazyPanelRuntime = {
-  error?: TemplateResult;
+  error?: Parameters<typeof LazyViewError>[0];
   listeners: Set<() => void>;
   pending?: Promise<void>;
 };
@@ -87,10 +78,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
 
-export function ensureLazySidebarElement(
-  key: LazyElementKey,
-  requestUpdate: () => void,
-): TemplateResult | null | undefined {
+export function ensureLazySidebarElement(key: LazyElementKey, requestUpdate: () => void) {
   const element = LAZY_SIDEBAR_ELEMENTS[key];
   if (!element) {
     return undefined;
@@ -111,11 +99,11 @@ export function ensureLazySidebarElement(
   }
   runtime.pending = ensureCustomElementDefined(tagName, loadModule)
     .catch((error: unknown) => {
-      runtime.error = renderLazyViewError({
+      runtime.error = {
         error,
         stale: isStaleChunkImportError(error),
         onRetry: () => void retryStaleChunkReloadWhenReachable(),
-      });
+      };
     })
     .finally(() => {
       delete runtime.pending;
@@ -174,27 +162,9 @@ export function sidebarRegionCallbacks(params: {
   };
 }
 
-export function renderSidebarRegion(params: {
-  presentationId: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
-  fetchFavicon?: LinkFaviconFetcher;
-  availableWidth: number;
-  callbacks: SidebarRegionCallbacks;
-  layout: SidebarLayout;
-  narrow: boolean;
-  /** The layout given is a narrow pane's view of the saved one; see presentNarrowSidebarLayout. */
-  sideFocusLocked?: boolean;
-  sideFocusManaged?: boolean;
-  sideFocusOrigin?: () => HTMLElement | null;
-  panelDefinitions?: SidebarPanelDefinition[];
-  header?: TemplateResult | typeof nothing;
-  background?: TemplateResult;
-  primary: TemplateResult;
-  requestUpdate: () => void;
-}): TemplateResult {
+export function renderSidebarRegion(params: SidebarRegionParams) {
   const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   let panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
-  const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
   const regionError = hasPanels
     ? ensureLazySidebarElement("region", params.requestUpdate)
@@ -204,92 +174,20 @@ export function renderSidebarRegion(params: {
     if (lazyState !== undefined) {
       panelDefinitions = panelDefinitions.map((definition) =>
         definition.slot === panel.slot
-          ? { ...definition, content: lazyState ?? definition.loading }
+          ? {
+              ...definition,
+              loadState: lazyState,
+            }
           : definition,
       );
     }
   }
-  const availableWidth =
-    params.availableWidth > 0 ? params.availableWidth : Number.POSITIVE_INFINITY;
-  const collapsed = params.narrow || availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX;
-  const main = sidebarMainPanel(params.layout);
-  const chatMain = !main || main.slot === "conversation";
-  const column = params.layout.columns[0];
-  // The successful outlet belongs to Solid; its cleanup must not eject a Lit child marker.
-  const rightRuntime = regionError
-    ? html`<div class="sidebar-region__right-runtime">${regionError}</div>`
-    : html`<div class="sidebar-region__right-runtime"></div>`;
-  return html`<div
-    class="sidebar-region ${params.background ? "sidebar-region--background" : ""} ${collapsed ? "sidebar-region--narrow" : ""} ${
-      params.layout.expanded ? "sidebar-region--expanded" : ""
-    } ${
-      params.layout.expanded && params.layout.expandedSide ? "sidebar-region--expanded-side" : ""
-    } sidebar-region--${sidebarDock(params.layout)} ${panelOpen ? "sidebar-region--open" : ""}"
-    style=${styleMap({
-      "--side-panel-width": `${column?.width ?? 480}px`,
-      "--side-panel-height": `${column?.height ?? 360}px`,
-    })}
-  >
-    ${
-      params.background
-        ? html`<div
-            class="sidebar-region__background"
-            ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
-            style=${styleMap({
-              gridArea: chatMain
-                ? "main-header / main-header / main / main"
-                : "side-header / side-header / side / side",
-            })}
-          >
-            ${params.background}
-          </div>`
-        : nothing
-    }
-    <div class="sidebar-region__header">${params.header ?? nothing}</div>
-    ${
-      regionError !== undefined
-        ? regionError === null
-          ? column?.panels
-              .filter(
-                (panel) =>
-                  panel.slot !== "conversation" && isSidebarSlotVisible(params.layout, panel.slot),
-              )
-              .map(
-                (panel) =>
-                  html`<div
-                    class="side-panel__panel"
-                    data-region=${panel.id === params.layout.mainPanelId ? "main" : "side"}
-                  >
-                    ${panelDefinitions.find((definition) => definition.slot === panel.slot)?.loading}
-                  </div>`,
-              )
-          : null
-        : html`<openclaw-chat-sidebar-region
-            .panelIdPrefix=${panelIdPrefix}
-            .conversationTab=${params.conversationTab}
-            .layout=${params.layout}
-            .fetchFavicon=${params.fetchFavicon}
-            .panelDefinitions=${panelDefinitions}
-            .callbacks=${params.callbacks}
-            .narrow=${params.narrow}
-            .sideFocusLocked=${params.sideFocusLocked === true}
-            .sideFocusManaged=${params.sideFocusManaged === true}
-            .sideFocusOrigin=${params.sideFocusOrigin}
-            .availableWidth=${params.availableWidth}
-          ></openclaw-chat-sidebar-region>`
-    }
-    <div
-      id=${`${panelIdPrefix}-conversation`}
-      class="sidebar-region__primary"
-      role="region"
-      aria-label=${t("chat.sidePanel.conversation")}
-      data-region=${chatMain ? "main" : "side"}
-      ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
-    >
-      ${params.primary}
-    </div>
-    ${rightRuntime}
-  </div>`;
+  return {
+    ...params,
+    panelIdPrefix,
+    panelDefinitions,
+    regionError,
+  };
 }
 
 export function resolveSidebarLayoutForBoard(params: {

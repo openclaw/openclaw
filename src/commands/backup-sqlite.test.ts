@@ -29,6 +29,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     getRuntimeConfig: configMocks.getRuntimeConfig,
     loadConfig: configMocks.getRuntimeConfig,
+    readConfigFileSnapshot: async () => ({ config: configMocks.getRuntimeConfig() }),
     captureRuntimeConfigAsyncReader:
       (...args: Parameters<typeof configMocks.getRuntimeConfig>) =>
       async () =>
@@ -110,6 +111,30 @@ function createGlobalDatabase(databasePath: string): void {
 }
 
 describe("SQLite backup commands", () => {
+  it.each(["backup", "restore"] as const)(
+    "refuses mixed engines before %s creates snapshot or target files",
+    async (operation) => {
+      configMocks.getRuntimeConfig.mockReturnValue({
+        database: { families: { workboard: { engine: "postgres" } } },
+      });
+      const repositoryPath = state.path("snapshots");
+      const targetPath = state.path("restored", "openclaw.sqlite");
+      const runtime = createRuntimeCapture();
+
+      await expect(
+        operation === "backup"
+          ? backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath })
+          : backupSqliteRestoreCommand(runtime, path.join(repositoryPath, "snapshot"), {
+              target: targetPath,
+            }),
+      ).rejects.toThrow(
+        `${operation} for mixed-engine installs is not supported yet; use a single engine`,
+      );
+      await expect(fs.access(repositoryPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(path.dirname(targetPath))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("creates, lists, verifies, and fresh-restores the global database", async () => {
     const tempDir = state.root;
     const repositoryPath = path.join(tempDir, "snapshots");

@@ -45,7 +45,8 @@ vi.mock("../deliver-reply.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../loggers.js", () => ({
+vi.mock("../loggers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../loggers.js")>()),
   whatsappInboundLog: { info: () => {}, debug: () => {} },
 }));
 

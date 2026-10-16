@@ -456,7 +456,7 @@ describe("session work admission", () => {
         ...entry,
         modelSelectionLocked: true,
       }),
-    ).toContain("Open it in WebChat and use Resume in new session");
+    ).toContain("Open it in WebChat and use Resume.");
     expect(
       resolveSessionWorkStartError("agent:main:matrix:channel:room-a", entry, {
         allowRestartTombstoneReplacement: true,

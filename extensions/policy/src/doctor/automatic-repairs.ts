@@ -249,7 +249,7 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
     return false;
   }
   const deny = existing ?? [];
-  if (deny.some((value) => typeof value === "string" && value === entry)) {
+  if (deny.includes(entry)) {
     return false;
   }
   current.deny = [...deny, entry];

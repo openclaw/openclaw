@@ -323,7 +323,7 @@ suite.define(() => {
     await page.keyboard.press("Enter");
     await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
-    for (const width of [796, 794, 390]) {
+    for (const width of [796, 794, 390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await expect
         .poll(() =>
@@ -340,7 +340,6 @@ suite.define(() => {
         )
         .toBe(true);
     }
-    await page.setViewportSize({ width: 1440, height: 900 });
     await pin.focus();
     await pin.hover();
     await expect

@@ -2084,7 +2084,7 @@ export const single = {
     }
   });
 
-  it("keeps the broad changed run available for unknown root surfaces", () => {
+  it("keeps the broad changed run available for unknown root surfaces", async () => {
     expect(
       resolveChangedTargetArgs(
         ["--changed", "origin/main"],
@@ -2093,6 +2093,48 @@ export const single = {
         { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
       ),
     ).toBeNull();
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const changedPaths = vi
+      .spyOn(lanes, "listChangedPathsFromGit")
+      .mockReturnValue(["unknown/file.txt"]);
+    try {
+      const specs = createVitestRunSpecs(["--changed", "origin/main"], {
+        baseEnv: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      });
+      expect(specs.map(({ config, includePatterns }) => ({ config, includePatterns }))).toEqual([
+        { config: "test/vitest/vitest.unit.config.ts", includePatterns: null },
+      ]);
+    } finally {
+      changedPaths.mockRestore();
+    }
+  });
+
+  it.each([false, true])("resolves standalone changed specs (watch=%s)", async (watch) => {
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const target = "test/scripts/run-node-lifecycle.test.ts";
+    const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue([target]);
+    try {
+      const specs = createVitestRunSpecs(
+        [...(watch ? ["--watch"] : []), "--changed", "origin/main"],
+        { baseEnv: {} },
+      );
+      expect(
+        specs.map(({ config, includePatterns, watchMode }) => ({
+          config,
+          includePatterns,
+          watchMode,
+        })),
+      ).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          includePatterns: [target],
+          watchMode: watch,
+        },
+      ]);
+      expect(changedPaths).toHaveBeenCalledTimes(1);
+    } finally {
+      changedPaths.mockRestore();
+    }
   });
 
   it("skips app-only changes because app tests are separate from Vitest lanes", () => {
@@ -2406,7 +2448,7 @@ export const single = {
   it.each(["changed", "explicit"])(
     "routes %s ui support files to the ui lane without dead include globs",
     (mode) => {
-      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/lit-warnings.setup.ts"];
+      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/dom.setup.ts"];
       const plans = buildVitestRunPlans(
         mode === "changed" ? ["--changed", "origin/main"] : targets,
         process.cwd(),
@@ -3733,6 +3775,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayFiles = await listVitestConfigTestFiles(
       "test/vitest/vitest.gateway-database-workers.config.ts",
     );
+    const extensionDatabaseFiles = await listVitestConfigTestFiles(
+      "test/vitest/vitest.extension-database-workers.config.ts",
+    );
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -3779,6 +3824,20 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
           [...new Set(gatewayFiles)].toSorted(),
         );
+        const extensionDatabasePlans = targetedPlans(
+          "test/vitest/vitest.extension-database-workers.config.ts",
+        );
+        expect(extensionDatabasePlans.every((plan) => plan.forwardedArgs.length <= 20)).toBe(true);
+        expect(extensionDatabasePlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(extensionDatabaseFiles)].toSorted(),
+        );
+        expect(
+          extensionDatabasePlans
+            .filter((plan) =>
+              plan.forwardedArgs.some((file) => file.startsWith("extensions/telegram/")),
+            )
+            .every((plan) => plan.forwardedArgs.length === 1),
+        ).toBe(true);
         const infraPlans = plans.filter((plan) => plan.config === infraConfig);
         expect(infraPlans.length).toBeGreaterThan(1);
         expect(
@@ -3801,6 +3860,19 @@ describe("scripts/test-projects full-suite sharding", () => {
           expect(plan.timingTargets).toEqual(plan.forwardedArgs);
           expect(plan.includePatterns).toBeNull();
         }
+      },
+    );
+  });
+
+  it("preserves one database invocation when Vitest owns suite-wide sharding", () => {
+    withEnv(
+      { CI: undefined, GITHUB_ACTIONS: undefined, OPENCLAW_TEST_PROJECTS_PARALLEL: undefined },
+      () => {
+        const plans = buildFullSuiteVitestRunPlans(["--shard=1/2"], process.cwd()).filter(
+          (plan) => plan.config === "test/vitest/vitest.extension-database-workers.config.ts",
+        );
+        expect(plans).toHaveLength(1);
+        expect(plans[0]?.forwardedArgs).toContain("--shard=1/2");
       },
     );
   });

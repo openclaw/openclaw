@@ -1,8 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -26,7 +26,6 @@ import {
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import {
@@ -340,23 +339,21 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           />
         </div>
         <Show when={hasTabs()}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "skill-detail",
-                active: detailTab(),
-                tabs: [
-                  { value: "overview", label: t("skillsPage.overview") },
-                  ...(props.skill.skillCard?.present
-                    ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
-                    : []),
-                ],
-                ariaLabel: props.skill.name,
-                panelId: "skill-detail-panel",
-                variant: "sub",
-                onSelect: props.view.onDetailTabChange,
-              })
-            }
+          <HubTabs
+            {...{
+              id: "skill-detail",
+              active: detailTab(),
+              tabs: [
+                { value: "overview", label: t("skillsPage.overview") },
+                ...(props.skill.skillCard?.present
+                  ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
+                  : []),
+              ],
+              ariaLabel: props.skill.name,
+              panelId: "skill-detail-panel",
+              variant: "sub",
+              onSelect: props.view.onDetailTabChange,
+            }}
           />
         </Show>
         <div

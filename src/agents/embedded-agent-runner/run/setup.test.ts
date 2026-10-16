@@ -8,6 +8,7 @@ import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
+import { createNativeModelOwnedRuntimeModel } from "../../defaults.js";
 import { AuthStorage } from "../../sessions/auth-storage.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
 import { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
@@ -691,6 +692,85 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 });
 
 describe("native model-owned harness policy", () => {
+  it.each([
+    ["native-large-a", 500_000, undefined, 500_000],
+    ["native-large-b", 500_000, 64_000, 64_000],
+    ["native-small-c", 24_000, 500_000, 24_000],
+  ] as const)(
+    "honors the authored exact-model budget for %s",
+    (modelId, contextTokens, callerBudget, expected) => {
+      const runtimeModel = createNativeModelOwnedRuntimeModel({ provider: "openai", modelId });
+      const result = resolveEmbeddedRunEffectiveModel({
+        runParams: {
+          sessionId: "native-configured",
+          workspaceDir: hookContext.workspaceDir,
+          prompt: "hello",
+          runId: "native-configured",
+          timeoutMs: 5_000,
+          contextTokenBudget: callerBudget,
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [createConfiguredModel({ id: modelId, contextTokens })],
+                },
+              },
+            },
+          },
+        },
+        provider: "openai",
+        modelConfigProvider: "openai",
+        modelId,
+        agentHarnessId: "codex",
+        runtimeModel,
+        nativeModelOwned: true,
+      });
+
+      expect(result.contextTokenBudget).toBe(expected);
+      expect(result.contextWindowInfo?.source).toBe("modelsConfig");
+      expect(result.contextTokensSource).toBeUndefined();
+      expect(result.authoredContextTokenCap).toBe(contextTokens);
+      // Authored policy must not become discovered native capacity metadata.
+      expect(result.effectiveModel).toBe(runtimeModel);
+    },
+  );
+
+  it.each(["unknown-model", "gpt-5.5"])(
+    "does not infer an unauthored native budget for %s",
+    (modelId) => {
+      const runtimeModel = createNativeModelOwnedRuntimeModel({ provider: "openai", modelId });
+      const result = resolveEmbeddedRunEffectiveModel({
+        runParams: {
+          sessionId: "native-missing-policy",
+          workspaceDir: hookContext.workspaceDir,
+          prompt: "hello",
+          runId: "native-missing-policy",
+          timeoutMs: 5_000,
+          contextTokenBudget: 500_000,
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [createConfiguredModel({ contextTokens: undefined })],
+                },
+              },
+            },
+          },
+        },
+        provider: "openai",
+        modelConfigProvider: "openai",
+        modelId,
+        agentHarnessId: "codex",
+        runtimeModel,
+        nativeModelOwned: true,
+      });
+
+      expect(result).toEqual({ effectiveModel: runtimeModel });
+    },
+  );
+
   it("does not apply outer context guards, budgets, or authored caps to a pinned native session", () => {
     const runtimeModel = createRuntimeModel();
     const result = resolveEmbeddedRunEffectiveModel({

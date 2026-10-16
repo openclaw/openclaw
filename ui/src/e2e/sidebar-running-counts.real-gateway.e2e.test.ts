@@ -15,7 +15,6 @@ import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -145,10 +144,6 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
         async ({ page }) => {
-          await page.addInitScript(
-            (key) => localStorage.setItem(key, "dismissed"),
-            COMMUNITY_INVITE_KEY,
-          );
           const activeEvents = new Set<string>();
           const stoppedEvents = new Set<string>();
           const url = new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));

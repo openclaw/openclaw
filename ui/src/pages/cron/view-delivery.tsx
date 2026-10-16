@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo } from "solid-js";
-import type { ChannelPickerOption } from "../../components/channel-picker.ts";
+import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";

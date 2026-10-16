@@ -64,6 +64,7 @@ let gcStartedAt = performance.now();
 let majorCollections = 0;
 let stormStartedAt = gcStartedAt;
 let stormCollections = 0;
+let consecutiveStormWindows = 0;
 let lastStormWarningAt = -Infinity;
 let cellCount = 0;
 let workerId: string | undefined;
@@ -77,7 +78,12 @@ observeGcSamples((samples) => {
   const now = performance.now();
   const stormIntervalMs = now - stormStartedAt;
   if (stormIntervalMs >= 10_000) {
-    if (stormCollections > stormIntervalMs / 100 && now - lastStormWarningAt >= 60_000) {
+    const storming = stormCollections > stormIntervalMs / 100;
+    consecutiveStormWindows = storming ? Math.min(2, consecutiveStormWindows + 1) : 0;
+    if (consecutiveStormWindows === 2 && workerId) {
+      publishWorkerGcStorm({ retireWorkerId: workerId });
+    }
+    if (storming && now - lastStormWarningAt >= 60_000) {
       const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
       publishWorkerGcStorm({
         workerId,

@@ -89,8 +89,8 @@ describe("Sessions page archive confirmation lifetime", () => {
     const fixture = await setup();
     const confirm = vi.spyOn(confirmDialog, "showConfirmDialog");
     try {
-      const archive = modal.track(fixture.page.archiveActions.archive(fixture.row));
-      const tree = modal.track(fixture.page.archiveActions.archive(fixture.row, true));
+      const archive = modal.track(fixture.page.archive(fixture.row));
+      const tree = modal.track(fixture.page.archive(fixture.row, true));
       await archiveImport.started;
       fixture.page.remove();
       archiveImport.release();
@@ -121,9 +121,7 @@ describe("Sessions page archive confirmation lifetime", () => {
       const modal = createModalDialogTestFixture();
       const fixture = await setup();
       try {
-        const operation = modal.track(
-          fixture.page.archiveActions.archive(fixture.row, hasDescendants),
-        );
+        const operation = modal.track(fixture.page.archive(fixture.row, hasDescendants));
         await waitForConfirmDialogActions();
         expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
         expect(fixture.writes()).toEqual([]);

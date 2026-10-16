@@ -9,6 +9,7 @@ import {
 import { loadPluginManifest } from "../../../../src/plugins/manifest.ts";
 import { normalizeControlUiBuildInfo } from "../../build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { installControlUiE2ePageDiagnosticRing } from "../../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -56,29 +57,18 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const errors: string[] = [];
       const requests: string[] = [];
-      const scripts = { requested: 0, completed: 0, failed: 0 };
-      const scriptStatuses = new Map<number, number>();
+      const pageEvents = installControlUiE2ePageDiagnosticRing(page);
+      const failedResources: Array<{ kind: string; status: number }> = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      page.on("request", (request) => {
-        requests.push(request.url());
-        if (request.resourceType() === "script") {
-          scripts.requested += 1;
-        }
-      });
-      page.on("requestfinished", (request) => {
-        if (request.resourceType() === "script") {
-          scripts.completed += 1;
-        }
-      });
-      page.on("requestfailed", (request) => {
-        if (request.resourceType() === "script") {
-          scripts.failed += 1;
-        }
-      });
+      page.on("request", (request) => requests.push(request.url()));
       page.on("response", (response) => {
-        if (response.request().resourceType() === "script") {
-          const status = response.status();
-          scriptStatuses.set(status, (scriptStatuses.get(status) ?? 0) + 1);
+        const kind = response.request().resourceType();
+        if (
+          (kind === "script" || kind === "stylesheet") &&
+          !response.ok() &&
+          failedResources.length < 12
+        ) {
+          failedResources.push({ kind, status: response.status() });
         }
       });
       const gateway = await installMockGateway(page, {
@@ -125,27 +115,49 @@ suite.define(() => {
           .click();
         await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
       } catch (error) {
-        const startup = await withTimeout(
+        const boot = await withTimeout(
           page.evaluate(() => {
-            const snapshot = window.openclawControlUi?.snapshot();
+            const ready = window.openclawControlUi?.snapshot();
             return {
               documentReadyState: document.readyState,
-              applicationAvailable: Boolean(snapshot),
-              booted: snapshot?.booted ?? null,
-              routeStatus: snapshot?.route?.status ?? null,
-              routeReady: snapshot?.routeReady ?? null,
-              gatewayPhase: snapshot?.gatewayPhase ?? null,
+              hasApp: Boolean(document.querySelector("openclaw-app")),
+              hasShell: Boolean(document.querySelector(".shell")),
+              modalCount: document.querySelectorAll("openclaw-modal-dialog").length,
+              openDialogCount: document.querySelectorAll("dialog[open]").length,
+              booted: ready?.booted ?? false,
+              routeStatus: ready?.route?.status ?? null,
+              routeReady: ready?.routeReady ?? null,
+              gatewayPhase: ready?.gatewayPhase ?? null,
+              scripts: [...document.scripts].slice(0, 12).map((script) => ({
+                module: script.type === "module",
+                external: Boolean(script.src),
+                completed: Boolean(script.src && performance.getEntriesByName(script.src).length),
+              })),
+              completedScriptCount: performance
+                .getEntriesByType("resource")
+                .filter(
+                  (entry) =>
+                    entry instanceof PerformanceResourceTiming && entry.initiatorType === "script",
+                ).length,
             };
           }),
-          5_000,
-          "Workboard startup diagnostics",
+          2_000,
+          "Workboard boot diagnostics",
         ).catch(() => null);
-        // Public CI receives only fixed state, counts, and status codes, never URLs or errors.
-        console.error("[workboard-distribution] startup failure", {
-          startup,
-          pageErrorCount: errors.length,
-          scripts: { ...scripts, statuses: Object.fromEntries(scriptStatuses) },
-        });
+        const failures = pageEvents
+          .filter((event) => event.source === "pageerror" || event.source === "requestfailed")
+          .slice(-12)
+          .map((event) => ({
+            source: event.source,
+            error:
+              ["SyntaxError", "ReferenceError", "TypeError"].find(
+                (name) => name === event.details.name,
+              ) ?? null,
+            resource:
+              ["script", "stylesheet"].find((kind) => kind === event.details.resourceType) ?? null,
+          }));
+        // Keep raw errors, URLs and page content out of public CI output.
+        console.error("[workboard-boot]", JSON.stringify({ failures, failedResources, boot }));
         throw error;
       }
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);

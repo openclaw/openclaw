@@ -116,8 +116,12 @@ export function wrapStreamFnWithSessionFork(
   identity: EmbeddedSessionForkIdentity,
 ): StreamFn {
   return (model, context, options) => {
-    // A transport without a payload boundary must not leave the previous turn replayable.
-    forgetSnapshot(identity.sessionId);
+    // A new run or transport cannot reuse old prepared data. Within the same run,
+    // keep the last committed request until its replacement finishes preparing.
+    const previous = snapshots.get(identity.sessionId);
+    if (previous && (previous.runId !== identity.runId || previous.streamFn !== streamFn)) {
+      forgetSnapshot(identity.sessionId);
+    }
     if (!captures.has(identity.sessionId) && captures.size >= MAX_ENTRIES) {
       const oldest = captures.keys().next().value;
       if (oldest !== undefined) {

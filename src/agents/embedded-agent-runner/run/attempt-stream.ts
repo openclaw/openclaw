@@ -6,6 +6,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { isSmallModel } from "../../../shared/model-param-b.js";
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
@@ -13,6 +14,7 @@ import {
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
@@ -126,6 +128,7 @@ export function installEmbeddedAttemptStreamGuards(
       providerTextTransforms,
     },
   } = input.prepared.sessionRuntime;
+  setInternalRepetitionGuard(session.agent, isSmallModel);
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
   const installStreamWrapper = <Args extends unknown[]>(
@@ -419,6 +422,7 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
@@ -446,9 +450,9 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
-      const request = cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(...args);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&

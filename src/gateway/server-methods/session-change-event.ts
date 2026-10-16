@@ -417,7 +417,7 @@ export function emitSessionsChanged(
   if (!catalogOnly && options.accessChanged !== false) {
     bumpGatewayAccessRevision();
   }
-  if (!catalogOnly) {
+  if (!catalogOnly && options.rowScope !== "runtime") {
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
@@ -485,4 +485,24 @@ export function emitSessionsChanged(
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   startPendingSessionChange(next, { payload, scope });
+}
+
+/** Naming changes runtime presentation without changing access or stored session facts. */
+export function emitSessionTitleChanged(
+  context: SessionChangeContext,
+  target: { sessionKey: string; sessionId?: string; agentId: string },
+): void {
+  try {
+    emitSessionsChanged(
+      context,
+      { ...target, reason: "chat.title" },
+      { accessChanged: false, rowScope: "runtime" },
+    );
+    // Title completion follows a metadata commit even though naming state is runtime-only.
+    void context.mentionInbox?.invalidateAsync(target.sessionKey);
+  } catch (error) {
+    log.warn("Session title state publication failed", {
+      error: formatErrorMessageWithCode(error),
+    });
+  }
 }

@@ -318,7 +318,7 @@ Doctor also refuses these retired config inputs:
 - Agent `model.timeoutMs` and `subagents.model.timeoutMs`, including defaults.
   Timeouts on tool-model selectors remain supported.
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
-- `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
+- Nonempty or malformed `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
 - Extension browser profiles with a legacy `cdpUrl`. Current extension profiles
   discover their relay endpoint automatically; the extension driver remains supported.
@@ -349,6 +349,11 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+An empty `plugins.installs: {}` contains no install records. `openclaw doctor --fix`
+backs up the config and removes this retired key, preserving the SQLite plugin
+index and any settings retained for pending plugin migrations. Runtime config
+validation still rejects the key until Doctor repairs it.
 
 WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
 the reported channel or account path before retrying; removing this no-op does
@@ -1113,7 +1118,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 
-    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
+    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Internal sessions, including subagents and private completions, require a result. External direct and group chats can end with explicit `NO_REPLY`; see [Silent replies](/concepts/messages#silent-replies).
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

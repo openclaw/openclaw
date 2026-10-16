@@ -1,4 +1,3 @@
-import { html, nothing } from "lit";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -51,7 +50,7 @@ import {
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
-import { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
@@ -71,16 +70,17 @@ import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-const bootLayout = html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
-
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.requestUpdate();
-  readonly providerReview = new ChatProviderReviewController(this, () => this.state, this.notify);
 
-  render() {
+  readProviderReviewState() {
+    return this.state;
+  }
+
+  render(readProviderReview?: () => ChatProviderReviewOwner) {
     const state = this.state;
     if (!state) {
-      return { layout: bootLayout, capabilityDialogs: undefined };
+      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
     }
     const selectionConnectionGeneration = this.connectionGeneration;
     const selectedSession = selectedChatSessionRow(state);
@@ -170,7 +170,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       placementStartup !== null,
     );
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
-    this.providerReview.sync(canWriteProgressCard && !selectedSessionArchived);
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -404,8 +403,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
-      providerReview: this.providerReview,
-      providerReviewRevision: {},
+      readProviderReview,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
@@ -550,7 +548,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
-      composerControls: composerControls?.composerControls ?? nothing,
+      composerControls: composerControls?.composerControls,
       permissionPicker: composerControls?.permissionPicker,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       messageReactions: this.messageReactions,
@@ -620,7 +618,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalkInputNotice = null;
         state.requestUpdate?.();
       },
-      onAbort: sessionActionCallbacks.onAbort,
+      ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
@@ -650,7 +648,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
-      onForkMessage: sessionActionCallbacks.onForkMessage,
       agentsList: state.agentsList,
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
@@ -687,6 +684,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       resourceBasePath: state.resourceBasePath,
     };
     return {
+      providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },
       capabilityDialogs: catalogKey
         ? undefined
         : {

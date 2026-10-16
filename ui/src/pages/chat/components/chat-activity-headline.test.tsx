@@ -4,7 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
 import {
@@ -68,11 +68,11 @@ function drawHeadline(props: ChatActivityHeadlineProps) {
         updateHeadline = setCurrent;
         presentHeadline = setActive;
         return (
-          <SolidContentPresentation value={active}>
+          <ContentPresentation value={active}>
             <button>
               <ChatActivityHeadline {...current()} />
             </button>
-          </SolidContentPresentation>
+          </ContentPresentation>
         );
       },
       { container },

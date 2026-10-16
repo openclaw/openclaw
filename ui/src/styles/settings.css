@@ -8,7 +8,7 @@
  * - Spacing uses --space-* tokens only.
  *
  * Templates should be built through the helpers in
- * ui/src/components/settings-ui.ts rather than hand-rolled markup.
+ * ui/src/components/solid/settings-ui.tsx rather than hand-rolled markup.
  */
 
 /* Personal backgrounds use the shared settings rows; samples are controls, not panels. */

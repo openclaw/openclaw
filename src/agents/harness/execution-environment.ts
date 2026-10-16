@@ -10,6 +10,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
+import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
@@ -378,6 +379,7 @@ export type ResolvedPluginHarnessToolPolicies = {
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
   requiresLiveToolAuthority: boolean;
+  toolPolicyScope: "conversation" | "turn";
   toolPolicyRestricted: boolean;
 };
 
@@ -566,13 +568,31 @@ export function resolvePluginHarnessToolPolicies(
     mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
     mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
   ];
+  const systemAgentOnlyAllowlist =
+    isHostScopedAgentToolActive("openclaw") && isSystemAgentOnlyAllowlist(params.toolsAllow);
+  const senderScopedGroupPolicy = resolveSenderScopedGroupToolPolicy(
+    params,
+    groupPolicyParams,
+    policy.groupPolicy,
+  );
   return {
+    // A no-op wildcard policy does not change lifetime; additive grants still do.
+    toolPolicyScope:
+      params.disableTools ||
+      (!systemAgentOnlyAllowlist && toolPolicyRestrictsTools(requestedToolPolicy)) ||
+      (params.scheduledToolPolicy?.mode === "account" &&
+        (explicitPolicies.some(toolPolicyRestrictsTools) ||
+          profilePolicies.some(toolPolicyRestrictsTools))) ||
+      params.runtimePluginToolGrant !== undefined ||
+      // A persisted delegation floor still requires this turn's live grant projection.
+      Boolean(policy.delegatedToolPolicy) ||
+      params.swarmCollector === true ||
+      toolPolicyRestrictsTools(policy.senderPolicy) ||
+      toolPolicyRestrictsTools(senderScopedGroupPolicy)
+        ? "turn"
+        : "conversation",
     senderPolicy: policy.senderPolicy,
-    senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
-      params,
-      groupPolicyParams,
-      policy.groupPolicy,
-    ),
+    senderScopedGroupPolicy,
     groupPolicy: policy.groupPolicy,
     runtimePolicies: [
       ...profilePolicies,
@@ -599,6 +619,10 @@ export function resolvePluginHarnessToolPolicies(
         toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
       ),
   };
+}
+
+export function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function collectHarnessSafeDeniedToolNames(

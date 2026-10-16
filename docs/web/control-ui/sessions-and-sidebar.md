@@ -13,6 +13,8 @@ sidebarTitle: "Sessions and sidebar"
 The sidebar separates navigation into **Pages**, **Sessions**, and **Users**.
 The New session page starts new conversations.
 
+On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on device** in the workspace picker. Enter an
 absolute path on that device. The option appears only when the connected session
@@ -120,6 +122,9 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
+A temporary selected row appears in the sidebar immediately, clearing the previous
+chat’s highlight without changing the saved session until creation is accepted.
+The temporary row has no session actions; a failed creation restores the draft.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is
@@ -175,6 +180,10 @@ can differ from the personal default selected when the actual chat starts.
 
 **Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
+While a name is pending, the sidebar and chat header show a gently waving blob
+instead of “New session.” A ready name replaces it immediately; if naming ends
+without a name, the ordinary fallback label returns. Reduced-motion preferences
+keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
@@ -320,6 +329,11 @@ mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent. Reset leaves those hidden preferences unchanged. It also preserves
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
+Switching to the all-agents roster or another navigation view, or closing
+navigation releases background sidebar activity streams. Open conversation panes
+keep their live messages. The active agent's session list retains critical observer
+headlines even when ambient message previews are off.
+
 On phone-width layouts the panel opens as a bottom sheet, like the issues sheet:
 tap the backdrop or press Escape to close it. The sheet has no hover or flyouts:
 tapping **Group by**, **Sort by**, or **Hide empty groups** opens its
@@ -360,7 +374,7 @@ Follow-up turns in an existing subagent session keep the parent’s activity rin
 
 When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
 
-Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators.
+Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The preview shows all PRs supplied by the Gateway, which returns up to three for the branch. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed.
 
 Hover a session with an enabled automation to inspect its attached jobs without leaving the conversation. The clock row shows the automation name for one job or a count for multiple jobs. Hover or focus that row to open a read-only flyout; clicking keeps it open. The flyout lists attached jobs, including paused jobs, and shows the selected job’s schedule, next run, current state, last outcome, and instructions. Expand **Full instructions** to read long prompts, commands, or scripts. Loading, empty, and unavailable states are explicit; a failed read offers **Retry**. **Open automation** opens the selected job in the existing editor, with the usual permissions for settings, history, and changes. Escape dismisses the flyout before the session hovercard. Cmd/Ctrl-click retains normal new-tab navigation. **Show all automations** on the Automations page clears the session filter.
 
@@ -455,7 +469,7 @@ This is a personal display preference, stored in this browser separately for eac
 Changing or clearing an owner or status filter never changes the saved preference.
 **Reset** in the popover restores **When filtering** when the empty-group control is visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
 
-Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection. When the Gateway advertises catalog change events, catalogs refresh on those events with paced bursts and a ten-minute safety refresh. Otherwise, visible tabs refresh catalogs every 30 seconds. Returning to a hidden tab also refreshes its catalog. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
+Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 

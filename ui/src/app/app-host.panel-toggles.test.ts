@@ -16,12 +16,12 @@ import {
 } from "./app-host.test-support.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import type { ApplicationContext } from "./context.ts";
-import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import type { LazyCustomElementRequests } from "./lazy-custom-element.ts";
 import { persistLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
 
 type ShellPanelToggleState = {
   element: HTMLElement;
-  lazyCustomElements: LazyCustomElementRequestController;
+  lazyCustomElements: LazyCustomElementRequests;
   routeState: { routeId: string };
   runtime: { context: ApplicationContext };
   terminalPanelElement: TestOptionalCustomElement;

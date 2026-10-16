@@ -226,8 +226,10 @@ applicable policy also requires fresh publication admission.
     }
     ```
 
-    Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
+    Requests default to `operator.write` scope. Trusted plugins can request a method-specific scope,
+    such as `operator.approvals` for `plugin.approval.request`, through the third argument; this does
+    not exceed an authenticated caller's scopes. Calls from arbitrary external plugins are rejected.
+    Failed methods throw a `GatewayClientRequestError`, preserving structured
     `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
     before choosing this path from tools that can also run in standalone agent processes.
 

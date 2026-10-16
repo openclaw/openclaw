@@ -3,7 +3,7 @@ import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
   type PresentationValue,
-} from "../lit/presentation-binding.ts";
+} from "../lib/presentation.ts";
 import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 

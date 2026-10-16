@@ -1,4 +1,4 @@
-export const CHAT_IMAGE_RENDITION_WIDTHS = [480, 960, 1920] as const;
+const CHAT_IMAGE_RENDITION_WIDTHS = [480, 960, 1920] as const;
 
 export type ChatImageRenditionWidth = (typeof CHAT_IMAGE_RENDITION_WIDTHS)[number];
 

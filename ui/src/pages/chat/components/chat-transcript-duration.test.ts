@@ -1,11 +1,10 @@
 /* @vitest-environment jsdom */
-import { render, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatStateController } from "../chat-state-controller.ts";
+import { createChatState } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -129,14 +128,11 @@ describe("completed-work duration", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
-    const host: ReactiveControllerHost = {
-      addController: () => undefined,
-      removeController: () => undefined,
+    const controller = createChatState({
       requestUpdate: rerender,
       updateComplete: Promise.resolve(true),
-    };
-    const controller = new ChatStateController(host);
-    controller.hostConnected();
+    });
+    const dispose = controller.dispose;
     const original = controller.createRenderLifecycle();
     props.onRequestUpdate = () => original.invalidate();
     try {
@@ -159,7 +155,7 @@ describe("completed-work duration", () => {
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
     } finally {
-      controller.hostDisconnected();
+      dispose();
       transcript.hostDisconnected();
       container.remove();
       vi.useRealTimers();

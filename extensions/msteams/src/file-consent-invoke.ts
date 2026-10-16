@@ -51,12 +51,6 @@ async function handleMSTeamsFileConsentInvoke(
 
   if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
     if (pendingFile) {
-      log.debug?.("user accepted file consent, uploading", {
-        uploadId,
-        filename: pendingFile.filename,
-        size: pendingFile.buffer.length,
-      });
-
       try {
         await uploadToConsentUrl({
           url: consentResponse.uploadInfo.uploadUrl,
@@ -84,12 +78,6 @@ async function handleMSTeamsFileConsentInvoke(
         } else {
           await context.sendActivity(fileActivity);
         }
-
-        log.info("file upload complete", {
-          uploadId,
-          filename: consentResponse.uploadInfo.name,
-          uniqueId: consentResponse.uploadInfo.uniqueId,
-        });
       } catch (err) {
         log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
         await context.sendActivity("File upload failed. Please try again.");

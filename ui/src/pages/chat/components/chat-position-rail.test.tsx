@@ -5,6 +5,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
@@ -14,7 +15,6 @@ import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
@@ -133,6 +133,21 @@ describe("conversation position rail", () => {
         expect(document.activeElement).toBe(current());
         root.focus();
         expect(tabStops()).toEqual([current()]);
+        if (scenario === "off-window") {
+          tabStops()[0]!.focus();
+          for (const [key, index] of [
+            ["End", 79],
+            ["Home", 0],
+          ] as const) {
+            const focusedMarker = document.activeElement;
+            assert(focusedMarker instanceof HTMLButtonElement);
+            focusedMarker.dispatchEvent(
+              new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+            );
+            expect(document.activeElement).toBe(marker(`message-${index}`));
+            expect(tabStops()).toEqual([document.activeElement]);
+          }
+        }
       } finally {
         view.unmount();
         transcript.hostDisconnected();
@@ -697,6 +712,18 @@ describe("conversation position rail", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
       expect(preview()).toBeUndefined();
+      const thread = container.querySelector<HTMLElement>(".chat-thread")!;
+      expect(document.activeElement).toBe(thread);
+      markers()[2]!.dispatchEvent(new Event("pointerenter"));
+      expect(preview()).toContain("Checkpoint 2");
+      const hoverEscape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true,
+      });
+      window.dispatchEvent(hoverEscape);
+      expect(hoverEscape.defaultPrevented).toBe(true);
+      expect(preview()).toBeUndefined();
+      expect(document.activeElement).toBe(thread);
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
       view.render(null);

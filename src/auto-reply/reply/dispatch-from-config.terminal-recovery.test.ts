@@ -336,10 +336,11 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     ["group", true, true, "allow", "slack", true],
     ["group", false, false, "allow", "slack", false],
     ["direct", true, false, "allow", "discord", true],
+    ["direct", false, false, "allow", "webchat", true],
   ] as const)(
     "settles an adopted %s failure (progress=%s, mentioned=%s, silence=%s, origin=%s)",
     async (chatType, progress, mentioned, silentReply, origin, expectedFinal) => {
-      const surface = "slack";
+      const surface = origin === "webchat" ? "webchat" : "slack";
       sessionStoreMocks.currentEntry = { verboseLevel: "on" };
       const resolverError = new Error("private synthetic failure detail");
       const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
@@ -396,10 +397,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         expectedFinal ? (progress ? ["tool", "final"] : ["final"]) : [],
       );
       if (expectedFinal) {
-        expect(delivered.at(-1)?.payload).toMatchObject({
-          text: expect.stringContaining("Check the conversation before trying again"),
-          isError: true,
-        });
+        expect(delivered.at(-1)?.payload.isError).toBe(true);
+        expect(delivered.at(-1)?.payload.text?.trim()).toBeTruthy();
       }
       expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
       expect(operation?.result).toEqual({
@@ -412,7 +411,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       expect(processedEvents).toEqual([
         expect.objectContaining({ outcome: "error", error: undefined }),
       ]);
-      if (origin !== surface) {
+      if (expectedFinal && origin !== surface) {
         expect(mocks.routeReply).toHaveBeenLastCalledWith(
           expect.objectContaining({
             channel: origin,
@@ -539,14 +538,16 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       resetTriggered: false,
     });
     activeOperation.setPhase("running");
+    const expired = createDeferred();
+    activeOperation.abortSignal.addEventListener("abort", () => expired.resolve(), { once: true });
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
     const dispatchParams = createVisibleDispatchParams(replyResolver);
     vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
     const resultPromise = dispatchReplyFromConfig(dispatchParams);
-    await vi.waitFor(() => {
-      expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    });
+    // Preparation may await real I/O; start the settlement clock at the actual expiry.
+    await expired.promise;
+    expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
 
     await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);

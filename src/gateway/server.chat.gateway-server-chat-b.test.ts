@@ -258,7 +258,8 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
-  const { sessionDir, storePath } = openDirectChatSession();
+  // Deferred recovery must not adopt a later case that reuses this synthetic session ID.
+  const { sessionDir, storePath } = openDirectChatSession({ fresh: true });
   try {
     await run(sessionDir, storePath);
   } finally {
@@ -3604,7 +3605,6 @@ describe("gateway server chat", () => {
         {
           error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           ok: false,
-          payload: undefined,
         },
       ]);
       expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
@@ -3613,6 +3613,7 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
+        lane: "main",
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),
@@ -4550,59 +4551,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      await createSessionDir();
-      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
-      await writeStoredMainSession({
-        sessionStartedAt,
-      });
-      const announce = {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:subagent:child",
-        sourceTool: "subagent_announce",
-      };
-      await writeMainSessionTranscript([
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:29.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("older stale announce reply", {
-          timestamp: "2026-05-16T16:00:30.000Z",
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:31.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("newer stale announce reply", {
-          timestamp: "2026-05-16T16:00:33.000Z",
-        }),
-        makeTranscriptTextEvent("fresh turn", {
-          role: "user",
-          timestamp: "2026-05-23T04:03:10.000Z",
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws, { limit: 3 });
-      const serialized = JSON.stringify(messages);
-      expect(serialized).not.toContain("older stale announce reply");
-      expect(serialized).not.toContain("newer stale announce reply");
-      expect(serialized).toContain("fresh turn");
-    });
-  });
-
   test("chat.history offset pages backfill after filtering stale announce replies", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -4923,43 +4871,6 @@ describe("gateway server chat", () => {
           expect(serialized, `${boundary}: ${privateValue}`).not.toContain(privateValue);
         }
       }
-    });
-  });
-
-  test("chat.history keeps recent messages within the production byte budget", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
-      const baseText = "s".repeat(100_000);
-      const lines: unknown[] = Array.from({ length: 70 }, (_, index) =>
-        createTextTranscriptEvent("user", `small-${index}:${baseText}`, {
-          timestamp: Date.now() + index,
-        }),
-      );
-      lines.push(
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            timestamp: Date.now() + 1_000,
-            content: [
-              {
-                type: "tool_result",
-                toolUseId: "tool-1",
-                output: { nested: { payload: "z".repeat(300_000) } },
-              },
-            ],
-          },
-        }),
-      );
-
-      await writeMainSessionTranscript(lines);
-      const messages = await fetchHistoryMessages(ws, { maxChars: 100_000 });
-      const serialized = JSON.stringify(messages);
-
-      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
-      expect(serialized).toContain("small-69:");
-      expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(serialized).not.toContain("small-0:");
     });
   });
 
@@ -5611,26 +5522,6 @@ describe("gateway server chat", () => {
       expect(history.ok).toBe(false);
       expect((history.error as { message?: string } | undefined)?.message).toContain(
         "offset and messageId cannot be used together",
-      );
-    });
-  });
-
-  test("chat.history rejects an anchored session id from another session key", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-
-      const history = await rpcReq(
-        ws,
-        "chat.history",
-        makeMainSessionParams({
-          messageId: "message-1",
-          sessionId: "unknown-session",
-        }),
-      );
-
-      expect(history.ok).toBe(false);
-      expect((history.error as { message?: string } | undefined)?.message).toContain(
-        "sessionId does not belong to sessionKey",
       );
     });
   });

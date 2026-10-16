@@ -107,6 +107,11 @@ Alternatively, on a Docker-enabled Testbox, start `postgres:17` with trust auth
 and a loopback-only port, run the same command with
 `postgresql://postgres@127.0.0.1:5432/postgres`, then remove the container.
 
+The port-command integration scenarios share their fixture across separate files so
+the existing Vitest workers can overlap independent recovery and custody cases.
+They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
+no additional job or service is started.
+
 CI's **PostgreSQL conformance** job uses a fresh `postgres:17` service. It runs
 on scheduled main CI and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
@@ -119,12 +124,12 @@ omit it. The selected job is required by `openclaw/ci-gate`.
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: untargeted runs use the `vitest.full-*.config.ts` shard set and may
-  expand multi-project shards into per-project configs for parallel
-  scheduling
+- Config: untargeted local runs expand the `vitest.full-*.config.ts` shard set
+  into bounded per-project invocations for parallel scheduling; CI retains
+  its aggregate shard policy
 - Files: core/unit inventories under `src/**/*.test.ts`,
   `packages/**/*.test.ts`, and `test/**/*.test.ts`; UI unit tests run in the
-  dedicated `unit-ui` shard
+  dedicated UI leaf projects
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -157,8 +162,10 @@ Native dependency policy:
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">
 
-    - Untargeted `pnpm test` runs thirteen smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-tooling`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/plugin work starving unrelated suites.
+    - Untargeted local `pnpm test` expands the twelve aggregate shard configs into their leaf projects, then splits large inventories into bounded invocations. The invocation count grows with the test inventory; it is not twelve processes. Separate process lifetimes bound retained module graphs and let auto-reply and plugin work share the scheduler with other suites. CI keeps its existing aggregate policy, including the Testbox expansion of agentic and extension shards.
     - Expanded local full-suite runs batch ordinary tooling tests into at most eight files per Vitest process to amortize startup. The shared UI lane also uses batches of at most eight files so a retained jsdom/module generation cannot slow the entire UI inventory. The shared Gateway database-worker fork is bounded to fifty files per process to avoid retaining its entire module graph. Isolated, browser, timing, and Docker lanes keep their existing owners and policies; batching does not remove tests or relax exclusive Gateway scheduling.
+    - Local extension database-worker invocations also use the existing twenty-file job bound within each process cohort. Telegram native-worker tests retain their one-file process lifetime, and other smaller process limits remain in force. This prevents a single hundreds-file cohort from becoming a serial tail.
+    - Local shard concurrency comes from the CPU, load, and available-memory worker budget, capped at ten processes. Ordinary shards receive one Vitest worker each. Exclusive Gateway shards run alone and can use that same concurrency budget inside their own process, while their config-level serial phases stay serial. `OPENCLAW_TEST_PROJECTS_PARALLEL=<n>` overrides shard concurrency; `OPENCLAW_TEST_PROJECTS_SERIAL=1` selects serial scheduling. Explicit `OPENCLAW_VITEST_MAX_WORKERS` or `OPENCLAW_TEST_WORKERS` values retain their worker policy. None of these local defaults changes CI scheduling.
     - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
     - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
     - Non-watch package and agent directory targets, such as `pnpm test packages/gateway-client` or `pnpm test src/agents/tools`, and quoted agent globs such as `pnpm test 'src/agents/failover/**/*.test.ts'`, discover regular `*.test.ts` files and route each to its owning lane. This preserves fast, isolated, harness, and database-worker ownership, shared exclusions, and inherited include limits; ordinary selections do not opt into live or E2E tests.

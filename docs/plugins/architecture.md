@@ -325,6 +325,9 @@ capture retains or releases. Legacy reload receipts keep their framed raw-byte v
 so a changed receipt still requires streaming its native payloads.
 Read-only inspection never publishes its native admissions during later settlement.
 Deferred publication retains the original database authority and state directory.
+Gateway startup uses the admitted in-memory receipts without waiting for their
+advisory persistence. Model workers receive those same admitted facts, and cache
+retirement joins pending receipt writes before releasing native captures.
 Doctor's private checks keep captured code in profile-qualified temporary storage,
 so removing their database snapshots cannot remove an image still loaded in the process.
 An entirely missing retired capture can be rebuilt from its installed source;

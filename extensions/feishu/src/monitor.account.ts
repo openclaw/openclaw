@@ -25,7 +25,6 @@ import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
-import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -35,8 +34,6 @@ import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import { normalizeFeishuEventChatType, type ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
-
-export { FeishuRetryableSyntheticEventError };
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;

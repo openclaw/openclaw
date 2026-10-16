@@ -4,6 +4,7 @@ import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
@@ -41,11 +42,10 @@ import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-
 import { buildErrorAgentMeta } from "./helpers.js";
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
-import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
@@ -182,14 +182,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
     !hasAttemptTerminalState(attempt) &&
-    !hasComposedVisibleAnswerAfterSettledTools(attempt) &&
-    !resolveSilentToolResultReplyPayload({
-      isCronTrigger: params.trigger === "cron",
-      payloadCount: 0,
-      aborted,
-      timedOut,
-      attempt,
-    });
+    !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =
     emptyLengthStop &&
     resolveSourceReplyDelivery(
@@ -358,6 +351,9 @@ export async function recoverEmbeddedRunAttempt(input: {
   const retryFailure = promptError
     ? resolveFailoverClassificationFromError(promptError, preparedRuntime.provider)
     : assistantFailure;
+  const providerTransportFailed = attemptAssistant?.diagnostics?.some(
+    (diagnostic) => diagnostic.type === "provider_transport_failure",
+  );
   const failureReason = promptError
     ? failoverReasonFromClassification(retryFailure)
     : assistantFailure?.kind === "reason"
@@ -365,9 +361,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       : idleTimedOut ||
           (attemptAssistant &&
             isRetryableAssistantError(attemptAssistant) &&
-            attemptAssistant.diagnostics?.some(
-              (diagnostic) => diagnostic.type === "provider_transport_failure",
-            ))
+            providerTransportFailed)
         ? "timeout"
         : null;
   const compactionSelection = resolveCompactionLiveModelSelection({
@@ -428,6 +422,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     return retry();
   }
   const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
+  const retryCode = promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code;
+  const retryMessage = promptError ? formatErrorMessage(promptError) : assistantSignal?.message;
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
@@ -450,8 +446,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
       sameModelRetry: retryFailure?.kind === "reason" ? retryFailure.sameModelRetry : undefined,
-      code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
-      message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
+      code: retryCode,
+      message: retryMessage,
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
@@ -483,6 +479,13 @@ export async function recoverEmbeddedRunAttempt(input: {
     }))
   ) {
     runInput.laneController.throwIfAborted();
+    if (
+      providerTransportFailed ||
+      isTransientNetworkError(promptError ?? { code: retryCode, message: retryMessage })
+    ) {
+      await preparedRuntime.refreshTransportForConnectionError();
+      runInput.laneController.throwIfAborted();
+    }
     if (outputLimitFailure) {
       sessionPromptState.markOwnedTranscriptRetry();
       await sessionPromptState.settleOwnedTranscriptProjection(

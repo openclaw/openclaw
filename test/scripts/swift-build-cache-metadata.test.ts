@@ -24,8 +24,8 @@ const sourcePath = "apps/macos/Sources/Feature.swift";
 const metadataPath = "apps/macos/.build/ci-input-metadata.json";
 const sourceDigest = createHash("sha256").update("source\n").digest("hex");
 
-function run(root: string, mode: "record" | "restore") {
-  const result = spawnSync("python3", ["-I", "-S", script, mode], {
+function run(root: string, mode: "record" | "restore", profile?: "ios") {
+  const result = spawnSync("python3", ["-I", "-S", script, mode, ...(profile ? [profile] : [])], {
     cwd: root,
     encoding: "utf8",
     timeout: 10_000,
@@ -67,6 +67,38 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === "win32")("Swift build-cache input metadata", () => {
+  it("reuses unchanged iOS and shared inputs while invalidating changed source and generated version settings", () => {
+    const root = tempDirs.make("openclaw-ios-cache-metadata-");
+    mkdirSync(path.join(root, "apps/ios/build"), { recursive: true });
+    const unchanged = [
+      "apps/ios/Sources/Feature.swift",
+      "apps/ios/Tests/FeatureTests.swift",
+      "apps/ios/WatchApp/Sources/Feature.swift",
+      "apps/shared/OpenClawKit/Sources/Shared.swift",
+      "apps/shared/OpenClawKit/Plugins/GenerateGatewayProtocol/plugin.swift",
+      "apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift",
+    ].map((relative) => writeInput(root, relative));
+    const changed = writeInput(root, "apps/ios/Sources/Changed.swift", "before\n");
+    const version = writeInput(
+      root,
+      "apps/ios/build/Version.xcconfig",
+      "CURRENT_PROJECT_VERSION = 1\n",
+    );
+    setTime(originalTime, ...unchanged, changed, version);
+    expect(run(root, "record", "ios")).toContain("7 verified input timestamps");
+    writeFileSync(changed, "after!\n");
+    writeFileSync(version, "CURRENT_PROJECT_VERSION = 2\n");
+    setTime(checkoutTime, ...unchanged, changed, version);
+    expect(run(root, "restore", "ios")).toContain("6 verified input timestamps");
+    for (const file of unchanged) {
+      expect(statSync(file, { bigint: true }).mtimeNs).toBe(originalTime);
+    }
+    for (const file of [changed, version]) {
+      expect(statSync(file, { bigint: true }).mtimeNs).toBe(checkoutTime);
+    }
+    expect(readFileSync(version, "utf8")).toContain("= 2");
+  });
+
   it("restores original nanoseconds only for byte-identical current inputs", () => {
     const { root, source, metadata } = fixture();
     const sharedFixture =

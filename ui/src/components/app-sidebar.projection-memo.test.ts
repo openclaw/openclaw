@@ -1,9 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../lib/session-pull-requests.ts";
+import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import {
   mountRoster,
   settleRoster,
@@ -17,13 +24,15 @@ import {
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SelectPicker } from "./select-picker.ts";
-import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
   sidebarNarrationLines: ReadonlyMap<string, string>;
@@ -64,12 +73,15 @@ async function mount(rows: GatewaySessionRow[]) {
   const gateway = createGatewayHarness(
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
-  const context = createContext(gateway.gateway, sessions.sessions, {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "work" }],
-  });
+  const context = {
+    ...createContext(gateway.gateway, sessions.sessions, {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "work" }],
+    }),
+    chatSubmissions: createChatSubmissions(),
+  };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
   context.overlays.subscribe = (listener) => {
     overlayListeners.add(listener);
@@ -116,6 +128,85 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it("watches live PR rows after preparation releases the boot snapshot", async () => {
+    const target = session("live-checkout", {
+      worktree: { id: "wt-live", branch: "main", repoRoot: "/synthetic/repo" },
+    });
+    const { sidebar, gateway, sessions, row } = await mount([target]);
+    sidebar.connected = true;
+    gateway.publish({ hello: gatewayHelloForMethods([SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]) });
+    await settleLitElement(sidebar);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    expect(owner.sidebarSnapshotSettled()).toBe(true);
+    expect(owner.readSessionPullRequestRows()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: target.key, worktreeId: "wt-live" })]),
+    );
+    const cached = sidebarBootSnapshot(captureBootRoster(sessions.sessions.state));
+    expect(cached.roster?.agentId).toBe(owner.expandedAgentId());
+    owner.restoreSidebarSnapshot({ ...cached, mode: "chip" });
+    owner.requestUpdate();
+    await settleLitElement(sidebar);
+    expect(owner.sidebarSnapshot).toBeNull();
+
+    gateway.publishEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [target.key]: {
+          pullRequests: [{ number: 42, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(sessionPullRequestsForGateway(gateway.gateway).get(target.key)?.pullRequests).toEqual([
+      { number: 42, state: "open" },
+    ]);
+    expect(
+      row(target.key)
+        ?.querySelector('[data-pull-request-state="open"]')
+        ?.getAttribute("aria-label"),
+    ).toContain("#42");
+  });
+
+  it("keeps one provisional row and invalidates admission without a new list or route", async () => {
+    const old = session("old");
+    const created = session("dashboard:creating");
+    const { sidebar, context, gateway, publish, row } = await mount([old]);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = created.key;
+    gateway.publish({ sessionKey: old.key });
+    const creation = { sessionKey: created.key, admitted: false };
+    const release = context.chatSubmissions.beginCreate({
+      creation,
+      message: null,
+      canDisplay: () => true,
+    });
+    try {
+      await settleLitElement(sidebar);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(old.key)?.visuallyActive).toBe(false);
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      publish([old, created]);
+      await settleLitElement(sidebar);
+      expect(row(created.key)).toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
+      const result = sidebar.sessionData.sessionsResult;
+      const navigation = sidebar.getSessionNavigationState();
+      expect(result?.sessions.some((value) => value.key === created.key)).toBe(true);
+      creation.admitted = true;
+      sidebar.requestUpdate();
+      await settleLitElement(sidebar);
+      expect(sidebar.sessionData.sessionsResult).toBe(result);
+      expect(sidebar.getSessionNavigationState()).not.toBe(navigation);
+      expect(sidebar.getRouteSessionKey()).toBe(created.key);
+      expect(sidebar.findSidebarSessionByKey(created.key)?.visuallyActive).toBe(true);
+      expect(row(created.key)).not.toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(0);
+    } finally {
+      release();
+    }
+  });
+
   it("shares the projection across unrelated updates and refreshes route, list, and filter inputs", async () => {
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
     const rows = [
@@ -279,7 +370,7 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("updates roster selection without rebuilding an unchanged new-session menu", async () => {
+  it("updates roster selection without reprojecting unchanged rows", async () => {
     const mounted = await mountRoster();
     const sidebar = mounted.sidebar as unknown as Sidebar;
     sidebar.sidebarAgentsMode = "roster";
@@ -292,9 +383,6 @@ describe("sidebar projection memo", () => {
     await settleRoster(mounted.sidebar);
     await vi.dynamicImportSettled();
     flush();
-    const newSession = sidebar.querySelector(".sidebar-new-session-menu")!;
-    const menuItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
-    expect(menuItems).toHaveLength(3);
     const sessionKey = "agent:main:recent";
     const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
     expect(row()).not.toBeNull();
@@ -317,10 +405,6 @@ describe("sidebar projection memo", () => {
     );
     expect(projectRows).not.toHaveBeenCalled();
     expect(sections).not.toHaveBeenCalled();
-    expect(sidebar.querySelector(".sidebar-new-session-menu")).toBe(newSession);
-    const retainedItems = [...newSession.querySelectorAll('a[role="menuitem"]')];
-    expect(retainedItems).toHaveLength(menuItems.length);
-    retainedItems.forEach((item, index) => expect(item).toBe(menuItems[index]));
   });
 
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {
@@ -365,6 +449,11 @@ describe("sidebar projection memo", () => {
         ?.querySelector('[data-session-attention="question"]')
         ?.getAttribute("aria-label"),
     ).toContain("Continue checking?");
+    const parent = sidebar.hostElement.parentElement!;
+    sidebar.hostElement.remove();
+    parent.append(sidebar.hostElement);
+    await settleLitElement(sidebar);
+    expect(row(target.key)?.querySelector('[data-session-attention="question"]')).not.toBeNull();
     await expectRowRefresh(sidebar, () =>
       gateway.publishEvent("question.resolved", { id: "question-memo", status: "cancelled" }),
     );
@@ -506,7 +595,7 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("replaces held running subtitles at their deadline without another input or full row projection", async () => {
+  it("replaces held running subtitles at their deadline after reparenting without a full row projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const target = session("running", {
@@ -524,6 +613,10 @@ describe("sidebar projection memo", () => {
     sidebar.sidebarNarrationLines = new Map([[target.key, "Second activity"]]);
     await settleLitElement(sidebar);
     expect(row(target.key)?.textContent).toContain("First activity");
+    const parent = sidebar.hostElement.parentElement!;
+    sidebar.hostElement.remove();
+    parent.append(sidebar.hostElement);
+    await settleLitElement(sidebar);
     projectRows.mockClear();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     await vi.advanceTimersByTimeAsync(1_499);

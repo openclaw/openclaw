@@ -368,10 +368,8 @@ export function createFaceTimeCallControl(params: {
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();
-        call.assertCurrent(generation);
         call.markModelReady(generation);
         await enableCallAudio(call);
-        call.assertCurrent(generation);
         call.markModelActive(generation);
         call.talk?.activate();
       })();

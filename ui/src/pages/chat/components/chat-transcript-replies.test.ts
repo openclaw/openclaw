@@ -1,18 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import * as chatMessage from "./chat-message-group.test-support.ts";
 import {
-  getTranscriptState,
+  render,
+  renderChatThread,
   renderTranscriptSearch,
-  toggleTranscriptSearch,
-} from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+} from "../test-helpers/chat-transcript-native.tsx";
+import * as chatMessage from "./chat-message-group-frame.ts";
+import { getTranscriptState, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -208,12 +207,12 @@ describe("chat transcript replies", () => {
   it.each([false, true])(
     "opens folded work when a reply navigation loads its source (run frame: %s)",
     async (framed) => {
-      const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const [sourceMessage, followUp] = replyMessages();
       const props = threadProps("pane-folded-history-reply", "agent:main:dashboard:reply", [
         followUp,
       ]);
+      const transcript = createTestTranscript(props.paneId);
       const open = vi.fn();
       props.replyMessageAccess = {
         revision: 0,
@@ -229,6 +228,11 @@ describe("chat transcript replies", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
+        const viewport = requireElement(container, ".chat-thread");
+        viewport.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+          viewport.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+          viewport.dispatchEvent(new Event("scroll"));
+        };
         requireElement(container, ".chat-reply-attribution--inline button").click();
         expect(open).toHaveBeenCalledWith("source-message");
         props.replyMessageAccess.navigationId = "source-message";
@@ -249,6 +253,8 @@ describe("chat transcript replies", () => {
           },
           followUp,
         ];
+        rerender();
+        expect(transcript.revealMessage("source-message")).toBe(true);
         rerender();
         await flushDeferredRowPrune();
         expect(
@@ -591,6 +597,7 @@ describe("chat transcript replies", () => {
             ?.querySelector(".chat-reply-attribution--reply"),
           "reply attribution",
         );
+      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
         transcript.hostConnected();
@@ -606,7 +613,8 @@ describe("chat transcript replies", () => {
             ?.getAttribute("data-chat-row-key"),
           "unrelated group key",
         );
-        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
+        prepareFrame.mockClear();
 
         for (const [name, text] of [
           ["Carol", "Original question loaded"],
@@ -626,7 +634,7 @@ describe("chat transcript replies", () => {
           expect(
             attribution().querySelector("button .chat-reply-attribution__name")?.textContent,
           ).toBe(name);
-          expect(renderGroup.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
+          expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual(
             [],
           );
         }

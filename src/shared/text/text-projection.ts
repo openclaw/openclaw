@@ -136,7 +136,7 @@ function createCheckpointTransform(project: CheckpointTransform): (text: string)
   };
 }
 
-export function createActivatedProjector(
+function createActivatedProjector(
   filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
 ): TextProjector {
   const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");

@@ -67,7 +67,10 @@ it.each(["existing", "admitted new"] as const)(
           },
         },
       };
-      const entry = { skillLibrarySelections: [selection] };
+      const entry = {
+        skillLibrarySelections: [selection],
+        spawnedCwd: state.path("session-workspace"),
+      };
       const staleEntry = {
         skillLibrarySelections: [{ ...selection, revision: "1".repeat(64) }],
       };
@@ -94,13 +97,22 @@ it.each(["existing", "admitted new"] as const)(
       } as unknown as Parameters<typeof prepareChatSendAttachments>[0]);
       expect(result.ok).toBe(true);
       expect(mocks.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ librarySelections: [selection] }),
+        expect.objectContaining({
+          librarySelections: [selection],
+          workspaceDir: state.workspaceDir,
+        }),
       );
       expect(mocks.ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
-        expect.objectContaining({ skillsSnapshot: snapshot }),
+        expect.objectContaining({
+          skillsSnapshot: snapshot,
+          workspaceDir: state.path("session-workspace"),
+        }),
       );
       expect(mocks.stageSandboxMedia).toHaveBeenCalledWith(
-        expect.objectContaining({ skillsSnapshot: snapshot }),
+        expect.objectContaining({
+          skillsSnapshot: snapshot,
+          workspaceDir: state.path("session-workspace"),
+        }),
       );
       if (result.ok) {
         expect(result.value.mediaPathOffloads[0]).toMatchObject({

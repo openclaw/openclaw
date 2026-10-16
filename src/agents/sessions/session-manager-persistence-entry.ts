@@ -12,6 +12,7 @@ import type {
   SessionMessageEntry,
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 export type PersistRecordResult =
   | undefined
@@ -79,7 +80,7 @@ export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
-  return canonicalEntry as T;
+  return shareSessionSystemPrompt(canonicalEntry) as T;
 }
 
 export function adoptPersistedMessage(

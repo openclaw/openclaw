@@ -516,7 +516,9 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+        this.error = t(
+          chatUnsupported ? "custodian.unsupportedGateway" : "custodian.accessRequired",
+        );
         return;
       }
       this.chatAvailable = true;
@@ -549,7 +551,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+      this.error = t(chatUnsupported ? "custodian.unsupportedGateway" : "custodian.accessRequired");
       return;
     }
     if (configuredInferenceState === "unresolved") {

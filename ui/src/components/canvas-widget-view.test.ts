@@ -6,7 +6,11 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationContextRequest,
+} from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   bumpCanvasWidgetFrameConnectionGeneration,
@@ -79,9 +83,11 @@ function mount(
   };
   gateways.set(view, gateway);
   view.addEventListener("context-request", (event) => {
-    if (event.context === applicationContext) {
+    // SAFETY: This listener handles the native application context protocol.
+    const contextRequest = event as ApplicationContextRequest;
+    if (contextRequest.context === applicationContext) {
       event.stopPropagation();
-      event.callback({ gateway } as unknown as ApplicationContext);
+      contextRequest.callback({ gateway } as unknown as ApplicationContext);
     }
   });
   view.docId = docId;
@@ -735,10 +741,12 @@ describe("Canvas widget view", () => {
     let onMessage!: (event: MessageEvent) => void;
     const postMessage = vi.fn();
     const close = vi.fn();
+    const removeEventListener = vi.fn();
     const port = {
       addEventListener: vi.fn((_type, handler) => {
         onMessage = handler;
       }),
+      removeEventListener,
       start: vi.fn(),
       postMessage,
       close,
@@ -860,6 +868,7 @@ describe("Canvas widget view", () => {
       view.allowScripts = false;
     }
     expect(close).toHaveBeenCalledOnce();
+    expect(removeEventListener).toHaveBeenCalledWith("message", onMessage);
     onMessage(
       new MessageEvent("message", {
         data: { type: "openclaw:widget-prompt", prompt: "Stale port" },

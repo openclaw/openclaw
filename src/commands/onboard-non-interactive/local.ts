@@ -279,6 +279,9 @@ export async function runNonInteractiveLocalSetup(params: {
     reset: opts.reset,
   });
   logConfigUpdated(runtime);
+  const { initializeFreshDaemonRuntimePinMigration } =
+    await import("../../infra/state-migrations.daemon-runtime-pins.js");
+  initializeFreshDaemonRuntimePinMigration(process.env);
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   let daemonInstallStatus: Parameters<typeof logNonInteractiveOnboardingJson>[0]["daemonInstall"];

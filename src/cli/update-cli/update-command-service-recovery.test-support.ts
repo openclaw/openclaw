@@ -6,6 +6,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { withDaemonRuntimePinMigration } from "../../daemon/runtime-pin-state.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
@@ -167,6 +168,14 @@ export async function createServiceActivationFixture() {
     `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
   );
   await writeRecoveryConfig(configPath, VERSION);
+  const platform = process.platform;
+  mockProcessPlatform(hostPlatform);
+  try {
+    // Installed-service fixtures enter after migration, before publishing a live Gateway owner.
+    await withDaemonRuntimePinMigration(process.env, () => undefined);
+  } finally {
+    mockProcessPlatform(platform);
+  }
   return { root, configPath, envSnapshot, servingOwner: createServingOwnerFixture() };
 }
 

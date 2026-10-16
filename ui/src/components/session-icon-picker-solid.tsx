@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import {
   normalizeSessionIconValue,
   SESSION_COLOR_IDS,
@@ -17,7 +17,6 @@ import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
 export type AppearancePickerProps = {
-  inline?: boolean;
   allowSvg?: boolean;
   clearable?: boolean;
   mode: "grid" | "custom";
@@ -44,11 +43,12 @@ export function AppearancePicker(props: AppearancePickerProps) {
       normalized && (props.allowSvg || !normalized.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX))
     );
   };
-  const tabStop = () =>
+  const tabStop = createMemo(() =>
     props.clearable !== false && props.currentIcon === null
       ? null
       : ([...EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find((icon) => icon === props.currentIcon) ??
-        EMOJI_CHOICES[0]);
+        EMOJI_CHOICES[0]),
+  );
   const choice = (icon: string | null, glyph = false) => (
     <button
       type="button"
@@ -65,7 +65,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
     </button>
   );
   return (
-    <div slot={props.inline ? undefined : "submenu"} class="session-menu__appearance">
+    <div class="session-menu__appearance">
       <div class="session-menu__icon-section-label">{t("sessionsView.setColorMenu")}</div>
       <div class="session-menu__colors" role="group" aria-label={t("sessionsView.setColorMenu")}>
         <For each={props.clearable === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]}>
@@ -305,22 +305,20 @@ export function useSessionMenuAppearance(
 ) {
   const [mode, setMode] = createSignal<"grid" | "custom">("grid");
   const [customValue, setCustomValue] = createSignal("");
-  const [focusRequest, setFocusRequest] = createSignal<{
-    target: "custom" | "grid";
-  }>();
-  createEffect(focusRequest, (request) => {
-    if (request?.target === "custom") {
-      host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
-    }
-    if (request?.target === "grid") {
-      const custom = host.querySelector<HTMLButtonElement>(".session-menu__icon-choice--custom");
-      for (const choice of host.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice")) {
-        choice.tabIndex = choice === custom ? 0 : -1;
+  const focusAfterRender = (target: "custom" | "grid") =>
+    onSettled(() => {
+      if (target === "custom") {
+        host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
+      } else {
+        const custom = host.querySelector<HTMLButtonElement>(".session-menu__icon-choice--custom");
+        for (const choice of host.querySelectorAll<HTMLButtonElement>(
+          ".session-menu__icon-choice",
+        )) {
+          choice.tabIndex = choice === custom ? 0 : -1;
+        }
+        custom?.focus();
       }
-      custom?.focus();
-    }
-    return undefined;
-  });
+    });
   const prepare = () => {
     setMode("grid");
     setCustomValue("");
@@ -328,14 +326,13 @@ export function useSessionMenuAppearance(
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
-    setFocusRequest({ target: "grid" });
+    focusAfterRender("grid");
   };
   return {
     prepare,
     showIconGrid,
-    render: (inline = false) => (
+    render: () => (
       <AppearancePicker
-        inline={inline}
         allowSvg
         mode={mode()}
         currentIcon={readState().session.icon}
@@ -361,7 +358,7 @@ export function useSessionMenuAppearance(
           event.stopPropagation();
           setMode("custom");
           setCustomValue("");
-          setFocusRequest({ target: "custom" });
+          focusAfterRender("custom");
         }}
         onBack={showIconGrid}
         onInput={(event) => {

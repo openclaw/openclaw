@@ -11,7 +11,6 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
-const STREAM_INTERVAL_MS = 20;
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const SESSION_KEY = "agent:qa:qa:session-streaming";
 const IDEMPOTENCY_KEY = "qa-session-streaming";
@@ -80,6 +79,7 @@ function writeEvent(response: ServerResponse, event: unknown): void {
 async function writeStreamingResponse(
   response: ServerResponse,
   deltasSent: ReturnType<typeof createDeferred>,
+  firstDeltaObserved: ReturnType<typeof createDeferred>,
   terminalRelease: ReturnType<typeof createDeferred>,
 ): Promise<void> {
   const message = {
@@ -108,7 +108,9 @@ async function writeStreamingResponse(
       content_index: 0,
       delta,
     });
-    await delay(STREAM_INTERVAL_MS);
+    if (delta === STREAM_DELTAS[0]) {
+      await firstDeltaObserved.promise;
+    }
   }
   deltasSent.resolve();
   await terminalRelease.promise;
@@ -136,6 +138,7 @@ async function startStreamingProvider() {
   const providerRequests: Array<Record<string, unknown>> = [];
   const transportRequests: string[] = [];
   const deltasSent = createDeferred();
+  const firstDeltaObserved = createDeferred();
   const terminalRelease = createDeferred();
   let terminalReleased = false;
   const releaseTerminal = () => {
@@ -161,7 +164,7 @@ async function startStreamingProvider() {
         providerRequests.push(
           JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
         );
-        await writeStreamingResponse(response, deltasSent, terminalRelease);
+        await writeStreamingResponse(response, deltasSent, firstDeltaObserved, terminalRelease);
         return;
       }
       transportRequests.push(`${request.method ?? "UNKNOWN"} ${request.url ?? ""}`);
@@ -182,11 +185,13 @@ async function startStreamingProvider() {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     deltasSent: deltasSent.promise,
+    releaseRemainingDeltas: firstDeltaObserved.resolve,
     isTerminalReleased: () => terminalReleased,
     releaseTerminal,
     providerRequests,
     transportRequests,
     stop: async () => {
+      firstDeltaObserved.resolve();
       releaseTerminal();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
@@ -320,6 +325,22 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
+      await vi.waitFor(
+        () => {
+          expect(
+            gatewayEvents
+              .map(asAgentEvent)
+              .some(
+                (event) =>
+                  event?.runId === IDEMPOTENCY_KEY &&
+                  event.stream === "assistant" &&
+                  event.data?.delta === STREAM_DELTAS[0],
+              ),
+          ).toBe(true);
+        },
+        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
+      );
+      provider.releaseRemainingDeltas();
       await provider.deltasSent;
       await vi.waitFor(
         () => {

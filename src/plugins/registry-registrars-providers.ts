@@ -50,7 +50,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       record.providerIds.push(id);
     }
     if (normalizedProvider.normalizeToolSchemas) {
-      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas, "tool");
     }
     registry.providers.push(
       createRegistration(record, {
@@ -253,6 +253,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     <T extends { id: string }>(params: {
       kindLabel: string;
       factory?: (provider: T) => ((...args: never[]) => unknown) | undefined;
+      factoryResult?: "tool";
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
       catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
@@ -278,7 +279,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }
       const factory = params.factory?.(provider);
       if (factory) {
-        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(
+          factory,
+          params.factoryResult,
+        );
       }
       params.registrations.push(
         createIdentityRegistration(record, {
@@ -392,12 +396,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerWebFetchProvider: createProviderLikeRegistrar({
       kindLabel: "web fetch provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webFetchProviders,
       ownedIds: (record) => record.webFetchProviderIds,
     }),
     registerWebSearchProvider: createProviderLikeRegistrar({
       kindLabel: "web search provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webSearchProviders,
       ownedIds: (record) => record.webSearchProviderIds,
     }),

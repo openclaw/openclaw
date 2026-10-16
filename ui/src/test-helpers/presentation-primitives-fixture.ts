@@ -7,7 +7,6 @@ export const group = query.get("group") ?? "settings";
 const theme = query.get("theme") === "light" ? "light" : "dark";
 document.documentElement.dataset.theme = theme;
 document.documentElement.dataset.themeMode = theme;
-document.documentElement.classList.add(`wa-${theme}`);
 document.documentElement.style.colorScheme = theme;
 document.documentElement.dir = query.get("direction") === "rtl" ? "rtl" : "ltr";
 export const root = document.createElement("main");

@@ -22,9 +22,8 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
-  GATEWAY_CRASH_LOOP_BREAKER_REASON,
   completeGatewayBootLifecycle,
-  recordGatewayBootStart,
+  beginGatewayBootLifecycle,
 } from "../../infra/gateway-boot-lifecycle.js";
 import * as bootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
@@ -146,7 +145,7 @@ describe("startup recovery admission", () => {
       let activeBootId: string | undefined;
       if (action !== "healthy") {
         for (let i = 0; i < 3; i++) {
-          const boot = recordGatewayBootStart(env, now - 295_000 + i);
+          const boot = (await beginGatewayBootLifecycle(env, now - 295_000 + i)).id;
           await completeGatewayBootLifecycle(
             boot,
             { outcome: "startup_failed" },
@@ -154,15 +153,11 @@ describe("startup recovery admission", () => {
             now - 295_000 + i,
           );
         }
-        activeBootId = recordGatewayBootStart(
-          env,
-          now - 290_000,
-          GATEWAY_CRASH_LOOP_BREAKER_REASON,
-        );
+        activeBootId = (await beginGatewayBootLifecycle(env, now - 290_000)).id;
       } else {
         // Two previous crashes plus the live boot must not independently trip safe mode.
         for (let i = 0; i < 2; i++) {
-          const boot = recordGatewayBootStart(env, now - 1_000 + i);
+          const boot = (await beginGatewayBootLifecycle(env, now - 1_000 + i)).id;
           await completeGatewayBootLifecycle(
             boot,
             { outcome: "startup_failed" },
@@ -170,7 +165,7 @@ describe("startup recovery admission", () => {
             now - 1_000 + i,
           );
         }
-        activeBootId = recordGatewayBootStart(env, now);
+        activeBootId = (await beginGatewayBootLifecycle(env, now)).id;
       }
       const lifetime = new AbortController();
       let suppression: object | null =
@@ -282,7 +277,7 @@ describe("startup recovery admission", () => {
         }
         const extendedPause = createDeferred();
         if (action === "crash") {
-          const boot = recordGatewayBootStart(env, now);
+          const boot = (await beginGatewayBootLifecycle(env, now)).id;
           await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
           info.mockImplementation((message) => {
             if (message.includes("restart recovery paused until")) {
@@ -508,31 +503,23 @@ describe("startup recovery admission", () => {
           expect(waitSpy).not.toHaveBeenCalled();
           const lines = info.mock.calls.map(([line]) => line);
           expect(lines).toContainEqual(
-            expect.stringMatching(
-              /startup complete: started=2 .*skipReasons=.*archived:1.*not_main_session:1/,
-            ),
+            expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
           );
           const decisions = lines
             .filter((line) => line.startsWith("main-session restart recovery candidate "))
             .map((line) =>
               JSON.parse(line.slice("main-session restart recovery candidate ".length)),
             );
-          expect(decisions).toHaveLength(3);
+          expect(decisions).toHaveLength(2);
           expect(decisions).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
                 sessionKey: first.sessionKey,
                 sourceRunId: "interrupted-main",
                 decision: "started",
-                nextOwner: "background-lane",
+                nextOwner: "restart-recovery-lane",
                 boot: expect.any(String),
                 pass: expect.any(String),
-              }),
-              expect.objectContaining({
-                sessionKey: "agent:main:archived",
-                reason: "archived",
-                decision: "deferred",
-                nextOwner: "none",
               }),
             ]),
           );

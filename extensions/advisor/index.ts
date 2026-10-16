@@ -113,10 +113,15 @@ export default definePluginEntry({
         const result = await api.session.workflow.steerActiveRun({
           sessionKey,
           text,
+          displayText: finding,
           idempotencyKey,
         });
         if (result.steered) {
           api.logger.info(`advisor: steered active run for session ${sessionKey}`);
+          return;
+        }
+        if (result.reason === "duplicate") {
+          api.logger.info(`advisor: correction already accepted for session ${sessionKey}`);
           return;
         }
         if (signal.aborted || !scheduler || scheduler.signal.aborted) {
@@ -250,6 +255,7 @@ export default definePluginEntry({
               agentId: run.agentId,
               runId: event.runId,
               durationMs: event.ts - run.startedAt,
+              aborted: event.data.aborted === true,
             });
           }
         }

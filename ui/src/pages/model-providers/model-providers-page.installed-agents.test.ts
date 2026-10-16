@@ -195,7 +195,6 @@ describe("ModelProvidersPage installed agents", () => {
           }
           settingsAgentSelection.intentRevision += 1;
           notifySelection();
-          page.requestUpdate();
         }
         await waitForSolid(() => expect(page.querySelector(".model-setup-wizard")).toBeNull());
         await drainPageUpdates(page);

@@ -375,7 +375,7 @@ function scoreClaimMatch(params: {
   if (normalizeLowercaseStringOrEmpty(params.id).includes(params.queryLower)) {
     score += 10;
   }
-  if (typeof params.confidence === "number") {
+  if (params.confidence !== undefined) {
     score += Math.round(params.confidence * 10);
   }
   switch (params.freshnessLevel) {
@@ -802,7 +802,7 @@ function toWikiSearchResult(
       ? {
           ...(matchingClaim.id ? { matchedClaimId: matchingClaim.id } : {}),
           ...(matchingClaim.status ? { matchedClaimStatus: matchingClaim.status } : {}),
-          ...(typeof matchingClaim.confidence === "number"
+          ...(matchingClaim.confidence !== undefined
             ? { matchedClaimConfidence: matchingClaim.confidence }
             : {}),
           evidenceKinds: uniqueStrings(

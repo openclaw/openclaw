@@ -8,6 +8,9 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { setFileDraft } from "./chat-file-drafts.ts";
+import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
@@ -423,6 +426,86 @@ describe("markdown sidebar", () => {
     },
   );
 
+  it("shows a failed attachment download and lets the user retry", async () => {
+    let failDownload!: (reason: Error) => void;
+    const download = vi.fn(
+      () =>
+        new Promise<Blob>((_resolve, reject) => {
+          failDownload = reject;
+        }),
+    );
+    const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
+      content: {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: "report.zip",
+        download,
+      } satisfies SidebarContent,
+    });
+    container.append(panel);
+    await panel.updateComplete;
+    const button = expectDefined(
+      panel.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__download"),
+      "Attachment download button",
+    );
+
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(true));
+    failDownload(new Error("Download interrupted"));
+    await vi.waitFor(() => {
+      expect(button.disabled).toBe(false);
+      expect(panel.querySelector('[role="alert"]')?.textContent).toBe("Download interrupted");
+    });
+    button.click();
+    await vi.waitFor(() => {
+      expect(button.disabled).toBe(true);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(download).toHaveBeenCalledTimes(2);
+    panel.remove();
+  });
+
+  it.each(["selection", "disconnection"])(
+    "retires an attachment download on %s before late bytes arrive",
+    async (change) => {
+      let finishDownload!: (blob: Blob) => void;
+      let signal!: AbortSignal;
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      panel.content = {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: "report.zip",
+        download: (requestSignal: AbortSignal) => {
+          signal = requestSignal;
+          return new Promise<Blob>((resolve) => {
+            finishDownload = resolve;
+          });
+        },
+      };
+      const createObjectURL = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = createObjectURL;
+        },
+      );
+      container.append(panel);
+      await panel.updateComplete;
+      panel.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__download")!.click();
+      if (change === "selection") {
+        panel.content = { kind: "markdown", content: "Next" };
+        await panel.updateComplete;
+      } else {
+        panel.remove();
+        await Promise.resolve();
+      }
+      expect(signal.aborted).toBe(true);
+      finishDownload(new Blob(["late content"]));
+      await Promise.resolve();
+      expect(createObjectURL).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["error"] as const)(
     "keeps the image placeholder through metadata until the image emits %s",
     async (outcome) => {
@@ -745,5 +828,88 @@ describe("file sidebar clipboard feedback", () => {
     expect(findCopyButton(panel, label).getAttribute("aria-label")).toBe(label);
     expect(timers.schedule.mock.calls.some(([, delay]) => delay === 1_500)).toBe(false);
     expect(panel.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe("file sidebar HTML preview ownership", () => {
+  it("restores preview mode on file replacement and source mode on line navigation", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel");
+    const first = {
+      kind: "file" as const,
+      path: "first.html",
+      name: "first.html",
+      content: "<h1>First</h1>",
+    };
+    panel.content = first;
+    container.append(panel);
+    const preview = () =>
+      expectDefined(
+        panel.querySelector<ChatHtmlPreviewElement>("openclaw-chat-html-preview"),
+        "HTML preview",
+      );
+    const previewContainer = () =>
+      expectDefined(panel.querySelector<HTMLElement>(".chat-html-preview"), "Preview container");
+    const toggle = () =>
+      expectDefined(
+        Array.from(panel.querySelectorAll("button")).find(
+          (button) =>
+            button.textContent?.trim() === "Source" || button.textContent?.trim() === "Preview",
+        ),
+        "Preview toggle",
+      );
+    await waitForSolid(() => expect(preview().html).toBe(first.content));
+    expect(previewContainer().hidden).toBe(false);
+    toggle().click();
+    await waitForSolid(() => expect(previewContainer().hidden).toBe(true));
+    const search = expectDefined(
+      panel.querySelector<HTMLButtonElement>(".sidebar-file-view__search-toggle"),
+      "Search toggle",
+    );
+    search.click();
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(panel.querySelector('input[type="search"]')),
+    );
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(search));
+    toggle().click();
+    await waitForSolid(() => expect(previewContainer().hidden).toBe(false));
+    panel.content = { ...first, path: "next.html", name: "next.html", content: "<h1>Next</h1>" };
+    await waitForSolid(() => expect(preview().html).toBe("<h1>Next</h1>"));
+    panel.fileNavigation = { line: 1 };
+    await waitForSolid(() => expect(previewContainer().hidden).toBe(true));
+    toggle().click();
+    await waitForSolid(() => expect(previewContainer().hidden).toBe(false));
+    expect(preview().html).toBe("<h1>Next</h1>");
+  });
+
+  it("previews a retained edit and restores its source when opened at a line", async () => {
+    const content = {
+      kind: "file" as const,
+      path: "draft.html",
+      name: "draft.html",
+      content: "<h1>Saved</h1>",
+      draftKey: "html-preview-draft",
+      edit: { hash: "saved", save: vi.fn(), fetchLatest: vi.fn() },
+    };
+    setFileDraft(content, { content: "<h1>Draft</h1>", expectedHash: "saved" });
+    try {
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      panel.content = content;
+      container.append(panel);
+      await waitForSolid(() =>
+        expect(
+          panel.querySelector<ChatHtmlPreviewElement>("openclaw-chat-html-preview")?.html,
+        ).toBe("<h1>Draft</h1>"),
+      );
+      panel.content = { ...content, line: 1 };
+      await waitForSolid(() =>
+        expect(panel.querySelector<HTMLElement>(".chat-html-preview")?.hidden).toBe(true),
+      );
+      expect(panel.querySelector(".file-view")?.hasAttribute("hidden")).toBe(false);
+    } finally {
+      setFileDraft(content, null);
+    }
   });
 });

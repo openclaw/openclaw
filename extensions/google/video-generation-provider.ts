@@ -358,7 +358,7 @@ async function generateGoogleVideoViaRest(params: {
     body: {
       instances: [{ prompt: params.prompt }],
       parameters: {
-        ...(typeof params.durationSeconds === "number"
+        ...(params.durationSeconds !== undefined
           ? { durationSeconds: params.durationSeconds }
           : {}),
         ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
@@ -469,12 +469,12 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       let operation;
       try {
         operation = await client.models.generateVideos({
-          model,
+          model: stripGoogleProviderPrefix(model),
           prompt: req.prompt,
           image: resolveInputImage(req),
           video: resolveInputVideo(req),
           config: {
-            ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
+            ...(durationSeconds !== undefined ? { durationSeconds } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),
             ...(resolution ? { resolution } : {}),
           },
@@ -508,11 +508,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         }
         operation = sdkOperation;
       }
-      let generatedVideos = extractGeneratedVideos(operation);
-      if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
-        operation = await generateViaRest();
-        generatedVideos = extractGeneratedVideos(operation);
-      }
+      const generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0) {
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }

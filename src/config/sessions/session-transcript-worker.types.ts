@@ -9,6 +9,7 @@ import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-his
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
@@ -207,6 +208,7 @@ export type SessionPreviewWorkerInput = {
 type SessionTitleFieldsWorkerInput = {
   kind: "session-title-fields";
   database: { agentId: string; path: string };
+  skillCommands?: SkillCommandSpec[];
   scope: SessionTranscriptReadScope;
   includeInterSession?: boolean;
   admission?: UserTurnTranscriptAdmissionReceipt;

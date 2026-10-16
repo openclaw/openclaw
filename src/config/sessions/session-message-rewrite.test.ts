@@ -16,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -109,12 +110,16 @@ it("commits the exact prepared rewrite without rereading its payload or generati
             ),
         ),
     );
-    const sql = trackSqliteStatementExecutions(f.database.db, ["generation", "payload"], (query) =>
-      query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
-        ? "generation"
-        : query.startsWith("select ") && query.includes('as "event_json" from "transcript_events"')
-          ? "payload"
-          : null,
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(f.database.db),
+      ["generation", "payload"],
+      (query) =>
+        query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
+          ? "generation"
+          : query.startsWith("select ") &&
+              query.includes('as "event_json" from "transcript_events"')
+            ? "payload"
+            : null,
     );
     let committedGeneration: string | undefined;
     try {

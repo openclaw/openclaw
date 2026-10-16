@@ -241,9 +241,6 @@ export async function loadSessionCostSummariesFromCache(params: SessionCostReadP
   remainingReportBytes?: number;
 }> {
   const result = await loadSessionCostResultFromCache(params);
-  if (result.kind !== "sessions") {
-    throw new Error("Usage worker returned an invalid session summary");
-  }
   return {
     summaries: result.summaries,
     cacheStatus: result.cacheStatus,
@@ -581,7 +578,6 @@ async function runQueuedUsageCostRefresh(
         }
       } catch (error) {
         if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
-          logger.debug("background refresh cancelled during shutdown");
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });

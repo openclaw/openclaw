@@ -24,14 +24,17 @@ export function registerGatewayCancellationTests({
   ) => ReturnType<ReturnType<typeof createGatewayCloseTestHandlerFactory>>;
   setShutdownHook: (hook: () => Promise<void>) => void;
 }) {
-  it("cancels received work before ordinary shutdown hooks without a recovery marker", async () => {
+  it("records recovery before canceling received work and running ordinary shutdown hooks", async () => {
     const order: string[] = [];
-    const marker = vi.fn();
+    const marker = vi.fn(() => {
+      order.push("marker");
+    });
     setShutdownHook(async () => {
       order.push("hook");
     });
     const close = createClose({
-      cancelReceivedWork: () => {
+      cancelReceivedWork: (reason) => {
+        expect(isAgentRunRestartAbortReason(reason)).toBe(true);
         order.push("cancel");
       },
       markMainSessionsAbortedForRestart: marker,
@@ -40,8 +43,8 @@ export function registerGatewayCancellationTests({
       },
     });
     await close();
-    expect(order).toEqual(["cancel", "hook", "dispose"]);
-    expect(marker).not.toHaveBeenCalled();
+    expect(order).toEqual(["marker", "cancel", "hook", "dispose"]);
+    expect(marker).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

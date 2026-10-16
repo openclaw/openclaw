@@ -484,8 +484,8 @@ export function registerBrowserAgentActRoutes(
         targetId: tab.targetId,
         signal,
         url,
-        timeoutMs: timeoutMs ?? undefined,
-        maxChars: maxChars ?? undefined,
+        timeoutMs,
+        maxChars,
       });
       signal.throwIfAborted();
       const currentUrl = await resolveTabUrl(tab.url);

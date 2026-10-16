@@ -2,6 +2,7 @@
 
 import { expect, it, vi } from "vitest";
 import { focusChatComposerFromPrintableKeydown } from "../pages/chat/chat-pane-shared.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   containers,
   menuItem,
@@ -12,7 +13,10 @@ import {
   settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
 import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-menu.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
+import { SessionMenu } from "./session-menu-solid.tsx";
 
 it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
   const actions: string[] = [];
@@ -76,16 +80,21 @@ it("updates registered menu props and retires its keyboard owner when unmounted"
   expect(calls).toEqual(["close", "delete"]);
 });
 
-it("preserves focused rows and an open owner search across external updates", async () => {
+it("preserves focus and owner search with the Solid application provider", async () => {
   const { context } = createSessionOwnerMenuHarness();
-  const host = await mountMenu({
-    context,
-    session: { label: "First title" },
-    archiveAllowed: true,
-  });
+  const provider = createSolidApplicationContextProvider(context);
+  const mounted = mountSolid(
+    () => (
+      <SessionMenu session={{ ...EMPTY_SESSION_MENU_DATA, label: "First title" }} archiveAllowed />
+    ),
+    { wrapper: provider.wrapper },
+  );
+  const host = mounted.container.querySelector("openclaw-session-menu")!;
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Assign to…"));
+  await settleSessionMenu(host);
   const pin = menuItem(host, "Pin session");
   pin.focus();
+  expect(document.activeElement).toBe(pin);
   host.session = { ...host.session, label: "Fresh title" };
   await settleSessionMenu(host);
   expect(menuItem(host, "Pin session")).toBe(pin);

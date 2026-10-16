@@ -216,9 +216,7 @@ export async function buildDiscordNativeInteractionContext(
     interactionId: interaction.rawData.id,
     channelId: channelContext.rawChannelId || "unknown",
     threadParentId: channelContext.threadParentId,
-    memberRoleIds: Array.isArray(interaction.rawData.member?.roles)
-      ? interaction.rawData.member.roles
-      : [],
+    memberRoleIds: channelContext.memberRoleIds,
     guildId: interaction.guild?.id,
     guildName: interaction.guild?.name,
     channelTopic: resolveDiscordChannelTopicSafe(interaction.channel),

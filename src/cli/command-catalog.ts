@@ -335,7 +335,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", networkProxy: "bypass" },
   },
   { commandPath: ["backup"], policy: { configGuard: "skip", networkProxy: "bypass" } },
-  { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
+  // Local TUI aliases run the embedded agent in this process, like `agent --local`.
+  { commandPath: ["chat"], policy: { networkProxy: "default" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
   { commandPath: ["cron"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
@@ -486,8 +487,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["security"], policy: { networkProxy: "bypass" } },
   { commandPath: ["system"], policy: { networkProxy: "bypass" } },
   { commandPath: ["resume"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["terminal"], policy: { networkProxy: "default" } },
+  {
+    commandPath: ["tui"],
+    policy: { networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass") },
+  },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
   ...updateCommandCatalog,
   {

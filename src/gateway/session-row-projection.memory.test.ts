@@ -263,6 +263,39 @@ it("keeps absent and closed sibling selections out of native storage", async () 
   });
 });
 
+it("prepares queued rows after the turn releases its actor without extending session lifetime", async () => {
+  const root = await fixture();
+  await fixture(childKey, { parentSessionKey: key });
+  let authorized = true;
+  const binding = {
+    ...root.binding,
+    authority: {
+      ...authority,
+      assertCurrent() {
+        if (!authorized) {
+          throw new Error("Disclosure authority revoked");
+        }
+      },
+    },
+  };
+  await root.actor.release();
+  await readRows(binding, [key, childKey], (rows) => {
+    expect(rowAt(rows, key)?.entry).toMatchObject({ sessionId: key, incognito: true });
+    expect(rowAt(rows, childKey)?.entry).toMatchObject({
+      sessionId: childKey,
+      parentSessionKey: key,
+    });
+  });
+  authorized = false;
+  await expect(readRows(binding, [key], () => undefined)).rejects.toThrow(
+    "Disclosure authority revoked",
+  );
+  root.owner.closeSession(key);
+  await readRows(root.binding, [key], (rows) => {
+    expect(rowAt(rows, key)).toBeUndefined();
+  });
+});
+
 it("reads memory reactions after writes through the Gateway reader", async () => {
   const root = await fixture();
   const sibling = await fixture(childKey);

@@ -44,6 +44,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -548,7 +549,7 @@ test("joins explicit Worker retirement before opening a different agent store", 
           order.push("following-write");
           return appendTranscriptEventSync(survivor, { type: "after-reclamation-close" });
         },
-        first.database.db,
+        requireNativeSqliteDatabase(first.database.db),
       );
       void followingWrite.catch(() => undefined);
     }

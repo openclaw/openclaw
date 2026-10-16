@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } from "./immutable-data.js";
+import {
+  freezeJsonSnapshot,
+  freezeTrustedJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "./immutable-data.js";
 
 describe("immutable plain data", () => {
   it("inspects mutable plain data without freezing or memoizing it", () => {
@@ -11,34 +16,53 @@ describe("immutable plain data", () => {
     expect(Object.isFrozen(value)).toBe(false);
   });
 
-  it("freezes shared and cyclic snapshots without retaining mutable aliases", () => {
-    const child = { value: 1 };
-    const snapshot = { child, children: [child], self: {} };
-    snapshot.self = snapshot;
-    expect(isDeeplyFrozenPlainData(snapshot)).toBe(false);
-    expect(freezeJsonSnapshot(snapshot)).toBe(snapshot);
-    expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
-    expect(isDeeplyFrozenPlainData(child)).toBe(true);
-    expect(isPlainData(snapshot.children)).toBe(true);
-    expect(Object.isFrozen(child)).toBe(true);
-    expect(Object.isFrozen(snapshot.children)).toBe(true);
-    expect(() => {
-      child.value = 2;
-    }).toThrow(TypeError);
-    expect(isDeeplyFrozenPlainData({ child })).toBe(false);
-    const republished = freezeJsonSnapshot({ child, children: snapshot.children });
-    expect(republished.child).toBe(child);
-    expect(republished.children).toBe(snapshot.children);
-    expect(isDeeplyFrozenPlainData(republished)).toBe(true);
-  });
+  it.each([freezeJsonSnapshot, freezeTrustedJsonSnapshot])(
+    "%s freezes shared and cyclic snapshots without retaining mutable aliases",
+    (freeze) => {
+      const child = { value: 1 };
+      const snapshot = { child, children: [child], self: {} };
+      snapshot.self = snapshot;
+      expect(isDeeplyFrozenPlainData(snapshot)).toBe(false);
+      expect(freeze(snapshot)).toBe(snapshot);
+      expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
+      expect(isDeeplyFrozenPlainData(child)).toBe(true);
+      expect(isPlainData(snapshot.children)).toBe(true);
+      expect(Object.isFrozen(child)).toBe(true);
+      expect(Object.isFrozen(snapshot.children)).toBe(true);
+      expect(() => {
+        child.value = 2;
+      }).toThrow(TypeError);
+      expect(isDeeplyFrozenPlainData({ child })).toBe(false);
+      const republished = freeze({ child, children: snapshot.children });
+      expect(republished.child).toBe(child);
+      expect(republished.children).toBe(snapshot.children);
+      expect(isDeeplyFrozenPlainData(republished)).toBe(true);
+    },
+  );
 
-  it("freezes deeply nested snapshots without using the call stack", () => {
-    let snapshot: { child?: object } = {};
-    for (let depth = 0; depth < 12_000; depth++) {
-      snapshot = { child: snapshot };
-    }
-    freezeJsonSnapshot(snapshot);
+  it.each([freezeJsonSnapshot, freezeTrustedJsonSnapshot])(
+    "%s freezes deeply nested snapshots without using the call stack",
+    (freeze) => {
+      let snapshot: { child?: object } = {};
+      for (let depth = 0; depth < 12_000; depth++) {
+        snapshot = { child: snapshot };
+      }
+      freeze(snapshot);
+      expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
+    },
+  );
+
+  it("freezes children of shallow-frozen trusted data and shares classification with inspected data", () => {
+    const known = freezeJsonSnapshot({ value: 1 });
+    const child = { value: 2 };
+    const snapshot = Object.freeze({ known, child });
+    freezeTrustedJsonSnapshot(snapshot);
+    expect(snapshot.known).toBe(known);
+    expect(() => {
+      child.value = 3;
+    }).toThrow(TypeError);
     expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
+    expect(freezeJsonSnapshot({ snapshot }).snapshot).toBe(snapshot);
   });
 
   it("never classifies opaque or accessor-bearing graphs as immutable plain data", () => {

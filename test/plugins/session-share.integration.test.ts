@@ -212,10 +212,14 @@ describe("session-share node commands", () => {
       await replaceSessionEntry(scope, entry);
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const reads = trackSqliteStatementExecutions(db, ["inventory"], (sql) =>
-        sql.includes('from "session_nodes" order by "session_key"') && sql.includes('"entry_json"')
-          ? "inventory"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["inventory"],
+        (sql) =>
+          sql.includes('from "session_nodes" order by "session_key"') &&
+          sql.includes('"entry_json"')
+            ? "inventory"
+            : null,
       );
       try {
         expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
@@ -273,12 +277,15 @@ describe("session-share node commands", () => {
         },
       );
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const counter = trackSqliteStatementExecutions(db, ["transcript", "participants"], (sql) =>
-        /\bfrom\s+"?session_participants\b/i.test(sql)
-          ? "participants"
-          : /\btranscript_events\b/.test(sql)
-            ? "transcript"
-            : null,
+      const counter = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["transcript", "participants"],
+        (sql) =>
+          /\bfrom\s+"?session_participants\b/i.test(sql)
+            ? "participants"
+            : /\btranscript_events\b/.test(sql)
+              ? "transcript"
+              : null,
       );
       try {
         expect((await source.list({ limit: 1 })).sessions).toMatchObject([

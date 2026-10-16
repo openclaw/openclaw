@@ -468,7 +468,7 @@ console.log("inherited ambient roots retained; unrelated roots excluded; selecte
     }));
 
   it.skipIf(process.platform === "win32").concurrent(
-    "admits cold sibling workspace outputs through installed aliases only in their build session",
+    "admits cold sibling workspace outputs through installed aliases",
     ({ command }) =>
       command.lifetime.run(async () => {
         const { root, write } = createFixture(command);
@@ -508,51 +508,43 @@ import fs from "node:fs";
 import path from "node:path";
 import { Program } from "typescript/unstable/async";
 import { build } from "tsdown";
-import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 const root = process.cwd();
 const output = path.join(root, "packages/output-producer/dist");
 const alias = ${JSON.stringify(alias)};
 assert.equal(fs.existsSync(output), false, "the producer must start cold");
 const originalEmit = Program.prototype.emitToString;
-let current;
-const begin = () => {
-  const started = Promise.withResolvers();
-  const written = Promise.withResolvers();
-  current = { started, written, compilers: 0 };
-  globalThis.consumerStarted = started.promise;
-  globalThis.finishProducer = written.resolve;
-  return current;
-};
+const started = Promise.withResolvers();
+const written = Promise.withResolvers();
+let compilers = 0;
+globalThis.consumerStarted = started.promise;
+globalThis.finishProducer = written.resolve;
 Program.prototype.emitToString = async function (...args) {
   const output = await originalEmit.apply(this, args);
   if ((await this.getSourceFileNames()).includes(path.join(root, "src/consumer.ts"))) {
-    const phase = current;
-    phase.compilers++;
-    phase.started.resolve();
-    // Delay only result delivery, preserving the real native compilation.
-    // The sibling writes between the consumer's before and after snapshots.
-    await phase.written.promise;
+    compilers++;
+    started.resolve();
+    // Delay only result delivery until the real sibling build writes its output.
+    await written.promise;
   }
   return output;
 };
 try {
-  const first = begin();
   const { bundles } = await build({ config: "tsdown.sibling.config.mts", clean: false, logLevel: "silent" });
   for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
-  assert.equal(first.compilers, 1);
+  assert.equal(compilers, 1);
   for (const file of ["index.mjs", "index.d.mts"]) {
     assert.ok(fs.existsSync(path.join(alias, "dist", file)), "missing sibling " + file);
   }
 } finally {
-  current?.written.resolve();
+  written.resolve();
   Program.prototype.emitToString = originalEmit;
 }
-console.log("cold sibling ownership and fresh build isolation verified");
+console.log("cold sibling outputs are available through the installed alias");
 `,
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toContain(
-          "cold sibling ownership and fresh build isolation verified",
+          "cold sibling outputs are available through the installed alias",
         );
       }),
   );
@@ -570,11 +562,9 @@ console.log("cold sibling ownership and fresh build isolation verified");
         `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { build } from "tsdown";
 const root = process.cwd();
-const canonicalRoot = fs.realpathSync.native(root);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
@@ -664,7 +654,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "tsdown";
 const root = process.cwd();
-const canonicalRoot = fs.realpathSync.native(root);
 const { default: configs } = await import("./tsdown.config.ts");
 const { default: ai } = await import("./tsdown.ai.config.ts");
 const workspace = configs.find(config => config.outDir === "packages/gateway-protocol/dist");
@@ -821,6 +810,8 @@ console.log("workspace/AI native compilation settled after success and failure")
           ["-p", positiveConfig, "--pretty", "false"],
           { cwd: root, encoding: "utf8" },
         );
+        expect(positive.error).toBeUndefined();
+        expect(positive.signal).toBeNull();
         expect(positive.status, positive.stdout + positive.stderr).toBe(0);
         rejectedPath = ambient;
       } else if (kind === "package symlink") {

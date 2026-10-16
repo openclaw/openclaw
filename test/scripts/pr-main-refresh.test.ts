@@ -4,6 +4,7 @@ import {
   constants,
   createReadStream,
   existsSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -13,8 +14,8 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { delimiter, dirname, join } from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
@@ -70,6 +71,76 @@ function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
 }
 
 describePosix("native PR main refresh boundaries", () => {
+  it("preserves guarded Git backend delegation without reentering fixture instrumentation", () => {
+    const originalPath = process.env.PATH;
+    const configuredGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const root = tempDirs.make("openclaw-pr-git-backend-");
+    const bin = join(root, "bin");
+    const observations = join(root, "backend.log");
+    mkdirSync(bin);
+    writeFileSync(observations, "");
+    // Model a configured wrapper that resolves its backend from PATH. Bound
+    // reentry so a regression reports the cycle instead of hanging the suite.
+    writeFileSync(
+      join(bin, "git"),
+      `#!${process.execPath}
+import { spawnSync } from 'node:child_process';
+import { accessSync, appendFileSync, constants, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
+const observations = ${JSON.stringify(observations)};
+const depth = Number(process.env.PR_FIXTURE_GIT_DEPTH ?? '0');
+if (depth >= 4) {
+  appendFileSync(observations, 'recursion\\n');
+  console.error('bounded fixture Git recursion');
+  process.exit(86);
+}
+const self = realpathSync(process.argv[1]);
+const backend = ${JSON.stringify(configuredGit)};
+const candidate = (process.env.PATH ?? '').split(delimiter)
+  .map(directory => join(directory || '.', 'git'))
+  .find(file => {
+    try {
+      accessSync(file, constants.X_OK);
+      return realpathSync(file) !== self;
+    } catch {
+      return false;
+    }
+  });
+if (!candidate) throw new Error('Missing fixture Git backend');
+const guardedBackend = realpathSync(candidate) === realpathSync(backend);
+appendFileSync(observations, guardedBackend ? 'backend\\n' : 'interception\\n');
+const result = spawnSync(candidate, process.argv.slice(2), {
+  env: {
+    ...process.env,
+    PATH: guardedBackend
+      ? (process.env.PATH ?? '').split(delimiter)
+          .filter(directory => directory !== ${JSON.stringify(bin)}).join(delimiter)
+      : process.env.PATH,
+    PR_FIXTURE_GIT_DEPTH: String(depth + 1),
+  },
+  stdio: 'inherit',
+});
+process.exit(result.status ?? 1);
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", `${bin}${delimiter}${originalPath ?? ""}`);
+    try {
+      // This temporary configured wrapper must not enter the shared setup cache.
+      const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-main-refresh-"));
+      const result = f.run("review-checkout-main");
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
+      expect(f.events().some((event) => event.kind === "main-fetch")).toBe(true);
+      expect(f.env.PATH?.split(delimiter)).not.toContain(dirname(f.realGit));
+      const calls = readFileSync(observations, "utf8").trim().split("\n");
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((call) => call === "backend")).toBe(true);
+    } finally {
+      vi.stubEnv("PATH", originalPath);
+    }
+  });
+
   it("reuses the exact local PR commit without fetching or changing checkpoints", () => {
     const f = fixture();
     const destination = "refs/heads/pr-42";
@@ -200,6 +271,11 @@ describePosix("native PR main refresh boundaries", () => {
     expect(f.git(f.origin, "rev-parse", "refs/heads/topic")).toBe(f.head);
     expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
     expect(f.events().filter((event) => event.kind === "unexpected-push")).toEqual([]);
+    if (command === "review-init") {
+      const mode = readFileSync(join(f.local, "review-mode.env"), "utf8");
+      expect(mode).toContain("REVIEW_PR_NUMBER=42\n");
+      expect(mode).toContain(`REVIEW_BASELINE_SHA=${f.main}\n`);
+    }
   });
 
   it.each(
@@ -465,7 +541,7 @@ describePosix("native PR main refresh boundaries", () => {
     f.git(f.worktree, "commit", "--allow-empty", "-qm", "reviewed fixup");
     const published = f.git(f.worktree, "rev-parse", "HEAD");
     const gitShim = join(f.root, "bin", "git");
-    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    const realGit = f.realGit;
     const updateMetadata = [
       'const fs = require("node:fs")',
       "const file = process.argv[1]",
@@ -860,14 +936,177 @@ ${readFileSync(gitShim, "utf8")}
     },
   );
 
-  it("starts a new operation fresh and rejects a stale detached main review", () => {
+  it("records the selected baseline and candidate without losing fresh private main checkpoints", () => {
     const f = fixture();
+    f.enableReviewTests();
     expect(f.run("review-checkout-main").status).toBe(0);
     f.git(f.origin, "update-ref", "refs/heads/main", f.movedMain);
-    const result = f.run("review-guard");
-    expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expect(result.stdout).toContain(`expected HEAD at origin/main (${f.movedMain})`);
+    const result = f.run(["review-tests", "42", "src/subject.test.ts"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("review tests passed and were observed in output");
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
+    expect(f.git(f.worktree, "rev-parse", "FETCH_HEAD")).toBe(f.movedMain);
+    const stampPath = join(f.local, "review-tests.env");
+    const baselineProof = readFileSync(stampPath, "utf8");
+    for (const field of [
+      "REVIEW_TEST_PR_NUMBER=42",
+      `REVIEW_TEST_BASELINE_SHA=${f.main}`,
+      `REVIEW_TEST_MAIN_CHECKPOINT_SHA=${f.movedMain}`,
+      `REVIEW_TEST_CANDIDATE_SHA=${f.head}`,
+      `REVIEW_TEST_HEAD_SHA=${f.main}`,
+      "REVIEW_TEST_MODE=main",
+    ]) {
+      expect(baselineProof).toContain(`${field}\n`);
+    }
+
+    const checkout = f.run("review-checkout-pr");
+    expect(checkout.status, checkout.stdout + checkout.stderr).toBe(0);
+    expect(readFileSync(stampPath, "utf8")).toBe(baselineProof);
+    expect(readFileSync(join(f.local, "review-mode.env"), "utf8")).not.toContain(
+      "REVIEW_BASELINE_SHA=",
+    );
+    const candidate = f.run(["review-tests", "42", "src/subject.test.ts"]);
+    expect(candidate.status, candidate.stdout + candidate.stderr).toBe(0);
+    const candidateProof = readFileSync(stampPath, "utf8");
+    for (const field of [
+      "REVIEW_TEST_PR_NUMBER=42",
+      `REVIEW_TEST_MAIN_CHECKPOINT_SHA=${f.movedMain}`,
+      `REVIEW_TEST_CANDIDATE_SHA=${f.head}`,
+      `REVIEW_TEST_HEAD_SHA=${f.head}`,
+      "REVIEW_TEST_MODE=pr",
+    ]) {
+      expect(candidateProof).toContain(`${field}\n`);
+    }
+    expect(candidateProof).not.toContain("REVIEW_TEST_BASELINE_SHA=");
+    expect(
+      f.events().filter((event) => event.kind === "pnpm" && event.args?.[0] === "test"),
+    ).toEqual([
+      { kind: "pnpm", args: ["test", "--", "src/subject.test.ts"] },
+      { kind: "pnpm", args: ["test", "--", "src/subject.test.ts"] },
+    ]);
+  });
+
+  it.each(["missing", "malformed", "inherited", "wrong-pr", "noncommit", "head-mismatch"])(
+    "rejects a %s main-baseline receipt before package commands or evidence writes",
+    (fault) => {
+      const f = fixture();
+      f.enableReviewTests();
+      expect(f.run("review-checkout-main").status).toBe(0);
+      const modePath = join(f.local, "review-mode.env");
+      let mode = readFileSync(modePath, "utf8");
+      if (fault === "missing" || fault === "inherited") {
+        mode = mode.replace(/^REVIEW_(PR_NUMBER|BASELINE_SHA)=.*\n/gm, "");
+        if (fault === "inherited") {
+          f.env.REVIEW_PR_NUMBER = "42";
+          f.env.REVIEW_BASELINE_SHA = f.main;
+        }
+      } else if (fault === "wrong-pr") {
+        mode = mode.replace("REVIEW_PR_NUMBER=42", "REVIEW_PR_NUMBER=43");
+      } else {
+        const baseline =
+          fault === "malformed"
+            ? "not-a-commit"
+            : fault === "noncommit"
+              ? f.git(f.worktree, "rev-parse", `${f.main}^{tree}`)
+              : f.movedMain;
+        mode = mode.replace(f.main, baseline);
+      }
+      writeFileSync(modePath, mode);
+      const stampPath = join(f.local, "review-tests.env");
+      writeFileSync(stampPath, "previous test evidence\n");
+      const result = f.run(["review-tests", "42", "src/subject.test.ts"]);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout).toContain(
+        fault === "head-mismatch"
+          ? "expected HEAD at recorded main baseline"
+          : "invalid main-baseline receipt",
+      );
+      expect(f.events().filter((event) => event.kind === "pnpm")).toEqual([]);
+      expect(readFileSync(stampPath, "utf8")).toBe("previous test evidence\n");
+      expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
+    },
+  );
+
+  it.each(
+    (["main", "pr"] as const).flatMap((mode) =>
+      ["missing", "malformed", "inherited", "mismatched", "noncommit"].map((fault) => ({
+        mode,
+        fault,
+      })),
+    ),
+  )("rejects $fault candidate identity in $mode test mode", ({ mode, fault }) => {
+    const f = fixture();
+    f.enableReviewTests();
+    if (mode === "main") {
+      expect(f.run("review-checkout-main").status).toBe(0);
+    }
+    const metaPath = join(f.local, "pr-meta.env");
+    let meta = readFileSync(metaPath, "utf8");
+    if (fault === "missing" || fault === "inherited") {
+      meta = meta.replace(/^PR_HEAD_SHA=.*\n/m, "");
+      if (fault === "inherited") {
+        f.env.PR_HEAD_SHA = f.head;
+      }
+    } else if (fault === "malformed") {
+      meta = meta.replace(f.head, "not-a-commit");
+    } else {
+      const candidate =
+        fault === "noncommit" ? f.git(f.worktree, "rev-parse", `${f.head}^{tree}`) : f.sameTreeHead;
+      writeFileSync(
+        join(f.local, "pr-meta.json"),
+        JSON.stringify({ ...f.metadata, headRefOid: candidate }),
+      );
+      if (fault === "noncommit") {
+        meta = meta.replace(f.head, candidate);
+      }
+    }
+    writeFileSync(metaPath, meta);
+    const result = f.run(["review-tests", "42", "src/subject.test.ts"]);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout).toContain("invalid or mismatched candidate identity");
+    expect(f.events().filter((event) => event.kind === "pnpm")).toEqual([]);
+    expect(existsSync(join(f.local, "review-tests.env"))).toBe(false);
+  });
+
+  it("does not inherit a missing review mode", () => {
+    const f = fixture();
+    f.enableReviewTests();
+    writeFileSync(join(f.local, "review-mode.env"), "REVIEW_MODE_SET_AT=2026-01-01T00:00:00Z\n");
+    f.env.REVIEW_MODE = "pr";
+    const result = f.run(["review-tests", "42", "src/subject.test.ts"]);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout).toContain("unknown review mode");
+    expect(f.events().filter((event) => event.kind === "pnpm")).toEqual([]);
+    expect(existsSync(join(f.local, "review-tests.env"))).toBe(false);
+  });
+
+  it.each([
+    { command: "review_checkout_main", field: "REVIEW_MODE" },
+    { command: "review_checkout_pr", field: "REVIEW_MODE" },
+    { command: "review_tests", field: "REVIEW_TESTS_AT" },
+    { command: "review_tests", field: "REVIEW_TEST_BASELINE_SHA" },
+  ])("propagates $field write failure from $command under an OR-list", ({ command, field }) => {
+    const f = fixture();
+    if (command === "review_tests") {
+      f.enableReviewTests();
+      expect(f.run("review-checkout-main").status).toBe(0);
+    }
+    const result = f.shell(`
+printf() {
+  if [ "\${2:-}" = ${field} ]; then
+    echo 'injected review receipt write failure' >&2
+    return 73
+  fi
+  builtin printf "$@"
+}
+${command} 42${command === "review_tests" ? " src/subject.test.ts" : ""} || exit 1
+echo UNEXPECTED_SUCCESS
+`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("injected review receipt write failure");
+    expect(result.stdout).not.toContain("review mode set to");
+    expect(result.stdout).not.toContain("review tests passed and were observed in output");
+    expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
   });
 
   it("preserves foreign checkout-hook changes when cold review initialization requests a reset", () => {
@@ -907,6 +1146,10 @@ ${readFileSync(gitShim, "utf8")}
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
     expect(f.git(f.worktree, "status", "--porcelain")).toBe("");
     expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.head);
+    expect(existsSync(join(f.local, "pr-meta.env"))).toBe(false);
+    const mode = readFileSync(join(f.local, "review-mode.env"), "utf8");
+    expect(mode).toContain("REVIEW_PR_NUMBER=42\n");
+    expect(mode).toContain(`REVIEW_BASELINE_SHA=${f.movedMain}\n`);
   });
 
   it.each([1, 2])(
@@ -1388,15 +1631,6 @@ fi`,
     expect(f.events().filter((e) => e.kind === "fetched")).toHaveLength(1);
   });
 
-  it("propagates authentication failure under an OR-list before any main fetch", () => {
-    const f = fixture();
-    f.configure({ failAuth: true });
-    const result = f.shell("review_validate_artifacts 42 || exit 1\necho UNEXPECTED_SUCCESS");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("GitHub API preflight failed");
-    expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
-  });
-
   it("stops native merge when both writer quotas are exhausted before fetch or dispatch and releases its lock", () => {
     const f = fixture();
     f.configure({ writerRateLimited: true });
@@ -1425,14 +1659,26 @@ fi`,
     expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
   });
 
-  it.each(["enter_worktree 42 false", "review_guard 42", "review_validate_artifacts 42"])(
-    "propagates failed refresh through %s in an OR-list",
-    (command) => {
+  it.each([
+    { command: "enter_worktree 42 false", failAuth: false },
+    { command: "review_guard 42", failAuth: false },
+    { command: "review_validate_artifacts 42", failAuth: false },
+    { command: "review_validate_artifacts 42", failAuth: true },
+  ])(
+    "propagates failed refresh through $command in an OR-list (auth=$failAuth)",
+    ({ command, failAuth }) => {
       const f = fixture();
-      f.configure({ failFetch: true });
+      f.configure({ failFetch: !failAuth, failAuth });
       const result = f.shell(`${command} || exit 1\necho UNEXPECTED_SUCCESS`);
-      expect(result.stderr).toContain("injected main fetch failure");
-      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toContain(
+        failAuth ? "GitHub API preflight failed" : "injected main fetch failure",
+      );
+      if (failAuth) {
+        expect(result.status).toBe(1);
+        expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
+      } else {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      }
       expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
       expect(result.stdout).not.toContain("review artifacts validated");
       expect(existsSync(join(f.local, "prep.env"))).toBe(false);

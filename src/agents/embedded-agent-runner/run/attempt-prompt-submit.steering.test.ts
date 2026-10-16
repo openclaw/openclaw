@@ -22,7 +22,7 @@ import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/se
 import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessions/session-history.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -88,7 +88,7 @@ async function prepareSteering() {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: answer });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: answer }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
@@ -424,7 +424,7 @@ async function publishChild(runId: string, resultText: string) {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: resultText });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: resultText }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }

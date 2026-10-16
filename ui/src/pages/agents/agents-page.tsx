@@ -1,35 +1,21 @@
-import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, untrack } from "solid-js";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { AgentsPageState } from "./agents-page-state.ts";
+import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { Agents, AgentsPageHeader } from "./view.tsx";
 
 export function AgentsPage(props: { routeData?: AgentsRouteData }) {
-  const state = new AgentsPageState();
-  state.context = useApplication();
-  state.routeData = untrack(() => props.routeData);
-  state.connect();
-  state.applyRoute();
+  // The initial route belongs to this mount; subsequent route commits use the effect.
+  const state = createAgentsPageState(
+    useApplication(),
+    untrack(() => props.routeData),
+  );
   createEffect(
     () => props.routeData,
-    (routeData) => {
-      if (state.routeData === routeData) {
-        return;
-      }
-      state.routeData = routeData;
-      state.applyRoute();
-      state.requestUpdate();
-    },
+    (routeData) => state.setRouteData(routeData),
   );
-  onCleanup(() => state.disconnect());
-  const projection = projectSource(state, {
-    read: (owner) => owner,
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
-  const viewProps = createMemo(() => projection.read().viewProps);
+  const viewProps = createMemo(() => state.read());
   return (
     <openclaw-agents-page>
       <AgentsPageHeader />

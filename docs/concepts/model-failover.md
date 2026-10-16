@@ -89,6 +89,16 @@ policy. OpenClaw does not retry them with thinking disabled.
 
 Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered. It does not persist the fallback as the next turn's model selection.
 
+A fallback that only relays a completed task result cannot start new delegated work.
+A verified requester continuation after its child tasks settle is different: on
+the built-in and plugin harness paths, it retains the requester's authorized
+session tools so unfinished work can continue. The live settlement owner and
+persisted child lineage must still match; an active Goal or completion message
+alone does not grant that exception. The exception is host-mediated: native
+collaboration stays disabled because it does not carry the settlement owner’s
+final-effect authority check. Existing tool restrictions and Stop still apply.
+CLI backends that cannot enforce settlement authority keep the report-only restriction.
+
 Sessions placed on an OpenClaw cloud worker keep the OpenClaw runtime when
 automatic model selection advances to a fallback. The configured provider,
 model, and auth-profile fallback rules still apply. Explicit session or

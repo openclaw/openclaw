@@ -36,6 +36,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerStartOptions,
+  type CodexPluginConfig,
 } from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
 import type {
@@ -58,7 +59,7 @@ import type { CodexCatalogPreviewCache } from "./session-catalog-native-projecti
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
 export type SafeCodexControlRequestFn = (
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
   options?: CodexControlRequestOptions,
@@ -257,7 +258,7 @@ export async function prepareCodexControlSessionAuth(
 }
 
 export function requestOptions(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   limit: number,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
@@ -275,24 +276,23 @@ export function requestOptions(
 type CodexControlRequestMethod = CodexControlMethod & CodexAppServerRequestMethod;
 
 export function codexControlRequest<M extends CodexControlRequestMethod>(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: M,
   requestParams: CodexAppServerRequestParams<M>,
   options?: CodexControlRequestOptions,
 ): Promise<CodexAppServerRequestResult<M>>;
 export function codexControlRequest(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: CodexControlMethod,
   requestParams?: JsonValue,
   options?: CodexControlRequestOptions,
 ): Promise<JsonValue | undefined>;
 export async function codexControlRequest(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: CodexControlMethod,
   requestParams?: unknown,
-  inputOptions: CodexControlRequestOptions = {},
+  options: CodexControlRequestOptions = {},
 ): Promise<unknown> {
-  const options = { ...inputOptions };
   try {
     options.controlObservation?.phase("prepare");
   } catch {
@@ -320,6 +320,7 @@ export async function codexControlRequest(
         };
   try {
     const controlRequestOptions = {
+      pluginConfig,
       timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
       assertCurrent: options.assertCurrent,
       assertCurrentAsync: options.assertCurrentAsync,
@@ -415,19 +416,19 @@ export async function codexControlRequest(
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: M,
   requestParams: CodexAppServerRequestParams<M>,
   options?: CodexControlRequestOptions,
 ): Promise<SafeValue<CodexAppServerRequestResult<M>>>;
 export function safeCodexControlRequest(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: CodexControlMethod,
   requestParams?: JsonValue,
   options?: CodexControlRequestOptions,
 ): Promise<SafeValue<JsonValue | undefined>>;
 export async function safeCodexControlRequest(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   method: CodexControlMethod,
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
@@ -439,7 +440,7 @@ export async function safeCodexControlRequest(
 }
 
 export async function readCodexStatusProbes(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
   config?: AuthProfileOrderConfig,
   agentDir?: string,
 ) {

@@ -1,5 +1,4 @@
 import { createMemo, Show } from "solid-js";
-import { icons } from "../../components/icons.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -26,7 +25,7 @@ type NewSessionComposerCapabilityOptions = {
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;
   };
-  requestUpdate: () => void;
+  onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
 
@@ -74,7 +73,7 @@ export function NewSessionPlusMenu(props: {
             {
               value: "new-session-draft",
               label: t("newSession.draft"),
-              icon: icons.pencil,
+              icon: "pencil",
               checked: options.visibility === "draft",
               disabled,
               title: t("newSession.draftDescription"),
@@ -87,11 +86,11 @@ export function NewSessionPlusMenu(props: {
         if (!open) {
           controller.capabilityMenuView = "root";
         }
-        options.requestUpdate();
+        options.onChange();
       },
       onViewChange: (view) => {
         controller.capabilityMenuView = view;
-        options.requestUpdate();
+        options.onChange();
       },
     };
   });
@@ -109,7 +108,7 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         onClick={() => {
           props.options.textareaController.capabilityMenuView = "root";
           props.options.textareaController.capabilityMenuOpen = true;
-          props.options.requestUpdate();
+          props.options.onChange();
         }}
       >
         {t(count() === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count", {

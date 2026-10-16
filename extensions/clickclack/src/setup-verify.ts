@@ -101,33 +101,25 @@ export async function checkClickClackSetupConnection(params: {
   }
 }
 
-function isGatewayNotRunningError(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    "kind" in error &&
-    "code" in error &&
-    (error as { name?: unknown }).name === "GatewayTransportError" &&
-    (error as { kind?: unknown }).kind === "closed" &&
-    (error as { code?: unknown }).code === 1006
-  ) {
-    return true;
-  }
-  const message = formatErrorMessage(error).toLowerCase();
-  return message.includes("econnrefused") || message.includes("connection refused");
-}
-
 async function probeClickClackGatewayStatus(): Promise<string> {
+  let gateway: typeof import("openclaw/plugin-sdk/gateway-runtime") | undefined;
   try {
-    const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
-    await callGatewayFromCli("health", { timeout: "1000", json: true }, undefined, {
+    gateway = await import("openclaw/plugin-sdk/gateway-runtime");
+    await gateway.callGatewayFromCli("health", { timeout: "1000", json: true }, undefined, {
       expectFinal: false,
       progress: false,
     });
     return GATEWAY_RUNNING_MESSAGE;
   } catch (error) {
-    return isGatewayNotRunningError(error) ? GATEWAY_NOT_RUNNING_MESSAGE : GATEWAY_UNKNOWN_MESSAGE;
+    const message = formatErrorMessage(error).toLowerCase();
+    const unavailable =
+      (gateway &&
+        gateway.isGatewayTransportError(error) &&
+        error.kind === "closed" &&
+        error.code === 1006) ||
+      message.includes("econnrefused") ||
+      message.includes("connection refused");
+    return unavailable ? GATEWAY_NOT_RUNNING_MESSAGE : GATEWAY_UNKNOWN_MESSAGE;
   }
 }
 

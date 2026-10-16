@@ -1,8 +1,78 @@
 import { createSignal, flush, Show } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import type { AgentIdentity } from "../identity-avatar-view.ts";
+import { IdentityAvatarImage } from "./identity-avatar-image.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
+
+it("retains the face subtree when a publication replaces the agent with the same ID", async () => {
+  const [agent, publish] = createSignal<AgentIdentity>({ id: "forge", name: "Before" });
+  const view = mountSolid(() => <AgentIdentityAvatar agent={agent()} />);
+  try {
+    await vi.dynamicImportSettled();
+    flush();
+    const face = view.container.querySelector("svg.identity-avatar__agent-face")!;
+    const features = face.querySelector("g")!;
+    const nodes = [...features.querySelectorAll("*")];
+    const mutations = new MutationObserver(() => undefined);
+    mutations.observe(features, { childList: true, subtree: true });
+    try {
+      publish({ id: "forge", name: "After" });
+      flush();
+      expect(view.container.querySelector('[aria-label="After"]')).not.toBeNull();
+      expect(view.container.querySelector("svg.identity-avatar__agent-face")).toBe(face);
+      const retained = [...features.querySelectorAll("*")];
+      expect(retained).toHaveLength(nodes.length);
+      retained.forEach((node, index) => expect(node).toBe(nodes[index]));
+      expect(mutations.takeRecords()).toHaveLength(0);
+    } finally {
+      mutations.disconnect();
+    }
+  } finally {
+    view.unmount();
+  }
+});
+
+it.each(["load", "error"])(
+  "keeps a settled %s image when its pending resource becomes the same URL",
+  async (event) => {
+    let resolve!: (value: string) => void;
+    const pending = new Promise<string>((done) => {
+      resolve = done;
+    });
+    const [source, publish] = createSignal<{ imageUrl: string | Promise<string> }>({
+      imageUrl: pending,
+    });
+    const view = mountSolid(() => (
+      <span class="test-avatar">
+        <IdentityAvatarImage view={source()} fallbackSelector=".test-avatar" />
+      </span>
+    ));
+    try {
+      resolve("/avatar/settled");
+      await pending;
+      const image = view.container.querySelector("img")!;
+      image.dispatchEvent(new Event(event));
+      const records: MutationRecord[] = [];
+      const mutations = new MutationObserver((batch) => records.push(...batch));
+      mutations.observe(view.container, { subtree: true, attributes: true, childList: true });
+      try {
+        publish({ imageUrl: "/avatar/settled" });
+        flush();
+        await Promise.resolve();
+        expect(view.container.querySelector("img")).toBe(image);
+        expect([...records, ...mutations.takeRecords()]).toHaveLength(0);
+        expect(image.parentElement?.getAttribute("data-avatar-state")).toBe(
+          event === "load" ? "loaded" : "failed",
+        );
+      } finally {
+        mutations.disconnect();
+      }
+    } finally {
+      view.unmount();
+    }
+  },
+);
 
 it("carries prepared avatar state and image errors across Solid updates", () => {
   const onImageError = vi.fn();

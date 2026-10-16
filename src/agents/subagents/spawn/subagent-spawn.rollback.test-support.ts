@@ -381,7 +381,6 @@ export function registerOperatorSpawnRollbackCases(options: {
           agentRunSeq: context.agentRunSeq,
           broadcast: context.broadcast,
           nodeSendToSession: context.nodeSendToSession,
-          restart: false,
           getPendingReplyCount: () => 0,
           timeoutMs: 0,
           warnings: [],

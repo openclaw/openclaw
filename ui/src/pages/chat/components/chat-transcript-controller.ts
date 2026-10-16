@@ -1,5 +1,8 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../../../lib/reactive/solid-controller-host.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
@@ -10,13 +13,13 @@ import {
 import type { ChatTranscriptSession, TranscriptCallbacks } from "./chat-transcript-session.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
-export class ChatTranscriptController implements ReactiveController {
+export class ChatTranscriptController implements SolidController {
   private activeSessionKey: string | null = null;
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
   private connected = false;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly scrollPaneId: () => string,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
@@ -41,7 +44,7 @@ export class ChatTranscriptController implements ReactiveController {
       const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
-        this.host,
+        () => this.host.requestUpdate(),
         initialOffset,
         (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
         this.callbacks,

@@ -150,7 +150,9 @@ export async function withPreparedSessionResolve<T>(
           },
           resolve,
           // Discovery needs current selection metadata, not every session's display row.
-          { selection: !key && candidateKeys === undefined },
+          {
+            selection: !key && candidateKeys === undefined ? { metadataOnly: true } : false,
+          },
         );
       } catch (error) {
         if (error === topologyChanged) {
@@ -200,7 +202,7 @@ export function resolveSessionKeyFromResolveParams(params: {
         configuredAgentsOnly,
       },
       params.candidateKeys === undefined
-        ? selector
+        ? { ...selector, metadataPrepared: params.preparedRead !== undefined }
         : { candidateKeys: params.candidateKeys, metadataPrepared: true },
     );
   const configuredAgentIds = new Set(listAgentIds(cfg));

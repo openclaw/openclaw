@@ -1,3 +1,4 @@
+import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillLibraryFile,
@@ -13,10 +14,11 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 /* @vitest-environment jsdom */
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { SkillLibraryController } from "./library-controller.ts";
+import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary } from "./library-view.tsx";
 
 const bindings = new Set<GatewayPageBinding>();
+const disposals: Array<() => void> = [];
 
 function harness() {
   const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
@@ -33,16 +35,18 @@ function harness() {
     lastError: null,
     lastErrorCode: null,
   });
-  const host = { requestUpdate() {} };
-  const gateway = new GatewayPageBinding(() => host.requestUpdate(), {
+  const gateway = new GatewayPageBinding(() => {}, {
     getGateway: () => connection.gateway,
   });
   gateway.connect();
   bindings.add(gateway);
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
-  const library = new SkillLibraryController(host, gateway, () => config);
-  library.list = {
+  const library = createRoot((dispose) => {
+    disposals.push(dispose);
+    return createSkillLibrary(gateway, () => config);
+  });
+  library.state.list = {
     entries: [],
     profileId: "alice",
     multipleProfiles: true,
@@ -50,7 +54,7 @@ function harness() {
     canManageWorkspace: false,
     defaultSelectionLimit: 64,
   };
-  library.view = "mine";
+  library.state.view = "mine";
   return { library, config, request, connection };
 }
 function fileWithReader(name: string, read: () => Promise<ArrayBuffer>) {
@@ -94,6 +98,9 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 }
 afterEach(() => {
   cleanupSolid();
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
   for (const binding of bindings) {
     binding.dispose();
   }
@@ -107,7 +114,7 @@ describe("skill library upload policy", () => {
     const oldSave = createDeferred<SkillsLibraryReceipt>();
     const newSave = createDeferred<SkillsLibraryReceipt>();
     const read = existingSkill();
-    const initialList = library.list;
+    const initialList = library.state.list;
     request
       .mockResolvedValueOnce(read)
       .mockReturnValueOnce(oldSave.promise)
@@ -115,26 +122,26 @@ describe("skill library upload policy", () => {
       .mockReturnValueOnce(newSave.promise)
       .mockResolvedValueOnce(initialList);
     await library.open(read.entry.skillId);
-    library.draft!.content = "First connection edit";
+    library.state.draft!.content = "First connection edit";
     const savingOld = library.save();
     connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
     library.reset();
     connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
     await library.open(read.entry.skillId);
-    library.draft!.content = "Current connection edit";
+    library.state.draft!.content = "Current connection edit";
     const savingNew = library.save();
-    expect(library.busy).toBe(true);
+    expect(library.state.busy).toBe(true);
 
     oldSave.reject(new Error("Previous connection failed"));
     await savingOld;
-    expect(library.busy).toBe(true);
-    expect(library.error).toBeNull();
+    expect(library.state.busy).toBe(true);
+    expect(library.state.error).toBeNull();
 
     newSave.resolve(savedReceipt(read));
     await savingNew;
-    expect(library.busy).toBe(false);
-    expect(library.draft?.content).toBe("Current connection edit");
-    expect(library.draft?.entry?.revision).toBe("b".repeat(64));
+    expect(library.state.busy).toBe(false);
+    expect(library.state.draft?.content).toBe("Current connection edit");
+    expect(library.state.draft?.entry?.revision).toBe("b".repeat(64));
   });
 
   it.each([
@@ -149,13 +156,13 @@ describe("skill library upload policy", () => {
       const read = existingSkill();
       request.mockResolvedValueOnce(read);
       await library.open(read.entry.skillId);
-      const draft = library.draft!;
+      const draft = library.state.draft!;
       const original = { ...draft.files[0]! };
       Object.assign(draft.files[0]!, change);
       config.current.uploadsEnabled = false;
       await library.save();
       expect(request).toHaveBeenCalledTimes(1);
-      expect(library.error).toBe(uploadsDisabledMessage());
+      expect(library.state.error).toBe(uploadsDisabledMessage());
       expect(draft.files[0]).toEqual({ ...original, ...change });
       expect(draft.baseFiles[0]).toEqual(original);
     },
@@ -167,7 +174,7 @@ describe("skill library upload policy", () => {
     read.files.push({ path: "notes.txt", content: "Original notes", encoding: "utf8" });
     request.mockResolvedValueOnce(read);
     await library.open(read.entry.skillId);
-    const draft = library.draft!;
+    const draft = library.state.draft!;
     expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
     draft.files[1]!.content = "Updated notes";
     const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
@@ -175,12 +182,12 @@ describe("skill library upload policy", () => {
     config.current.uploadsEnabled = false;
     await library.save();
     expect(request).toHaveBeenCalledTimes(1);
-    expect(library.error).toBe(uploadsDisabledMessage());
+    expect(library.state.error).toBe(uploadsDisabledMessage());
 
     config.current.uploadsEnabled = true;
-    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
+    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.state.list);
     await library.save();
-    expect(library.error).toBeNull();
+    expect(library.state.error).toBeNull();
     expect(request).toHaveBeenNthCalledWith(
       2,
       "skills.library.save",
@@ -194,9 +201,9 @@ describe("skill library upload policy", () => {
 
     config.current.uploadsEnabled = false;
     draft.content = "# Next edit";
-    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.list);
+    request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.state.list);
     await library.save();
-    expect(library.error).toBeNull();
+    expect(library.state.error).toBeNull();
     expect(request).toHaveBeenNthCalledWith(4, "skills.library.save", {
       skillId: read.entry.skillId,
       slug: read.entry.slug,
@@ -211,18 +218,18 @@ describe("skill library upload policy", () => {
     const { library, config, request } = harness();
     const read = vi.fn(async () => new ArrayBuffer(1));
     config.current.uploadsEnabled = false;
-    library.importOpen = true;
+    library.setImportOpen(true);
     const container = document.createElement("div");
     mountSolid(() => <SkillLibrary library={library} navigationActions={null} />, { container });
     expect(container.querySelector('input[type="file"]')).toBeNull();
     await library.importFiles([fileWithReader("SKILL.md", read)]);
     expect(read).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
-    expect(library.error).toBe(uploadsDisabledMessage());
+    expect(library.state.error).toBe(uploadsDisabledMessage());
     library.create();
-    expect(library.draft).not.toBeNull();
-    library.draft!.content = "# Manual skill";
-    library.draft!.slug = "manual";
+    expect(library.state.draft).not.toBeNull();
+    library.state.draft!.content = "# Manual skill";
+    library.state.draft!.slug = "manual";
     await library.save();
     expect(request).toHaveBeenCalledWith(
       "skills.library.save",
@@ -244,13 +251,13 @@ describe("skill library upload policy", () => {
     read.resolve(new TextEncoder().encode("# Skill").buffer);
     await reading;
     if (phase === "save") {
-      expect(library.draft?.content).toBe("# Skill");
+      expect(library.state.draft?.content).toBe("# Skill");
       config.current.uploadsEnabled = false;
       await library.save();
     } else {
-      expect(library.draft).toBeNull();
+      expect(library.state.draft).toBeNull();
     }
     expect(request).not.toHaveBeenCalled();
-    expect(library.error).toBe(uploadsDisabledMessage());
+    expect(library.state.error).toBe(uploadsDisabledMessage());
   });
 });

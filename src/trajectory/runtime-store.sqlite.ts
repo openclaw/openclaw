@@ -17,6 +17,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -293,7 +294,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
   return read.found ? read.value : [];
 }
 
-function getTrajectoryKysely(database: import("node:sqlite").DatabaseSync) {
+function getTrajectoryKysely(database: EngineConnection) {
   return getNodeSqliteKysely<SqliteTrajectoryRuntimeDatabase>(database);
 }
 
@@ -339,7 +340,9 @@ function prepareSqliteTrajectoryRuntimeWindow(
       .select((eb) => {
         // octet_length reads stored byte sizes without loading overflow pages. Only
         // UTF-8 stores match the capture budget; preserve text decoding for UTF-16.
-        const utf8 = eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8");
+        const utf8 = isPostgresSqlConnection(database.db)
+          ? eb.lit(true)
+          : eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8");
         return [
           eb
             .case()

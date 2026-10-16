@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -62,7 +63,7 @@ export function createDreamingCompletion(
 export function seedMemoryForgetTombstones(
   params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],
 ): number {
-  const { db } = openOpenClawAgentDatabase({ agentId: params.agentId });
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: params.agentId }).db);
   ensureMemorySessionTombstones(db);
   return recordMemorySessionTombstonesInDatabase(db, params);
 }

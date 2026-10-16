@@ -261,12 +261,7 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   reserveTokens: number;
   projectedTurnTokens?: number;
 }): number {
-  const projectedTurnTokens =
-    typeof params.projectedTurnTokens === "number" &&
-    Number.isFinite(params.projectedTurnTokens) &&
-    params.projectedTurnTokens > 0
-      ? Math.floor(params.projectedTurnTokens)
-      : 0;
+  const projectedTurnTokens = params.projectedTurnTokens ?? 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
   const promptBudget = resolveProjectionPromptBudgetTokens({
@@ -332,17 +327,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     maxBytes !== undefined &&
     params.contextEngineActive === true &&
     binding.contextEngine?.projection?.mode === "thread_bootstrap";
-  if (shouldDeferByteGuard) {
-    embeddedAgentLog.debug(
-      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
-      {
-        threadId: binding.threadId,
-        engineId: binding.contextEngine?.engineId,
-        epoch: binding.contextEngine?.projection?.epoch,
-        fingerprint: binding.contextEngine?.projection?.fingerprint,
-      },
-    );
-  } else if (maxBytes !== undefined) {
+  if (!shouldDeferByteGuard && maxBytes !== undefined) {
     const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
     if (oversizedFiles.length > 0) {
       await Promise.all(

@@ -456,7 +456,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     ).toHaveLength(1);
   });
 
-  it("observes only foreground dispatch and keeps compaction out of restoration", async () => {
+  it("restores only foreground dispatch and keeps compaction out of restoration", async () => {
     const { activeSession } = createSession();
     const captures: Context[] = [];
     const stream: StreamFn = (_model, context) => {
@@ -473,17 +473,14 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         ? Promise.resolve(() => ({ tools: restoredTools, systemPrompt: "restored" }))
         : undefined,
     );
-    const observe = vi.fn();
     await submitEmbeddedAttemptPrompt({
       ...createBaseInput(),
       activeSession,
-      onPrimaryModelRequest: observe,
       preparePrimaryModelRequest: prepare,
       promptActiveSession: async (_prompt, options) => {
         const request = (systemPrompt: string) =>
           activeSession.agent.streamFn(testModel, { messages: [], tools: [], systemPrompt }, {});
         await request("preflight");
-        expect(observe).not.toHaveBeenCalled();
         expect(prepare).not.toHaveBeenCalled();
         options?.preflightResult?.(true);
         await request("filtered");
@@ -503,26 +500,23 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
       { tools: restoredTools, systemPrompt: "restored" },
     ]);
     expect(prepare).toHaveBeenCalledOnce();
-    expect(observe).toHaveBeenCalledExactlyOnceWith([]);
     expect(activeSession.agent.streamFn).toBe(stream);
   });
 
   it.each(["restoration", "persistence"] as const)(
-    "rechecks authority after awaiting %s, before callbacks or dispatch",
+    "rechecks authority after awaiting %s, before dispatch",
     async (boundary) => {
       const { activeSession } = createSession();
       const stream = vi.fn<StreamFn>();
       activeSession.agent.streamFn = stream;
       const admission = prepareSystemAgentRunAdmission({}, "prompt-restoration", "main", "prompt");
       const reader = vi.fn(() => ({ tools: [], systemPrompt: "restored" }));
-      const observe = vi.fn();
       try {
         const admitted = await admission.admit("embedded");
         await expect(
           submitEmbeddedAttemptPrompt({
             ...createBaseInput(),
             activeSession,
-            onPrimaryModelRequest: observe,
             assertHostActive: resolveAdmittedRunActiveAssertion(admitted),
             preparePrimaryModelRequest:
               boundary === "restoration"
@@ -543,7 +537,6 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
           }),
         ).rejects.toThrow("admitted run authority is no longer active");
         expect(reader).not.toHaveBeenCalled();
-        expect(observe).not.toHaveBeenCalled();
         expect(stream).not.toHaveBeenCalled();
       } finally {
         admission.close();

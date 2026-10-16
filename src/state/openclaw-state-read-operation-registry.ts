@@ -7,6 +7,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  githubPublications: () =>
+    import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   deviceIdentity: () =>
     import("../infra/device-identity.read.worker.js").then((m) => m.deviceIdentityReadOperations),
   stateBootstrap: () =>

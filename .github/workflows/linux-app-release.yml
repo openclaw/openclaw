@@ -18,6 +18,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # TEMPORARY: Windows Tauri companion publication is off. Release tags have
+  # shipped unplanned Windows installers (and a windows-stable channel) from
+  # sources without Windows local Gateway support. While "false", releases
+  # build, sign, and publish only the Linux bundles: no
+  # OpenClaw-<version>-windows-x86_64.exe, latest-windows.json, or
+  # windows-stable channel. Opt-in desktop-test bundles still include their
+  # Windows test installer. Re-enable by setting this to "true".
+  WINDOWS_COMPANION_RELEASE: "false"
   MINISIGN_ARCHIVE_SHA256: 9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
   MINISIGN_BINARY_SHA256: 2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db
   MINISIGN_URL: https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
@@ -48,6 +56,9 @@ jobs:
       tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
       updater_pubkey: ${{ steps.updater_trust.outputs.updater_pubkey }}
       already_published: ${{ steps.completion.outputs.already_published }}
+      # Opt-in desktop-test bundles include the Windows installer, so they build it
+      # even while Windows companion publication is off.
+      windows_build: ${{ (env.WINDOWS_COMPANION_RELEASE == 'true' || steps.request.outputs.desktop_test_bundles == 'true') && 'true' || 'false' }}
     steps:
       - name: Validate trusted release request
         id: request
@@ -449,7 +460,7 @@ jobs:
             --require-fuse \
             "${runtime_args[@]}" \
             --shell-container \
-              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+              "archlinux@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd"
 
       # Diagnostic bytes never use the qualified artifact IDs consumed by signing.
       - name: Retain completed unqualified Linux bundles
@@ -710,7 +721,7 @@ jobs:
 
   build_windows:
     name: Build Windows installer
-    if: ${{ needs.validate_release.outputs.already_published != 'true' }}
+    if: ${{ needs.validate_release.outputs.already_published != 'true' && needs.validate_release.outputs.windows_build == 'true' }}
     needs: validate_release
     runs-on: windows-2022
     timeout-minutes: 45
@@ -988,6 +999,7 @@ jobs:
         (needs.validate_release.outputs.desktop_test_bundles != 'true' ||
           needs.build_macos.result == 'success') &&
         (needs.validate_release.outputs.already_published == 'true' ||
+          needs.validate_release.outputs.windows_build != 'true' ||
           (needs.build_windows.result == 'success' && needs.sign_desktop.result == 'success'))
       }}
     needs:
@@ -1058,7 +1070,7 @@ jobs:
           path: dist/input/macos/release
 
       - name: Download signed desktop updater bundles
-        if: ${{ needs.validate_release.outputs.already_published != 'true' }}
+        if: ${{ needs.validate_release.outputs.already_published != 'true' && needs.validate_release.outputs.windows_build == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}
@@ -1070,12 +1082,15 @@ jobs:
           DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          WINDOWS_BUILD: ${{ needs.validate_release.outputs.windows_build }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           mkdir -p dist/release
           cp dist/input/linux/release/* dist/release/
-          cp dist/input/windows/release/* dist/release/
+          if [[ "${WINDOWS_BUILD}" == "true" ]]; then
+            cp dist/input/windows/release/* dist/release/
+          fi
           if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
             cp dist/input/macos/release/* dist/release/
           fi
@@ -1083,12 +1098,18 @@ jobs:
           # Checksums cover only immutable downloadable bundles.
           (cd dist/release && sha256sum ./* > SHA256SUMS.linux-app.txt)
           cat dist/release/SHA256SUMS.linux-app.txt
+          # Linux updater metadata is written by the publisher; only Windows and
+          # desktop-test manifests are assembled here.
+          if [[ "${WINDOWS_BUILD}" != "true" ]]; then
+            exit 0
+          fi
 
           url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
           release_json=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body,publishedAt)
           pub_date=$(jq -er '.publishedAt' <<< "$release_json")
           notes=$(jq -r '.body // ""' <<< "$release_json")
           windows_signature=$(cat "dist/input/windows/signatures/OpenClaw-${version}-windows-x86_64.exe.sig")
+          windows_manifest="${RUNNER_TEMP}/latest-windows.json"
           jq -n \
             --arg version "${version}" \
             --arg notes "${notes}" \
@@ -1096,13 +1117,16 @@ jobs:
             --arg windows_signature "${windows_signature}" \
             --arg windows_url "${url_base}/OpenClaw-${version}-windows-x86_64.exe" \
             '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $windows_signature, url: $windows_url}}}' \
-            > dist/release/latest-windows.json
+            > "$windows_manifest"
+          if [[ "${WINDOWS_COMPANION_RELEASE}" == "true" ]]; then
+            cp "$windows_manifest" dist/release/latest-windows.json
+          fi
           if [[ "${DESKTOP_TEST_BUNDLES}" == "true" ]]; then
             macos_signature=$(cat "dist/input/macos/signatures/OpenClaw-${version}-darwin-aarch64.app.tar.gz.sig")
             jq --arg signature "$macos_signature" \
               --arg url "${url_base}/OpenClaw-${version}-darwin-aarch64.app.tar.gz" \
               '.platforms["darwin-aarch64"] = {signature: $signature, url: $url}' \
-              dist/release/latest-windows.json > dist/release/latest-desktop-test.json
+              "$windows_manifest" > dist/release/latest-desktop-test.json
           fi
 
       # The control tag can target release-branch workflows. Its existing
@@ -1174,7 +1198,7 @@ jobs:
             --workflow-ref "$WORKFLOW_REF" --workflow-full-ref "$WORKFLOW_FULL_REF" \
             --request-run-id "$REQUEST_RUN_ID" --request-run-attempt "$REQUEST_RUN_ATTEMPT" \
             "${input_args[@]}" --public-key-config apps/linux/src-tauri/tauri.conf.json \
-            --desktop-test "$DESKTOP_TEST_BUNDLES" --windows true \
+            --desktop-test "$DESKTOP_TEST_BUNDLES" --windows "$WINDOWS_COMPANION_RELEASE" \
             2> >(tee "$RUNNER_TEMP/linux-publication.log" >&2) | tee "$RUNNER_TEMP/linux-publication.json"
 
       - name: Record incomplete Linux publication

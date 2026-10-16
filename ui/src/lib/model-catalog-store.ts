@@ -179,7 +179,9 @@ export async function loadModelCatalog(
   const params = modelCatalogParams(requestOptions);
   if (!params.refresh) {
     const result = peekModelCatalog(client, params);
-    if (result) {
+    // A connect snapshot can precede native discovery. Explicit catalog reads
+    // must still admit demand; prepared-only projections stay passive.
+    if (result && (params.preparedOnly || !result.pendingProviders?.length)) {
       return result;
     }
   }

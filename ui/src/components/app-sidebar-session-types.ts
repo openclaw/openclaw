@@ -96,6 +96,7 @@ export type SidebarRecentSession = {
   agentId?: string;
   sessionId?: string;
   displayName?: string;
+  titlePending?: boolean;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;

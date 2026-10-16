@@ -8,24 +8,6 @@
   overflow: hidden;
 }
 
-/* The unported session menus still use these shared layout rules. */
-wa-dropdown-item.session-menu__item--compact-details::part(label) {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-wa-dropdown-item.session-menu__item--compact-details {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-}
-
-.session-menu__item::part(submenu) {
-  max-height: calc(100dvh - 16px);
-  overflow: auto;
-}
-
 .sidebar-session-sort-menu.oc-menu {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));

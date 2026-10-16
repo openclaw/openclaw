@@ -273,7 +273,10 @@ export function resolveMcpRequestContext(
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
-    return structuredClone(auth.boundClientGrant.context);
+    return {
+      ...structuredClone(auth.boundClientGrant.context),
+      currentConversationOrigin: "run-bound-grant",
+    };
   }
   // Grant-authenticated callers get only their server-bound session and optional
   // global-session agent owner; spoofable delivery/action headers stay reserved.
@@ -287,6 +290,7 @@ export function resolveMcpRequestContext(
       currentChannelId: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
+      currentConversationOrigin: "server-session",
       currentInboundAudio: undefined,
       accountId: undefined,
       inboundEventKind: undefined,
@@ -307,6 +311,8 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
+    // Caller-writable generic-token headers are not authority for thread binding.
+    currentConversationOrigin: "caller-token",
     currentInboundAudio: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-current-inbound-audio"),
     ),

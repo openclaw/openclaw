@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
 import type {
   SessionTranscriptContextVersion,
@@ -11,11 +10,12 @@ import {
 import { replaceTranscriptSuffixEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-write.js";
 import { replaceSessionWithBranchedTranscriptInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionMaintenanceOperations } from "../../config/sessions/session-manager-write-contract.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 
 type SessionMaintenanceContext = {
-  database: DatabaseSync;
+  database: EngineConnection;
   admit(stage: "transaction" | "commit"): void;
 };
 

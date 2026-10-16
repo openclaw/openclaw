@@ -69,7 +69,7 @@ import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
-import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
+import { createConfigMachineStateStep } from "./state-migrations.config-machine-state-step.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -813,25 +813,6 @@ function createPluginInstallIndexStep(params: {
       changes: [],
       warnings: migrationFileExists(sourcePath) ? [message] : [],
     }),
-  };
-}
-
-function createConfigMachineStateStep(params: {
-  config: OpenClawConfig;
-  configPath: string;
-  configIncludedPaths: readonly string[];
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-}): LegacyStateMigrationStep {
-  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  return {
-    id: "config-machine-state",
-    phase: "shared",
-    source: createConfigMigrationSources(params.configPath, params.configIncludedPaths),
-    target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(stateEnv) }],
-    requiredness: "conditional",
-    reversibility: "checkpoint-required",
-    run: () => migrateLegacyConfigMachineState({ config: params.config, env: stateEnv }),
   };
 }
 

@@ -28,7 +28,7 @@ sha2 = "0.11.0"
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
 # fails. It is inert on Linux and Windows.
-tauri = { version = "2.12.1", features = [
+tauri = { version = "2.12.2", features = [
   "image-png",
   "macos-private-api",
   "tray-icon",

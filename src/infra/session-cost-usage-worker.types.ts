@@ -142,7 +142,7 @@ type UsageCostPreparedRollup = {
 
 type UsageCostPruneRow = {
   key: string;
-  value: Uint8Array;
+  value: Uint8Array<ArrayBuffer>;
   updatedAt: number;
 };
 
@@ -153,9 +153,9 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   restore: { input: SqliteSessionFileMarker; output: void };
-  "prune-row": { input: UsageCostPruneRow; output: void };
+  "prune-rows": { input: UsageCostPruneRow[]; output: void };
   prune: { input: Record<string, never>; output: void };
-  write: { input: UsageCostPreparedRollup; output: boolean };
+  write: { input: UsageCostPreparedRollup[]; output: boolean };
 };
 
 export type UsageCostWorkerHostRequest = {

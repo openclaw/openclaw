@@ -233,6 +233,8 @@ function sourceFiles(root: string, excluded: string): Map<string, Buffer> {
 
 it("explains prepared schema crossings and complete live inventory without changing source state", async () => {
   const f = fixture();
+  const daemon = path.join(f.stateDir, "control", "services.sqlite");
+  database(daemon, 1).close();
   const before = sourceFiles(f.root, path.join(f.root, "cache"));
   const coverage = await inspectImmutableUpdateCoverage({ root: f.root });
   expect(coverage.warnings).toEqual([]);
@@ -244,6 +246,12 @@ it("explains prepared schema crossings and complete live inventory without chang
   expect(coverage.databases).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ path: f.shared, userVersion: 1, coverage: "matching-version" }),
+      expect.objectContaining({
+        path: daemon,
+        userVersion: 1,
+        targetVersion: 1,
+        coverage: "matching-version",
+      }),
       expect.objectContaining({
         path: f.external,
         external: true,

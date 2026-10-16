@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type {
   OpenBlobStoreOptions,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
@@ -107,10 +107,10 @@ export async function createDiffStoreHarness(
 ): Promise<{
   rootDir: string;
   store: DiffArtifactStore;
-  blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   reopen: () => Promise<{
     store: DiffArtifactStore;
-    blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+    blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   }>;
   cleanup: () => Promise<void>;
 }> {

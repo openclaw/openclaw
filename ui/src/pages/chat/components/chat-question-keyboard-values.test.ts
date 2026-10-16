@@ -41,6 +41,43 @@ async function mountQuestion(question: QuestionPanelProps["model"]["questions"][
 }
 
 it.each([
+  { selector: ".chat-question-panel", modifier: "ctrlKey" },
+  { selector: ".chat-question-panel", modifier: "metaKey" },
+  { selector: '[role="radio"][aria-checked="true"]', modifier: "ctrlKey" },
+  { selector: '[role="radio"][aria-checked="true"]', modifier: "metaKey" },
+  { selector: '[role="checkbox"][aria-checked="true"]', modifier: "ctrlKey" },
+  { selector: '[role="checkbox"][aria-checked="true"]', modifier: "metaKey" },
+  { selector: "textarea", modifier: "ctrlKey" },
+  { selector: "textarea", modifier: "metaKey" },
+])(
+  "submits selected answers from $selector with $modifier+Enter",
+  async ({ selector, modifier }) => {
+    const { container, panel, group, onSubmit } = await mountQuestion({
+      questionId: "format",
+      header: "Format",
+      question: "Which format?",
+      options: options.slice(0, 2),
+      multiSelect: selector.includes("checkbox"),
+      isOther: true,
+    });
+    group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+    await panel.updateComplete;
+    const target = container.querySelector<HTMLElement>(selector);
+    assert(target);
+    target.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      [modifier]: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["  detailed-id  "] });
+  },
+);
+
+it.each([
   { key: "2", value: "  detailed-id  " },
   { key: "5", value: "format-5" },
   { key: "9", value: "format-9" },
@@ -65,6 +102,58 @@ it.each([
   assert(submit);
   submit.click();
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: [value] });
+});
+
+it.each([false, true])("respects allowEmpty=%s for shortcut submission", async (allowEmpty) => {
+  const { group, onSubmit } = await mountQuestion({
+    questionId: "format",
+    header: "Format",
+    question: "Which format?",
+    options: [],
+    allowEmpty,
+  });
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  group.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(allowEmpty);
+  expect(onSubmit.mock.calls).toEqual(allowEmpty ? [[{ format: [] }]] : []);
+});
+
+it("keeps native activation on links, file pickers, and action buttons", async () => {
+  const { container, onSubmit } = await mountQuestion({
+    questionId: "attachment",
+    header: "Attachment",
+    question: "Attach a file",
+    options: [],
+    allowEmpty: true,
+    url: "https://example.test/confirm",
+    resource: { viewId: "synthetic-form", selection: "implicit", userOptions: { kind: "file" } },
+  });
+  for (const selector of [
+    "a",
+    "input[type=file]",
+    ".chat-question-panel__collapse",
+    ".chat-question-panel__advance",
+  ]) {
+    const target = container.querySelector<HTMLElement>(selector);
+    assert(target);
+    target.focus();
+    for (const keys of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        ...keys,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      expect(event.defaultPrevented, selector).toBe(false);
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  }
 });
 
 it("numbers only visible implicit resources and cannot restore a hidden option with a shortcut", async () => {

@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
@@ -50,7 +51,7 @@ export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
   agentDir: string;
   authProfileId: string | null | undefined;
-  pluginConfig: unknown;
+  pluginConfig: CodexPluginConfig | undefined;
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
@@ -169,7 +170,7 @@ function describeInactiveProfileStatus(params: {
     return `rate-limited - resets in ${formatRelativeDuration(Math.max(60_000, blockedUntil - params.now))}`;
   }
   const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
-  if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
+  if (isActiveUntil(unusableUntil, params.now)) {
     return describeFailureStatus(stats?.disabledReason ?? stats?.cooldownReason, params.credential);
   }
   const eligibility = resolveAuthProfileEligibility({
@@ -314,6 +315,6 @@ function describeEligibilityStatus(
   return ELIGIBILITY_STATUS.get(reason) ?? "unavailable";
 }
 
-function isActiveUntil(value: number | undefined, now: number): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > now;
+function isActiveUntil(value: number | null | undefined, now: number): value is number {
+  return value != null && value > now;
 }

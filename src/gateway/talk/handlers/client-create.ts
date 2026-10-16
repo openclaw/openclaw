@@ -344,6 +344,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     entryId,
                     role,
                     text,
+                    providerOwned: controlSource === "delegation",
                     config: runtimeConfig,
                   },
                   writer,

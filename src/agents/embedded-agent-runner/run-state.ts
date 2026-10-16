@@ -182,6 +182,8 @@ export type EmbeddedRunRegistration = {
   agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
+  /** Exact-run keyed inputs retain accepted outcomes, never rejected reservations. */
+  messageAdmissions?: Map<string, Promise<EmbeddedAgentQueueMessageOutcome>>;
   onHumanInputResolved?: () => void;
 };
 

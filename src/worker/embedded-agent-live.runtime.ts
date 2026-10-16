@@ -11,6 +11,7 @@ import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
   bindAgentAssistantSource,
   readAgentAssistantSource,
@@ -188,11 +189,14 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let assistantSource: AgentAssistantSourceReceipt | undefined;
   let streamedThinking = "";
   const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
-    const { text, phase } = readAssistantSnapshot(message);
+    const { text: rawText, phase } = readAssistantSnapshot(message);
     // Cancellation can synthesize an empty final after checked text was streamed.
-    if (complete && !text && message.role === "assistant" && message.stopReason === "aborted") {
+    if (complete && !rawText && message.role === "assistant" && message.stopReason === "aborted") {
       return;
     }
+    const protocol = createStreamingDirectiveAccumulator();
+    protocol.consume(rawText, { final: complete });
+    const text = protocol.sourceText;
     const mediaUrls = complete ? parseReplyDirectives(text).mediaUrls : undefined;
     if (text === streamedText && phase === streamedPhase && !mediaUrls?.length) {
       return;

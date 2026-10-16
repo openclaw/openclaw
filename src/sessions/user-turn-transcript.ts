@@ -489,7 +489,7 @@ export function createUserTurnTranscriptRecorder(
     assertOriginalInputCommit: params.assertOriginalInputCommit
       ? createDynamicSessionSourceAssertion(
           () =>
-            !blocked && !persistedResult && !runtimePersisted && !pendingInput
+            !blocked && !persistedResult && !runtimePersisted && !pendingInput && !sentToProvider
               ? params.assertOriginalInputCommit
               : undefined,
           () => {

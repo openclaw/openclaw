@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import { constants } from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -91,20 +91,6 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
     }
   };
   return { handle, observed, exited: exited.promise, waitForOutput };
-}
-
-// Session signaling has no completion promise for an adopted slave-holding child.
-async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
-    }
-    throw error;
-  }
 }
 
 // Stock Bun and the current CI pin lack the capability required by the native route.
@@ -200,7 +186,8 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       descendants.push(childPid);
       expect(isPidAlive(childPid)).toBe(true);
       handle.kill();
-      await waitForPidToExit(childPid, signal);
+      // Session signaling has no completion promise for an adopted slave-holding child.
+      await waitForDead(childPid, signal);
       expect(isPidAlive(childPid)).toBe(false);
     });
 

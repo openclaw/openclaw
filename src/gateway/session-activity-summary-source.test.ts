@@ -17,6 +17,7 @@ import { seedSessionActorTranscriptContext } from "../config/sessions/session-ac
 import { withActor } from "../config/sessions/session-actor-worker.test-support.js";
 import type { PreparedSessionTranscriptHydration } from "../config/sessions/session-history-read.types.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { readActivitySummaryBatchFromReplica } from "./session-activity-summary-replica.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import { readActivitySummaryBatch } from "./session-activity-summary-source.worker.js";
@@ -190,7 +191,11 @@ it("reuses complete actor context with the worker's byte bounds, anchors and rol
         expect(resident).toEqual(summaryFacts(readActivitySummaryBatch(input)));
       }
 
-      const reads = trackSqliteStatementExecutions(f.database.db, ["read"], () => "read");
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(f.database.db),
+        ["read"],
+        () => "read",
+      );
       try {
         const source = await readActivitySummarySource({
           scope: f.scope,

@@ -102,15 +102,15 @@ export class LinkReaderPanelOwner {
   }
   private hostedSignature = "";
 
-  get hostedTabs(): PanelHostedTab[] {
+  get hostedTabs() {
     return this.tabs.map((tab) => ({
       id: tab.id,
       label: tabLabel(tab),
       url: tabTarget(tab)?.href,
       title: tabTarget(tab)?.href,
-      icon: readerIcon(tabTarget(tab)?.reader.icon),
+      icon: readerIcon(tabTarget(tab)?.reader.icon, this.host.ownerDocument),
       className: tab.view.status === "loading" ? "is-connecting" : "",
-    }));
+    })) satisfies PanelHostedTab[];
   }
   get activeHostedTabId(): string | null {
     return this.activeId;
@@ -546,6 +546,7 @@ export class LinkReaderPanelOwner {
       this.readers.includes(target.reader);
     const requestParams: ControlUiLinkReaderDetailParams = {
       url: target.href,
+      ...(target.reader.linkReader.sessionScoped ? { sessionKey } : {}),
       ...(agentId ? { agentId } : {}),
       ...(this.refreshRequested ? { refresh: true } : {}),
     };

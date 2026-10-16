@@ -248,7 +248,10 @@ describe("worker turn launcher local placement", () => {
             await settle();
             expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
           });
-          return { payloads: [{ text: "local" }], meta: { durationMs: 1 } };
+          return {
+            payloads: [{ text: "local" }],
+            meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "local" } },
+          };
         },
       );
 

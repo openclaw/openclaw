@@ -116,7 +116,6 @@ export function readPreparedSessionRows<T>(
         }
       }
     }
-    // Native custody and deletion admission remain authoritative until the memory owner moves.
     if (row && !owner.isCurrent(row)) {
       throw new Error("Session changed while preparing its description; retry the request");
     }

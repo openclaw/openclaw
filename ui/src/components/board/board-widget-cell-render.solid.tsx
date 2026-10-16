@@ -1,6 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { dynamic, type JSX } from "@solidjs/web";
-import { createEffect } from "solid-js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -11,23 +10,12 @@ export function BoardCoreWidget(props: {
   active: boolean;
 }) {
   const Element = dynamic(() => props.tagName);
-  let element!: HTMLElement & {
-    widget?: BoardWidget;
-    session?: BoardGetParams;
-    active?: boolean;
-  };
-  createEffect(
-    () => ({ widget: props.widget, session: props.session, active: props.active }),
-    (value) => {
-      element.widget = value.widget;
-      element.session = value.session ?? { sessionKey: "" };
-      element.active = value.active;
-    },
-  );
   return (
     <Element
-      ref={(node: typeof element) => {
-        element = node;
+      {...{
+        "prop:widget": props.widget,
+        "prop:session": props.session ?? { sessionKey: "" },
+        "prop:active": props.active,
       }}
     />
   );

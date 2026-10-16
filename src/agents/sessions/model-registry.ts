@@ -34,6 +34,7 @@ import {
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import { resolveModelRegistryRequestAuth } from "./model-registry-request-auth.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -57,11 +58,7 @@ import {
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
-import {
-  resolveConfigValueOrThrow,
-  resolveConfigValueUncached,
-  resolveHeadersOrThrow,
-} from "./resolve-config-value.js";
+import { resolveConfigValueUncached } from "./resolve-config-value.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -659,6 +656,7 @@ export class ModelRegistry {
       contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
       ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
       contextTokens: model.contextTokens,
+      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
       contextWindows: model.contextWindows,
       contextWindowDefault: model.contextWindowDefault,
       maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
@@ -689,6 +687,9 @@ export class ModelRegistry {
 
   hasConfiguredAuth(model: Model): boolean {
     const providerConfig = this.getModelProviderRequestConfig(model);
+    if (providerConfig?.auth === "none") {
+      return model.api === "openai-completions";
+    }
     return (
       this.authStorage.hasAuth(model.provider) ||
       providerConfig?.auth === "aws-sdk" ||
@@ -707,10 +708,6 @@ export class ModelRegistry {
       return undefined;
     }
     return config;
-  }
-
-  private getModelRequestKey(provider: string, modelId: string): string {
-    return JSON.stringify([provider, modelId]);
   }
 
   private storeProviderRequestConfig(
@@ -746,7 +743,7 @@ export class ModelRegistry {
     modelId: string,
     headers?: Record<string, string>,
   ): void {
-    const key = this.getModelRequestKey(providerName, modelId);
+    const key = JSON.stringify([providerName, modelId]);
     if (!headers || Object.keys(headers).length === 0) {
       this.modelRequestHeaders.delete(key);
       return;
@@ -755,56 +752,12 @@ export class ModelRegistry {
   }
 
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
-    try {
-      const providerConfig = this.getModelProviderRequestConfig(model);
-      const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
-      const apiKeyFromAuthStorage = usesAwsSdkAuth
-        ? undefined
-        : await this.authStorage.getApiKey(model.provider, {
-            includeFallback: false,
-            baseUrl: model.baseUrl,
-          });
-      const apiKey =
-        apiKeyFromAuthStorage ??
-        (!usesAwsSdkAuth && providerConfig?.apiKey
-          ? resolveConfigValueOrThrow(
-              providerConfig.apiKey,
-              `API key for provider "${model.provider}"`,
-            )
-          : undefined);
-
-      const providerHeaders = resolveHeadersOrThrow(
-        providerConfig?.headers,
-        `provider "${model.provider}"`,
-      );
-      const modelHeaders = resolveHeadersOrThrow(
-        this.modelRequestHeaders.get(this.getModelRequestKey(model.provider, model.id)),
-        `model "${model.provider}/${model.id}"`,
-      );
-
-      let headers =
-        model.headers || providerHeaders || modelHeaders
-          ? { ...model.headers, ...providerHeaders, ...modelHeaders }
-          : undefined;
-
-      if (providerConfig?.authHeader) {
-        if (!apiKey) {
-          return { ok: false, error: `No API key found for "${model.provider}"` };
-        }
-        headers = { ...headers, Authorization: `Bearer ${apiKey}` };
-      }
-
-      return {
-        ok: true,
-        apiKey,
-        headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return resolveModelRegistryRequestAuth({
+      model,
+      providerConfig: this.getModelProviderRequestConfig(model),
+      modelHeaders: this.modelRequestHeaders.get(JSON.stringify([model.provider, model.id])),
+      authStorage: this.authStorage,
+    });
   }
 
   /**

@@ -4,6 +4,7 @@ import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_thre
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken } from "../sqlite-database-admission.js";
+import { readSqliteNativeMutationRevision } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { PostgresSyncConnection } from "./connection.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
@@ -37,6 +38,7 @@ function transportFixture(
     requestId: 1,
     anchor,
     isOpen: true,
+    mutationRevision: 0,
   });
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
@@ -155,6 +157,22 @@ describe("PostgreSQL bridge request correlation", () => {
     const before = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
     expect(() => fixture.db.exec("COMMIT")).toThrow("rolled back instead of committing");
     expect(readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry")).toBe(before);
+  });
+
+  it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
+    const fixture = transportFixture("normal");
+    fixture.db.isTransaction = true;
+    const before = readSqliteNativeMutationRevision(fixture.db);
+    fixture.command("UPDATE");
+    fixture.db.exec("UPDATE records SET value = 1");
+    const written = readSqliteNativeMutationRevision(fixture.db);
+    expect(written).not.toBe(before);
+    fixture.command("SELECT");
+    fixture.db.exec("SELECT 1");
+    expect(readSqliteNativeMutationRevision(fixture.db)).toBe(written);
+    fixture.command("ROLLBACK");
+    fixture.db.exec("ROLLBACK");
+    expect(readSqliteNativeMutationRevision(fixture.db)).toBe(written);
   });
 
   it.skipIf(threadId !== 0)(

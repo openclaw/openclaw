@@ -1093,24 +1093,29 @@ describe("gateway send mirroring", () => {
     expect(response?.[3]?.channel).toBe("slack");
   });
 
-  it("rejects empty sends when neither text nor media is present", async () => {
-    await expectRejectedSend({ channel: "slack", message: "   " }, "text or media is required");
-  });
-
-  it("returns actionable guidance when channel is internal webchat", async () => {
-    const response = await expectRejectedSend(
-      { channel: "webchat" },
-      "unsupported channel: webchat",
-    );
-    expect(response[2]?.message).toContain("Use `chat.send`");
-  });
-
-  it("rejects unknown send channels without delivering", async () => {
-    mocks.getChannelPlugin.mockReturnValue(undefined);
-    await expectRejectedSend(
-      { channel: "definitely-not-a-real-channel-xyz" },
+  it.each([
+    ["slack", "   ", "text or media is required"],
+    ["webchat", "hi", "unsupported channel: webchat"],
+    [
+      "definitely-not-a-real-channel-xyz",
+      "hi",
       "unsupported channel: definitely-not-a-real-channel-xyz",
-    );
+    ],
+    ["slack", "hi", "target not found"],
+  ])("rejects channel %s and message %j: %s", async (channel, message, error) => {
+    if (channel === "definitely-not-a-real-channel-xyz") {
+      mocks.getChannelPlugin.mockReturnValue(undefined);
+    }
+    if (error === "target not found") {
+      mocks.resolveOutboundTarget.mockResolvedValue({ ok: false, error: new Error(error) });
+    }
+    const response = await expectRejectedSend({ channel, message }, error);
+    if (channel === "webchat") {
+      expect(response[2]?.message).toContain("Use `chat.send`");
+    }
+    if (error === "target not found") {
+      expect(response[3]?.channel).toBe("slack");
+    }
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -1322,15 +1327,6 @@ describe("gateway send mirroring", () => {
     runSend,
     mockDeliverySuccess,
     registerMessageThreadAddressingPlugin,
-  });
-
-  it("returns invalid request when outbound target resolution fails", async () => {
-    mocks.resolveOutboundTarget.mockResolvedValue({
-      ok: false,
-      error: new Error("target not found"),
-    });
-    const response = await expectRejectedSend({ channel: "slack" }, "target not found");
-    expect(response[3]?.channel).toBe("slack");
   });
 
   it("strips forged current-turn context from agent runs without an ingress capability", async () => {
@@ -1554,54 +1550,45 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry a delivered terminal reply when receipt finalization fails", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
-      jsonResult({ ok: true, messageId: "tg-ambiguous-receipt" }),
-    );
-    mocks.completeRestartRecoveryTerminalDelivery.mockRejectedValueOnce(
-      new Error("receipt store unavailable"),
-    );
-    const { respond } = await runTelegramTerminalAction({
-      sessionId: "session-ambiguous-receipt",
-      idempotencyKey: "idem-ambiguous-receipt",
-      sourceTurnId: "channel-user:v1:ambiguous-receipt",
-      toolCallId: "message-call-ambiguous",
-      message: "delivered with pending receipt",
-    });
+  it.each(["receipt finalization fails", "transcript mirroring is rejected"])(
+    "preserves a delivered terminal reply when %s",
+    async (failure) => {
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+        jsonResult({ ok: true, messageId: "tg-2" }),
+      );
+      if (failure === "receipt finalization fails") {
+        mocks.completeRestartRecoveryTerminalDelivery.mockRejectedValueOnce(
+          new Error("receipt store unavailable"),
+        );
+      } else {
+        mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+          ok: false,
+          code: "blocked",
+          reason: "transcript write rejected",
+        });
+      }
+      const sessionKey = "agent:main:telegram:direct:chat-123";
 
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the provider receipt durable when transcript mirroring is rejected", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
-      jsonResult({ ok: true, messageId: "tg-2" }),
-    );
-    mocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
-      ok: false,
-      code: "blocked",
-      reason: "transcript write rejected",
-    });
-    const sessionKey = "agent:main:telegram:direct:chat-123";
-
-    const { respond } = await runTelegramTerminalAction({
-      sessionId: "session-2",
-      idempotencyKey: "idem-source-message-action-2",
-      sourceTurnId: "channel-user:v1:telegram-message-2",
-      toolCallId: "message-call-2",
-      message: "delivered but unrecorded",
-    });
-
-    expect(firstRespondCall(respond)[0]).toBe(true);
-    expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
+      const { respond } = await runTelegramTerminalAction({
         sessionId: "session-2",
-        sessionKey,
+        idempotencyKey: "idem-source-message-action-2",
         sourceTurnId: "channel-user:v1:telegram-message-2",
-      }),
-    );
-  });
+        toolCallId: "message-call-2",
+        message: "delivered but unrecorded",
+      });
+
+      expect(firstRespondCall(respond)[0]).toBe(true);
+      expect(mocks.cancelRestartRecoveryTerminalDelivery).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "session-2",
+          sessionKey,
+          sourceTurnId: "channel-user:v1:telegram-message-2",
+        }),
+      );
+    },
+  );
 
   it("mirrors a Slack DM send after target resolution strips its user prefix", async () => {
     registerMessageActionPlugin({

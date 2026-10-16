@@ -4,26 +4,20 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as discordModerationActionRuntime from "../send.js";
 import {
-  isDiscordModerationAction,
   readDiscordModerationCommand,
   requiredGuildPermissionForModerationAction,
+  type DiscordModerationAction,
 } from "./runtime.moderation-shared.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
 export async function handleDiscordModerationAction(
-  action: string,
+  action: DiscordModerationAction,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
-  if (!isDiscordModerationAction(action)) {
-    throw new Error(`Unknown action: ${action}`);
-  }
   if (!isActionEnabled("moderation", false)) {
     throw new Error("Discord moderation is disabled.");
-  }
-  if (!cfg) {
-    throw new Error("Discord moderation actions require a resolved runtime config.");
   }
   const accountId = readStringParam(params, "accountId");
   const command = readDiscordModerationCommand(action, params);

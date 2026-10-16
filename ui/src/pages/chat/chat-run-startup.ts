@@ -9,7 +9,13 @@ registerNewSessionSetupEnglish();
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
-  | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: ChatRunStartupPhase;
+      waitReason?: "response" | "slot";
+      seq?: number;
+    }
   | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
   | {
       state: "status";
@@ -37,6 +43,12 @@ export function reconcileChatRunStartup(
   }
   const current = host.chatRunStartup;
   if (current?.runId === next.runId) {
+    const isModelWaitTransition =
+      next.state === "status" &&
+      (next.phase === "waiting_for_model" ||
+        (next.phase === "starting_model" &&
+          current.state === "status" &&
+          current.phase === "waiting_for_model"));
     // Finishing settles one attempt, not the run. Only newer agent activity can resume it.
     if (
       current.state === "status" &&
@@ -57,6 +69,7 @@ export function reconcileChatRunStartup(
       (next.state === "status" &&
         next.phase !== "finishing" &&
         next.phase !== "answer" &&
+        !isModelWaitTransition &&
         !isChatRunRecoveryStatus(next) &&
         (current.state === "activity" ||
           (current.state === "status" && current.phase === "answer"))) ||
@@ -64,7 +77,8 @@ export function reconcileChatRunStartup(
         current.phase === "starting_model" &&
         next.state === "status" &&
         isChatRunStartupPhase(next.phase) &&
-        next.phase !== "starting_model") ||
+        next.phase !== "starting_model" &&
+        next.phase !== "waiting_for_model") ||
       (current.seq !== undefined &&
         (next.seq === undefined
           ? next.state === "status" && next.phase !== "answer" && next.phase !== "finishing"
@@ -92,6 +106,7 @@ const STARTUP_LABEL_KEYS = {
   preparing_context: "chat.startupStatus.preparingContext",
   memory_flushing: "chat.startupStatus.memoryFlushing",
   starting_model: "chat.startupStatus.startingModel",
+  waiting_for_model: "chat.startupStatus.waitingForLocalModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
 
 export function isChatRunStartupPhase(value: unknown): value is ChatRunStartupPhase {
@@ -121,6 +136,9 @@ export function chatStartupStatusLabel(
     }
   }
   if (run) {
+    if (run.phase === "waiting_for_model" && run.waitReason === "slot") {
+      return t("chat.startupStatus.waitingForModelSlot");
+    }
     if (run.phase === "finishing" || run.phase === "answer") {
       return undefined;
     }
@@ -147,7 +165,8 @@ export function chatStartupStatusLabel(
     case "sending":
       return t("chat.composer.sendingMessage");
     default:
-      return awaitingActivity ? t("chat.startupStatus.preparingContext") : undefined;
+      // Queue custody and recovery can precede execution; only an explicit phase proves preparation.
+      return awaitingActivity ? t("chat.startupStatus.waitingForTurn") : undefined;
   }
 }
 

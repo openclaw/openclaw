@@ -1,8 +1,7 @@
-import { For, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import type {
   SessionMenuActions,
@@ -13,24 +12,12 @@ import { Icon } from "./solid/icon.tsx";
 import type { MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
-function OwnerAvatar(props: { owner: SessionOwnerOption }) {
-  return (
-    <span class="session-menu__avatar" aria-hidden="true">
-      <SessionOwnerAvatar owner={props.owner} />
-    </span>
-  );
-}
-
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
-  revision: () => number,
 ) {
-  const ownerSnapshot = createMemo(() => {
-    revision();
-    return actions.ownerMenu.snapshot;
-  });
+  const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
     const status = ownerSnapshot();
     if (!status.connected) {
@@ -64,7 +51,7 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
-  const owners = () => {
+  const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
     const currentOwner = readState().currentOwner;
@@ -90,28 +77,30 @@ export function useSessionMenuDetails(
           .includes(term),
       ),
     );
-  };
-  const ownerSearch = (
-    <div
-      class="people-menu__search"
-      ref={nativeListener("click", (event) => event.stopPropagation())}
-    >
-      <input
-        type="search"
-        data-search
-        data-form-control
-        autocomplete="off"
-        aria-label={t("sessionsView.searchPeople")}
-        placeholder={t("sessionsView.searchPeople")}
-        value={query()}
-        onInput={(event) => setQuery(event.currentTarget.value)}
-      />
-    </div>
+  });
+  const ownersByKey = createMemo(
+    () => new Map(owners().map((owner) => [`${owner.type}:${owner.id}`, owner])),
   );
   const ownerSearchEntry: MenuEntry = {
     kind: "content",
     id: "owners-search",
-    content: ownerSearch,
+    content: (
+      <div
+        class="people-menu__search"
+        ref={nativeListener("click", (event) => event.stopPropagation())}
+      >
+        <input
+          type="search"
+          data-search
+          data-form-control
+          autocomplete="off"
+          aria-label={t("sessionsView.searchPeople")}
+          placeholder={t("sessionsView.searchPeople")}
+          value={query()}
+          onInput={(event) => setQuery(event.currentTarget.value)}
+        />
+      </div>
+    ),
   };
   const ownerOptions = (): MenuEntry[] => {
     const current = readState().currentOwner;
@@ -131,13 +120,37 @@ export function useSessionMenuDetails(
           checked,
           disabled: actions.actionDisabled("assign-owner") || checked,
           attributes: { title: readState().actionDisabledReasons["assign-owner"] },
-          icon: <OwnerAvatar owner={owner} />,
-          content: <span class="session-menu__text">{label}</span>,
-          details: checked ? (
-            <span class="session-menu__check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          ) : undefined,
+          render: (attributes) => (
+            <button
+              {...attributes}
+              type="button"
+              value={`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+              class="oc-menu-item session-menu__item"
+              disabled={attributes["aria-disabled"] === "true"}
+              title={readState().actionDisabledReasons["assign-owner"]}
+            >
+              <span class="oc-menu-item__check" aria-hidden="true">
+                {attributes["aria-checked"] === "true" ? "✓" : ""}
+              </span>
+              <span class="oc-menu-item__icon">
+                <span class="session-menu__avatar" aria-hidden="true">
+                  <SessionOwnerAvatar
+                    owner={ownersByKey().get(`${owner.type}:${owner.id}`) ?? owner}
+                  />
+                </span>
+              </span>
+              <span class="oc-menu-item__label">
+                <span class="session-menu__text">{attributes["aria-label"]}</span>
+              </span>
+              <Show when={attributes["aria-checked"] === "true"}>
+                <span class="oc-menu-item__details">
+                  <span class="session-menu__check" aria-hidden="true">
+                    <Icon name="check" />
+                  </span>
+                </span>
+              </Show>
+            </button>
+          ),
         };
       }),
       ...(options.length === 0
@@ -156,10 +169,7 @@ export function useSessionMenuDetails(
       ...ownerStatus(),
     ];
   };
-  const communicationSnapshot = createMemo(() => {
-    revision();
-    return actions.advanced.communicationState();
-  });
+  const communicationSnapshot = createMemo(() => actions.advanced.communicationState());
   const policy = () => communicationSnapshot().session.communication;
   const effective = () => communicationSnapshot().session.effectiveCommunication;
   const reason = () => readState().actionDisabledReasons["set-communication"];
@@ -253,9 +263,6 @@ export function useSessionMenuDetails(
       : []),
     communicationEnd,
   ];
-  const error = createMemo(() => {
-    revision();
-    return actions.advanced.error;
-  });
+  const error = () => actions.advanced.error;
   return { ownerStatus, ownerOptions, communication, error };
 }

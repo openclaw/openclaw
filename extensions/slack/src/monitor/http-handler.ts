@@ -6,9 +6,31 @@ import {
   createWebhookInFlightLimiter,
   readWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+export function registerSlackHttpHandler(params: {
+  path: string;
+  handler: ReturnType<typeof createSlackHttpRequestHandler>;
+  accountId: string;
+  log?: (message: string) => void;
+}): () => void {
+  return registerPluginHttpRoute({
+    ...params,
+    auth: "plugin",
+    pluginId: "slack",
+    source: "slack-webhook",
+    handler: async (req, res) => {
+      // Slack's configured Request URL remains exact, not a canonical alias.
+      if (new URL(req.url ?? "/", "http://localhost").pathname !== params.path) {
+        return false;
+      }
+      return params.handler(req, res);
+    },
+  });
+}
 
 export function createSlackHttpRequestHandler(params: {
   receiver: { requestListener: RequestListener };

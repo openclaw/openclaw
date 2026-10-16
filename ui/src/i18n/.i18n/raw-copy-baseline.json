@@ -346,6 +346,20 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
+      "text": "Assistant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
+      "text": "Assistant"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",

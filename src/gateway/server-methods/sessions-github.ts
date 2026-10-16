@@ -285,8 +285,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             }),
             action ? service!.status(action) : null,
             action ? coordinator.personalPending(action, session) : null,
-            coordinator.latestShared(session, options.params.idempotencyKey, (snapshot) =>
-              isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
+            coordinator.latestShared(
+              session,
+              options.params.idempotencyKey,
+              (snapshot) =>
+                isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
+              read.currentSessionRead,
             ),
           ]);
           let shared: SessionGitHubOptionsResult["shared"] = identity

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -16,8 +17,8 @@ import {
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
 
 export function createCodeExecutionTool(options?: {
-  config?: unknown;
-  runtimeConfig?: Record<string, unknown> | null;
+  config?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig | null;
   auth?: XaiToolAuthContext;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -38,8 +39,8 @@ export function createCodeExecutionTool(options?: {
   return createCodeExecutionToolDefinition(
     async (_toolCallId: string, args: Record<string, unknown>) => {
       const apiKey = await resolveXaiToolApiKeyWithAuth({
-        runtimeConfig: (runtimeConfig ?? undefined) as never,
-        sourceConfig: options?.config as never,
+        runtimeConfig: runtimeConfig ?? undefined,
+        sourceConfig: options?.config,
         auth: options?.auth,
       });
       if (!apiKey) {

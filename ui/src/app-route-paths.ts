@@ -21,6 +21,7 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
+export const INTERNAL_CLAWS_PATH_PARAM = "__openclawClawsPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
   approval: "/approve",
@@ -49,6 +50,7 @@ const APP_ROUTE_DEFINITIONS = {
   apps: { path: "/apps" },
   portals: { path: "/portals" },
   "agents-home": { path: "/agents" },
+  claws: { path: "/agents/claws" },
   agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -102,7 +104,7 @@ const APP_ROUTE_DEFINITIONS = {
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
 // SAFETY: Object.keys returns only the own keys of this closed route catalog.
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
-const APP_ROUTE_PATHS: string[] = [];
+export const APP_ROUTE_PATHS: string[] = [];
 const ROUTE_ID_BY_PATH = new Map<string, RouteId>();
 // Static paths and aliases share one prepared index; earlier declarations keep priority.
 for (const routeId of APP_ROUTE_IDS) {
@@ -347,6 +349,19 @@ export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string
   return id && isPluginCatalogId(id) ? id : null;
 }
 
+export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
+  const match = /^@openclaw\/([a-z0-9][a-z0-9._-]*)$/u.exec(packageName);
+  if (!match) {
+    throw new Error("Only official Claws can be opened from a route path.");
+  }
+  return `${pathForRoute("claws", basePath)}/${match[1]}`;
+}
+
+export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
+  const slug = routePathSuffix(pathname, "claws", basePath);
+  return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
+}
+
 export function pathForPluginSettings(pluginId: string, basePath = ""): string {
   if (!pluginId || pluginId === "." || pluginId === "..") {
     throw new Error("Invalid plugin id for a route path.");
@@ -427,10 +442,17 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   workboard: INTERNAL_WORKBOARD_PATH_PARAM,
   memory: INTERNAL_MEMORY_PATH_PARAM,
   plugins: INTERNAL_PLUGINS_PATH_PARAM,
+  claws: INTERNAL_CLAWS_PATH_PARAM,
   "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   chat: INTERNAL_SESSION_PATH_PARAM,
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
+
+// These namespaces belong to app documents. /plugins also owns Gateway HTTP
+// routes, so offline admission there stays limited to its exact catalog root.
+export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
+  (routeId) => routeId !== "plugins" && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+).map((routeId) => `${pathForRoute(routeId)}/`);
 
 const DYNAMIC_ROUTE_MATCHERS = [
   ["terminal", terminalSessionIdFromPath],
@@ -447,6 +469,9 @@ function dynamicRouteIdFromPath(
   pathname: string,
   basePath = "",
 ): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
+  if (clawCatalogPackageNameFromPath(pathname, basePath)) {
+    return "claws";
+  }
   return (
     DYNAMIC_ROUTE_MATCHERS.find(([, matches]) => matches(pathname, basePath))?.[0] ??
     sessionRouteNamespaceFromPath(pathname, basePath)
@@ -456,7 +481,9 @@ function dynamicRouteIdFromPath(
 export function dynamicRouteFromPath(pathname: string, basePath: string) {
   const routeId = pluginCatalogIdFromPath(pathname, basePath)
     ? "plugins"
-    : dynamicRouteIdFromPath(pathname, basePath);
+    : clawCatalogPackageNameFromPath(pathname, basePath)
+      ? "claws"
+      : dynamicRouteIdFromPath(pathname, basePath);
   // The overview is a static route; only its subpages need the pathname bridge.
   return routeId && !(routeId === "memory" && memoryTabFromPath(pathname, basePath) === "overview")
     ? ([routeId, DYNAMIC_ROUTE_PATH_PARAMS[routeId], pathname] as const)
@@ -478,6 +505,9 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
     : normalizedPath;
   if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
     return "plugins";
+  }
+  if (clawCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
+    return "claws";
   }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the

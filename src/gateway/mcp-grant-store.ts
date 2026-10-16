@@ -24,12 +24,16 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
+
+/** Set by MCP authentication; caller-token conversation headers cannot select a binding. */
+export type McpCurrentConversationOrigin = "run-bound-grant" | "server-session" | "caller-token";
 
 export type McpLoopbackRequestContext = {
   /** Recorded requester boundary captured by the host; never read from request headers. */
@@ -62,6 +66,7 @@ export type McpLoopbackRequestContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   accountId?: string;
@@ -150,6 +155,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   requestScope?: PluginRuntimeGatewayRequestScope;
   /** Trusted source-turn authority retained only by the host. */
   messageActionTurnCapability?: string;
+  /** Host-minted memory audience for the admitted CLI turn; its owner releases it at run end. */
+  memoryAudience?: MemoryAudience;
   /** Original native creator scope, kept outside all child-visible context. */
   cronRequesterGrantIssuer?: (
     authority: AgentRunDelegatedAuthority,
@@ -286,6 +293,7 @@ export function mintMcpLoopbackClientGrant(
     personalToolParticipants: params.personalToolParticipants,
     requestScope: getPluginRuntimeGatewayRequestScope(),
     messageActionTurnCapability: params.messageActionTurnCapability || undefined,
+    memoryAudience: params.memoryAudience,
     cronRequesterGrantIssuer: params.cronRequesterGrantIssuer,
     cronAuthorityCheck: params.cronAuthorityCheck,
     abortSignal: params.abortSignal,
@@ -485,6 +493,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       personalToolParticipants?: ReplyTurnParticipants;
       requestScope?: PluginRuntimeGatewayRequestScope;
       messageActionTurnCapability?: string;
+      memoryAudience?: MemoryAudience;
       mintCronRequesterGrant?: (signal?: AbortSignal) => CronCreatorAuthorityGrant;
       cronAuthorityCheck?: () => boolean;
       questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
@@ -529,6 +538,7 @@ export function resolveMcpLoopbackClientGrant(params: {
     personalToolParticipants: grant.personalToolParticipants,
     requestScope: grant.requestScope,
     messageActionTurnCapability: grant.messageActionTurnCapability || undefined,
+    memoryAudience: grant.memoryAudience,
     cronAuthorityCheck: grant.cronAuthorityCheck,
     mintCronRequesterGrant: issueCronRequesterGrant
       ? (signal?: AbortSignal) => {

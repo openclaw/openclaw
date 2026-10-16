@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  readDaemonRuntimePinMigrationPending,
+} from "../../daemon/runtime-pin-state.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as systemdDefinition from "../../daemon/systemd-definition-mutation.js";
 import { inspectServiceRuntimeIntent } from "./status.runtime-intent.js";
@@ -8,6 +11,7 @@ import { inspectServiceRuntimeIntent } from "./status.runtime-intent.js";
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
   readDaemonRuntimePin: vi.fn(),
+  readDaemonRuntimePinMigrationPending: vi.fn(() => false),
 }));
 
 const service = createMockGatewayService();
@@ -73,7 +77,7 @@ it("does not turn malformed or stale pin records into absence", async () => {
     throw new Error("stale pin");
   });
   expect(await inspectServiceRuntimeIntent(params)).toEqual({
-    runtimeIntent: { status: "unknown" },
+    runtimeIntent: { status: "unknown", error: "stale pin" },
   });
 });
 
@@ -84,4 +88,12 @@ it("rejects a pin changed while the service capability was being inspected", asy
   expect(await inspectServiceRuntimeIntent(params)).toEqual({
     runtimeIntent: { status: "unknown" },
   });
+});
+
+it("reports pending migration without reading a pin or claiming it is unpinned", async () => {
+  vi.mocked(readDaemonRuntimePinMigrationPending).mockReturnValueOnce(true);
+  expect(await inspectServiceRuntimeIntent(params)).toEqual({
+    runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" },
+  });
+  expect(readDaemonRuntimePin).not.toHaveBeenCalled();
 });

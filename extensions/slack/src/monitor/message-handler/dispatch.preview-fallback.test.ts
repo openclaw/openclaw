@@ -18,16 +18,26 @@ import {
   type GetReplyOptions,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import {
+  checkpoint,
+  contentTaskId,
   emitCompactProgressScenario,
+  expectRecordFields,
+  planUpdate,
+  requireMockCall,
+  taskUpdate,
   type SlackReplyOptionEvent,
 } from "./dispatch.compact-progress.test-support.js";
+import {
+  createSlackPlatformError,
+  expectMockCallArgFields,
+  requireRecord,
+} from "./dispatch.preview.test-support.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const FINAL_REPLY_TEXT = "final answer";
@@ -79,6 +89,10 @@ const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { message
 const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
+const editSlackMessageMock = vi.fn<typeof import("../../actions.js").editSlackMessage>();
+const editSlackRenderedMessageMock =
+  vi.fn<typeof import("../../actions.js").editSlackRenderedMessage>();
+const deleteSlackMessageMock = vi.fn<typeof import("../../actions.js").deleteSlackMessage>();
 const logVerboseMock = vi.fn();
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
@@ -156,40 +170,12 @@ function requireCapturedTyping() {
   return capturedTyping;
 }
 
-function createSlackPlatformError(error: string, details?: { needed?: string; provided?: string }) {
-  // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
-  return Object.assign(new Error(`An API error occurred: ${error}`), {
-    code: "slack_webapi_platform_error",
-    data: { ok: false, error, ...details },
-  });
-}
-
 function requireCapturedItemEventHandler() {
   const handler = capturedReplyOptions?.onItemEvent;
   if (!handler) {
     throw new Error("expected Slack reply item event handler");
   }
   return handler;
-}
-
-const requireRecord = createRequireRecord("object", "label-not-object");
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
-  if (!call) {
-    throw new Error(`missing ${label} call ${index + 1}`);
-  }
-  return call;
-}
-
-function expectMockCallArgFields(mock: unknown, index: number, fields: Record<string, unknown>) {
-  expectRecordFields(requireRecord(requireMockCall(mock, index, "call")[0], "params"), fields);
 }
 
 function expectNativeProgressStart(chunks: unknown[]) {
@@ -217,23 +203,6 @@ function expectNativeStreamText(text: string, count = 1) {
     },
   );
   expect(matches).toHaveLength(count);
-}
-
-function planUpdate(title: string) {
-  return { type: "plan_update", title };
-}
-
-function taskUpdate(
-  id: unknown,
-  title: string,
-  status: "pending" | "in_progress" | "complete" | "error",
-  extra?: Record<string, unknown>,
-) {
-  return { type: "task_update", id, title, status, ...extra };
-}
-
-function contentTaskId(prefix: string) {
-  return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
 function collectNativeTaskUpdates() {
@@ -270,10 +239,6 @@ function progressAccount(
 
 function preamble(progressText: string, itemId: string, phase?: string): SlackReplyOptionEvent {
   return { kind: "item", itemKind: "preamble", progressText, itemId, phase };
-}
-
-function checkpoint(run: () => Promise<void>): { kind: "checkpoint"; run: () => Promise<void> } {
-  return { kind: "checkpoint", run };
 }
 
 function delivered(index = 0) {
@@ -564,9 +529,13 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("../../actions.js", () => ({
+vi.mock("../../actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../actions.js")>()),
   reactSlackMessage: reactSlackMessageMock,
   removeSlackReaction: removeSlackReactionMock,
+  editSlackMessage: editSlackMessageMock,
+  editSlackRenderedMessage: editSlackRenderedMessageMock,
+  deleteSlackMessage: deleteSlackMessageMock,
 }));
 
 vi.mock("../../draft-stream.js", () => ({
@@ -829,6 +798,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     sendMessageSlackMock.mockReset();
+    editSlackMessageMock.mockReset();
+    editSlackRenderedMessageMock.mockReset();
+    deleteSlackMessageMock.mockReset();
     useRealChannelInboundTurn = false;
     finalizeSlackPreviewEditMock.mockReset();
     normalizeSlackOutboundTextMock.mockClear();
@@ -1452,11 +1424,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     const { createSlackDraftStream } =
       await vi.importActual<typeof import("../../draft-stream.js")>("../../draft-stream.js");
     let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
-    const edit = vi.fn(noopAsync);
-    const remove = vi.fn(noopAsync);
+    const edit = editSlackMessageMock.mockImplementation(noopAsync);
+    editSlackRenderedMessageMock.mockImplementation(noopAsync);
+    const remove = deleteSlackMessageMock.mockImplementation(noopAsync);
     createSlackDraftStreamMock.mockImplementationOnce(
       (params: Parameters<typeof createSlackDraftStream>[0]) => {
-        draftStream = createSlackDraftStream({ ...params, edit, remove });
+        draftStream = createSlackDraftStream(params);
         return draftStream;
       },
     );
@@ -1494,6 +1467,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await draftStream?.flush();
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
     expect(edit).not.toHaveBeenCalled();
+    expect(editSlackRenderedMessageMock).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
 
     expect(deliverRepliesMock).not.toHaveBeenCalled();
@@ -1830,6 +1804,30 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       if (finalInStream) {
         expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
       }
+    },
+  );
+
+  it.each([true, false])(
+    "retracts a native model-wait headline before the final reply (detailed=%s)",
+    async (toolProgress) => {
+      const waitText = "Waiting for the local model to respond";
+      await dispatchNativeProgressScenario({
+        finalPayload: { text: FINAL_REPLY_TEXT },
+        progress: { style: "card", nativeTaskCards: true, toolProgress },
+        events: [
+          { kind: "item", itemKind: "model-wait", phase: "update", progressText: waitText },
+          checkpoint(async () => {
+            const start = requireRecord(startSlackStreamMock.mock.calls[0]?.[0], "wait start");
+            expect(start.chunks).toContainEqual(planUpdate(waitText));
+          }),
+          { kind: "item", itemKind: "model-wait", phase: "end" },
+          checkpoint(async () => {
+            const clear = requireRecord(appendSlackStreamMock.mock.calls.at(-1)?.[0], "wait clear");
+            expect(clear.chunks).toContainEqual(planUpdate(toolProgress ? "Thinking" : "Working"));
+          }),
+        ],
+      });
+      expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
     },
   );
 
@@ -2251,27 +2249,27 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       let noteHumanReply = () => {};
       createSlackDraftStreamMock.mockImplementationOnce(
         (params: Parameters<typeof createSlackDraftStream>[0]) => {
-          draftStream = createSlackDraftStream({
-            ...params,
-            send: async (_target, text) => {
-              const messageId = String(nextMessageId++);
-              visibleMessages.set(messageId, text);
-              return {
-                channelId: "C123",
-                messageId,
-                receipt: createMessageReceiptFromOutboundResults({
-                  results: [{ channel: "slack", channelId: "C123", messageId }],
-                  kind: "preview",
-                }),
-              };
-            },
-            edit: async (_channelId, messageId, text) => {
-              visibleMessages.set(messageId, text);
-            },
-            remove: async (_channelId, messageId) => {
-              visibleMessages.delete(messageId);
-            },
+          sendMessageSlackMock.mockImplementation(async (_target, text) => {
+            const messageId = String(nextMessageId++);
+            visibleMessages.set(messageId, text);
+            return {
+              channelId: "C123",
+              messageId,
+              receipt: createMessageReceiptFromOutboundResults({
+                results: [{ channel: "slack", channelId: "C123", messageId }],
+                kind: "preview",
+              }),
+            };
           });
+          const edit = async (_channelId: string, messageId: string, text: string) => {
+            visibleMessages.set(messageId, text);
+          };
+          editSlackMessageMock.mockImplementation(edit);
+          editSlackRenderedMessageMock.mockImplementation(edit);
+          deleteSlackMessageMock.mockImplementation(async (_channelId, messageId) => {
+            visibleMessages.delete(messageId);
+          });
+          draftStream = createSlackDraftStream(params);
           noteHumanReply = () =>
             noteSlackDraftConversationMessage({
               accountId: params.accountId,

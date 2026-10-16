@@ -2,6 +2,7 @@ import {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
 } from "../../infra/bun-sqlite-library.js";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -48,7 +49,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     prepareWorker: () => {
       // Bun loads one SQLite library per process; workers inherit the parent's selection.
       ensureSqliteLibrarySelected();
-      return { options: {} };
+      return { options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } } };
     },
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers,
@@ -166,7 +167,9 @@ export function createSessionTranscriptHistoryPool(
         // Early workers stay conservative if native-close qualification was still pending.
         canCloseNativeResources =
           captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
-        return { options: {} };
+        return {
+          options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } },
+        };
       },
     },
     { databaseAccess: "read-only" },
@@ -191,7 +194,7 @@ function createUsageCostPool(kind: "read" | "refresh") {
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
-      return { options: {} };
+      return { options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } } };
     },
     validateResult(reply) {
       if (!reply.ok) {

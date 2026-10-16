@@ -16,6 +16,7 @@ import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 /** Compose domain registrars over one explicit mutable registry state. */
 export function createPluginRegistrars(state: PluginRegistryState) {
   const { registry, reportRegistrationError, reportRegistrationWarning } = state;
+  const providers = createProviderRegistrars(state);
 
   const registerDecisionProvider = (
     record: PluginRecord,
@@ -26,11 +27,13 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       !id ||
       id !== provider.id ||
       id.includes("/") ||
-      provider.contractVersion !== 1 ||
+      (provider.contractVersion !== 1 && provider.contractVersion !== 2) ||
       typeof provider.evaluate !== "function" ||
-      (provider.isReady !== undefined && typeof provider.isReady !== "function")
+      (provider.contractVersion === 1 &&
+        provider.isReady !== undefined &&
+        typeof provider.isReady !== "function")
     ) {
-      reportRegistrationError(record, "invalid version 1 decision provider contract");
+      reportRegistrationError(record, "invalid versioned decision provider contract");
       return;
     }
     if (!record.contracts?.decisionProviders?.includes(id)) {
@@ -44,7 +47,40 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `decision provider already registered: ${id}`);
       return;
     }
-    const host = new DecisionProviderHost(provider, record);
+    let canonical = registry.providers.find((entry) => entry.provider.id === id);
+    if (provider.contractVersion === 2) {
+      if (canonical && canonical.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          `decision provider identity is owned by another plugin: ${id}`,
+        );
+        return;
+      }
+      if (canonical && provider.provider) {
+        reportRegistrationError(
+          record,
+          `provider already registered; omit the duplicate definition: ${id}`,
+        );
+        return;
+      }
+      if (!canonical) {
+        if (!provider.provider) {
+          reportRegistrationError(
+            record,
+            `version 2 decisions require a shared provider definition: ${id}`,
+          );
+          return;
+        }
+        providers.registerProvider(record, { ...provider.provider, id });
+        canonical = registry.providers.find(
+          (entry) => entry.provider.id === id && entry.pluginId === record.id,
+        );
+        if (!canonical) {
+          return;
+        }
+      }
+    }
+    const host = new DecisionProviderHost(provider, record, canonical);
     registry.decisionProviders.push({ pluginId: record.id, host });
     record.services.push(`decisions:${id}`);
     getPluginInstance(record)?.lifecycle.onDispose(() => host.stop());
@@ -239,7 +275,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     registerCompactionProvider,
     ...createToolHookRegistrars(state),
     ...createNetworkRegistrars(state),
-    ...createProviderRegistrars(state),
+    ...providers,
     ...createOperationRegistrars(state),
     ...createHostRegistrars(state),
     registerMemoryCapability,
