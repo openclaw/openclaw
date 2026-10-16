@@ -1,4 +1,3 @@
-/** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
@@ -29,20 +28,12 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// Mirrors SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES in the source under test. Kept in
-// sync deliberately so the regression asserts the body is capped, not drained.
+// Independent cap expectation: discovery must cancel rather than drain the body.
 const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
 
-/**
- * Builds a Response body that would never terminate on its own: each pull emits
- * a 1 MiB chunk forever. A bounded reader must cancel it after the byte cap.
- */
-function createUnboundedJsonStream(): {
-  body: ReadableStream<Uint8Array>;
-  cancelCount: number;
-  bytesPulled: number;
-} {
+// Never ends: only the production byte cap can stop this stream.
+function createUnboundedJsonStream() {
   const state = { cancelCount: 0, bytesPulled: 0 };
   const chunk = new Uint8Array(CHUNK_BYTES).fill(0x20); // ASCII spaces: valid stream, never closes
   const body = new ReadableStream<Uint8Array>({
@@ -54,23 +45,7 @@ function createUnboundedJsonStream(): {
       state.cancelCount += 1;
     },
   });
-  return {
-    body,
-    get cancelCount() {
-      return state.cancelCount;
-    },
-    get bytesPulled() {
-      return state.bytesPulled;
-    },
-  };
-}
-
-function createRuntime() {
-  return {
-    error: vi.fn(),
-    exit: vi.fn(),
-    log: vi.fn(),
-  };
+  return Object.assign(state, { body });
 }
 
 function createContext(params: {
@@ -79,10 +54,6 @@ function createContext(params: {
   apiKey?: string;
   modelId?: string;
 }): ProviderAuthMethodNonInteractiveContext {
-  const resolved = {
-    key: params.apiKey ?? "self-hosted-test-key",
-    source: "flag" as const,
-  };
   return {
     authChoice: params.providerId,
     config: { agents: { defaults: {} } },
@@ -92,11 +63,12 @@ function createContext(params: {
       customApiKey: params.apiKey,
       customModelId: params.modelId,
     },
-    runtime: createRuntime() as never,
+    runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
     agentDir: "/tmp/openclaw-self-hosted-test-agent",
-    resolveApiKey: vi.fn<ProviderAuthMethodNonInteractiveContext["resolveApiKey"]>(
-      async () => resolved,
-    ),
+    resolveApiKey: vi.fn<ProviderAuthMethodNonInteractiveContext["resolveApiKey"]>(async () => ({
+      key: params.apiKey ?? "self-hosted-test-key",
+      source: "flag" as const,
+    })),
     toApiKeyCredential: vi.fn<ProviderAuthMethodNonInteractiveContext["toApiKeyCredential"]>(
       ({ provider, resolved: apiKeyResult }) => ({
         type: "api_key",
@@ -123,6 +95,14 @@ function expectedModel(
   };
 }
 
+function rejectCredential(ctx: ProviderAuthMethodNonInteractiveContext, message: string) {
+  vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+    ctx.runtime.error(message);
+    ctx.runtime.exit(1);
+    return null;
+  });
+}
+
 function readPrimaryModel(config: Awaited<ReturnType<typeof configureSelfHostedTestProvider>>) {
   const model = config?.agents?.defaults?.model;
   return model && typeof model === "object" ? model.primary : undefined;
@@ -130,24 +110,64 @@ function readPrimaryModel(config: Awaited<ReturnType<typeof configureSelfHostedT
 
 async function configureSelfHostedTestProvider(params: {
   ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  providerLabel: string;
-  envVar: string;
+  providerId?: string;
+  providerLabel?: string;
+  envVar?: string;
 }) {
   return await configureOpenAICompatibleSelfHostedProviderNonInteractive({
     ctx: params.ctx,
-    providerId: params.providerId,
-    providerLabel: params.providerLabel,
+    providerId: params.providerId ?? "vllm",
+    providerLabel: params.providerLabel ?? "vLLM",
     defaultBaseUrl: "http://127.0.0.1:8000/v1",
-    defaultApiKeyEnvVar: params.envVar,
+    defaultApiKeyEnvVar: params.envVar ?? "VLLM_API_KEY",
     modelPlaceholder: "Qwen/Qwen3-32B",
   });
 }
 
-function cancelTrackedResponse(init?: ResponseInit): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
+function queueResponse(response: Response, finalUrl = "http://127.0.0.1:8000/v1/models") {
+  const release = vi.fn(async () => undefined);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, finalUrl, release });
+  return release;
+}
+
+function queueJson(body: unknown, finalUrl?: string) {
+  return queueResponse(new Response(JSON.stringify(body), { status: 200 }), finalUrl);
+}
+
+function expectGuardedFetch(
+  call: number,
+  url: string,
+  timeoutMs: number,
+  headers?: Record<string, string>,
+) {
+  expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+    call,
+    expect.objectContaining({
+      url,
+      init: { headers },
+      policy: { allowedOrigins: [new URL(url).origin] },
+      timeoutMs,
+    }),
+  );
+}
+
+const providers = {
+  vllm: { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" },
+  lmstudio: { providerId: "lmstudio", providerLabel: "LM Studio", envVar: "LM_API_TOKEN" },
+};
+
+function discover(
+  overrides: Partial<Parameters<typeof discoverOpenAICompatibleLocalModels>[0]> = {},
+) {
+  return discoverOpenAICompatibleLocalModels({
+    baseUrl: "http://127.0.0.1:8000/v1",
+    label: "vLLM",
+    env: {},
+    ...overrides,
+  });
+}
+
+function cancelTrackedResponse(init?: ResponseInit) {
   let canceled = false;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -188,31 +208,17 @@ async function discoverSingleCatalogModel(
 
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("retains valid models when a provider catalog contains malformed entries", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "valid-a", meta: { n_ctx_train: 32_768 } },
-            null,
-            7,
-            "invalid",
-            [],
-            { id: "valid-b", meta: { n_ctx_train: 65_536 } },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
+    const release = queueJson({
+      data: [
+        { id: "valid-a", meta: { n_ctx_train: 32_768 } },
+        null,
+        7,
+        "invalid",
+        [],
+        { id: "valid-b", meta: { n_ctx_train: 65_536 } },
+      ],
     });
-
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      label: "vLLM",
-      discoverRuntimeContext: false,
-      env: {},
-    });
+    const models = await discover({ discoverRuntimeContext: false });
 
     expect(models).toMatchObject([
       { id: "valid-a", contextWindow: 32_768 },
@@ -223,22 +229,8 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("rejects a non-array model catalog", async () => {
-    const data = {};
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
-
-    await expect(
-      discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        label: "vLLM",
-        discoverRuntimeContext: false,
-        env: {},
-      }),
-    ).resolves.toEqual([]);
+    const release = queueJson({ data: {} });
+    await expect(discover({ discoverRuntimeContext: false })).resolves.toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("vLLM discovery: malformed JSON response"),
     );
@@ -338,22 +330,18 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("logs a warning when discovery JSON contains invalid UTF-8 bytes", async () => {
-    const release = vi.fn(async () => undefined);
     const body = new Uint8Array([
       ...new TextEncoder().encode('{"data":[{"id":"qwen3-'),
       0xff,
       ...new TextEncoder().encode('"}]}'),
     ]);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release,
-    });
-
-    const models = await discoverOpenAICompatibleLocalModels({
+    const release = queueResponse(
+      new Response(body, { status: 200 }),
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const models = await discover({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "local llama.cpp",
-      env: {},
     });
 
     expect(models).toEqual([]);
@@ -364,48 +352,19 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
-    const release = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
     const propsResponse = cancelTrackedResponse({ status: 404 });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: propsResponse.response,
-      finalUrl: "http://127.0.0.1:8000/props",
-      release: propsRelease,
-    });
+    const release = queueJson({ data: [{ id: "Qwen/Qwen3-32B" }] });
+    const propsRelease = queueResponse(propsResponse.response, "http://127.0.0.1:8000/props");
 
-    const models = await discoverOpenAICompatibleLocalModels({
+    const models = await discover({
       baseUrl: "http://127.0.0.1:8000/v1/",
       apiKey: "self-hosted-test-key",
-      label: "vLLM",
-      env: {},
     });
 
     expect(models).toEqual([expectedModel("Qwen/Qwen3-32B")]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8000/v1/models",
-        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
-        timeoutMs: 5000,
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8000/props",
-        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
-        timeoutMs: 2500,
-      }),
-    );
+    const headers = { Authorization: "Bearer self-hosted-test-key" };
+    expectGuardedFetch(1, "http://127.0.0.1:8000/v1/models", 5000, headers);
+    expectGuardedFetch(2, "http://127.0.0.1:8000/props", 2500, headers);
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
@@ -532,104 +491,48 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("scopes llama.cpp /props runtime caps to each discovered model without autoloading", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const firstPropsRelease = vi.fn(async () => undefined);
-    const secondPropsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen/router-a",
-              meta: { n_ctx_train: 262_144 },
-            },
-            {
-              id: "qwen/router-b",
-              meta: { n_ctx_train: 131_072 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      release: firstPropsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 32_768 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      release: secondPropsRelease,
-    });
-
-    const models = await discoverOpenAICompatibleLocalModels({
+    const modelsRelease = queueJson(
+      {
+        data: [
+          { id: "qwen/router-a", meta: { n_ctx_train: 262_144 } },
+          { id: "qwen/router-b", meta: { n_ctx_train: 131_072 } },
+        ],
+      },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const firstPropsRelease = queueJson(
+      { default_generation_settings: { n_ctx: 65_536 } },
+      "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+    );
+    const secondPropsRelease = queueJson(
+      { default_generation_settings: { n_ctx: 32_768 } },
+      "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+    );
+    const models = await discover({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama.cpp",
-      env: {},
     });
 
     expect(models).toEqual([
       expectedModel("qwen/router-a", { contextWindow: 262_144, contextTokens: 65_536 }),
       expectedModel("qwen/router-b", { contextWindow: 131_072, contextTokens: 32_768 }),
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-        init: { headers: undefined },
-        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
-        timeoutMs: 2500,
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-        init: { headers: undefined },
-        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
-        timeoutMs: 2500,
-      }),
-    );
+    expectGuardedFetch(2, "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false", 2500);
+    expectGuardedFetch(3, "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false", 2500);
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(firstPropsRelease).toHaveBeenCalledOnce();
     expect(secondPropsRelease).toHaveBeenCalledOnce();
   });
 
   it("keeps top-level llama.cpp /props n_ctx as a compatibility fallback", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen3.6-mxfp4-moe",
-              meta: { n_ctx_train: 262_144 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ n_ctx: 65_536 }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
-
-    const models = await discoverOpenAICompatibleLocalModels({
+    const modelsRelease = queueJson(
+      { data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }] },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const propsRelease = queueJson({ n_ctx: 65_536 }, "http://127.0.0.1:8080/props");
+    const models = await discover({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama.cpp",
-      env: {},
     });
 
     expect(models).toEqual([
@@ -666,19 +569,9 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("bounds an unbounded /models discovery stream instead of buffering it", async () => {
-    const release = vi.fn(async () => undefined);
     const oversized = createUnboundedJsonStream();
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversized.body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
-
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      label: "vLLM",
-      env: {},
-    });
+    const release = queueResponse(new Response(oversized.body, { status: 200 }));
+    const models = await discover();
 
     // The reader cancels the body once the byte cap is exceeded; without the
     // cap the stream would never finish and the discovery would buffer it all.
@@ -691,26 +584,18 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("bounds an unbounded llama.cpp /props discovery stream instead of buffering it", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
     const oversized = createUnboundedJsonStream();
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "qwen3.6-mxfp4-moe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversized.body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
-
-    const models = await discoverOpenAICompatibleLocalModels({
+    const modelsRelease = queueJson(
+      { data: [{ id: "qwen3.6-mxfp4-moe" }] },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const propsRelease = queueResponse(
+      new Response(oversized.body, { status: 200 }),
+      "http://127.0.0.1:8080/props",
+    );
+    const models = await discover({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama.cpp",
-      env: {},
     });
 
     // /props overflow is swallowed so discovery still succeeds, but the body is
@@ -732,14 +617,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     const failure = new Error("Auth profile store is unavailable.");
     upsertAuthProfileWithLockOrThrow.mockRejectedValueOnce(failure);
 
-    await expect(
-      configureSelfHostedTestProvider({
-        ctx,
-        providerId: "vllm",
-        providerLabel: "vLLM",
-        envVar: "VLLM_API_KEY",
-      }),
-    ).rejects.toBe(failure);
+    await expect(configureSelfHostedTestProvider({ ctx })).rejects.toBe(failure);
     expect(ctx.config).toEqual(configBefore);
     expect(ctx.runtime.log).not.toHaveBeenCalled();
   });
@@ -755,12 +633,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     };
     const ctx = createContext(params);
 
-    const cfg = await configureSelfHostedTestProvider({
-      ctx,
-      providerId: params.providerId,
-      providerLabel: params.providerLabel,
-      envVar: params.envVar,
-    });
+    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
 
     const profileId = `${params.providerId}:default`;
     expect(cfg?.auth?.profiles?.[profileId]).toEqual({
@@ -817,11 +690,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       key: profileSecret,
       source: "profile",
     });
-    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
-      ctx.runtime.error("Cannot encode an existing profile as a SecretRef.");
-      ctx.runtime.exit(1);
-      return null;
-    });
+    rejectCredential(ctx, "Cannot encode an existing profile as a SecretRef.");
 
     const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
 
@@ -835,79 +704,43 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      providerId: "lmstudio",
-      providerLabel: "LM Studio",
-      envVar: "LM_API_TOKEN",
-      marker: "custom-local",
-    },
-    {
-      providerId: "lmstudio",
-      providerLabel: "LM Studio",
-      envVar: "LM_API_TOKEN",
-      marker: "lmstudio-local",
-    },
-  ])("keeps the $providerLabel non-secret marker keyless in ref mode", async (params) => {
-    const modelId = "Qwen/Qwen3-32B";
-    const ctx = createContext({ providerId: params.providerId, modelId });
-    ctx.opts.secretInputMode = "ref";
-    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: params.marker, source: "flag" });
-    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
-      ctx.runtime.error("A synthetic non-secret marker must not become an auth credential.");
-      ctx.runtime.exit(1);
-      return null;
-    });
+  it.each(["custom-local", "lmstudio-local"])(
+    "keeps the LM Studio marker %s keyless in ref mode",
+    async (marker) => {
+      const params = providers.lmstudio;
+      const modelId = "Qwen/Qwen3-32B";
+      const ctx = createContext({ providerId: params.providerId, modelId });
+      ctx.opts.secretInputMode = "ref";
+      vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: marker, source: "flag" });
+      rejectCredential(ctx, "A synthetic non-secret marker must not become an auth credential.");
 
-    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+      const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
 
-    expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
-    expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
-    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-    expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
-    expect(ctx.runtime.error).not.toHaveBeenCalled();
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-  });
+      expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
+      expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
+      expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+      expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
+      expect(ctx.runtime.error).not.toHaveBeenCalled();
+      expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "custom-local" },
-    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "lmstudio-local" },
-    {
-      providerId: "lmstudio",
-      providerLabel: "LM Studio",
-      envVar: "LM_API_TOKEN",
-      key: "ollama-local",
-    },
-    {
-      providerId: "lmstudio",
-      providerLabel: "LM Studio",
-      envVar: "LM_API_TOKEN",
-      key: "oauth:lmstudio",
-    },
-    {
-      providerId: "lmstudio",
-      providerLabel: "LM Studio",
-      envVar: "LM_API_TOKEN",
-      key: "secretref-env:LM_API_TOKEN",
-    },
-    {
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
-      key: "fixture-genuine-self-hosted-secret",
-    },
-    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "OPENAI_API_KEY" },
-  ])(
-    "rejects unowned marker or genuine flag value $key for $providerLabel in ref mode",
-    async ({ key, ...params }) => {
+    ["vllm", "custom-local"],
+    ["vllm", "lmstudio-local"],
+    ["lmstudio", "ollama-local"],
+    ["lmstudio", "oauth:lmstudio"],
+    ["lmstudio", "secretref-env:LM_API_TOKEN"],
+    ["vllm", "fixture-genuine-self-hosted-secret"],
+    ["vllm", "OPENAI_API_KEY"],
+  ] as const)(
+    "rejects %s unowned marker or genuine flag value %s in ref mode",
+    async (provider, key) => {
+      const params = providers[provider];
       const ctx = createContext({ providerId: params.providerId, modelId: "Qwen/Qwen3-32B" });
       ctx.opts.secretInputMode = "ref";
       vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key, source: "flag" });
-      vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
-        ctx.runtime.error("SecretRef mode requires an explicit environment variable.");
-        ctx.runtime.exit(1);
-        return null;
-      });
+      rejectCredential(ctx, "SecretRef mode requires an explicit environment variable.");
 
       const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
 
@@ -924,12 +757,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     ctx.opts.secretInputMode = "plaintext";
     vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: "lmstudio-local", source: "flag" });
 
-    const cfg = await configureSelfHostedTestProvider({
-      ctx,
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
-    });
+    const cfg = await configureSelfHostedTestProvider({ ctx });
 
     expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
     expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({
@@ -958,12 +786,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     };
     vi.mocked(ctx.toApiKeyCredential).mockReturnValueOnce(credential);
 
-    const cfg = await configureSelfHostedTestProvider({
-      ctx,
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
-    });
+    const cfg = await configureSelfHostedTestProvider({ ctx });
 
     expect(upsertAuthProfileWithLockOrThrow).toHaveBeenCalledWith({
       profileId: "vllm:default",
@@ -977,12 +800,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
     vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce(null);
 
-    const cfg = await configureSelfHostedTestProvider({
-      ctx,
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
-    });
+    const cfg = await configureSelfHostedTestProvider({ ctx });
 
     expect(cfg).toBeNull();
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
@@ -995,19 +813,11 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       apiKey: "vllm-test-key",
     });
 
-    const cfg = await configureSelfHostedTestProvider({
-      ctx,
-      providerId: "vllm",
-      providerLabel: "vLLM",
-      envVar: "VLLM_API_KEY",
-    });
+    const cfg = await configureSelfHostedTestProvider({ ctx });
 
     expect(cfg).toBeNull();
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      [
-        "Missing --custom-model-id for --auth-choice vllm.",
-        "Pass the vLLM model id to use, for example Qwen/Qwen3-32B.",
-      ].join("\n"),
+      "Missing --custom-model-id for --auth-choice vllm.\nPass the vLLM model id to use, for example Qwen/Qwen3-32B.",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(ctx.resolveApiKey).not.toHaveBeenCalled();
