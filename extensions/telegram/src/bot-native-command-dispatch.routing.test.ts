@@ -335,6 +335,13 @@ describe("registered native command routing through the message pipeline", () =>
     });
   });
 
+  it("does not dispatch the same update twice", async () => {
+    const bot = await createBot();
+    const update = { update_id: 1001, message: commandMessage("/status") };
+    await bot.handleUpdate(update);
+    await bot.handleUpdate(update);
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+  });
   it("publishes account-scoped skills and keeps omitted bound skills callable", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-native-skills-"));
     try {

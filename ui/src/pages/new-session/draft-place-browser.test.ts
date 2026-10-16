@@ -415,8 +415,16 @@ describe("DraftPlaceBrowser", () => {
     },
   );
 
-  it("keeps roster recents when the Gateway omits recents", async () => {
-    const { browser } = createBrowser(async () => ({ projects: [] }));
+  it.each([
+    ["the Gateway omits recents", async () => ({ projects: [] })],
+    [
+      "projects.list fails",
+      async () => {
+        throw new Error("projects unavailable");
+      },
+    ],
+  ])("keeps roster recents when %s", async (_label, request) => {
+    const { browser } = createBrowser(request);
 
     await browser.refreshProjects();
 
@@ -571,6 +579,12 @@ describe("DraftGatewayState", () => {
   });
 
   it.each([
+    {
+      advertised: true,
+      response: { machineName: "Gateway B" },
+      name: "Gateway B",
+      scopes: ["operator.read"],
+    },
     {
       advertised: false,
       response: { machineName: "Hidden Gateway" },

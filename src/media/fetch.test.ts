@@ -96,6 +96,28 @@ describe("readRemoteMediaBuffer", () => {
     await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
   });
 
+  it("rejects malformed content-length before remote buffer reads", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(body.stream, {
+          status: 200,
+          headers: { "content-length": "1e9" },
+        }),
+    );
+
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        maxBytes: 4,
+        lookupFn: makeLookupFn(),
+      }),
+    ).rejects.toThrow("invalid content-length header: 1e9");
+
+    expect(body.wasCanceled()).toBe(true);
+  });
+
   it.each([
     {
       name: "redacts bot tokens from fetch failure messages",
@@ -581,6 +603,16 @@ describe("readRemoteMediaBuffer", () => {
   );
 
   it.each([
+    {
+      name: "unquoted filename retains its leading apostrophe",
+      header: "attachment; filename='report.csv",
+      fileName: "'report.csv",
+    },
+    {
+      name: "unquoted filename retains its trailing apostrophe",
+      header: "attachment; filename=report.csv'",
+      fileName: "report.csv'",
+    },
     {
       name: "unquoted filename retains surrounding apostrophes",
       header: "attachment; filename='report.csv'",

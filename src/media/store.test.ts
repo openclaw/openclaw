@@ -45,14 +45,18 @@ describe("media store", () => {
     await expect(result).rejects.toMatchObject({ code: "ENOENT" });
   }
 
-  it("enforces the default buffer size limit", async () => {
+  it.each([
+    { maxBytes: undefined, size: 5 * 1024 * 1024 + 1, message: "Media exceeds 5MB limit" },
+    { maxBytes: 256 * 1024, size: 256 * 1024 + 1, message: "Media exceeds 256KB limit" },
+  ])("enforces buffer size limit: $message", async ({ maxBytes, size, message }) => {
     await expect(
       store.saveMediaBuffer(
-        Buffer.alloc(5 * 1024 * 1024 + 1),
+        Buffer.alloc(size),
         "application/octet-stream",
         "fractional-buffer",
+        maxBytes,
       ),
-    ).rejects.toThrow("Media exceeds 5MB limit");
+    ).rejects.toThrow(message);
   });
 
   const sourceErrors: {

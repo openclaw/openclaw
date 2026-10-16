@@ -120,10 +120,12 @@ async function fixture(enabled = false) {
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
 
-it.each([
-  { change: "runtime", unattended: false },
-  { change: "environment", unattended: true },
-])(
+it.each(
+  ["runtime", "arguments", "environment"].flatMap((change) => [
+    { change, unattended: false },
+    { change, unattended: true },
+  ]),
+)(
   "replaces a running registered task before publishing a changed $change (unattended=$unattended)",
   async ({ change, unattended }) => {
     const { args, scriptPath, original, registration } = await fixture(true);
@@ -148,7 +150,9 @@ it.each([
       programArguments:
         change === "runtime"
           ? ["bun", "/prefix-a/openclaw/dist/index.js", "gateway"]
-          : ["node", "/prefix-a/openclaw/dist/index.js", "gateway"],
+          : change === "arguments"
+            ? args.programArguments
+            : ["node", "/prefix-a/openclaw/dist/index.js", "gateway"],
       ...(change === "environment" ? { environment: { SYNTHETIC_SETTING: "updated" } } : {}),
     });
     expect(running).toEqual(await fs.readFile(scriptPath));

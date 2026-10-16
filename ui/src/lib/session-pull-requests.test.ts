@@ -9,6 +9,7 @@ import {
   sessionGitHubRepository,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
+import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 function createStoreHarness() {
   const harness = createGatewayHarness();
@@ -42,7 +43,7 @@ afterEach(() => {
 });
 
 describe("session pull request snapshot store", () => {
-  it.each([true])(
+  it.each([false, true])(
     "requires operator.read and retires cached facts (cached: %s)",
     async (cached) => {
       vi.useFakeTimers();
@@ -73,6 +74,24 @@ describe("session pull request snapshot store", () => {
       store.unwatch(owner);
     },
   );
+
+  it("waits for an active viewer before subscribing passive sidebar rows", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const passiveOwner = {};
+    const key = "agent:main:demo";
+    store.watch(passiveOwner, [key], { passive: true });
+    await flushSync();
+    expect(harness.request).not.toHaveBeenCalled();
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(1);
+    expectSubscription(harness, [key]);
+    store.unwatch(owner);
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expectSubscription(harness, []);
+    store.unwatch(passiveOwner);
+  });
 
   it("coalesces refresh bursts while a subscription request is unsettled and keeps one trailing refresh", async () => {
     const { harness, store, owner } = createStoreHarness();
@@ -118,6 +137,12 @@ describe("session pull request snapshot store", () => {
       status: "ready",
       ...fields,
     });
+    const unavailable = snapshot({
+      repository,
+      pullRequests: [{ number: 1, state: "merged" }],
+      status: "unavailable",
+    });
+    const changedBranch = { ...branch, additions: 9 };
     const cases: Array<{
       name: string;
       initial: Snapshot;
@@ -128,39 +153,67 @@ describe("session pull request snapshot store", () => {
       }>;
     }> = [
       {
-        name: "replacement branch during rate-limited with PR metadata",
+        name: "populated unavailable facts and later branch enrichment",
         initial: snapshot({
           repository,
-          pullRequests: [{ number: 1, state: "open", branch: "feature/previous" }],
+          branch: { ...branch, additions: 1 },
+          pullRequests: open,
+          rateLimited: true,
+          status: "rate-limited",
         }),
         updates: [
+          { received: unavailable, expected: unavailable },
           {
-            received: snapshot({
-              repository,
-              branch: { ...repository, branch: "feature/current", additions: 9 },
-              rateLimited: true,
-              status: "rate-limited",
-            }),
-            expected: snapshot({
-              repository,
-              branch: { ...repository, branch: "feature/current", additions: 9 },
-              rateLimited: true,
-              status: "rate-limited",
-            }),
+            received: { ...unavailable, pullRequests: [], branch: changedBranch },
+            expected: { ...unavailable, branch: changedBranch },
           },
         ],
       },
-      {
-        name: "repository-only context during unavailable and its ready replacement",
+      ...(["unavailable", "rate-limited"] as const).map((status, index) => {
+        const next = snapshot({
+          repository,
+          branch: { ...repository, branch: "feature/current", additions: 9 },
+          rateLimited: status === "rate-limited",
+          status,
+        });
+        return {
+          name: `replacement branch during ${status} with ${index === 0 ? "branch" : "PR"} metadata`,
+          initial: snapshot({
+            repository,
+            pullRequests: [{ number: 1, state: "open", branch: "feature/previous" }],
+            ...(index === 0 ? { branch: { ...repository, branch: "feature/previous" } } : {}),
+          }),
+          updates: [{ received: next, expected: next }],
+        };
+      }),
+      ...(["rate-limited", "unavailable"] as const).map((status) => ({
+        name: `repository-only context during ${status} and its ready replacement`,
         initial: snapshot({ repository }),
         updates: [
           {
-            received: snapshot({ status: "unavailable" }),
-            expected: snapshot({ repository, status: "unavailable" }),
+            received: snapshot({ status, rateLimited: status === "rate-limited" }),
+            expected: snapshot({ repository, status, rateLimited: status === "rate-limited" }),
           },
           { received: snapshot(), expected: snapshot(), repository: null },
         ],
-      },
+      })),
+      ...(
+        [
+          { status: "unavailable", repository: { owner: "other", repo: "openclaw" } },
+          { status: "rate-limited", repository: { owner: "openclaw", repo: "other" } },
+        ] as const
+      ).map(({ status, repository: replacement }) => {
+        const next = snapshot({
+          repository: replacement,
+          status,
+          rateLimited: status === "rate-limited",
+        });
+        return {
+          name: `repository replacement during ${status}`,
+          initial: snapshot({ repository, branch, pullRequests: open }),
+          updates: [{ received: next, expected: next, repository: replacement }],
+        };
+      }),
       {
         name: "empty failure deltas retain PR facts and repository context",
         initial: snapshot({ repository, pullRequests: open }),
@@ -242,8 +295,58 @@ describe("session pull request snapshot store", () => {
       await flushSync();
     },
   );
+  it("derives the repository from explicit context, branch, then the first pull request", () => {
+    const repository = { owner: "explicit", repo: "checkout" };
+    const branch = { owner: "branch-owner", repo: "checkout", branch: "feature/demo" };
+    const pullRequest = {
+      owner: "pr-owner",
+      repo: "checkout",
+      branch: "feature/demo",
+      number: 123,
+      title: "Demo",
+      url: "https://github.com/pr-owner/checkout/pull/123",
+      state: "open" as const,
+    };
+    const snapshot = { repository, branch, pullRequests: [pullRequest], rateLimited: false };
+    expect(sessionGitHubRepository(snapshot)).toEqual(repository);
+    expect(sessionGitHubRepository({ ...snapshot, repository: undefined })).toEqual({
+      owner: "branch-owner",
+      repo: "checkout",
+    });
+    expect(
+      sessionGitHubRepository({ ...snapshot, repository: undefined, branch: undefined }),
+    ).toEqual({
+      owner: "pr-owner",
+      repo: "checkout",
+    });
+    expect(sessionGitHubRepository({ pullRequests: [], rateLimited: false })).toBeNull();
+    expect(sessionGitHubRepository(undefined)).toBeNull();
+  });
 
-  it.each(["rewind", "send"])(
+  it("retires snapshots and resubscribes normally across a same-client reconnect", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:demo";
+    store.watch(owner, [key]);
+    await flushSync();
+    emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+
+    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+    expect(store.get(key)).toBeUndefined();
+
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      phase: "connected",
+      hello: createHello(),
+    });
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expectSubscription(harness, [key]);
+    store.unwatch(owner);
+    await flushSync();
+  });
+
+  it.each(["branch-switch", "rewind", "send"])(
     "invalidates matching snapshots only for structural events (%s)",
     async (reason) => {
       vi.useFakeTimers();
@@ -358,6 +461,57 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.request).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["watch", "load"] as const)(
+    "reactivates a detached store for a fresh %s",
+    async (mode) => {
+      const { harness, store, owner } = createStoreHarness();
+      const key = "agent:main:demo";
+      store.watch(owner, [key]);
+      await flushSync();
+      emitReadySnapshot(harness, key, [{ number: 1, state: "open" }]);
+      expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "open" }]);
+      store.unwatch(owner);
+      await flushSync();
+      expect(store.get(key)).toBeUndefined();
+      expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
+      expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
+
+      emitReadySnapshot(harness, key, [{ number: 99, state: "open" }]);
+      const loaded = mode === "load" ? store.load(owner, key) : undefined;
+      if (mode === "watch") {
+        store.watch(owner, [key]);
+      }
+      await flushSync();
+      expect(harness.subscribeSnapshots).toHaveBeenCalledTimes(2);
+      expect(harness.subscribeEvents).toHaveBeenCalledTimes(2);
+      expectSubscription(harness, [key]);
+      emitReadySnapshot(harness, key, [{ number: 2, state: "open" }]);
+      expect(store.get(key)?.pullRequests).toEqual([{ number: 2, state: "open" }]);
+      if (loaded) {
+        await expect(loaded).resolves.toMatchObject({ status: "ready" });
+      }
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+
+  it("requests an immediate refresh for only the selected watched key", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    store.watch(owner, ["agent:main:demo", "agent:main:other"]);
+    await flushSync();
+    harness.request.mockClear();
+
+    expect(store.refresh("agent:main:unwatched")).toBe(false);
+    expect(store.refresh("agent:main:demo")).toBe(true);
+    expect(store.refresh("agent:main:demo")).toBe(true);
+    await flushSync();
+
+    expect(harness.request).toHaveBeenCalledOnce();
+    expectSubscription(harness, ["agent:main:demo", "agent:main:other"], ["agent:main:demo"]);
+    store.unwatch(owner);
+    await flushSync();
   });
 
   it("debounces automatic bursts per session while an explicit refresh absorbs its timer", async () => {
@@ -639,5 +793,10 @@ describe("session pull request snapshot store", () => {
     expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "merged" }]);
     store.unwatch(sidebar);
     await flushSync();
+  });
+
+  it("scopes global aliases without changing canonical keys", () => {
+    expect(scopedSessionArtifactKey("global", "Work")).toBe("agent:work:global");
+    expect(scopedSessionArtifactKey("agent:work:main", "main")).toBe("agent:work:main");
   });
 });
