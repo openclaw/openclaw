@@ -9,6 +9,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+// These tests own identity loading, not the lazy preference reader; settle that module at setup
+// so its cold transform cannot consume the one-second UI waits on a loaded CI runner.
+import "../../app/user-prefs-request.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
