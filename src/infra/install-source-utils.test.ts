@@ -137,7 +137,7 @@ describe.each([
 });
 
 it.each([
-  ["archive not found", async () => "/tmp/does-not-exist-openclaw-archive.tgz"],
+  ["archive not found", async (): Promise<string> => "/tmp/does-not-exist-openclaw-archive.tgz"],
   [
     "unsupported archive",
     async (): Promise<string> => (await createFixtureFile("plugin.txt", "not-an-archive")).filePath,

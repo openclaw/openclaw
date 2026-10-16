@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRecord } from "../../../config/legacy.shared.js";
 import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
@@ -6,6 +6,8 @@ import { LEGACY_CONFIG_MIGRATIONS_QQBOT } from "./legacy-config-migrations.qqbot
 import { maybeRepairOpenPolicyAllowFrom } from "./open-policy-allowfrom.js";
 
 const locked = ["openclaw:approval-disabled"];
+
+afterEach(() => vi.unstubAllEnvs());
 
 function migrate(raw: Record<string, unknown>) {
   const config = structuredClone(raw);
