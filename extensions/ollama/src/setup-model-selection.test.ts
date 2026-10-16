@@ -4,6 +4,7 @@ import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OllamaModelWithContext } from "./provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
   buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
   selectAppGuidedOllamaModelFromDiscovery,
@@ -23,6 +24,28 @@ function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promi
 }
 
 describe("Ollama onboarding model selection", () => {
+  it("retains freshly inspected size when using a configured cloud definition", () => {
+    const model = buildAppGuidedOllamaModel({
+      baseUrl: "http://127.0.0.1:11434",
+      model: { name: "compact-chat:cloud" },
+      showInfo: {
+        contextWindow: 32_768,
+        capabilities: ["completion", "tools"],
+        parameterCount: 4_000_000_000,
+      },
+      configuredCloudModel: {
+        id: "compact-chat:cloud",
+        name: "Compact Chat",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8192,
+      },
+    });
+    expect(model?.parameterCount).toBe(4_000_000_000);
+  });
+
   it.each([{ remote_host: "https://ollama.com" }, { remote_model: "upstream-cloud-model" }])(
     "keeps a remote alias output budget during setup: %j",
     (remote) => {

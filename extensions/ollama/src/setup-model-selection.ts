@@ -124,6 +124,7 @@ export function buildAppGuidedOllamaModel(params: {
   return capLocalOllamaModelContext(
     {
       ...definition,
+      ...(showInfo.parameterCount !== undefined ? { parameterCount: showInfo.parameterCount } : {}),
       thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
       contextWindow,
       compat: { ...definition.compat, supportsTools: true },
