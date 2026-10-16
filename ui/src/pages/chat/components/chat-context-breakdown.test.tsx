@@ -73,8 +73,14 @@ it("retires a pending report on session replacement and rejects a report from an
     sessions: Array<{ key: string; sessionId: string; contextWeight: SessionSystemPromptReport }>;
   }>();
   let signal: AbortSignal | undefined;
-  const request = createGatewayRequestMock((_method, params, options) => {
-    if (params?.key === "agent:main:first") {
+  let requestIndex = 0;
+  const request = createGatewayRequestMock((method, params, options) => {
+    const firstRequest = requestIndex++ === 0;
+    expect(method).toBe("sessions.usage");
+    expect(params).toMatchObject({
+      key: firstRequest ? "agent:main:first" : "agent:main:second",
+    });
+    if (firstRequest) {
       signal = options?.signal;
       return first.promise;
     }
